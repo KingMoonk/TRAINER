@@ -85,11 +85,11 @@ class CurriculumMixin:
     def _build_curriculum_card(self):
         page = self.pages["training"].body
         box = card(page)
-        box.pack(fill="x", pady=(0, 14), before=self.run_log)
+        box.pack(fill="x", pady=(0, 8))
         self.curriculum_box = box
         self.mark_advanced(box)
         self.curriculum_open = False
-        self.curriculum_toggle = ttk.Button(box, text="▸  Train on everything: stage-by-stage training (advanced)", command=self.toggle_curriculum)
+        self.curriculum_toggle = ttk.Button(box, text="▸  Train on everything, stage by stage", command=self.toggle_curriculum)
         self.curriculum_toggle.pack(anchor="w")
         Tooltip(self.curriculum_toggle, help_text("curriculum"))
         body = self.curriculum_body = ttk.Frame(box, style="Card.TFrame")
@@ -129,7 +129,7 @@ class CurriculumMixin:
 
     def toggle_curriculum(self, open_=None):
         self.curriculum_open = (not self.curriculum_open) if open_ is None else open_
-        self.curriculum_toggle.configure(text=("▾" if self.curriculum_open else "▸") + "  Train on everything: stage-by-stage training (advanced)")
+        self.curriculum_toggle.configure(text=("▾" if self.curriculum_open else "▸") + "  Train on everything, stage by stage")
         if self.curriculum_open:
             self.curriculum_body.pack(fill="x", pady=(10, 0))
         else:

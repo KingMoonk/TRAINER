@@ -19,6 +19,7 @@ from studio_core import ROOT, Workspace, fingerprint, messages_of, normalize, no
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, BLUE, FONT,
                             label, button, text_box, content, set_text, card, field, tree, ScrollPage, ExampleEditor,
                             Tooltip, help_icon, with_help, help_text)
+from studio_align import Collapsible
 from studio_ux import SIZE_PRESETS, device_kind, estimate_seconds, format_duration, plain_training_status
 
 
@@ -360,7 +361,11 @@ class NativeStudio(tk.Tk):
         page = self.pages["blueprint"].body
         cfg = dict(DEFAULT_CONFIG, **{k: v for k, v in self.workspace.state.get("studioConfig", {}).items() if k in DEFAULT_CONFIG})
         self.config_vars = {key: tk.StringVar(value=str(value)) for key, value in cfg.items()}
-        top = card(page, "Pick a model size")
+        self.data_card = card(page, "Training data")
+        self.data_card.pack(fill="x", pady=(0, 14))
+        self.data_summary = tk.StringVar()
+        label(self.data_card, textvariable=self.data_summary, style="Card.TLabel", font=(FONT, 12, "bold")).pack(anchor="w")
+        top = card(page, "Model size")
         top.pack(fill="x", pady=(0, 14))
         grid = ttk.Frame(top, style="Card.TFrame")
         grid.pack(fill="x")
@@ -374,59 +379,59 @@ class NativeStudio(tk.Tk):
         hint.pack(fill="x", pady=(12, 0))
         label(hint, "Not sure? Pick Small. All of the model's numbers start random and are learned from your data.", "CardMuted.TLabel").pack(side="left")
         help_icon(hint, "preset").pack(side="left", padx=(4, 0))
-        basics = card(page, "Basics")
-        basics.pack(fill="x", pady=(0, 14))
-        row = ttk.Frame(basics, style="Card.TFrame")
-        row.pack(fill="x")
-        for key, title, helper, width in [("name", "Model name", "model_name", 30), ("steps", "Training steps (more = learns longer)", "steps", 14)]:
-            frame, widget = field(row, title, self.config_vars[key], None, width, help=helper)
-            frame.pack(side="left", padx=(0, 18))
-            widget.bind("<FocusOut>", lambda _: self.update_estimate())
-        frame, selector = field(row, "Device (auto uses the GPU if it works)", self.config_vars["device"], ["auto", "cpu", "cuda"], 20, help="device")
-        frame.pack(side="left", padx=(0, 18))
-        selector.bind("<<ComboboxSelected>>", lambda _: self.update_estimate())
-        compute = card(page, "Compute details")
-        compute.pack(fill="x", pady=(0, 14))
-        self.mark_advanced(compute)
-        label(compute, "auto prefers a supported NVIDIA GPU and falls back to CPU. cuda requires a working CuPy installation and NVIDIA driver.", "CardMuted.TLabel").pack(anchor="w")
-        label(compute, textvariable=self.compute_status, style="Card.TLabel", justify="left", wraplength=880).pack(anchor="w", pady=(8, 0))
-        groups = [("Model shape", [("tokenizer", "Tokenizer (how text is split)", ["byte", "character"]), ("width", "Model width (embedding size)", None),
-                                   ("layers", "Layers (transformer blocks)", None), ("heads", "Attention heads", None), ("context", "Context length (tokens)", None),
-                                   ("expansion", "Feed-forward size (MLP expansion)", None), ("dropout", "Dropout (0 to 0.5)", None)]),
-                  ("Learning settings", [("batch_size", "Batch size (examples per step)", None), ("accumulation", "Gradient accumulation", None), ("learning_rate", "Learning rate (step size)", None),
-                                         ("weight_decay", "Weight decay", None), ("warmup", "Warmup steps", None), ("eval_every", "Test every N steps (validation)", None),
-                                         ("validation", "Validation fraction (held-out test data)", None), ("seed", "Random seed", None),
-                                         ("objective", "Train on (objective)", ["assistant", "all"]), ("windowing", "Windows (how text is cut)", ["anchored", "sequential"])])]
-        for title, settings in groups:
-            box = card(page, title + "  \u00b7  advanced")
-            box.pack(fill="x", pady=(0, 14))
-            self.mark_advanced(box)
-            grid = ttk.Frame(box, style="Card.TFrame")
-            grid.pack(fill="x")
-            for col in range(4):
-                grid.columnconfigure(col, weight=1)
-            for i, (key, name, options) in enumerate(settings):
-                frame, widget = field(grid, name, self.config_vars[key], options, 18, help=key)
-                frame.grid(row=i // 4, column=i % 4, sticky="ew", padx=(0, 15), pady=(0, 14))
-                widget.bind("<FocusOut>", lambda _: self.update_estimate())
-                if options:
-                    widget.bind("<<ComboboxSelected>>", lambda _: self.update_estimate())
-        launch = card(page, "Training plan")
-        launch.pack(fill="x")
+        launch = card(page)
+        launch.pack(fill="x", pady=(0, 14))
         self.estimate_var = tk.StringVar()
         self.time_var = tk.StringVar()
         label(launch, textvariable=self.time_var, style="Card.TLabel", font=(FONT, 13, "bold"), foreground=ACCENT).pack(anchor="w", pady=(0, 6))
         label(launch, textvariable=self.estimate_var, style="CardMuted.TLabel", justify="left").pack(anchor="w")
-        notes = label(launch, "Character vocabulary is fitted to the training split. Byte vocabulary covers UTF-8.\n'assistant' learns responses (and all raw-text tokens); 'all' predicts every token. Anchored windows end at an answer and carry as much of its prompt as fits; sequential cuts independent chunks.", "CardMuted.TLabel")
-        notes.pack(anchor="w", pady=(10, 12))
-        self.mark_advanced(notes)
         action = ttk.Frame(launch, style="Card.TFrame")
         action.pack(fill="x", pady=(10, 0))
         button(action, "Start training", self.start_training, True)
         self.mark_advanced(button(action, "Save blueprint", self.save_blueprint))
+        self.mark_advanced(button(action, "Design the layers yourself", lambda: self.show_page("network")))
         unlock = label(launch, "Want to design the layers yourself? Switch to Advanced (bottom-left) to unlock the Network designer.", "Hint.TLabel", background=PANEL)
         unlock.pack(anchor="w", pady=(10, 0))
         self.mark_beginner_only(unlock)
+
+        def drawer(title, advanced=False):
+            box = Collapsible(page, title)
+            box.pack(fill="x", pady=(0, 8))
+            return self.mark_advanced(box) if advanced else box
+
+        def fields(parent, settings, columns=4):
+            grid = ttk.Frame(parent, style="Card.TFrame")
+            grid.pack(fill="x")
+            for col in range(columns):
+                grid.columnconfigure(col, weight=1)
+            for i, (key, name, options, width, helper) in enumerate(settings):
+                frame, widget = field(grid, name, self.config_vars[key], options, width, help=helper)
+                frame.grid(row=i // columns, column=i % columns, sticky="ew", padx=(0, 15), pady=(0, 14))
+                widget.bind("<FocusOut>", lambda _: self.update_estimate())
+                if options:
+                    widget.bind("<<ComboboxSelected>>", lambda _: self.update_estimate())
+
+        fields(drawer("Name and training steps").body, [("name", "Model name", None, 30, "model_name"), ("steps", "Training steps (more = learns longer)", None, 14, "steps")])
+        shape = [("tokenizer", "Tokenizer (how text is split)", ["byte", "character"]), ("width", "Model width (embedding size)", None),
+                 ("layers", "Layers (transformer blocks)", None), ("heads", "Attention heads", None), ("context", "Context length (tokens)", None),
+                 ("expansion", "Feed-forward size (MLP expansion)", None), ("dropout", "Dropout (0 to 0.5)", None)]
+        learning = [("batch_size", "Batch size (examples per step)", None), ("accumulation", "Gradient accumulation", None), ("learning_rate", "Learning rate (step size)", None),
+                    ("weight_decay", "Weight decay", None), ("warmup", "Warmup steps", None), ("eval_every", "Test every N steps (validation)", None),
+                    ("validation", "Validation fraction (held-out test data)", None), ("seed", "Random seed", None),
+                    ("objective", "Train on (objective)", ["assistant", "all"]), ("windowing", "Windows (how text is cut)", ["anchored", "sequential"])]
+        fields(drawer("Model shape", True).body, [(k, n, o, 18, k) for k, n, o in shape])
+        box = drawer("Learning settings", True)
+        fields(box.body, [(k, n, o, 18, k) for k, n, o in learning])
+        label(box.body, "Character vocabulary is fitted to the training split. Byte vocabulary covers UTF-8.\n'assistant' learns responses (and all raw-text tokens); 'all' predicts every token. Anchored windows end at an answer and carry as much of its prompt as fits; sequential cuts independent chunks.", "CardMuted.TLabel").pack(anchor="w")
+        box = drawer("Device")
+        frame, selector = field(box.body, "Device (auto uses the GPU if it works)", self.config_vars["device"], ["auto", "cpu", "cuda"], 20, help="device")
+        frame.pack(anchor="w", pady=(0, 10))
+        selector.bind("<<ComboboxSelected>>", lambda _: self.update_estimate())
+        label(box.body, "auto prefers a supported NVIDIA GPU and falls back to CPU. cuda requires a working CuPy installation and NVIDIA driver.", "CardMuted.TLabel").pack(anchor="w")
+        label(box.body, textvariable=self.compute_status, style="Card.TLabel", justify="left", wraplength=880).pack(anchor="w", pady=(8, 0))
+
+    def _set_data_summary(self, count):
+        self.data_summary.set(f"{self.dataset_var.get() or 'No dataset selected'}  \u00b7  {count:,} examples")
 
     def read_config(self):
         return validate_config({key: variable.get() for key, variable in self.config_vars.items()})
@@ -481,6 +486,7 @@ class NativeStudio(tk.Tk):
             cfg = self.read_config()
             examples = self.workspace.examples(self.selected_dataset())
             vocab = Tokenizer.fit(cfg["tokenizer"], examples).vocab_size if examples else 263
+            self._set_data_summary(len(examples))
             count = parameter_estimate(cfg, vocab)
             self._set_time_estimate(cfg, count)
             self.estimate_var.set(f"\u2248 {count:,} parameters  \u00b7  {vocab:,} tokens before validation split  \u00b7  {len(examples):,} examples\n\u2248 {count * 16 / 1024**2:.1f} MB for weights, gradients and Adam state + activations")
@@ -502,18 +508,21 @@ class NativeStudio(tk.Tk):
         status.pack(fill="x", pady=(0, 12))
         self.train_plain = tk.StringVar(value=plain_training_status([]))
         label(status, textvariable=self.train_plain, style="Card.TLabel", wraplength=1000, justify="left", font=(FONT, 12)).pack(anchor="w")
+        self.progress = ttk.Progressbar(page, mode="determinate")
+        self.progress.pack(fill="x", pady=(0, 12))
         metrics = ttk.Frame(page)
         metrics.pack(fill="x", pady=(0, 12))
+        details = Collapsible(page, "Speed and run details")
+        extra = ttk.Frame(details.body)
+        extra.pack(fill="x", pady=(0, 10))
         self.metric_vars = {}
         for key, title, helper in [("step", "STEP", "step"), ("loss", "TRAINING ERROR (LOSS)", "train_loss"), ("val_loss", "TEST ERROR (VALIDATION)", "val_loss"), ("tokens_per_second", "SPEED (TOKENS / SEC)", "tokens_sec")]:
-            box = card(metrics)
+            box = card(metrics if key in ("loss", "val_loss") else extra)
             box.pack(side="left", fill="x", expand=True, padx=(0, 10))
             variable = tk.StringVar(value="\u2014")
             self.metric_vars[key] = variable
             label(box, textvariable=variable, style="Metric.TLabel").pack(anchor="w")
             with_help(box, title, helper, font=(FONT, 9)).pack(anchor="w", pady=(4, 0))
-        self.progress = ttk.Progressbar(page, mode="determinate")
-        self.progress.pack(fill="x", pady=(0, 12))
         self.loss_plot = tk.Canvas(page, bg=PANEL, height=270, highlightthickness=0)
         self.loss_plot.pack(fill="x")
         self.loss_plot.bind("<Configure>", lambda _: self.draw_loss())
@@ -521,34 +530,37 @@ class NativeStudio(tk.Tk):
         controls.pack(fill="x", pady=10)
         self.pause_button = button(controls, "Pause", self.toggle_pause)
         button(controls, "Stop & save", self.stop_job)
-        button(controls, "Set up a new run", lambda: self.show_page("blueprint"), True)
+        self.chat_button = ttk.Button(controls, text="Chat with this model", command=self.play_run, style="Accent.TButton")
         label(controls, "Green = training error    Blue = test error (validation)", "Muted.TLabel").pack(side="right")
-        reading = card(page, "Reading the chart")
-        reading.pack(fill="x", pady=(0, 12))
-        label(reading, "\u2022 The green line should fall: the model is getting less wrong. Lower is better; a brand-new model starts near 5.5.\n"
-                       "\u2022 The blue line is the honest score. It uses examples the model never studied.\n"
-                       "\u2022 If blue stops falling or climbs while green keeps falling, the model is memorizing: stop and save, or add more data.\n"
-                       "\u2022 Rough guide: under 3 it knows common letters and words; under 2 it writes recognisable phrases; near 1 it has learned this data well.\n"
-                       "\u2022 Stop when both lines flatten out. Extra steps after that mostly cost time.", "CardMuted.TLabel", justify="left", wraplength=1000).pack(anchor="w")
-        help_row = ttk.Frame(reading, style="Card.TFrame")
+        reading = Collapsible(page, "Reading the chart")
+        reading.pack(fill="x", pady=(0, 8))
+        label(reading.body, "\u2022 The green line should fall: the model is getting less wrong. Lower is better; a brand-new model starts near 5.5.\n"
+                            "\u2022 The blue line is the honest score. It uses examples the model never studied.\n"
+                            "\u2022 If blue stops falling or climbs while green keeps falling, the model is memorizing: stop and save, or add more data.\n"
+                            "\u2022 Rough guide: under 3 it knows common letters and words; under 2 it writes recognisable phrases; near 1 it has learned this data well.\n"
+                            "\u2022 Stop when both lines flatten out. Extra steps after that mostly cost time.", "CardMuted.TLabel", justify="left", wraplength=1000).pack(anchor="w")
+        help_row = ttk.Frame(reading.body, style="Card.TFrame")
         help_row.pack(anchor="w", pady=(8, 0))
         for text_, key in (("What is loss?", "loss"), ("Memorizing", "overfitting"), ("Checkpoint", "checkpoint")):
             with_help(help_row, text_, key).pack(side="left", padx=(0, 18))
-        self.run_log = text_box(page, 3, state="disabled")
-        self.run_log.pack(fill="x", pady=(0, 14))
-        self.mark_advanced(self.run_log)
-        label(page, "Saved runs", font=(FONT, 12, "bold")).pack(anchor="w", pady=(0, 8))
-        self.runs_tree = tree(page, [("name", "MODEL", 270), ("status", "STATUS", 100), ("step", "STEPS", 80), ("params", "PARAMETERS", 100), ("loss", "BEST ERROR", 100)], 4)
+        saved = Collapsible(page, "Saved runs")
+        saved.pack(fill="x", pady=(0, 8))
+        self.runs_tree = tree(saved.body, [("name", "MODEL", 270), ("status", "STATUS", 100), ("step", "STEPS", 80), ("params", "PARAMETERS", 100), ("loss", "BEST ERROR", 100)], 4)
         self.runs_tree.bind("<<TreeviewSelect>>", lambda _: self.inspect_run())
-        bottom = ttk.Frame(page)
+        bottom = ttk.Frame(saved.body)
         bottom.pack(fill="x", pady=(10, 0))
         resume = button(bottom, "Resume checkpoint", self.resume_run)
         Tooltip(resume, help_text("resume"))
         self.mark_advanced(resume)
-        button(bottom, "Chat with this model", self.play_run, True)
+        button(bottom, "Chat with this model", self.play_run)
         self.mark_advanced(button(bottom, "Open folder", self.open_run_folder))
         self.mark_advanced(button(bottom, "Export run ZIP", self.export_run))
         button(bottom, "Refresh", self.refresh_runs)
+        button(bottom, "Set up a new run", lambda: self.show_page("blueprint"))
+        details.pack(fill="x", pady=(0, 8))
+        self.run_log = text_box(details.body, 3, state="disabled")
+        self.run_log.pack(fill="x")
+        self.mark_advanced(self.run_log)
 
     def start_training(self):
         if self.busy():
@@ -597,6 +609,8 @@ class NativeStudio(tk.Tk):
     def training_event(self, event):
         kind = event["type"]
         if kind == "metric":
+            if self.chat_button.winfo_manager():
+                self.chat_button.pack_forget()
             self.history.append(event)
             for key, variable in self.metric_vars.items():
                 value = event.get(key)
@@ -616,6 +630,9 @@ class NativeStudio(tk.Tk):
             self.train_plain.set(plain_training_status(self.history, event["run"].get("steps"), finished=True))
             self.calibrate_speed(event["run"])
             self.refresh_runs()
+            if self.run_map:
+                self.runs_tree.selection_set("0")
+            self.chat_button.pack(side="left", padx=(0, 8), pady=4)
 
     def log(self, text):
         self.run_log.configure(state="normal")

@@ -91,9 +91,17 @@ class NetworkMixin:
         self.net_picker = ttk.Combobox(bar, textvariable=self.net_arch_var, state="readonly", width=34)
         self.net_picker.pack(side="left", padx=(0, 8), pady=3)
         self.net_picker.bind("<<ComboboxSelected>>", lambda _: self.net_pick())
-        for text, command in (("+ New", self.net_new), ("Rename", self.net_rename), ("Delete", self.net_delete),
-                              ("Import", self.net_import), ("Export", self.net_export)):
+        for text, command in (("Undo", lambda: self.net_undo()), ("Redo", lambda: self.net_redo())):
             ttk.Button(bar, text=text, command=command, style="Small.TButton").pack(side="left", padx=(0, 6), pady=3)
+        more = tk.Menu(bar, tearoff=0)
+        for text, command in (("New design", self.net_new), ("Rename", self.net_rename), ("Delete", self.net_delete), (None, None),
+                              ("Import…", self.net_import), ("Export…", self.net_export), (None, None), ("Open 3D brain", self.net_open_viewer)):
+            if command:
+                more.add_command(label=text, command=command)
+            else:
+                more.add_separator()
+        menu_button = ttk.Menubutton(bar, text="More  \u25be", menu=more, style="Small.TButton")
+        menu_button.pack(side="left", padx=(0, 6), pady=3)
         self.net_summary = tk.StringVar()
         label(bar, textvariable=self.net_summary, style="Muted.TLabel").pack(side="right")
         strip = ttk.Frame(page)
@@ -109,8 +117,7 @@ class NetworkMixin:
             Tooltip(chip, PART_HELP[kind])
         label(strip, "drag to place", "Muted.TLabel").pack(side="left", padx=(2, 0))
         help_icon(strip, "block").pack(side="left", padx=(2, 0))
-        for text, command in (("Panel", self.net_toggle_panel), ("Fit", lambda: self.net_canvas.fit()), ("−", lambda: self.net_canvas.zoom(1 / 1.25)), ("+", lambda: self.net_canvas.zoom(1.25)),
-                              ("Redo", lambda: self.net_redo()), ("Undo", lambda: self.net_undo())):
+        for text, command in (("Panel", self.net_toggle_panel), ("Fit", lambda: self.net_canvas.fit()), ("−", lambda: self.net_canvas.zoom(1 / 1.25)), ("+", lambda: self.net_canvas.zoom(1.25))):
             ttk.Button(strip, text=text, command=command, style="Small.TButton", width=3 if len(text) < 2 else 4 if len(text) < 4 else 6).pack(side="right", padx=(5, 0))
         body = ttk.Frame(page)
         body.pack(fill="both", expand=True)
@@ -143,7 +150,6 @@ class NetworkMixin:
         self.net_live_button = ttk.Button(actions, text="Apply live edit", command=self.net_apply_live)
         self.net_live_button.pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Stop", command=self.stop_job).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Open 3D brain", command=self.net_open_viewer).pack(side="left", padx=(8, 0))
         meta = ttk.Frame(page)
         meta.pack(fill="x", pady=(4, 0))
         label(meta, textvariable=self.net_init_var, style="Muted.TLabel").pack(side="left")

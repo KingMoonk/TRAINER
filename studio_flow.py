@@ -22,6 +22,7 @@ from studio_planning import build_training_set
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, BLUE, FONT,
                             label, button, text_box, content, set_text, card, field, tree, ExampleEditor,
                             Tooltip, help_icon, with_help, help_text)
+from studio_align import Collapsible
 from studio_ux import SIZE_PRESETS, device_kind, estimate_seconds, format_duration, step_seconds
 
 
@@ -1273,9 +1274,9 @@ class WorkflowMixin:
     def _build_blueprint(self):
         super()._build_blueprint()
         page = self.pages["blueprint"].body
-        first = page.winfo_children()[0]
-        mixture = card(page, "Choose your data")
-        mixture.pack(fill="x", before=first, pady=(0, 14))
+        drawer = Collapsible(self.data_card, "Change or mix")
+        drawer.pack(fill="x", pady=(10, 0))
+        mixture = drawer.body
         label(mixture, "By default each run trains on the next dataset in your library, in order, then starts again at the first. "
                        "Switch to Choose by hand to pick the datasets for a run yourself. The budget caps how many examples a run uses.",
               "CardMuted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(0, 10))
@@ -1418,6 +1419,7 @@ class WorkflowMixin:
         try:
             cfg = self.read_config()
             records = sum(self.dataset_stats(source)["records"] for source in self.run_sources())
+            self._set_data_summary(records)
             vocab, basis = self.vocabulary_estimate(cfg)
             count = parameter_estimate(cfg, vocab)
             self._set_time_estimate(cfg, count)
