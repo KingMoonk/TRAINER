@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # monthly and grouped: one pull request (one CI run) per ecosystem
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: monthly}
+    groups:
+      actions: {patterns: ["*"]}
+  - package-ecosystem: pip
+    directory: /
+    schedule: {interval: monthly}
+    groups:
+      python: {patterns: ["*"]}

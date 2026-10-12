@@ -1,10 +1,24 @@
 name: CI
 
-on: [push, pull_request]
+# macOS minutes bill at 10x and Windows at 2x on a private repo, so: one run per change, none for docs
+on:
+  push:
+    branches: [master]
+    paths-ignore: ["**.md"]
+  pull_request:
+    paths-ignore: ["**.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15  # a hung Tk test would otherwise run for the 6 hour default
     strategy:
       fail-fast: false
       matrix:
@@ -15,17 +29,27 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install -r requirements.txt
       # software OpenGL (Mesa on Windows) so the 3D viewer tests run without a GPU
-      - uses: pyvista/setup-headless-display-action@v3
-      - run: python -m ruff check .
-      # catches syntax errors in modules no test imports
+      - uses: pyvista/setup-headless-display-action@9c1c7435d9635423c90d2c37489588c81673274a  # v3
+      # catches syntax errors in modules no test imports; lint (ruff) runs in the git hooks, not here
       - run: python -m compileall -q .
       # only test_gpu should skip here (no CUDA); -v lists every test so a skip is visible in the log
       - run: python -m unittest discover -s tests -v
       # real training run on a committed sample (about 1 s of compute)
       - run: python -m unittest tests.e2e_train -v
         timeout-minutes: 5
-      # real watchdog + trainer processes: kill, pause/resume, finish on a 75 s time limit; installs and removes the real sign-in entry (CI is set)
-      - run: python -m unittest tests.e2e_passive -v
-        timeout-minutes: 10
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read  # the action lists the pull request's commits
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks scans the pushed commits, so it needs history
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

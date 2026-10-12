@@ -1,7 +1,9 @@
 #!/bin/sh
-# Lint and run the fast tests before every push; CI runs the full suite. Enable once per clone: git config core.hooksPath .githooks
+# Lint and run the fast tests before every push; CI runs the full suite (lint is only here). Enable once per clone: git config core.hooksPath .githooks
 cd "$(git rev-parse --show-toplevel)" || exit 1
-for py in .venv/bin/python .venv/Scripts/python.exe python3 python; do
+# a git worktree has no .venv of its own, so fall back to the main checkout's
+main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
+for py in .venv/bin/python .venv/Scripts/python.exe "$main/.venv/bin/python" "$main/.venv/Scripts/python.exe" python3 python; do
     command -v "$py" >/dev/null 2>&1 && break
 done
 "$py" -m ruff check . || exit 1
