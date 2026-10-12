@@ -69,9 +69,17 @@ print("FAKELINK-OK")
 """
 
 
-# Hosted CI runners have no GPU, so Panda3D cannot open even an offscreen window there.
-@unittest.skipIf(os.environ.get("CI"), "no hardware OpenGL on CI runners")
 class Brain3DTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Machines without a GPU (hosted CI runners) cannot open even an offscreen window: skip rather than fail there.
+        with tempfile.TemporaryDirectory() as directory:
+            probe = subprocess.run([sys.executable, str(SCRIPT), "--selftest", "1", "--screenshot", os.path.join(directory, "probe.png")],
+                                   capture_output=True, text=True, timeout=180, cwd=str(ROOT))
+        output = probe.stdout + probe.stderr
+        if "Could not open window" in output or "No graphics pipe is available" in output:
+            raise unittest.SkipTest("no usable OpenGL on this machine")
+
     def test_selftest_renders_screenshot(self):
         with tempfile.TemporaryDirectory() as directory:
             shot = os.path.join(directory, "brain.png")
