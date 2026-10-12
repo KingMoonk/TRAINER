@@ -180,8 +180,6 @@ class WorkflowMixin:
         parent = self.page_host.master
         self.flow_bar = ttk.Frame(parent)
         self.flow_bar.pack(fill="x", before=self.page_host, pady=(0, 14))
-        with_help(self.flow_bar, "WORKING DATASET", "working_dataset", "Muted.TLabel", font=(FONT, 9, "bold")).pack(side="left", padx=(0, 12))
-        self.dataset_picker(self.flow_bar)
         self.next_action = ttk.Button(self.flow_bar, text="Discover data →", command=self.next_step, style="Accent.TButton")
         self.next_action.pack(side="right")
         self.task_progress = ttk.Progressbar(parent, mode="determinate", maximum=100)
@@ -728,7 +726,7 @@ class WorkflowMixin:
                  ("answer", "Answer prompts: the teacher writes answers (distillation)")]
         for i, (value, text) in enumerate(kinds):
             ttk.Radiobutton(pane, text=text, value=value, variable=self.grow_kind, command=self._grow_changed, style="Card.TRadiobutton").grid(row=i, column=0, sticky="w", pady=2)
-        label(pane, "Prompts come from the working dataset chosen at the top of the page. Computed answers are never rewritten.", "CardMuted.TLabel").grid(row=3, column=0, sticky="w", pady=(6, 8))
+        label(pane, "Prompts come from the working dataset chosen on the Your data page. Computed answers are never rewritten.", "CardMuted.TLabel").grid(row=3, column=0, sticky="w", pady=(6, 8))
         self.grow_filter_row = ttk.Frame(pane, style="Card.TFrame")
         self.grow_filter_row.grid(row=4, column=0, sticky="w")
         frame, _ = field(self.grow_filter_row, "Which prompts get answered?", self.grow_filter, list(FILTER_LABELS.values()), width=34)

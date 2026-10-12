@@ -845,7 +845,7 @@ class NativeStudio(tk.Tk):
         if not hasattr(self, "correction_note"):
             return
         name = self.dataset_var.get() or "your working dataset"
-        self.correction_note.set(f"Teach a correction saves your better answer as a new example in \u201c{name}\u201d (the working dataset picked at the top). "
+        self.correction_note.set(f"Teach a correction saves your better answer as a new example in \u201c{name}\u201d (the working dataset picked on the Your data page). "
                                  "Train again to make the model learn it.")
 
     def latest_checkpoint(self):
