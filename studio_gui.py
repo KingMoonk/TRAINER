@@ -5,6 +5,8 @@ import copy
 import json
 import os
 import queue
+import subprocess
+import sys
 import threading
 import traceback
 import zipfile
@@ -698,7 +700,7 @@ class NativeStudio(tk.Tk):
     def refresh_runs(self):
         if not hasattr(self, "runs_tree"):
             return
-        selected = self.runs_tree.selection()
+        selected_run = self.selected_run()
         self.runs_tree.delete(*self.runs_tree.get_children())
         self.run_map = {}
         for i, record in enumerate(self.workspace.runs()):
@@ -706,8 +708,9 @@ class NativeStudio(tk.Tk):
             self.run_map[key] = record
             best = record.get("best_loss")
             self.runs_tree.insert("", "end", iid=key, values=(record.get("name", "Untitled"), record.get("status", "unknown"), record.get("step", 0), f"{record.get('parameters', 0):,}", f"{best:.4f}" if isinstance(best, (int, float)) else "—"))
-        if selected and selected[0] in self.run_map:
-            self.runs_tree.selection_set(selected[0])
+        keep = [key for key, record in self.run_map.items() if selected_run and record["directory"] == selected_run["directory"]]
+        if keep:
+            self.runs_tree.selection_set(keep[0])
 
     def selected_run(self):
         selected = self.runs_tree.selection()
@@ -752,7 +755,11 @@ class NativeStudio(tk.Tk):
     def open_run_folder(self):
         record = self.selected_run()
         if record:
-            os.startfile(record["directory"])
+            folder = record["directory"]
+            if sys.platform == "win32":
+                os.startfile(folder)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", folder])
 
     def export_run(self):
         record = self.selected_run()
@@ -954,38 +961,48 @@ class NativeStudio(tk.Tk):
         return True
 
     def poll(self):
-        try:
-            for _ in range(100):
+        for _ in range(100):
+            try:
                 kind, value = self.events.get_nowait()
-                if kind == "training":
-                    self.training_event(value)
-                elif kind == "gpu_status":
-                    self.update_gpu_status(value)
-                elif kind == "status":
-                    self.status_var.set(value)
-                elif kind == "chat_text":
-                    self.render_chat(value)
-                elif kind == "result":
-                    previous = self.job_kind
-                    self.job_kind = None
-                    self.pause.clear()
-                    self.pause_button.configure(text="Pause")
-                    self.status_var.set(f"{previous.capitalize()} · {'stopped' if self.stop.is_set() else 'complete'}")
-                    self.result_callback(value)
-                elif kind == "error":
-                    self.job_kind = None
-                    self.log(value[1])
-                    self.refresh_runs()
-                    self.status_var.set(f"Task failed · {value[0]}")
-                    if not self.closing:
-                        messagebox.showerror("Task failed", value[0], parent=self)
-        except queue.Empty:
-            pass
+            except queue.Empty:
+                break
+            try:
+                self.handle_event(kind, value)
+            except Exception as exc:
+                try:
+                    self.log(traceback.format_exc())
+                    self.status_var.set(f"Something went wrong: {exc}")
+                except Exception:
+                    pass
         if self.closing and (self.worker is None or not self.worker.is_alive()):
             self.workspace.save()
             self.destroy()
             return
         self.after(60, self.poll)
+
+    def handle_event(self, kind, value):
+        if kind == "training":
+            self.training_event(value)
+        elif kind == "gpu_status":
+            self.update_gpu_status(value)
+        elif kind == "status":
+            self.status_var.set(value)
+        elif kind == "chat_text":
+            self.render_chat(value)
+        elif kind == "result":
+            previous = self.job_kind
+            self.job_kind = None
+            self.pause.clear()
+            self.pause_button.configure(text="Pause")
+            self.status_var.set(f"{previous.capitalize()} · {'stopped' if self.stop.is_set() else 'complete'}")
+            self.result_callback(value)
+        elif kind == "error":
+            self.job_kind = None
+            self.log(value[1])
+            self.refresh_runs()
+            self.status_var.set(f"Task failed · {value[0]}")
+            if not self.closing:
+                messagebox.showerror("Task failed", value[0], parent=self)
 
     def toggle_pause(self):
         if self.job_kind != "training":
@@ -1003,7 +1020,8 @@ class NativeStudio(tk.Tk):
         if self.job_kind:
             self.stop.set()
             self.pause.clear()
-            self.status_var.set("Stopping after the current operation · training progress will be saved")
+            teacher = self.job_kind in ("automated improvement", "checkpoint comparison")
+            self.status_var.set("Stopping · waiting for the teacher's current answer to arrive, which can take a minute" if teacher else "Stopping after the current operation · training progress will be saved")
 
     def close(self):
         if self.job_kind:

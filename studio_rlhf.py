@@ -113,9 +113,10 @@ def evaluate_checkpoint(path, examples, device="auto", limit=200, stop=None):
     if not samples:
         raise ValueError("These examples contain no assistant tokens to evaluate.")
     xp = model.xp
-    total_loss, errors, tokens = 0., 0, 0
+    total_loss, errors, tokens, stopped = 0., 0, 0, False
     for start in range(0, len(samples), 16):
         if stop is not None and stop.is_set():
+            stopped = True
             break
         x, y = batch_arrays(samples[start:start + 16])
         logits = model.forward(x)
@@ -132,7 +133,7 @@ def evaluate_checkpoint(path, examples, device="auto", limit=200, stop=None):
                   for t in tokenizer.encode(m["content"]) if t == 6)
     return {"loss": loss, "perplexity": math.exp(min(loss, 50)), "token_error": errors / max(1, tokens),
             "token_accuracy": 1 - errors / max(1, tokens), "tokens": tokens, "examples": min(limit, len(examples)),
-            "unknown_tokens": unknown, "step": data["step"], "name": data["config"].get("name", "model")}
+            "unknown_tokens": unknown, "step": data["step"], "name": data["config"].get("name", "model"), "stopped": stopped}
 
 
 # --------------------------------------------------------------------------- preference store
@@ -167,12 +168,12 @@ class PreferenceStore:
         if not self.path.exists():
             return []
         out = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        for line in self.path.read_text(encoding="utf-8").split("\n"):  # not splitlines(): it also splits on U+2028 inside a record
             if not line.strip():
                 continue
             try:
                 row = json.loads(line)
-                out.append((row if isinstance(row, dict) else None, line))
+                out.append((row if _valid_record(row) else None, line))
             except ValueError:
                 out.append((None, line))  # kept verbatim on rewrites, ignored by readers
         return out
@@ -206,8 +207,10 @@ class PreferenceStore:
                   "chosen": chosen, "rejected": rejected, "source": source, **meta}
         with self.lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self.path.open("a+b") as stream:
+                size = stream.seek(0, 2)
+                needs_break = size and (stream.seek(-1, 2), stream.read(1))[1] != b"\n"  # a file lacking its final newline would glue two records together
+                stream.write((b"\n" if needs_break else b"") + (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
         return record
 
     def update(self, pair_id, **fields):
@@ -263,7 +266,7 @@ class PreferenceStore:
             known_keys = {pair_key(r) for r, _ in existing if r is not None}
             known_ids = {r.get("id") for r, _ in existing if r is not None}
             fresh = []
-            for line in Path(path).read_text(encoding="utf-8").splitlines():
+            for line in Path(path).read_text(encoding="utf-8").split("\n"):
                 if not line.strip():
                     continue
                 try:
@@ -594,8 +597,8 @@ def _number(value):
 
 class OllamaTeacher:
     def __init__(self, url="http://localhost:11434", model="", timeout=240, rubric=None, judge_model=None,
-                 retries=2, retry_delay=.4):
-        self.url, self.model, self.timeout = url.rstrip("/"), model, timeout
+                 retries=2, retry_delay=.4, stop=None):
+        self.url, self.model, self.timeout, self.stop = url.rstrip("/"), model, timeout, stop
         self.rubric = normalize_rubric(rubric) or normalize_rubric(DEFAULT_RUBRIC)
         self.judge_model = judge_model or None
         self.retries, self.retry_delay = int(retries), float(retry_delay)
@@ -607,6 +610,8 @@ class OllamaTeacher:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except ValueError:
+            raise RuntimeError("Ollama sent a reply that could not be read.") from None
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Ollama error {exc.code}: {detail[:300]}") from None
@@ -635,7 +640,7 @@ class OllamaTeacher:
             self.think_supported = False
             payload.pop("think")
             reply = self._request("/api/chat", payload)
-        text = re.sub(r"<think>.*?</think>", "", reply.get("message", {}).get("content", ""), flags=re.S).strip()
+        text = re.sub(r"<think>.*?</think>", "", ((reply.get("message") or {}).get("content") or ""), flags=re.S).strip()
         if not json_mode:
             return text
         try:
@@ -655,7 +660,7 @@ class OllamaTeacher:
         """The object that grades: this teacher, or a sibling using the separate judge model."""
         if not self.judge_model or self.judge_model == self.model:
             return self
-        return OllamaTeacher(self.url, self.judge_model, self.timeout, self.rubric, None, self.retries, self.retry_delay)
+        return OllamaTeacher(self.url, self.judge_model, self.timeout, self.rubric, None, self.retries, self.retry_delay, self.stop)
 
     def _system(self, template, **values):
         text = template.replace("{criteria}", rubric_text(self.rubric))
@@ -668,6 +673,8 @@ class OllamaTeacher:
         and is retried. Returns the dict (or parse's result) or raises TeacherError."""
         last = "no reply"
         for attempt in range(max(0, self.retries) + 1):
+            if self.stop is not None and self.stop.is_set():
+                raise TeacherError("Stopped.", fatal=True)
             try:
                 result = self.chat(system, user, True, temperature)
                 if not isinstance(result, dict):
@@ -710,6 +717,8 @@ class OllamaTeacher:
         if both_orders:
             a2, b2, reason2 = one(first, second) if swap else one(second, first)
             second_scores = [a2, b2] if swap else [b2, a2]
+            if not swap:  # this pass was asked with the replies swapped
+                reason2 = re.sub(r"\b([AB])\b", lambda m: "B" if m.group(1) == "A" else "A", reason2)
             consistent = (scores[0] - scores[1]) * (second_scores[0] - second_scores[1]) >= 0
             scores = [(scores[0] + second_scores[0]) / 2, (scores[1] + second_scores[1]) / 2]
             if not consistent:
@@ -755,7 +764,8 @@ class OllamaTeacher:
     def rewrite(self, messages, max_chars=240):
         # JSON mode keeps reasoning-style models from leaking their thinking into the answer.
         result = self.ask(self._system(REWRITE_SYSTEM, max_chars=max_chars), _transcript(messages), temperature=.2)
-        return str(result.get("answer", "")).strip()[:max_chars].strip()
+        answer = result.get("answer")
+        return (answer.strip()[:max_chars].strip() if isinstance(answer, str) else "")
 
 
 # --------------------------------------------------------------------------- best-of-N pair building
@@ -898,6 +908,8 @@ def compare_checkpoints(a, b, prompts, judge, samples=2, max_tokens=120, tempera
                     outcome = "win" if gap > tie_eps else "loss" if gap < -tie_eps else "tie"
                     failures = 0
                 except Exception as exc:
+                    if stop.is_set():
+                        break
                     errors += 1
                     failures += 1
                     if isinstance(exc, TeacherError) and exc.fatal or failures >= 6:
@@ -992,6 +1004,8 @@ def auto_rlhf(base_checkpoint, prompts, teacher, store, run_root, config=None, d
                                            round=round_index, reference=pair["reference"], source_id=pair["source_id"],
                                            candidates=pair["n_candidates"]))
             except Exception as exc:  # one bad reply must never kill the run
+                if stop.is_set():
+                    break
                 label = _skip_label(exc)
                 skipped[label] += 1
                 streak += 1
@@ -1013,7 +1027,7 @@ def auto_rlhf(base_checkpoint, prompts, teacher, store, run_root, config=None, d
             say(f"Round {round_index}: {len(fresh)} usable pairs" + (f" · skipped: {reasons}" if reasons else "") +
                 (" · stopping" if stop.is_set() else " · too few to train, continuing"))
             continue
-        replay = [p for p in collected if p not in fresh][-int(cfg["replay"]):]
+        replay = [p for p in collected if p not in fresh][-int(cfg["replay"]):] if int(cfg["replay"]) > 0 else []
         say(f"Round {round_index}: {len(fresh)} new pairs" + (f" (skipped: {reasons})" if reasons else "") +
             f" + {len(replay)} replayed · training…")
         directory = Path(run_root) / uid("rlhf")

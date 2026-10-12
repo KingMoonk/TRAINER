@@ -102,6 +102,10 @@ class Helpers(unittest.TestCase):
     def test_duration_words(self):
         self.assertEqual([duration_words(s) for s in (1, 45, 120, 3600, 3900, 8 * 3600, 90000)], ["1 second", "45 seconds", "2 minutes", "1 hour", "1 hour 5 minutes", "8 hours", "1 day 1 hour"])
 
+    def test_duration_words_survives_huge_durations(self):
+        self.assertIn("longer", duration_words(float("inf")))
+        self.assertIn("longer", duration_words(1e308 * 3600))
+
     def test_interruptions(self):
         self.assertEqual(interruptions([]), [])
         self.assertEqual(interruptions([{"type": "round"}, {"type": "check"}, {"type": "checkpoint"}]), [])
@@ -279,6 +283,7 @@ class Views(unittest.TestCase):
         self.workspace.add(dataset, [{"user": "a", "assistant": "b"}])
         self.app._stats_cache.clear()
         self.app._passive_launch.side_effect = ImportError("no watchdog")
+        self.app.status_var.set("")
         try:
             self.app.passive_start()
         finally:
@@ -286,6 +291,32 @@ class Views(unittest.TestCase):
         self.assertEqual(self.dialogs, ["showerror"])
         self.assertEqual(self.store.list()[0]["status"], "failed")
         self.assertIsNone(self.store.active())
+        self.assertNotIn("started", self.app.status_var.get())
+
+    def test_failed_build_is_retried_and_tick_survives_errors(self):
+        app = self.app
+        self.seed("failed", stop_reason=None)
+        with patch.object(app, "_passive_build_catchup", side_effect=ValueError("bad build")):
+            with self.assertRaises(ValueError):
+                app.refresh_passive()
+        self.assertIsNone(app._passive_key)
+        app.refresh_passive()
+        self.assertEqual(app._passive_key[0], "catchup")
+        app.active_page = "training"
+        with patch.object(app, "refresh_passive", side_effect=ValueError("tick boom")):
+            app._passive_tick()
+        self.assertIsNotNone(app._passive_job)
+        self.assertIn("tick boom", app.status_var.get())
+
+    def test_done_keeps_pending_lessons_reviewable(self):
+        app = self.app
+        sid = self.seed()
+        self.store.set_lessons(sid, [{"id": "l1", "round": 1, "checkpoint": 1, "prompt": "Q", "reply": "r", "answer": "A", "messages": [{"role": "user", "content": "Q"}], "status": "pending", "at": AT}])
+        app.refresh_passive()
+        self.buttons("Done")[0].invoke()
+        self.assertEqual(app._passive_key, ("catchup", sid))
+        self.assertIn("showinfo", self.dialogs)
+        self.assertEqual(self.store.lessons(sid)[0]["status"], "pending")
 
     def test_running_view_pause_resume_stop(self):
         app = self.app
