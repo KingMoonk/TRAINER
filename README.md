@@ -40,6 +40,19 @@ Recommended while editing the code. From the repo root, with the venv active or 
 - A restart discards any running training job without the checkpoint prompt. Stop and save the run before saving an edit.
 - The 3D viewer is a separate process and may stay open after a restart. Close it manually if it lingers.
 
+
+## Lint and git hooks
+
+Run once per clone:
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+git config core.hooksPath .githooks
+```
+
+- **pre-commit** lints the staged Python files with [ruff](https://docs.astral.sh/ruff/) and applies its safe fixes. The rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
+- **pre-push** runs `ruff check .` and the fast tests (about 3 seconds); a failure stops the push. The GUI, network and 3D viewer tests take about 40 seconds more and run in CI, or locally with `python -m unittest discover -s tests`.
+
 ## Launch
 
 On Windows, double-click **start_studio.bat**. It creates a virtual environment if needed, installs the two dependencies, and opens the desktop window.

@@ -29,7 +29,7 @@ import numpy as np
 
 from studio_core import atomic_json, messages_of, now, replace_file, uid
 from studio_model import (ASSISTANT, BOS, EOS, SYSTEM, USER, AdamW, LocalModel, ScratchTransformer, Tokenizer,
-                          batch_arrays, load_checkpoint, samples_from, softmax)
+                          batch_arrays, load_checkpoint, samples_from)
 
 DPO_DEFAULTS = {"beta": .1, "learning_rate": 1e-4, "steps": 100, "batch_size": 4, "sft_weight": .2,
                 "validation": .1, "eval_every": 10, "device": "auto", "seed": 7, "weight_decay": 0.,

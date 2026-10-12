@@ -1,26 +1,22 @@
 """Guided native workflow: acquire, curate, blend, train and improve."""
 from __future__ import annotations
 
-import copy
 import json
 import math
-import queue
-import threading
 import webbrowser
-from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
-from studio_core import atomic_json, fingerprint, now, uid
+from studio_core import atomic_json, uid
 from studio_model import DEFAULT_CONFIG, Tokenizer, parameter_estimate, train, validate_config as validate_model_config
 import studio_catalog
 from studio_catalog import CATALOG, download_dataset, list_downloads, register_download
 from studio_planning import build_training_set
-from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, BLUE, FONT,
-                            label, button, text_box, content, set_text, card, field, tree, ExampleEditor,
-                            Tooltip, help_icon, with_help, help_text)
+from studio_widgets import (TEXT, MUTED, ACCENT, FONT,
+                            label, button, text_box, set_text, card, tree, ExampleEditor,
+                            Tooltip, with_help, help_text)
 from studio_align import Collapsible
-from studio_ux import SIZE_PRESETS, device_kind, estimate_seconds, format_duration, step_seconds
+from studio_ux import SIZE_PRESETS, device_kind, format_duration, step_seconds
 
 
 QUICK_START_SECONDS = 120          # target length of the Quick start run
@@ -469,7 +465,6 @@ class WorkflowMixin:
 
     def _build_blueprint(self):
         super()._build_blueprint()
-        page = self.pages["blueprint"].body
         drawer = Collapsible(self.data_card, "Change or mix")
         drawer.pack(fill="x", pady=(10, 0))
         mixture = drawer.body

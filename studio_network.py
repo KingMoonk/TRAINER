@@ -13,7 +13,7 @@ from studio_archdb import ArchitectureStore
 from studio_circuit import ACCENT as CHIP_COLORS, CircuitCanvas, ERR
 from studio_model import Tokenizer, load_checkpoint, validate_config
 from studio_vizbridge import VizBridge
-from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, FONT, label, button, card,
+from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, FONT, label, card,
                             Tooltip, help_icon, help_text, with_help)
 
 TEXT_WIDGETS = {"TEntry", "Entry", "TSpinbox", "Text", "TCombobox", "Spinbox"}

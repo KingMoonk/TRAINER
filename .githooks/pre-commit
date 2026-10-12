@@ -1,0 +1,11 @@
+#!/bin/sh
+# Lint the staged Python files before every commit and apply ruff's safe fixes.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+for py in .venv/bin/python .venv/Scripts/python.exe python3 python; do
+    command -v "$py" >/dev/null 2>&1 && break
+done
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+[ -z "$files" ] && exit 0
+# ponytail: re-stages whole files, so unstaged edits in a staged file get committed too; stash-based isolation if that bites
+"$py" -m ruff check --fix $files || exit 1
+git add $files

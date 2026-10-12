@@ -1146,7 +1146,7 @@ class _BrainMixin:
                 self.cur[key][:] = self.tgt[key]
             self.cur[key] += (self.tgt[key] - self.cur[key]) * k
         c, lay, t = self.cur, self.layout, self.t_anim
-        nb, ns = len(self.ids), lay["ns"]
+        ns = lay["ns"]
         dyn = self.qm.dyn
         # ---- backprop shimmer: a soft gold wave travelling from the last slab back to the tokens
         gstage = np.repeat(0.5 * (c["agn"] + c["mgn"]), 2)
@@ -1631,7 +1631,7 @@ def main(argv=None) -> int:
     if not args.no_msaa:
         prc += ["framebuffer-multisample 1", "multisamples 4"]
     if args.selftest or args.offscreen:
-        prc.append("window-type offscreen")
+        prc += ["window-type offscreen", "framebuffer-hardware 0"]
     loadPrcFileData("", "\n".join(prc))
     app = BrainApp(link=link, demo=link is None, size=(w, h), selftest=bool(args.selftest))
     if args.selftest:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from studio_widgets import ACCENT, BG, EDGE, FONT, MUTED, PANEL, TEXT, GlossaryDialog, Tooltip, label
+from studio_widgets import ACCENT, BG, FONT, MUTED, PANEL, GlossaryDialog, Tooltip, label
 
 MODES = ("beginner", "advanced")
 

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Lint and run the fast tests before every push; CI runs the full suite. Enable once per clone: git config core.hooksPath .githooks
+cd "$(git rev-parse --show-toplevel)" || exit 1
+for py in .venv/bin/python .venv/Scripts/python.exe python3 python; do
+    command -v "$py" >/dev/null 2>&1 && break
+done
+"$py" -m ruff check . || exit 1
+# No windows or subprocesses in these: about 3 seconds. The GUI, network and 3D viewer tests are left to CI.
+"$py" -m unittest tests.test_arch tests.test_archdb tests.test_catalog tests.test_core tests.test_model_inputs tests.test_planning tests.test_studio

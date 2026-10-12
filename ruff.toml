@@ -1,0 +1,5 @@
+# Lint: real errors only (syntax errors, undefined names, unused imports and variables). Style is not enforced.
+exclude = [".venv", ".venv-py39-old", ".claude"]
+
+[lint]
+select = ["E9", "F"]

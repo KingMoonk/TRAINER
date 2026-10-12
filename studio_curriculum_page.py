@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from studio_curriculum import (DEFAULT_CONTEXT, DEFAULT_REPLAY, default_plan, latest_plan, resume_plan, run_plan, validate_plan)
-from studio_widgets import BG, EDGE, FONT, INPUT, MUTED, TEXT, Tooltip, button, card, help_text, label, tree
+from studio_widgets import BG, INPUT, TEXT, Tooltip, button, card, help_text, label, tree
 
 CONTEXTS = ("128", "256", "512", "1024")
 STATUS_TEXT = {"pending": "waiting", "running": "training…", "evaluating": "checking…", "completed": "done",

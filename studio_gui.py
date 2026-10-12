@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from studio_model import DEFAULT_CONFIG, LocalModel, Tokenizer, load_checkpoint, parameter_estimate, train, validate_config
 from studio_backend import gpu_status
-from studio_core import ROOT, Workspace, fingerprint, messages_of, normalize, now, uid
+from studio_core import ROOT, Workspace, fingerprint, now, uid
 
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, BLUE, FONT,
                             label, button, text_box, content, set_text, card, field, tree, ScrollPage, ExampleEditor,

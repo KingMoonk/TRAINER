@@ -1,6 +1,4 @@
 """Functional checks for data integrity, causal attention, learning and resumption."""
-import json
-import re
 import tempfile
 import threading
 import unittest
