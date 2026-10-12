@@ -1,7 +1,7 @@
 """Passive training end to end with real processes: session -> watchdog -> trainer, a hard kill, pause/resume, and a finish on the time limit.
 
-Not named test_*.py so `unittest discover` skips it; CI runs `python -m unittest tests.e2e_passive -v`.
-Every wait polls with a generous timeout and fails with the session row, the journal tail and trainer.log, because on Windows CI that log is all anyone gets.
+Not named test_*.py so `unittest discover` skips it; the release workflow runs `python -m unittest tests.e2e_passive -v`.
+Every wait polls with a generous timeout and fails with the session row, the journal tail and trainer.log, because on a Windows runner that log is all anyone gets.
 The real sign-in entry (LaunchAgent / schtasks) is only created when CI is set; otherwise macOS gets a throwaway HOME (the watchdog inherits it, so it removes the entry from there)
 and Windows gets a no-op install.
 """
