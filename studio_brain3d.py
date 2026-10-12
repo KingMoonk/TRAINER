@@ -152,6 +152,11 @@ void main() {
 """
 
 
+def _glsl(src):
+    """macOS only offers GLSL 1.50+ (core profile); everywhere else keep 1.30."""
+    return src.replace("#version 130", "#version 150") if sys.platform == "darwin" else src
+
+
 # --------------------------------------------------------------------------- spec helpers
 def _norm_block(b: dict, i: int = 0) -> dict:
     att = dict(b.get("attention") or {})
@@ -389,8 +394,12 @@ def build_layout(spec: dict) -> dict:
             hi = H.add(g, [[0.0, y0 - 0.01, SH / 2]], (SW2, SH / 2), 0.02, -0.06, (*YELLOW_C, 0.45), margin=0.25)
             sel_halo_idx.append(hi)
             sel_halo_stage.append(np.full(len(hi), s))
-            # residual stream at this stage
+            # residual stream at this stage, wired token-for-token to the previous stage's columns
             add_row(g, y, i)
+            yp = Y_TOK if s == 0 else yc(s - 1)
+            rail = np.array([[x + dx, 0.0, z] for x in TOK_X for dx in (-BRK, BRK) for z in (COL_Z0, COL_Z1)],
+                            np.float32)
+            L.add(g, rail + [0, yp, 0], rail + [0, y, 0], (0.75, 0.8, 0.88, 0.5))
             name = ("Attention" if part == 0 else "Multilayer\nPerceptron") if on else \
                 ("Attention (off)" if part == 0 else "MLP (off)")
             # captions float clear of the token-word row (which sits deeper and so projects higher on screen);
@@ -449,7 +458,8 @@ def build_layout(spec: dict) -> dict:
                     tx, tz_ = half * np.sin(th), hh * np.cos(th)
                     nrm = np.stack([-tz_, tx], 1)
                     nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-6
-                    arcs.append((i, np.column_stack([px, np.full_like(px, y - 0.01), pz]),
+                    # the arc leaves key k in the previous stage and lands on query q in this one
+                    arcs.append((i, np.column_stack([px, np.linspace(yp, y - 0.01, nseg + 1, dtype=np.float32), pz]),
                                  np.column_stack([nrm[:, 0], np.zeros_like(px), nrm[:, 1]])))
             else:
                 # ---- MLP: neuron rows above the columns, fans from column tops
@@ -751,13 +761,17 @@ class _BrainMixin:
         self.camLens.setFov(40)
         self.camLens.setNearFar(0.3, 4000)
         self.render.setAntialias(AntialiasAttrib.MMultisample)
-        self.quad_shader = Shader.make(Shader.SL_GLSL, _VS_QUAD, _FS_QUAD)
-        self.rib_shader = Shader.make(Shader.SL_GLSL, _VS_RIB, _FS_RIB)
+        self.quad_shader = Shader.make(Shader.SL_GLSL, _glsl(_VS_QUAD), _glsl(_FS_QUAD))
+        self.rib_shader = Shader.make(Shader.SL_GLSL, _glsl(_VS_RIB), _glsl(_FS_RIB))
         F = _FONTS
-        self.font_serif = _load_font([(os.path.join(F, "cambria.ttc"), 0), (os.path.join(F, "times.ttf"), 0)], 80)
-        self.font_ital = _load_font([(os.path.join(F, "cambriai.ttf"), 0), (os.path.join(F, "timesi.ttf"), 0)], 64) \
+        M = "/System/Library/Fonts/Supplemental"  # macOS fallbacks
+        self.font_serif = _load_font([(os.path.join(F, "cambria.ttc"), 0), (os.path.join(F, "times.ttf"), 0),
+                                      (os.path.join(M, "Times New Roman.ttf"), 0)], 80)
+        self.font_ital = _load_font([(os.path.join(F, "cambriai.ttf"), 0), (os.path.join(F, "timesi.ttf"), 0),
+                                     (os.path.join(M, "Times New Roman Italic.ttf"), 0)], 64) \
             or self.font_serif
-        self.font_ui = _load_font([(os.path.join(F, "segoeui.ttf"), 0), (os.path.join(F, "cambria.ttc"), 0)], 48) \
+        self.font_ui = _load_font([(os.path.join(F, "segoeui.ttf"), 0), (os.path.join(F, "cambria.ttc"), 0),
+                                   (os.path.join(M, "Arial.ttf"), 0)], 48) \
             or self.font_serif
         self._make_background()
         # camera
@@ -1612,6 +1626,8 @@ def main(argv=None) -> int:
                 link = None
     prc = ["audio-library-name null", "sync-video 0", f"win-size {w} {h}", "window-title Transformer",
            "textures-power-2 none"]
+    if sys.platform == "darwin":
+        prc.append("gl-version 3 2")
     if not args.no_msaa:
         prc += ["framebuffer-multisample 1", "multisamples 4"]
     if args.selftest or args.offscreen:
