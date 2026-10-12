@@ -224,7 +224,23 @@ def _read_jsonl(path):
     path = Path(path)
     if not path.is_file():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = []
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    for line_bytes in raw.split(b'\n'):
+        try:
+            line = line_bytes.decode(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return rows
 
 
 def _checkpoint(run_dir):
@@ -360,15 +376,18 @@ def _execute(workspace, state, emit, stop, pause):
                 _save(state, emit, index)
             # held-out scores of this stage and every earlier one (forgetting check)
             evals = {}
-            for j in range(index + 1):
-                held_out = _read_jsonl(eval_dir / f"stage{j + 1}.jsonl")
-                if not held_out:
-                    continue
-                try:
-                    result = evaluate_checkpoint(stage["checkpoint"], held_out, device=device, limit=int(stages[j].get("eval_records", 100)), stop=stop)
-                    evals[str(j)] = {k: result[k] for k in ("loss", "perplexity", "token_accuracy", "tokens", "unknown_tokens")}
-                except (ValueError, OSError) as exc:
-                    emit({"type": "info", "text": f"{label}: could not score stage {j + 1} data ({exc})."})
+            if not stage.get("checkpoint"):
+                emit({"type": "info", "text": f"{label}: no checkpoint saved; could not evaluate."})
+            else:
+                for j in range(index + 1):
+                    held_out = _read_jsonl(eval_dir / f"stage{j + 1}.jsonl")
+                    if not held_out:
+                        continue
+                    try:
+                        result = evaluate_checkpoint(stage["checkpoint"], held_out, device=device, limit=int(stages[j].get("eval_records", 100)), stop=stop)
+                        evals[str(j)] = {k: result[k] for k in ("loss", "perplexity", "token_accuracy", "tokens", "unknown_tokens")}
+                    except (ValueError, OSError) as exc:
+                        emit({"type": "info", "text": f"{label}: could not score stage {j + 1} data ({exc})."})
             if stop.is_set():
                 state["status"] = "stopped"
                 _save(state, emit, index)
