@@ -114,7 +114,10 @@ class NativeStudio(tk.Tk):
         label(sidebar, "GROUNDWORK", font=(FONT, 16, "bold")).pack(anchor="w", pady=(2, 0))
         label(sidebar, "AI STUDIO", "Muted.TLabel", font=(FONT, 10)).pack(anchor="w", pady=(0, 22))
         self.nav = {}
+        sections = {"catalog": "DATA", "blueprint": "MODEL", "align": "IMPROVE"}
         for key, number, title, _ in self.PAGES:
+            if key in sections:
+                label(sidebar, sections[key], "Muted.TLabel", font=(FONT, 9, "bold")).pack(anchor="w", padx=12, pady=(14, 2))
             nav = ttk.Button(sidebar, text=self.nav_label(key), style="Nav.TButton", command=lambda k=key: self.show_page(k))
             nav.pack(fill="x", pady=2)
             self.nav[key] = nav
@@ -218,23 +221,49 @@ class NativeStudio(tk.Tk):
         counts = Counter(d["name"] for d in self.workspace.state["datasets"])
         return {(d["name"] if counts[d["name"]] == 1 else f"{d['name']}  ·  {d['id'][-6:]}"): d["id"] for d in self.workspace.state["datasets"]}
 
+    def drilldown(self, row, text, panel):
+        """Quiet button in `row` that shows/hides `panel` (packed right after the row). Set `button.base` to retitle it."""
+        def sync():
+            button_.configure(text=("\u25be " if panel.winfo_manager() else "\u25b8 ") + button_.base)
+        def toggle():
+            if panel.winfo_manager():
+                panel.pack_forget()
+            else:
+                panel.pack(fill="x", pady=(8, 0), after=row)
+            sync()
+        button_ = ttk.Button(row, command=toggle)
+        button_.base, button_.sync = text, sync
+        button_.pack(side="left", padx=(0, 8), pady=4)
+        sync()
+        return button_
+
     def _build_datasets(self):
         page = self.pages["datasets"]
-        toolbar = ttk.Frame(page)
-        toolbar.pack(fill="x", pady=(0, 10))
-        self.dataset_picker(toolbar)
-        button(toolbar, "+ New dataset", self.new_dataset)
-        self.mark_advanced(button(toolbar, "Rename", self.rename_dataset))
-        button(toolbar, "Import files", self.import_files, True)
-        self.mark_advanced(button(toolbar, "Export", self.export_dataset))
-        hint = ttk.Frame(page)
-        hint.pack(fill="x", pady=(0, 10))
-        label(hint, "Importing: each example needs a prompt and an answer (JSONL, JSON, CSV, TSV or TXT). Duplicates are skipped.", "Muted.TLabel").pack(side="left")
-        help_icon(hint, "import_format").pack(side="left", padx=(4, 18))
-        label(hint, "Quality: Review = not checked yet, Good = you approved it.", "Muted.TLabel").pack(side="left")
-        help_icon(hint, "review_good").pack(side="left", padx=(4, 0))
-        overview = ttk.Frame(page)
-        overview.pack(fill="x", pady=(0, 12))
+        head = ttk.Frame(page)
+        head.pack(fill="x", pady=(0, 10))
+        self.dataset_picker(head)
+        self.dataset_summary = tk.StringVar()
+        label(head, textvariable=self.dataset_summary, style="Muted.TLabel").pack(side="left", padx=4)
+        button(head, "Train on this data \u2192", lambda: self.show_page("blueprint"), True).pack_configure(side="right", padx=0)
+        tools = ttk.Frame(page)
+        tools.pack(fill="x", pady=(0, 10))
+        self.search = tk.StringVar()
+        label(tools, "Search").pack(side="left", padx=(0, 8))
+        ttk.Entry(tools, textvariable=self.search, width=40).pack(side="left", padx=(0, 12))
+        self.search.trace_add("write", lambda *_: self.refresh_examples())
+        button(tools, "Edit", self.edit_example)
+        Tooltip(button(tools, "Mark as Good", self.mark_reviewed), help_text("review_good"))
+        button(tools, "Remove", self.remove_examples)
+        self.examples_tree = tree(page, [("prompt", "PROMPT (or raw text)", 350), ("answer", "ANSWER", 350), ("intent", "CATEGORY", 100), ("review", "QUALITY", 80)])
+        self.examples_tree.bind("<Double-1>", lambda _: self.edit_example())
+        # quiet drill-downs: everything else about the dataset lives behind these
+        links = self.dataset_links = ttk.Frame(page)
+        links.pack(fill="x", pady=(12, 0))
+        button(links, "+ Write example", self.new_example)
+        button(links, "Import files", self.import_files)
+        stats = ttk.Frame(page)
+        overview = ttk.Frame(stats)
+        overview.pack(fill="x")
         self.audit_vars = {}
         for key, title, helper in [("records", "EXAMPLES", "example"), ("review", "NOT YET CHECKED", "review_good"), ("characters", "CHARACTERS", "token"), ("duplicates", "DUPLICATES", "duplicates")]:
             box = card(overview)
@@ -243,24 +272,25 @@ class NativeStudio(tk.Tk):
             self.audit_vars[key] = value
             label(box, textvariable=value, style="Metric.TLabel").pack(anchor="w")
             with_help(box, title, helper, font=(FONT, 9)).pack(anchor="w", pady=(4, 0))
-        tools = ttk.Frame(page)
-        tools.pack(fill="x", pady=(0, 10))
-        self.search = tk.StringVar()
-        label(tools, "Search").pack(side="left", padx=(0, 8))
-        ttk.Entry(tools, textvariable=self.search, width=28).pack(side="left", padx=(0, 12))
-        self.search.trace_add("write", lambda *_: self.refresh_examples())
-        button(tools, "+ Write example", self.new_example)
-        button(tools, "Edit", self.edit_example)
-        Tooltip(button(tools, "Mark as Good", self.mark_reviewed), help_text("review_good"))
-        button(tools, "Remove", self.remove_examples)
-        self.examples_tree = tree(page, [("prompt", "PROMPT (or raw text)", 350), ("answer", "ANSWER", 350), ("intent", "CATEGORY", 100), ("review", "QUALITY", 80)])
-        self.examples_tree.bind("<Double-1>", lambda _: self.edit_example())
-        bottom = ttk.Frame(page)
-        bottom.pack(fill="x", pady=(12, 0))
-        label(bottom, "Double-click an example to read or edit it.", "Muted.TLabel").pack(side="left")
-        delete = ttk.Button(bottom, text="Delete dataset", command=self.delete_dataset)
-        delete.pack(side="right")
+        hint = ttk.Frame(stats)
+        hint.pack(fill="x", pady=(8, 0))
+        label(hint, "Importing: each example needs a prompt and an answer (JSONL, JSON, CSV, TSV or TXT). Duplicates are skipped.", "Muted.TLabel").pack(side="left")
+        help_icon(hint, "import_format").pack(side="left", padx=(4, 18))
+        label(hint, "Quality: Review = not checked yet, Good = you approved it.", "Muted.TLabel").pack(side="left")
+        help_icon(hint, "review_good").pack(side="left", padx=(4, 0))
+        manage = ttk.Frame(page)
+        button(manage, "+ New dataset", self.new_dataset)
+        self.mark_advanced(button(manage, "Rename", self.rename_dataset))
+        self.mark_advanced(button(manage, "Export", self.export_dataset))
+        delete = button(manage, "Delete dataset", self.delete_dataset)
         self.mark_advanced(delete)
+        self.drilldown(links, "Stats and checks", stats)
+        self.drilldown(links, "Rename, export or delete", manage)
+        label(links, "Double-click an example to read or edit it.", "Muted.TLabel").pack(side="right")
+
+    def dataset_line(self):
+        a = self.audit_vars
+        return f"{a['records'].get()} examples \u00b7 {a['review'].get()} not yet checked"
 
     def refresh_examples(self):
         if not hasattr(self, "examples_tree"):
@@ -274,6 +304,7 @@ class NativeStudio(tk.Tk):
         stats = self.workspace.audit(self.selected_dataset())
         for key, variable in self.audit_vars.items():
             variable.set(f"{stats[key]:,}")
+        self.dataset_summary.set("\u00b7 " + self.dataset_line())
 
     def new_dataset(self):
         name = simpledialog.askstring("Create dataset", "Dataset name", parent=self)
