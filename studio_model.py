@@ -430,7 +430,8 @@ class AdamW:
             self.v[key] += .001 * gradient * gradient
             m = self.m[key] / (1 - .9 ** self.steps)
             v = self.v[key] / (1 - .999 ** self.steps)
-            parameter *= 1 - learning_rate * self.weight_decay
+            if not key.endswith((".g", ".b")):  # no decay on normalisation gains and biases
+                parameter *= 1 - learning_rate * self.weight_decay
             parameter -= learning_rate * m / (self.xp.sqrt(v) + 1e-8)
         return norm
 
@@ -834,7 +835,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         total, count = 0., 0
         for start in range(0, min(len(samples), cfg["batch_size"] * 20), cfg["batch_size"]):
             if stop.is_set():
-                break
+                return None  # a part-way result must never pick the best checkpoint
             x, y = batch_arrays(samples[start:start + cfg["batch_size"]])
             targets = int((y != -100).sum())
             total += model.loss(x, y) * targets
@@ -896,8 +897,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             if payload:
                 emit({"type": "telemetry", "step": step, "total": cfg["steps"], "loss": loss, "lr": rate, **payload})
             if step % cfg["eval_every"] == 0 or step == cfg["steps"]:
-                score = validation_loss if validation_loss is not None else loss
-                if score < best:
+                score = validation_loss if validation_loss is not None else evaluate(train_samples)  # no held-out windows: fixed training windows, not one random batch
+                if score is not None and score < best:
                     best = score
                     save("best.npz")
                 record["best_loss"] = best

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from studio_arch import default_spec
 from studio_archdb import ArchitectureStore
 
 
@@ -159,12 +160,13 @@ class ArchitectureDatabaseTests(unittest.TestCase):
 
     def test_export_import_roundtrip(self):
         arch = self.store.create("Export me", spec("x"))
-        self.store.commit(arch, spec("y"))
+        valid = default_spec("y")  # import now validates, so the exported head must be a real network
+        self.store.commit(arch, valid)
         path = self.root / "exports" / "net.json"
         self.store.export_spec(arch, path)
         self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["format"], "groundwork-arch-export/1")
         copied = self.store.import_spec(path, name="Copy")
-        self.assertEqual(self.store.get(copied)["spec"], spec("y"))
+        self.assertEqual(self.store.get(copied)["spec"], valid)
         self.assertEqual(self.store.get(copied)["name"], "Copy")
         defaulted = self.store.import_spec(path)
         self.assertEqual(self.store.get(defaulted)["name"], "Export me")
