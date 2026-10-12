@@ -14,7 +14,7 @@ FAKE_LINK_SCRIPT = r"""
 import sys
 sys.path.insert(0, %r)
 from panda3d.core import loadPrcFileData
-loadPrcFileData("", "window-type offscreen\naudio-library-name null\nsync-video 0")
+loadPrcFileData("", "window-type offscreen\nframebuffer-hardware 0\naudio-library-name null\nsync-video 0")
 import studio_brain3d as sb
 
 class Link:

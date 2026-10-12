@@ -19,7 +19,7 @@ AT = "2026-01-01T22:10:00+00:00"
 def story(base="/nonexistent"):
     """The engine's story: errors 5, 4, 2, 3, 3.5, 1.5 where 4 and 5 are discarded off 3 and 6 continues from 3."""
     errors, parents = [5, 4, 2, 3, 3.5, 1.5], [None, 1, 2, 3, 4, 3]
-    return [{"n": i, "round": i, "path": f"{base}/{i}.npz", "error": e, "elapsed": i * 600.0, "at": AT, "parent": p, "kept": True,
+    return [{"n": i, "round": i, "path": str(Path(base) / f"{i}.npz"), "error": e, "elapsed": i * 600.0, "at": AT, "parent": p, "kept": True,
              "discarded": i in (4, 5), "pivot": "halve_lr" if i == 6 else None, "teacher": {"polished": i == 2, "win_rate": None, "lessons": 2 if i == 1 else 0}}
             for i, (e, p) in enumerate(zip(errors, parents), 1)]
 
