@@ -27,6 +27,19 @@ py -3 -m venv .venv
 
 On Windows you can instead double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
 
+## Development with hot reload
+
+Recommended while editing the code. From the repo root, with the venv active or using its interpreter:
+
+```bash
+.venv/bin/python dev.py
+```
+
+`dev.py` starts the studio and restarts it whenever a `.py` file changes. It watches the whole project, including subfolders, and skips `.venv/`, `tests/`, `data/`, `runs/`, `exports/`, `artifacts/`, and dot-folders. Ctrl+C stops it.
+
+- A restart discards any running training job without the checkpoint prompt. Stop and save the run before saving an edit.
+- The 3D viewer is a separate process and may stay open after a restart. Close it manually if it lingers.
+
 ## Launch
 
 On Windows, double-click **start_studio.bat**. It creates a virtual environment if needed, installs the two dependencies, and opens the desktop window.
