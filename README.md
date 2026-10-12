@@ -35,10 +35,13 @@ Recommended while editing the code. From the repo root, with the venv active or 
 .venv/bin/python dev.py
 ```
 
-`dev.py` starts the studio and restarts it whenever a `.py` file changes. It watches the whole project, including subfolders, and skips `.venv/`, `tests/`, `data/`, `runs/`, `exports/`, `artifacts/`, and dot-folders. Ctrl+C stops it.
+`dev.py` starts the studio and applies code changes inside the open window. Nothing is relaunched, so the app never takes focus from the editor you are working in.
 
-- A restart discards any running training job without the checkpoint prompt. Stop and save the run before saving an edit.
-- The 3D viewer is a separate process and may stay open after a restart. Close it manually if it lingers.
+- An edit is applied about a second after the files stop changing, and only while the studio is in the background. While you are using the studio, the status bar says the code changed and the reload waits until you switch away. Cmd+R (Ctrl+R on Windows) reloads at once.
+- A reload never interrupts a running job or an open dialog; it waits for them.
+- If the new code has an error, the old code keeps running and the error is shown in the status bar and the terminal. Fix the file and it reloads again.
+- A reload rebuilds every page: the window, its position and the current page stay, but text typed into fields, scroll positions and the chat on screen are reset. Saved work is untouched.
+- Changes to `dev.py` itself need a restart of `dev.py`. It watches the whole project and skips `.venv/`, `tests/`, `data/`, `runs/`, `exports/`, `artifacts/`, and dot-folders. Ctrl+C stops it.
 
 
 ## Lint and git hooks
