@@ -105,7 +105,8 @@ class SceneModel:
             bins = min(32, self.spec['dims']['n_ctx'])
             result['edges'] = list(self.summary_edges) if self.summary_edges is not None else bin_edges(self.spec['dims']['n_ctx'], bins).tolist()
             result['gates'] = self.gates
-            result['attention'] = {key: np.asarray(value)[:, :32, :32].tolist() for key, value in self.summaries.items()}
+            bins = min(32, self.spec['dims']['n_ctx'])
+            result['attention'] = {key: np.asarray(value)[:, :bins, :bins].tolist() for key, value in self.summaries.items()}
             result['stream_norms'] = {key: np.asarray(value)[:32].tolist() for key, value in self.stream_norms.items()}
         elif level in ('Window', 'Head'):
             ids = arrays.get('ids')

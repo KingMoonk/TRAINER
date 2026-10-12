@@ -1298,7 +1298,7 @@ class NetworkMixin:
                 summary = binned_attention(source, "The model reads this prompt.", n_bins=16)
                 result = {"type": "summary", "attention": {key: value.tolist() for key, value in summary["attention"].items()},
                           "stream_norms": {key: value.tolist() for key, value in summary["stream_norms"].items()},
-                          "paths": run_paths(run_dirs)}
+                          "edges": summary["edges"].tolist(), "paths": run_paths(run_dirs)}
                 outcome = True, result
             except Exception as error:
                 outcome = False, str(error)
