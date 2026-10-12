@@ -115,7 +115,7 @@ class PaneSwitcher(ttk.Frame):
 
 
 class WorkflowMixin:
-    PAGES = [("home", "↗", "Start here", "Five steps from raw data to a small AI you can chat with. Follow the checklist, or press Quick start."),
+    PAGES = [("home", "↗", "Start here", "Five steps, all on this computer. Follow the list; optional steps can be skipped."),
              ("catalog", "01", "Get data", "Download published training datasets. Their licenses and sources stay attached."),
              ("datasets", "02", "Your data", "Read your examples, fix mistakes, and mark the good ones."),
              ("synthesis", "03", "Make extra data", "Optional: generate more examples. Try 5 samples first, then add the good ones to your data."),
@@ -223,46 +223,34 @@ class WorkflowMixin:
 
     def _build_home(self):
         page = self.pages["home"].body
-        start = card(page)
+        start = ttk.Frame(page)
         start.pack(fill="x", pady=(0, 14))
-        label(start, "START HERE", "CardMuted.TLabel", font=(FONT, 9, "bold")).pack(anchor="w")
-        label(start, "Train your own small AI in five steps", "CardTitle.TLabel", font=(FONT, 20, "bold")).pack(anchor="w", pady=(8, 4))
-        label(start, "Everything runs on this computer. Work down the list; steps marked optional can be skipped.", "CardMuted.TLabel").pack(anchor="w", pady=(0, 14))
         self.home_rows = {}
         for item in self.home_steps():
-            row = ttk.Frame(start, style="Card.TFrame")
-            row.pack(fill="x", pady=3)
-            marker = label(row, "\u25cb", "Card.TLabel", font=(FONT, 16, "bold"), foreground=MUTED, width=2)
-            marker.pack(side="left", padx=(0, 10))
-            text = ttk.Frame(row, style="Card.TFrame")
+            row = ttk.Frame(start)
+            row.pack(fill="x", pady=2, ipady=6)
+            status = label(row, "", "Muted.TLabel", width=9)
+            status.pack(side="left", padx=(0, 10))
+            text = ttk.Frame(row)
             text.pack(side="left", fill="x", expand=True)
-            head = ttk.Frame(text, style="Card.TFrame")
-            head.pack(anchor="w")
-            title = label(head, item["title"], "Card.TLabel", font=(FONT, 12, "bold"))
-            title.pack(side="left")
-            tag = label(head, "optional" if item["optional"] else "", "CardMuted.TLabel", font=(FONT, 9))
-            tag.pack(side="left", padx=(8, 0))
-            label(text, item["desc"], "CardMuted.TLabel").pack(anchor="w")
-            go = ttk.Button(row, text=item["action"], command=lambda p=item["page"]: self.show_page(p))
-            go.pack(side="right")
-            self.home_rows[item["key"]] = {"marker": marker, "title": title, "tag": tag, "button": go}
-        quick = ttk.Frame(start, style="Card.TFrame")
-        quick.pack(fill="x", pady=(16, 0))
-        self.quick_button = ttk.Button(quick, text="Quick start: train a first model for me", style="Accent.TButton", command=self.quick_start)
-        self.quick_button.pack(side="left")
-        label(quick, "Picks your biggest instruction dataset and a Small model, then trains for about two minutes. You confirm first.", "CardMuted.TLabel").pack(side="left", padx=14)
-        metrics = ttk.Frame(page)
-        metrics.pack(fill="x", pady=(0, 10))
-        self.home_metrics = {}
-        for key, title in [("datasets", "DATASETS"), ("records", "EXAMPLES"), ("drafts", "DRAFTS TO REVIEW"), ("runs", "TRAINED MODELS")]:
-            box = card(metrics)
-            box.pack(side="left", fill="x", expand=True, padx=(0, 10))
-            var = tk.StringVar(value="0")
-            self.home_metrics[key] = var
-            label(box, textvariable=var, style="Metric.TLabel").pack(anchor="w")
-            label(box, title, "CardMuted.TLabel", font=(FONT, 9)).pack(anchor="w", pady=(5, 0))
+            title = label(text, item["title"], font=(FONT, 12, "bold"))
+            title.pack(anchor="w")
+            label(text, item["desc"], "Muted.TLabel").pack(anchor="w")
+            go = ttk.Button(row, text=item["action"], command=lambda p=item["page"]: self.show_page(p), style="Accent.TButton")
+            self.home_rows[item["key"]] = {"marker": status, "title": title, "button": go}
+            for widget in (row, text, title):
+                widget.bind("<Button-1>", lambda _e, p=item["page"]: self.show_page(p))
+        links = ttk.Frame(page)
+        links.pack(fill="x")
+        self.quick_button = ttk.Button(links, text="Quick start: train a first model for me", command=self.quick_start)
+        self.quick_button.pack(side="left", padx=(0, 8))
+        Tooltip(self.quick_button, "Picks your biggest instruction dataset and a Small model, then trains for about two minutes. You confirm first.")
+        self.home_metrics = {key: tk.StringVar(value="0") for key in ("datasets", "records", "drafts", "runs")}
+        self.home_totals, self.home_runs = tk.StringVar(), tk.StringVar()
+        ttk.Button(links, textvariable=self.home_totals, command=lambda: self.show_page("datasets")).pack(side="left", padx=(0, 8))
+        ttk.Button(links, textvariable=self.home_runs, command=lambda: self.show_page("training")).pack(side="left")
         self.home_hint = tk.StringVar()
-        label(page, textvariable=self.home_hint, style="Muted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=8)
+        label(page, textvariable=self.home_hint, style="Muted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=12)
 
     @staticmethod
     def home_steps():
@@ -297,20 +285,26 @@ class WorkflowMixin:
                   "drafts": len(self.drafts), "runs": len([r for r in runs if r.get("stage") != "dpo"])}
         for key, var in self.home_metrics.items():
             var.set(f"{counts[key]:,}")
+        self.home_totals.set(f"{counts['datasets']:,} datasets \u00b7 {counts['records']:,} examples")
+        self.home_runs.set(f"{counts['runs']:,} trained models")
         progress = self.home_progress()
         upcoming = next((item["key"] for item in progress if not item["done"] and not item["optional"]), None)
         for item in progress:
             row = self.home_rows[item["key"]]
-            row["marker"].configure(text="\u2713" if item["done"] else "\u25cb", foreground=ACCENT if item["done"] else MUTED)
-            row["title"].configure(foreground=ACCENT if item["key"] == upcoming else TEXT)
-            row["tag"].configure(text="optional" if item["optional"] and not item["done"] else "done" if item["done"] else "\u2190 do this next" if item["key"] == upcoming else "")
-            row["button"].configure(style="Accent.TButton" if item["key"] == upcoming else "TButton")
+            is_next = item["key"] == upcoming
+            row["marker"].configure(text="Done" if item["done"] else "Next" if is_next else "Optional" if item["optional"] else "To do",
+                                    foreground=ACCENT if item["done"] or is_next else MUTED)
+            row["title"].configure(foreground=ACCENT if is_next else TEXT)
+            if is_next:
+                row["button"].pack(side="right")
+            else:
+                row["button"].pack_forget()
         selected = self.selected_dataset()
         if not selected:
             text = "Next: download a starter collection or import your own examples."
         else:
             stats = self.dataset_stats(selected)
-            text = f"Working dataset: {self.dataset_var.get()} \u00b7 {stats['records']:,} examples \u00b7 {stats['review']:,} not yet checked. Training uses a bounded sample, so a large dataset does not make every run slow."
+            text = f"Working dataset: {self.dataset_var.get()} \u00b7 {stats['records']:,} examples \u00b7 {stats['review']:,} not yet checked."
         self.home_hint.set(text)
 
     # ---- quick start
@@ -372,35 +366,45 @@ class WorkflowMixin:
 
     def _build_catalog(self):
         page = self.pages["catalog"].body
-        banner = card(page, "A broad training library")
+        banner = card(page, "Recommended collection")
         banner.pack(fill="x", pady=(0, 14))
-        label(banner, "Conversation \u2022 coding \u2022 reasoning \u2022 grounded knowledge\nDownloads use original training splits. Source and license details travel with each collection.", "CardMuted.TLabel").pack(anchor="w")
         summary = catalog_summary()
-        self.catalog_total = tk.StringVar(value=(f"Recommended collection: {summary['count']} datasets \u00b7 about {summary['megabytes']:,.0f} MB to download \u00b7 roughly "
-                                                 f"{summary['records']:,} examples \u00b7 about {format_duration(summary['minutes'] * 60).replace('about ', '')} on a {DOWNLOAD_MBPS} Mbps connection "
-                                                 "(plus preparing them on disk). Everything is optional: you can also download one dataset at a time below."))
-        label(banner, textvariable=self.catalog_total, style="Card.TLabel", wraplength=920, justify="left", foreground=ACCENT).pack(anchor="w", pady=(10, 0))
+        self.catalog_total = tk.StringVar(value=(f"Conversation, coding, reasoning and grounded knowledge. {summary['count']} datasets, about {summary['megabytes']:,.0f} MB "
+                                                 f"(roughly {summary['records']:,} examples), about {format_duration(summary['minutes'] * 60).replace('about ', '')} on a {DOWNLOAD_MBPS} Mbps connection."))
+        label(banner, textvariable=self.catalog_total, style="CardMuted.TLabel", wraplength=920, justify="left").pack(anchor="w")
         controls = ttk.Frame(banner, style="Card.TFrame")
-        controls.pack(fill="x", pady=(12, 0))
-        button(controls, "Download recommended collection", self.download_core, True)
+        controls.pack(fill="x", pady=(14, 0))
+        button(controls, "Download", self.download_core, True)
         button(controls, "Stop download", self.stop_job)
-        button(controls, "Open my data", lambda: self.show_page("datasets"))
         self.catalog_status = tk.StringVar(value="Choose a source below. Completed downloads can be reused.")
         label(banner, textvariable=self.catalog_status, style="CardMuted.TLabel", wraplength=920).pack(anchor="w", pady=(8, 0))
         self.catalog_labels = {}
+        chooser = getattr(studio_catalog, "default_catalog_ids", None)
+        recommended = set(chooser()) if chooser else set()
+        label(page, "Or choose sources", "Muted.TLabel").pack(anchor="w", pady=(0, 4))
+        short, rest = ttk.Frame(page), ttk.Frame(page)
+        short.pack(fill="x")
         for source in CATALOG:
-            box = card(page, source["name"])
-            box.pack(fill="x", pady=(0, 12))
-            label(box, source["description"], "Card.TLabel", wraplength=930, justify="left").pack(anchor="w")
-            details = f"{source.get('records_hint', '')}  \u00b7  {source.get('size_hint', '')}  \u00b7  {source['license']}"
-            label(box, details, "CardMuted.TLabel").pack(anchor="w", pady=(8, 3))
-            row = ttk.Frame(box, style="Card.TFrame")
-            row.pack(fill="x")
-            button(row, "Download", lambda key=source["id"]: self.download_sources([key]), True)
-            button(row, "Source & license", lambda url=source["source_url"]: webbrowser.open(url))
-            var = tk.StringVar(value="Not in your library")
-            self.catalog_labels[source["id"]] = var
-            label(row, textvariable=var, style="CardMuted.TLabel").pack(side="left", padx=12)
+            self._catalog_row(short if source["id"] in recommended else rest, source)
+        links = ttk.Frame(page)
+        links.pack(fill="x", pady=(10, 0))
+        if rest.winfo_children():
+            self.drilldown(links, f"More sources ({len(rest.winfo_children())})", rest)
+        button(links, "Import my own files", self.import_files)
+        button(links, "Open my data", lambda: self.show_page("datasets"))
+
+    def _catalog_row(self, parent, source):
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=2)
+        name = label(row, source["name"], font=(FONT, 11, "bold"), width=34)
+        name.pack(side="left")
+        Tooltip(name, f"{source['description']}\n\nLicense: {source['license']}")
+        label(row, f"{source.get('size_hint', '')}", "Muted.TLabel", width=18).pack(side="left")
+        var = tk.StringVar(value="Not in your library")
+        self.catalog_labels[source["id"]] = var
+        label(row, textvariable=var, style="Muted.TLabel", width=26).pack(side="left")
+        button(row, "Download", lambda key=source["id"]: self.download_sources([key]))
+        button(row, "Source & license", lambda url=source["source_url"]: webbrowser.open(url))
 
     def refresh_catalog(self):
         if not hasattr(self, "catalog_labels"):
@@ -465,14 +469,13 @@ class WorkflowMixin:
         page = self.pages["datasets"]
         self.search.trace_add("write", lambda *_: self.reset_record_page())
         pager = ttk.Frame(page)
-        pager.pack(fill="x", pady=(8, 0))
+        pager.pack(fill="x", pady=(8, 0), before=self.dataset_links)
         button(pager, "← Previous", lambda: self.page_records(-1))
         button(pager, "Next 100 →", lambda: self.page_records(1))
         self.record_count = tk.StringVar()
         label(pager, textvariable=self.record_count, style="Muted.TLabel").pack(side="left", padx=10)
-        button(pager, "Train on this data \u2192", lambda: self.show_page("blueprint"), True)
         details = ttk.Frame(page)
-        details.pack(fill="x", pady=(10, 0))
+        details.pack(fill="x", pady=(10, 0), before=self.dataset_links)
         self.example_detail = text_box(details, height=5, state="disabled")
         self.example_detail.pack(fill="x")
         self.examples_tree.bind("<<TreeviewSelect>>", lambda _: self.preview_example())
@@ -502,6 +505,7 @@ class WorkflowMixin:
         stats = self.dataset_stats(selected)
         for key, var in self.audit_vars.items():
             var.set(f"{stats[key]:,}")
+        self.dataset_summary.set("\u00b7 " + self.dataset_line())
         if hasattr(self, "record_count"):
             self.record_count.set(f"{offset + 1 if count else 0:,}–{min(offset + self.record_page_size, count):,} of {count:,}")
         if hasattr(self, "example_detail"):
@@ -556,11 +560,13 @@ class WorkflowMixin:
             style.configure(f"Card.T{kind}", background=PANEL, foreground=TEXT)
             style.map(f"Card.T{kind}", background=[("active", PANEL)], foreground=[("active", ACCENT)])
         page = self.pages["synthesis"].body
-        self.synthesis_stage = ttk.Notebook(page)
+        self.synthesis_stage = PaneSwitcher(page)       # 0 = make data, 1 = review drafts, 2 = history (the last two are drill-downs)
+        self.synthesis_stage.configure(style="TFrame")
         self.synthesis_stage.pack(fill="both", expand=True)
-        configure, review, history = [ttk.Frame(self.synthesis_stage, padding=16) for _ in range(3)]
-        for frame, title in zip((configure, review, history), ("Make data", "Review & add", "History")):
-            self.synthesis_stage.add(frame, text=title)
+        configure, review, history = [ttk.Frame(self.synthesis_stage, padding=(0, 8)) for _ in range(3)]
+        for frame in (configure, review, history):
+            self.synthesis_stage.add(frame)
+            button(frame, "\u2190 Back to Make extra data", lambda: self.synthesis_stage.select(0)).pack_configure(side="top", padx=0, pady=(0, 10), anchor="w")
         self.batch_history_page = history
         # shared settings (names are part of the test hooks and saved recipes)
         self.synth_count, self.synth_seed = tk.StringVar(value="200"), tk.StringVar(value="42")
@@ -587,7 +593,7 @@ class WorkflowMixin:
         self.synth_checkpoint = tk.StringVar()
         self.synth_temperature, self.synth_top_k, self.synth_max_tokens = tk.StringVar(value="0.8"), tk.StringVar(value="40"), tk.StringVar(value="160")
 
-        # ---- 1. what do you want to make?
+        # ---- the focal block: what to make, how many, go
         goals = card(configure, "What do you want to make?")
         goals.pack(fill="x", pady=(0, 12))
         grid = ttk.Frame(goals, style="Card.TFrame")
@@ -598,12 +604,24 @@ class WorkflowMixin:
             widget = ModeCard(grid, key, title, blurb, self.select_goal)
             widget.grid(row=i // 3, column=i % 3, sticky="nsew", padx=(0 if i % 3 == 0 else 6, 0 if i % 3 == 2 else 6), pady=(0, 10 if i < 3 else 0))
             self.goal_cards[key] = widget
+        self.count_row = ttk.Frame(goals, style="Card.TFrame")
+        self.count_row.pack(fill="x", pady=(12, 0))
+        frame, _ = field(self.count_row, "How many examples", self.synth_count, width=12)
+        frame.pack(side="left", padx=(0, 16))
+        action = ttk.Frame(self.count_row, style="Card.TFrame")
+        action.pack(side="left", pady=(20, 0))
+        button(action, "Generate examples \u2192", self.generate_drafts, True)
+        button(action, "Try 5 samples first", self.preview_samples)
+        button(action, "Stop", self.stop_job)
+        self.synth_summary = tk.StringVar(value="Pick what to make, try 5 samples, then generate a full batch.")
+        label(configure, textvariable=self.synth_summary, style="Muted.TLabel", wraplength=1000, justify="left").pack(anchor="w", pady=(0, 8))
 
-        # ---- 2. essential settings for the chosen goal
-        settings = card(configure)
-        settings.pack(fill="x", pady=(0, 12))
-        label(settings, textvariable=self.synth_goal_title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
-        self.synth_tabs = PaneSwitcher(settings, self._synth_changed)
+        # ---- quiet drill-downs
+        links = ttk.Frame(configure)
+        links.pack(fill="x")
+        options = self.synth_options = card(configure)
+        label(options, textvariable=self.synth_goal_title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 10))
+        self.synth_tabs = PaneSwitcher(options, self._synth_changed)
         self.synth_tabs.pack(fill="x")
         panes = {key: ttk.Frame(self.synth_tabs, style="Card.TFrame") for key in PANE_ORDER}
         for key in PANE_ORDER:
@@ -614,28 +632,17 @@ class WorkflowMixin:
         self._build_remix_pane(panes["remix"])
         self._build_model_pane(panes["model"])
         self._build_template_pane(panes["templates"])
-        self.teacher_box = self._build_teacher_box(settings)
-        self.count_row = ttk.Frame(settings, style="Card.TFrame")
-        self.count_row.pack(fill="x", pady=(12, 0))
-        frame, _ = field(self.count_row, "How many examples", self.synth_count, width=12)
-        frame.pack(side="left", padx=(0, 16))
-
-        # ---- 3. try, generate, read the result
-        action = ttk.Frame(configure)
-        action.pack(fill="x", pady=(0, 6))
-        button(action, "Generate examples →", self.generate_drafts, True)
-        button(action, "Generate 5 samples", self.preview_samples)
-        button(action, "Stop", self.stop_job)
-        self.advanced_button = ttk.Button(action, text="▸ Advanced options", command=self.toggle_advanced)
-        self.advanced_button.pack(side="right", pady=4)
+        self.teacher_box = self._build_teacher_box(options)
+        self.review_link = button(links, "Review drafts (0)", lambda: self.synthesis_stage.select(1))
+        self.options_button = self.drilldown(links, "Options", options)
+        self.advanced_button = ttk.Button(links, text="\u25b8 Quality checks & recipes", command=self.toggle_advanced)
+        self.advanced_button.pack(side="left", padx=(0, 8), pady=4)
+        button(links, "History", lambda: self.synthesis_stage.select(2))
         self.mark_advanced(self.advanced_button)
-        self.synth_summary = tk.StringVar(value="Pick what to make, try 5 samples, then generate a full batch.")
-        label(configure, textvariable=self.synth_summary, style="Muted.TLabel", wraplength=1000, justify="left").pack(anchor="w", pady=(0, 8))
-        self.sample_preview = text_box(configure, 8, state="disabled")
-        self.sample_preview.pack(fill="x", pady=(0, 12))
+        self.sample_preview = text_box(configure, 8, state="disabled")      # packed by show_samples
         set_text(self.sample_preview, "Samples appear here. They are not saved: use them to check the style, then generate the full batch.")
         self.synth_advanced = self._build_advanced(configure)
-        self.advanced_anchor = self.sample_preview
+        self.advanced_anchor = links
 
         # ---- review tab
         review_controls = card(review, "Choose what joins your training collection")
@@ -675,6 +682,7 @@ class WorkflowMixin:
         self.batch_detail.pack(fill="x", pady=(12, 0))
         self.synth_tabs.select(PANE_ORDER.index("practice"))
         self.refresh_batches()
+        self.synthesis_stage.select(0)
 
     # ---- the six goal panes: only the essential fields live here
     def _build_practice_pane(self, pane):
@@ -768,7 +776,7 @@ class WorkflowMixin:
         label(pane, "Prompts to answer, one per line. Leave empty to use the prompts in the working dataset.", "CardMuted.TLabel").pack(anchor="w", pady=(0, 5))
         self.synth_prompts = text_box(pane, 3)
         self.synth_prompts.pack(fill="x")
-        label(pane, "Answers come only from your own model and always need review. Sampling controls are under Advanced options.", "CardMuted.TLabel").pack(anchor="w", pady=(8, 0))
+        label(pane, "Answers come only from your own model and always need review. Sampling controls are under Quality checks & recipes.", "CardMuted.TLabel").pack(anchor="w", pady=(8, 0))
 
     def _build_template_pane(self, pane):
         pane.columnconfigure((0, 1), weight=1)
@@ -859,10 +867,10 @@ class WorkflowMixin:
     def toggle_advanced(self):
         if self.synth_advanced.winfo_ismapped():
             self.synth_advanced.pack_forget()
-            self.advanced_button.configure(text="▸ Advanced options")
+            self.advanced_button.configure(text="▸ Quality checks & recipes")
         else:
             self.synth_advanced.pack(fill="x", pady=(0, 12), after=self.advanced_anchor)
-            self.advanced_button.configure(text="▾ Advanced options")
+            self.advanced_button.configure(text="▾ Quality checks & recipes")
 
     # ---- goal selection
     def select_goal(self, key):
@@ -874,8 +882,13 @@ class WorkflowMixin:
         for key, widget in self.goal_cards.items():
             widget.set_selected(key == goal)
         self.synth_goal_title.set(next(title for key, title, _ in GOALS if key == goal))
+        if hasattr(self, "options_button"):
+            self.options_button.base = f"Options for {self.synth_goal_title.get().lower()}"
+            if goal != "practice" and not self.synth_options.winfo_manager():     # these goals need input, so open their options
+                self.options_button.invoke()
+            self.options_button.sync()
         if goal in TEACHER_GOALS:
-            self.teacher_box.pack(fill="x", pady=(12, 0), before=self.count_row)
+            self.teacher_box.pack(fill="x", pady=(12, 0))
             if not self.teacher_models_loaded and not self.teacher_model.get().strip():
                 self.after(80, lambda: self.refresh_teacher_models(quiet=True))
         else:
@@ -1098,6 +1111,8 @@ class WorkflowMixin:
             parts.append(f"PROMPT\n{row.get('user', '')}\n\nANSWER\n{row.get('assistant', '')}")
         if not parts:
             parts.append("Nothing passed the quality checks. Skipped examples and reasons are listed in the summary above.")
+        if not self.sample_preview.winfo_manager():
+            self.sample_preview.pack(fill="x", pady=(0, 12))
         set_text(self.sample_preview, "\n\n────────────\n\n".join(parts))
         self.synth_summary.set(summarize_batch(result) + "  These samples were not saved.")
 
@@ -1144,6 +1159,8 @@ class WorkflowMixin:
                                                                         checks, "Reviewed" if row.get("quality") == "Good" else "To review"))
         if hasattr(self, "draft_count"):
             self.draft_count.set(f"{offset + 1 if self.drafts else 0:,}–{min(offset + self.draft_page_size, len(self.drafts)):,} of {len(self.drafts):,}")
+        if hasattr(self, "review_link"):
+            self.review_link.configure(text=f"Review drafts ({len(self.drafts):,})")
         if hasattr(self, "add_all_button"):
             self.add_all_button.configure(text=f"Add all {len(self.drafts):,}" if self.drafts else "Add all")
 
