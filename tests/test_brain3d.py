@@ -69,6 +69,8 @@ print("FAKELINK-OK")
 """
 
 
+# Hosted CI runners have no GPU, so Panda3D cannot open even an offscreen window there.
+@unittest.skipIf(os.environ.get("CI"), "no hardware OpenGL on CI runners")
 class Brain3DTests(unittest.TestCase):
     def test_selftest_renders_screenshot(self):
         with tempfile.TemporaryDirectory() as directory:
