@@ -9,13 +9,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import uuid
 
 FORMAT = "groundwork-arch/1"
 ACTIVATIONS = ("gelu", "relu")
 TOKENIZERS = ("byte", "character")
-BLOCK_ID = re.compile(r"^blk_[0-9a-f]{6}$")
+BLOCK_ID = re.compile(r"^blk_[0-9a-f]{6}\Z")
 TRAINING_DEFAULTS = {"steps": 300, "batch_size": 4, "accumulation": 1, "learning_rate": 0.001, "warmup": 20,
                      "weight_decay": 0.01, "eval_every": 25, "validation": 0.1, "seed": 42,
                      "objective": "all", "device": "auto"}
@@ -44,11 +45,11 @@ def default_spec(name="My network"):
 
 
 def _int(value, label, low, high):
-    if isinstance(value, bool) or (isinstance(value, float) and value != int(value)):
+    if isinstance(value, bool) or (isinstance(value, float) and (math.isinf(value) or math.isnan(value) or value != int(value))):
         raise ValueError(f"{label} must be a whole number.")
     try:
         number = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError(f"{label} must be a whole number.") from None
     if not low <= number <= high:
         raise ValueError(f"{label} must be between {low} and {high}.")
@@ -60,6 +61,8 @@ def _float(value, label, low, high):
         number = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"{label} must be a number.") from None
+    if math.isinf(number) or math.isnan(number):
+        raise ValueError(f"{label} must be a number.")
     if not low <= number <= high:
         raise ValueError(f"{label} must be between {low} and {high}.")
     return number
