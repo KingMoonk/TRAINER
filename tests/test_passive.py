@@ -1,6 +1,7 @@
 """Passive training engine: plan, pure decisions, the SQLite record and the whole loop driven with fakes."""
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -32,12 +33,13 @@ class Rig:
         self.calls, self.teacher_calls, self.emitted = [], [], 0
         self.time = [1000.0]
         self.on_train = None
+        self.fail_with = RuntimeError("boom")
 
     def train(self, config, examples, output_dir, emit, stop, pause, init_from=None):
         self.calls.append({"config": config, "examples": list(examples), "init_from": init_from, "dir": Path(output_dir)})
         if self.fail_on == len(self.calls):
             self.fail_on = None
-            raise RuntimeError("boom")
+            raise self.fail_with
         Path(output_dir).mkdir(parents=True)
         (Path(output_dir) / "best.npz").write_bytes(b"x")
         if self.on_train:
@@ -87,6 +89,13 @@ class PlanTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 merge_plan(bad)
 
+    def test_non_finite_numbers_and_config_are_rejected(self):
+        for bad in ({"stop": {"duration": float("inf")}}, {"stop": {"duration": float("nan")}}, {"stop": {"target_error": float("nan")}},
+                    {"stop": {"target_error": float("inf")}}, {"plateau": {"checks": float("inf")}}, {"limits": {"memory_fraction": float("nan")}},
+                    {"plateau": {"min_improvement": float("inf")}}, {"config": "fast"}, {"config": [1]}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, r"number|group of settings"):
+                merge_plan(bad)
+
     def test_duration_seconds(self):
         self.assertEqual(passive.duration_seconds(merge_plan({"stop": {"duration": 30, "unit": "minutes"}})), 1800)
         self.assertEqual(passive.duration_seconds(merge_plan({})), 8 * 3600)
@@ -99,6 +108,14 @@ class PlanTests(unittest.TestCase):
         self.assertIn("3 rounds", summary["stop"])
         self.assertIn("1.5", summary["stop"])
         self.assertIn("halve the learning rate", summary["worse"])
+
+
+class JournalTests(unittest.TestCase):
+    def test_bad_lines_are_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "journal.jsonl"
+            path.write_bytes(b'{"a": 1}\nnot json\n{"b": 2}\n{"c": "caf\xc3')  # killed in the middle of a two-byte character
+            self.assertEqual(passive._read_jsonl(path), [{"a": 1}, {"b": 2}])
 
 
 class DecisionTests(unittest.TestCase):
@@ -272,6 +289,107 @@ class LoopTests(unittest.TestCase):
         self.assertTrue(Path(state["checkpoints"][state["best"] - 1]["path"]).exists())
         self.assertEqual(rig.types()[-1], "stop")
 
+    def test_a_stop_survives_a_trainer_that_dies_before_acting_on_it(self):
+        rig = Rig(self, [3.0, 2.0], plateau={"checks": 9})
+
+        def dies(config, examples, output_dir, emit, stop, pause, init_from=None):
+            rig.store.command(rig.id, "stop")
+            emit({"type": "metric", "step": 1, "loss": 1.0, "val_loss": 3.0})  # the trainer takes the command here
+            raise KeyboardInterrupt  # and is killed before it writes the stopped status
+        with self.assertRaises(KeyboardInterrupt):
+            run_session(rig.root, rig.id, train=dies, evaluate=rig.evaluate, build=lambda root, data: [dict(e) for e in EXAMPLES], clock=lambda: rig.time[0])
+        self.assertEqual(rig.row()["command"], "stop")
+        state = run_session(rig.root, rig.id, train=rig.train, evaluate=rig.evaluate, build=lambda root, data: [dict(e) for e in EXAMPLES], clock=lambda: rig.time[0])  # the watchdog restarts it
+        self.assertEqual((rig.row()["status"], rig.row()["command"], state["stop_reason"], len(rig.calls)), ("stopped", "", "user", 0))
+
+    def test_a_stop_while_the_data_is_still_being_prepared_ends_cleanly(self):
+        rig = Rig(self, [3.0], plateau={"checks": 9})
+
+        def cancelled(config, examples, output_dir, emit, stop, pause, init_from=None):
+            rig.store.command(rig.id, "stop")
+            self.assertTrue(stop.wait(5))  # the heartbeat thread takes the command
+            raise InterruptedError("Training preparation cancelled.")
+        with patch.object(passive, "POLL", 0.01):
+            state = run_session(rig.root, rig.id, train=cancelled, evaluate=rig.evaluate, build=lambda root, data: [dict(e) for e in EXAMPLES], clock=lambda: rig.time[0])
+        self.assertEqual((rig.row()["status"], state["stop_reason"], state["checkpoints"]), ("stopped", "user", []))
+
+    def test_a_diverging_round_steps_back_and_halves_the_learning_rate(self):
+        rig = Rig(self, [5.0, 4.0, 3.0], stop={"target_error": 3.5}, plateau={"checks": 9}, fail_train_on=3)
+        rig.fail_with = ValueError("Non-finite loss. Reduce the learning rate.")
+        state = rig.run()
+        self.assertEqual((rig.row()["status"], state["stop_reason"], state["best"]), ("finished", "target", 3))
+        self.assertEqual([c["n"] for c in state["checkpoints"]], [1, 2, 3])
+        move = [e for e in rig.store.journal(rig.id) if e["type"] == "rollback"]
+        self.assertEqual((move[0]["from"], move[0]["to"], move[0]["pivot"]), (2, 2, "halve_lr"))
+        self.assertEqual(rig.calls[3]["init_from"], state["checkpoints"][1]["path"])
+        self.assertAlmostEqual(rig.calls[3]["config"]["learning_rate"], rig.calls[0]["config"]["learning_rate"] / 2)
+        self.assertIn("went wrong", [e for e in rig.store.journal(rig.id) if e["type"] == "error"][0]["message"])
+        self.assertFalse(rig.calls[2]["dir"].exists())
+
+    def test_diverging_with_nothing_left_to_try_ends_the_session_not_as_failed(self):
+        rig = Rig(self, [5.0, 4.0], plateau={"checks": 9}, fail_train_on=3, worse={"limit": 2, "pivots": []})
+        rig.fail_with = ValueError("Non-finite loss. Reduce the learning rate.")
+        state = rig.run()
+        self.assertEqual((rig.row()["status"], state["stop_reason"], state["best"]), ("finished", "pivots", 2))
+
+    def test_diverging_before_any_checkpoint_halves_the_learning_rate_and_retries(self):
+        rig = Rig(self, [5.0], stop={"target_error": 6}, plateau={"checks": 9}, fail_train_on=1)
+        rig.fail_with = ValueError("Non-finite loss. Reduce the learning rate.")
+        state = rig.run()
+        self.assertEqual((rig.row()["status"], len(state["checkpoints"])), ("finished", 1))
+        self.assertAlmostEqual(rig.calls[1]["config"]["learning_rate"], rig.calls[0]["config"]["learning_rate"] / 2)
+
+    def test_other_training_errors_still_fail_the_session(self):
+        rig = Rig(self, [5.0], plateau={"checks": 9}, fail_train_on=1)
+        rig.fail_with = ValueError("The dataset is empty.")
+        with self.assertRaises(ValueError):
+            rig.run()
+        self.assertIn("empty", rig.row()["error"])
+
+    def test_heartbeat_runs_during_a_slow_setup_and_survives_any_error(self):
+        rig = Rig(self, [3.0], stop={"target_error": 5}, plateau={"checks": 9})
+        beats, real = [], PassiveStore.beat
+
+        def build(root, data):
+            time.sleep(0.15)
+            beats.append(rig.row()["heartbeat"])
+            return [dict(e) for e in EXAMPLES]
+
+        calls = []
+
+        def beat(self, session_id, pid):
+            calls.append(1)
+            if len(calls) == 2:  # the first beat is run()'s own, the second is the thread's
+                raise OSError("not a SQLite error")
+            real(self, session_id, pid)
+        with patch.object(passive, "BEAT", 0.01), patch.object(passive, "POLL", 0.01), patch.object(PassiveStore, "beat", beat):
+            run_session(rig.root, rig.id, train=rig.train, evaluate=rig.evaluate, build=build, clock=lambda: rig.time[0])
+        self.assertIsNotNone(beats[0])
+        self.assertGreater(len(calls), 2)  # still beating after the error
+
+    def test_pruning_takes_discarded_branches_first_and_removes_their_run_folders(self):
+        rig = Rig(self, [5.0, 4.0, 2.0, 3.0, 3.5, 1.5], limits={"keep_checkpoints": 3}, stop={"target_error": 1.6}, plateau={"checks": 9, "max_steps": 50})
+        state = rig.run()
+        kept = {c["n"]: c["kept"] for c in state["checkpoints"]}
+        self.assertEqual(kept, {1: False, 2: False, 3: True, 4: False, 5: True, 6: True})
+        for c, call in zip(state["checkpoints"], rig.calls):
+            self.assertEqual(call["dir"].exists(), c["kept"])
+        self.assertTrue(Path(state["checkpoints"][state["best"] - 1]["path"]).exists())
+
+    def test_win_rate_without_a_teacher_is_journalled_and_the_session_still_ends(self):
+        rig = Rig(self, [3.0, 2.0, 1.0], stop={"win_rate": 0.6, "target_error": 1.5}, plateau={"checks": 9})
+        state = rig.run()
+        self.assertEqual(state["stop_reason"], "target")
+        notes = [e["message"] for e in rig.store.journal(rig.id) if e["type"] == "error"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("no teacher", notes[0])
+
+    def test_win_rate_with_a_teacher_is_not_flagged(self):
+        rig = Rig(self, [3.0, 2.0], stop={"win_rate": 0.6, "target_error": 2.5}, plateau={"checks": 9}, teacher=lambda n, c: {"checkpoint": c, "lessons": []})
+        rig.set_teacher()
+        rig.run()
+        self.assertNotIn("error", rig.types())
+
     def test_pause_and_resume(self):
         rig = Rig(self, [3.0, 2.0], stop={"target_error": 2.5}, plateau={"checks": 9})
         rig.on_train = lambda r, n: r.store.command(r.id, "pause") if n == 1 else None
@@ -399,6 +517,15 @@ class LoopTests(unittest.TestCase):
         trainer.prune()
         self.assertTrue(outside.exists())
         self.assertFalse(trainer.state["checkpoints"][0]["kept"])
+
+    def test_a_paused_session_does_not_spin(self):
+        rig = Rig(self, [])
+        trainer = passive._Trainer(rig.root, rig.id, None, None, None, None, None, lambda: 0.0, threading.Event())
+        trainer.pause.set()
+        naps = []
+        with patch.object(passive.time, "sleep", lambda seconds: (naps.append(seconds), trainer.pause.clear())):
+            trainer.wait_if_paused()
+        self.assertGreaterEqual(naps[0], 1.0)
 
     def test_memory_over_limit_reruns_with_smaller_batch(self):
         rig = Rig(self, [2.0], stop={"target_error": 5}, limits={"memory_fraction": 0.5}, plateau={"checks": 9})

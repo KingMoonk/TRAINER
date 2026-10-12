@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import os
 import random
+import shutil
 import signal
 import sqlite3
 import sys
@@ -36,7 +38,7 @@ DEFAULT_PLAN = {
     "config": {},
     "base_checkpoint": None,
 }
-BEAT, POLL = 5.0, 1.0  # seconds between heartbeats / between command checks while a round is training
+BEAT, POLL, PAUSED_POLL = 5.0, 1.0, 1.0  # seconds between heartbeats / between command checks while a round is training / while paused
 
 
 # --------------------------------------------------------------------------- plan
@@ -44,7 +46,7 @@ BEAT, POLL = 5.0, 1.0  # seconds between heartbeats / between command checks whi
 def _number(value, label, low=None, high=None, integer=False, allow_none=False):
     if value is None and allow_none:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or (integer and int(value) != value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or (integer and int(value) != value):
         raise ValueError(f"{label} must be {'a whole number' if integer else 'a number'}.")
     if (low is not None and value < low) or (high is not None and value > high):
         raise ValueError(f"{label} must be {'at least ' + str(low) if high is None else 'between ' + str(low) + ' and ' + str(high)}.")
@@ -280,7 +282,7 @@ def _read_jsonl(path):
     if not Path(path).exists():
         return []
     rows = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             rows.append(json.loads(line))
         except ValueError:
@@ -386,6 +388,10 @@ def default_versus(settings, new, old, examples, stop):
 
 # --------------------------------------------------------------------------- the loop
 
+class _Diverged(Exception):
+    """A training round whose error stopped being a number."""
+
+
 class _Trainer:
     def __init__(self, root, session_id, train, teacher_round, evaluate, build, versus, clock, interrupt):
         self.root, self.id, self.clock = Path(root), session_id, clock
@@ -397,7 +403,7 @@ class _Trainer:
         self.interrupt = interrupt
         self.lock = threading.RLock()
         self.pause, self.stop, self.cause, self.user = threading.Event(), threading.Event(), None, False
-        self.done = threading.Event()
+        self.done, self.ready = threading.Event(), threading.Event()  # ready: setup is over and the state may be ticked and polled
         self.settings = {}
 
     # -- bookkeeping
@@ -421,6 +427,11 @@ class _Trainer:
             command = self.store.get(self.id)["command"]
             if not command:
                 return
+            if command == "stop":  # stays in the record until run() writes the stopped status: if this process dies first, the restarted trainer still sees it
+                self.user = True
+                self.pause.clear()
+                self.stop.set()
+                return
             self.store.update(self.id, command="")
             if command == "pause" and not self.user:
                 self.pause.set()
@@ -430,10 +441,6 @@ class _Trainer:
                 self.pause.clear()
                 self.store.update(self.id, status="running")
                 self.journal("resume")
-            elif command == "stop":
-                self.user = True
-                self.pause.clear()
-                self.stop.set()
 
     def guard(self):
         """Called often while training: clock, commands, time limit, memory."""
@@ -452,22 +459,24 @@ class _Trainer:
         last = 0.0
         while not self.done.wait(POLL):
             try:
-                self.tick()
-                self.poll()
+                if self.ready.is_set():
+                    self.tick()
+                    self.poll()
                 if time.monotonic() - last >= BEAT:
                     self.store.beat(self.id, os.getpid())
                     last = time.monotonic()
-            except sqlite3.Error:
-                pass  # a locked record for a moment must not end the heartbeat
+            except Exception:
+                pass  # a locked record, or any other hiccup, must not end the heartbeat: the watchdog would kill a healthy trainer
 
     def wait_if_paused(self):
         while self.pause.is_set() and not self.user and not self.interrupt.is_set():
-            time.sleep(0.05)
+            time.sleep(PAUSED_POLL)
             self.poll()
             self.tick()
 
     # -- data
     def setup(self):
+        from studio_rlhf import load_settings
         if self.state.get("started"):
             self.journal("restart", round=self.state.get("round"), best=self.state.get("best"))
             self.state["phase"] = "idle"
@@ -478,6 +487,8 @@ class _Trainer:
                               rounds_since_best=0, pivot_index=0, learning_rate=lr, batch_size=bs, source_index=None, stop_reason=None,
                               teacher={"model": "", "reachable": None, "done": 0, "total": 0}, live=[], memory={"used": 0, "limit": 0},
                               checkpoints=[], win_rate=None, pending_pivot=None, paused=False)
+            if self.plan["stop"]["win_rate"] is not None and not load_settings(self.root).get("teacher_model"):
+                self.journal("error", message="The head-to-head stop condition was ignored because no teacher is set up. The session still ends by its other limits.")
         if not (self.directory / "snapshot.jsonl").exists():
             examples = self.build(self.root, self.plan["data"])
             if len(examples) < 2:
@@ -534,7 +545,17 @@ class _Trainer:
                 self.stop.set()
             config = {**self.plan["config"], "steps": self.plan["plateau"]["max_steps"], "learning_rate": state["learning_rate"], "batch_size": state["batch_size"]}
             run_dir = self.directory / f"round{n:03d}_{uid('run')[-6:]}"
-            self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, init_from=init_from)
+            try:
+                self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, init_from=init_from)
+            except InterruptedError:
+                if not (self.user or self.interrupt.is_set()):
+                    raise
+                return None  # stopped while the data was still being prepared: there is no checkpoint to keep
+            except ValueError as exc:
+                if "Non-finite loss" not in str(exc):
+                    raise
+                shutil.rmtree(run_dir, ignore_errors=True)
+                raise _Diverged(str(exc)) from exc
             (run_dir / "dataset.jsonl").unlink(missing_ok=True)  # a copy of the whole training set per round would fill the disk; snapshot.jsonl and lessons.jsonl rebuild it
             if self.cause != "memory":
                 break
@@ -597,7 +618,7 @@ class _Trainer:
         protected = {self.state["best"], self.state["current"]}
         if self.plan["stop"]["win_rate"] is not None and not self.plan["base_checkpoint"]:
             protected.add(1)  # the starting model for the head-to-head comparison
-        for c in cps:
+        for c in sorted(cps, key=lambda c: not c.get("discarded")):  # checkpoints on a branch that was stepped back from go first, then the oldest
             if sum(x["kept"] for x in cps) <= limit:
                 break
             if c["kept"] and c["n"] not in protected:
@@ -605,6 +626,8 @@ class _Trainer:
                 if path.resolve().is_relative_to(self.directory.resolve()):
                     for file in (path, path.with_name("last.npz")):
                         file.unlink(missing_ok=True)
+                    if path.resolve().parent.parent == self.directory.resolve() and path.parent.name.startswith("round"):
+                        shutil.rmtree(path.parent, ignore_errors=True)  # the run folder holds nothing else worth keeping
                 c["kept"] = False
 
     def one_round(self):
@@ -613,8 +636,11 @@ class _Trainer:
         state.update(round=n, phase="train", live=[])
         self.journal("round", round=n, parent=state["current"], learning_rate=state["learning_rate"], batch_size=state["batch_size"])
         self.save()
-        path = self.train_round(n)
-        if self.interrupt.is_set():
+        try:
+            path = self.train_round(n)
+        except _Diverged as exc:
+            return self.diverged(n, exc)
+        if path is None or self.interrupt.is_set():
             return
         state["phase"] = "save"
         entry = {"n": n, "round": n, "path": str(path), "error": float(self.evaluate(str(path), self.eval_examples)), "elapsed": round(state["active_seconds"], 1),
@@ -639,6 +665,25 @@ class _Trainer:
         move = next_move(state, plan)
         if move["action"] == "rollback" and not self.user:
             self.rollback(move, entry)
+        self.save()
+
+    def diverged(self, n, exc):
+        """The round blew up: treat it as a checkpoint that is worse than the best. Step back and make the next change; with no best yet, just halve the learning rate."""
+        state = self.state
+        state["phase"] = "idle"
+        best, limit = state["best"], self.plan["worse"]["limit"]
+        if best is None:
+            if state["learning_rate"] <= 1e-7:
+                raise exc
+            state["learning_rate"] = max(1e-7, state["learning_rate"] / 2)
+            self.journal("error", message=f"Training in round {n} went wrong ({exc}), so it tried again with a smaller learning rate.", round=n)
+        else:
+            state["worse_streak"] = max(state["worse_streak"], limit)
+            state["rounds_since_best"] += 1
+            move = next_move(state, self.plan)
+            self.journal("error", message=f"Training in round {n} went wrong ({exc}), so it " + (f"went back to checkpoint {best} and tried a change." if move["action"] == "rollback" else "has no more changes to try."), round=n)
+            if move["action"] == "rollback":
+                self.rollback(move, {"n": state["current"], "error": None})
         self.save()
 
     def win_rate(self, entry):
@@ -675,9 +720,10 @@ class _Trainer:
     def run(self):
         pulse = threading.Thread(target=self.pulse, daemon=True)
         try:
-            self.setup()  # inside the try so a setup failure is recorded with its reason, not only in trainer.log
             self.store.beat(self.id, os.getpid())
-            pulse.start()
+            pulse.start()  # before the slow setup: building the data can outlast the watchdog's silence limit
+            self.setup()  # inside the try so a setup failure is recorded with its reason, not only in trainer.log
+            self.ready.set()
             while True:
                 self.wait_if_paused()
                 self.tick()
@@ -691,7 +737,7 @@ class _Trainer:
             if reason:
                 self.state.update(stop_reason=reason, phase="idle", tick=None)
                 self.journal("stop", reason=reason, best=self.state["best"])
-                self.save(status="stopped" if reason == "user" else "finished")
+                self.save(status="stopped" if reason == "user" else "finished", command="")
             else:
                 self.save()  # interrupted by a signal: stay "running" so the watchdog starts us again
         except BaseException as exc:
