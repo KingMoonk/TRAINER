@@ -50,7 +50,7 @@ class AlignPage(unittest.TestCase):
                     app.show_page("align")
                     app.update()
                     self.assertEqual([app.step_widgets[i][1].cget("text") for i in range(4)],
-                                     ["Check your model", "Collect preferences", "Improve with feedback", "Compare results"])
+                                     ["Check the model", "Vote", "Train", "Compare"])
                     app.align_tabs.select(TAB_RATE)
                     app.update()
                     # a real comparison is generated from the checkpoint
