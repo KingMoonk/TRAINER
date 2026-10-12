@@ -22,6 +22,7 @@ from studio_planning import build_training_set
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, BLUE, FONT,
                             label, button, text_box, content, set_text, card, field, tree, ExampleEditor,
                             Tooltip, help_icon, with_help, help_text)
+from studio_align import Collapsible
 from studio_ux import SIZE_PRESETS, device_kind, estimate_seconds, format_duration, step_seconds
 
 
@@ -1273,10 +1274,10 @@ class WorkflowMixin:
     def _build_blueprint(self):
         super()._build_blueprint()
         page = self.pages["blueprint"].body
-        first = page.winfo_children()[0]
-        mixture = card(page, "Choose your data")
-        mixture.pack(fill="x", before=first, pady=(0, 14))
-        label(mixture, "Training learns from your working dataset (change it in the Training plan below). The budget caps how many of its examples are used.", "CardMuted.TLabel").pack(anchor="w", pady=(0, 10))
+        drawer = Collapsible(self.data_card, "Change or mix")
+        drawer.pack(fill="x", pady=(10, 0))
+        mixture = drawer.body
+        label(mixture, "Training learns from your working dataset (change it on the Datasets page), or mix several. The budget caps how many examples are used.", "CardMuted.TLabel").pack(anchor="w", pady=(0, 10))
         self.use_mixture = tk.BooleanVar(value=False)
         self.reviewed_only = tk.BooleanVar(value=False)
         self.use_all_records = tk.BooleanVar(value=False)
@@ -1362,6 +1363,7 @@ class WorkflowMixin:
         try:
             cfg = self.read_config()
             stats = self.dataset_stats(self.selected_dataset())
+            self._set_data_summary(stats['records'])
             vocab, basis = self.vocabulary_estimate(cfg)
             count = parameter_estimate(cfg, vocab)
             self._set_time_estimate(cfg, count)
