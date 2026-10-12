@@ -18,12 +18,12 @@ from studio_widgets import (ACCENT, BG, FONT, MUTED, TEXT, Tooltip, help_icon, h
 
 WARN = "#ffb86b"
 SAME_AS_TEACHER = "(same as teacher)"
-STEPS = [("A", "Check your model", "Is it trained enough to be worth polishing?"),
-         ("B", "Collect preferences", "Say which replies are better, or let an Ollama teacher do it."),
-         ("C", "Improve with feedback", "Train the model toward the replies that were preferred."),
-         ("D", "Compare results", "Check that the new model really beats the old one.")]
+STEPS = [("1", "Check the model", "Is it trained enough to be worth polishing?"),
+         ("2", "Vote", "Say which replies are better, or let an Ollama teacher do it."),
+         ("3", "Train", "Train the model toward the replies that were preferred."),
+         ("4", "Compare", "Check that the new model really beats the old one.")]
 TAB_TO_STEP = {0: 0, 1: 1, 2: 1, 3: 1, 4: 2, 5: 3}
-TABS = ("A · Check model", "B · Rate replies", "B · Auto teacher", "B · Saved preferences", "C · Improve model", "D · Compare")
+TABS = ("Check model", "Vote", "Teacher voting", "Saved votes", "Train", "Compare")
 TAB_CHECK, TAB_RATE, TAB_AUTO, TAB_SAVED, TAB_IMPROVE, TAB_COMPARE = range(6)
 KEEP_NOTE = "Only keep a new checkpoint if it beats the current one head-to-head."
 
@@ -97,20 +97,25 @@ class AlignMixin:
         top.pack(fill="x", pady=(0, 8))
         head = ttk.Frame(top, style="Card.TFrame")
         head.pack(fill="x", pady=(0, 8))
-        label(head, "Model to improve", "CardTitle.TLabel").pack(side="left")
+        label(head, "Improve with feedback", "CardTitle.TLabel").pack(side="left")
         help_icon(head, "rlhf").pack(side="left", padx=(6, 0))
         label(head, "Polishes a model that already writes sensible text. The original file is never overwritten.", "CardMuted.TLabel").pack(side="left", padx=(14, 0))
-        row = ttk.Frame(top, style="Card.TFrame")
-        row.pack(fill="x")
         self.align_checkpoint = tk.StringVar()
+        self.align_model_name = tk.StringVar()
+        self.align_checkpoint.trace_add("write", lambda *_: self.align_model_name.set(
+            "Your votes polish " + (f"{Path(self.align_checkpoint.get()).parent.name} \u00b7 {Path(self.align_checkpoint.get()).name}" if self.align_checkpoint.get().strip() else "(no model chosen yet)")))
+        self.align_checkpoint.set(self.align_checkpoint.get())
+        label(top, textvariable=self.align_model_name, style="Card.TLabel").pack(anchor="w")
+        change = Collapsible(top, "Change model")
+        change.pack(fill="x", pady=(6, 0))
+        row = ttk.Frame(change.body, style="Card.TFrame")
+        row.pack(fill="x")
         ttk.Entry(row, textvariable=self.align_checkpoint).pack(side="left", fill="x", expand=True, padx=(0, 8))
         button(row, "Choose file\u2026", lambda: self.choose_checkpoint(self.align_checkpoint))
         button(row, "Use latest run", self.use_latest_checkpoint, True)
         device = ttk.Combobox(row, textvariable=self.inference_device, values=("auto", "cpu", "cuda"), state="readonly", width=8)
         device.pack(side="left")
         Tooltip(device, help_text("inference"))
-        self.mark_advanced(device)
-
 
         steps = ttk.Frame(page)
         steps.pack(fill="x", pady=(0, 8))
@@ -132,11 +137,17 @@ class AlignMixin:
                 widget.bind("<Button-1>", lambda _e, t=target: self.align_tabs.select(t))
             self.step_widgets.append((badge, name))
 
-        self.align_tabs = ttk.Notebook(page)
+        # One step at a time: the notebook still drives navigation, its tab strip is just hidden.
+        ttk.Style(self).layout("Hidden.TNotebook.Tab", [])
+        self.align_tabs = ttk.Notebook(page, style="Hidden.TNotebook")
         self.align_tabs.pack(fill="both", expand=True)
         frames = [ttk.Frame(self.align_tabs, padding=10) for _ in TABS]
         for frame, title in zip(frames, TABS):
             self.align_tabs.add(frame, text=title)
+        for tab in (TAB_AUTO, TAB_SAVED):
+            back = ttk.Frame(frames[tab])
+            back.pack(fill="x", pady=(0, 8))
+            button(back, "\u2190 Back to voting", lambda: self.align_tabs.select(TAB_RATE))
         self._build_readiness(frames[TAB_CHECK])
         self._build_human(frames[TAB_RATE])
         self._build_teacher(frames[TAB_AUTO])
@@ -174,7 +185,7 @@ class AlignMixin:
         actions.pack(fill="x", pady=(12, 0))
         button(actions, "Check the model", self.evaluate_readiness, True)
         button(actions, "Train it more first", lambda: self.show_page("training"))
-        button(actions, "Next: collect preferences →", lambda: self.align_tabs.select(TAB_RATE))
+        button(actions, "Next: vote →", lambda: self.align_tabs.select(TAB_RATE))
         metrics = ttk.Frame(page)
         metrics.pack(fill="x", pady=(0, 12))
         self.ready_vars = {}
@@ -191,35 +202,15 @@ class AlignMixin:
         self.ready_label.pack(anchor="w", pady=(4, 0))
 
     def _build_human(self, page):
-        controls = card(page, "Pick the better of two replies")
-        controls.pack(fill="x", pady=(0, 8))
-        intro = ttk.Frame(controls, style="Card.TFrame")
-        intro.pack(fill="x", pady=(0, 6))
-        label(intro, "The model answers a prompt twice. Say which reply is better, or write the right answer. Each choice is one preference pair.",
-              "CardMuted.TLabel").pack(side="left")
+        intro = ttk.Frame(page)
+        intro.pack(fill="x", pady=(0, 8))
+        label(intro, "The model answers a prompt twice. Say which reply is better. Each choice is one preference pair.", "Muted.TLabel").pack(side="left")
         help_icon(intro, "preference").pack(side="left", padx=(4, 0))
-        actions = ttk.Frame(controls, style="Card.TFrame")
-        actions.pack(fill="x")
-        button(actions, "Next prompt from dataset", lambda: self.next_comparison(None), True)
-        button(actions, "Use my prompt below", lambda: self.next_comparison(content(self.own_prompt)))
         self.pref_count = tk.StringVar()
         self.pref_hint = tk.StringVar()
-        label(actions, textvariable=self.pref_count, style="CardMuted.TLabel").pack(side="left", padx=12)
-        self.hint_label = label(controls, textvariable=self.pref_hint, style="Card.TLabel", foreground=ACCENT, font=(FONT, 10, "bold"))
-        self.hint_label.pack(anchor="w")
-        advanced = Collapsible(controls, "More options: your own prompt, reply settings")
-        advanced.pack(fill="x", pady=(8, 0))
-        self.mark_advanced(advanced)
-        label(advanced.body, "Type your own prompt, then press “Use my prompt below”:", "CardMuted.TLabel").pack(anchor="w")
-        self.own_prompt = text_box(advanced.body, 2)
-        self.own_prompt.pack(fill="x", pady=(4, 10))
-        grid = ttk.Frame(advanced.body, style="Card.TFrame")
-        grid.pack(fill="x")
-        self.temp_a, self.temp_b, self.compare_tokens = tk.StringVar(value="0.7"), tk.StringVar(value="1.1"), tk.StringVar(value="120")
-        setting_rows(grid, [
-            ("Creativity of reply A", self.temp_a, "Sampling temperature: low = safe and repetitive, high = varied but riskier.", None, "temperature"),
-            ("Creativity of reply B", self.temp_b, "Keep it different from A so you have something to compare.", None, "temperature"),
-            ("Longest reply (tokens)", self.compare_tokens, "Replies are cut off after this many tokens (about one character each here).", None, "max_tokens")])
+        label(page, textvariable=self.pref_count, style="Muted.TLabel").pack(anchor="w")
+        self.hint_label = label(page, textvariable=self.pref_hint, style="TLabel", foreground=ACCENT, font=(FONT, 10, "bold"))
+        self.hint_label.pack(anchor="w", pady=(0, 8))
         label(page, "PROMPT", "Muted.TLabel", font=(FONT, 9, "bold")).pack(anchor="w")
         self.compare_prompt = text_box(page, 2, state="disabled")
         self.compare_prompt.pack(fill="x", pady=(4, 8))
@@ -234,14 +225,38 @@ class AlignMixin:
             self.reply_boxes.append(box)
         votes = ttk.Frame(page)
         votes.pack(fill="x", pady=(8, 0))
-        button(votes, "A is better  [1]", lambda: self.vote("A"), True)
-        button(votes, "B is better  [2]", lambda: self.vote("B"), True)
-        button(votes, "Both wrong: I'll write it  [3]", self.write_answer)
-        button(votes, "Skip  [4]", lambda: self.next_comparison(None))
-        self.undo_button = button(votes, "Undo  [U]", self.undo_vote)
-        button(votes, "Train on these →", lambda: self.align_tabs.select(TAB_IMPROVE))
+        button(votes, "A is better  [1]", lambda: self.vote("A"))
+        button(votes, "B is better  [2]", lambda: self.vote("B"))
+        quiet = ttk.Frame(page)
+        quiet.pack(fill="x")
+        button(quiet, "Next prompt from dataset", lambda: self.next_comparison(None))
+        button(quiet, "Both wrong: I'll write it  [3]", self.write_answer)
+        button(quiet, "Skip  [4]", lambda: self.next_comparison(None))
+        self.undo_button = button(quiet, "Undo  [U]", self.undo_vote)
         self.reference_text = tk.StringVar()
-        label(page, textvariable=self.reference_text, style="Muted.TLabel", wraplength=980, justify="left").pack(anchor="w", pady=(8, 0))
+        label(page, textvariable=self.reference_text, style="Muted.TLabel", wraplength=980, justify="left").pack(anchor="w", pady=(4, 0))
+        go = ttk.Frame(page)
+        go.pack(fill="x", pady=(12, 0))
+        button(go, "Train on these \u2192", lambda: self.align_tabs.select(TAB_IMPROVE), True)
+        more = ttk.Frame(page)
+        more.pack(fill="x", pady=(12, 0))
+        button(more, "Let a teacher model vote for me", lambda: self.align_tabs.select(TAB_AUTO))
+        button(more, "Saved votes", lambda: self.align_tabs.select(TAB_SAVED))
+        advanced = Collapsible(page, "Use my own prompt, reply settings")
+        advanced.pack(fill="x", pady=(4, 0))
+        label(advanced.body, "Type your own prompt, then press \u201cUse my prompt\u201d:", "CardMuted.TLabel").pack(anchor="w")
+        self.own_prompt = text_box(advanced.body, 2)
+        self.own_prompt.pack(fill="x", pady=(4, 6))
+        own = ttk.Frame(advanced.body, style="Card.TFrame")
+        own.pack(fill="x", pady=(0, 10))
+        button(own, "Use my prompt", lambda: self.next_comparison(content(self.own_prompt)), True)
+        grid = ttk.Frame(advanced.body, style="Card.TFrame")
+        grid.pack(fill="x")
+        self.temp_a, self.temp_b, self.compare_tokens = tk.StringVar(value="0.7"), tk.StringVar(value="1.1"), tk.StringVar(value="120")
+        setting_rows(grid, [
+            ("Creativity of reply A", self.temp_a, "Sampling temperature: low = safe and repetitive, high = varied but riskier.", None, "temperature"),
+            ("Creativity of reply B", self.temp_b, "Keep it different from A so you have something to compare.", None, "temperature"),
+            ("Longest reply (tokens)", self.compare_tokens, "Replies are cut off after this many tokens (about one character each here).", None, "max_tokens")])
 
     def _build_teacher(self, page):
         box = card(page, "Let a local Ollama model teach")
