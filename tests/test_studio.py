@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from studio_core import Workspace, fingerprint, normalize, parse_file, synthetic_recipe
+from studio_core import Workspace, fingerprint, normalize, parse_file
 from studio_model import (BOS, DEFAULT_CONFIG, LocalModel, ScratchTransformer, Tokenizer, WindowStore, batch_arrays,
                           encode_example, load_checkpoint, samples_from, train, validate_config)
 
@@ -26,19 +26,6 @@ class DataChecks(unittest.TestCase):
             self.assertEqual([fingerprint(e) for e in workspace.examples(dataset)], [fingerprint(e) for e in restored])
             self.assertEqual(workspace.add(dataset, records), (0, 2, 0))
             self.assertEqual(len(Workspace(directory).examples(dataset)), 2)
-
-    def test_recipes_are_seeded_unique_and_labeled(self):
-        first = synthetic_recipe("arithmetic", count=100, seed=7)
-        second = synthetic_recipe("arithmetic", count=100, seed=7)
-        self.assertEqual([fingerprint(e) for e in first], [fingerprint(e) for e in second])
-        self.assertEqual(len(set(fingerprint(e) for e in first)), 100)
-        for row in first:
-            a, op, b = re.search(r"(\d+) ([+*-]) (\d+)", row["user"]).groups()
-            a, b = int(a), int(b)
-            self.assertEqual(row["assistant"], str(a + b if op == "+" else a - b if op == "-" else a * b))
-        rows = synthetic_recipe("templates", 20, variables={"word": ["a", "b"]}, prompt="Repeat {word}", response="{word}")
-        self.assertEqual(len(rows), 2)
-        self.assertEqual({e["assistant"] for e in rows}, {"a", "b"})
 
     def test_mixed_text_and_invalid_examples(self):
         with tempfile.TemporaryDirectory() as directory:

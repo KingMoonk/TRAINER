@@ -19,7 +19,6 @@ GLOSSARY = {
     "balance": ("Balance by", "How to share the budget between datasets. 'tokens' gives each dataset an equal amount of text so a dataset with very long answers does not take over. 'records' splits by number of examples."),
     "reviewed_only": ("Reviewed examples only", "Train only on examples marked Good. Safer, but you need to have reviewed some first."),
     "weight": ("Weight", "How much a dataset or rule matters compared with the others. 2 means twice as important as 1."),
-    "drafts": ("Drafts", "Newly generated examples waiting for you to look at them. Nothing joins your training data until you add it."),
     "teacher": ("Teacher model", "A bigger helper model running on your computer (through Ollama) that writes examples or grades answers for your small model, like a tutor."),
     "ollama": ("Ollama", "A free program that runs large language models on your own computer. The studio uses it as a 'teacher' if you have it installed."),
     "difficulty": ("Difficulty", "How hard the generated problems are. 'curriculum' starts easy and ramps up, like a textbook."),
@@ -97,7 +96,7 @@ GLOSSARY = {
     "loss_type": ("Loss type", "The maths used for feedback training. 'dpo' is the standard; 'ipo' is steadier when your judgements are noisy."),
     "arena": ("Compare checkpoints", "A fair contest: two models answer the same prompts and a judge picks the winner each time."),
     # ---- extra terms
-    "working_dataset": ("Working dataset", "The dataset the other pages act on: training, extra-data prompts and saved corrections all use it. Pick it on the Your data page."),
+    "working_dataset": ("Working dataset", "The dataset the other pages act on: training, feedback prompts and saved corrections all use it. Pick it on the Your data page."),
     "sample_size": ("Source sample size", "How many of your existing examples are shown to the generator as raw material. More variety, but slower."),
     "attempts": ("Attempt multiplier", "The generator tries this many times more candidates than you asked for, because some are thrown away by the quality checks."),
     "teacher_batch": ("Examples per teacher call", "How many examples the teacher model writes in each request. Smaller batches are slower but easier for small teachers."),

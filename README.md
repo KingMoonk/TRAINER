@@ -1,6 +1,6 @@
 # Groundwork AI Studio
 
-A native Python desktop studio for creating datasets, generating synthetic examples, and training your own language model from random weights.
+A native Python desktop studio for creating datasets and training your own language model from random weights.
 
 **NumPy and pandas provide the CPU version; optional CuPy enables NVIDIA GPU acceleration.** Python's built-in Tkinter supplies the interface. The transformer, backward pass, optimizer, tokenizer, checkpoint format and text sampler are implemented in this repository. Everything runs locally; CPU and GPU use the same handwritten learning code.
 
@@ -62,7 +62,7 @@ Choose **Model blueprint → Compute device**:
 - `cuda`: require GPU execution. If it is unavailable, report the error instead of silently changing devices.
 - `cpu`: use NumPy without requiring CuPy or probing CUDA in the training engine.
 
-Chat and model-generated synthetic data share a separate **Inference device** selector. For chat, reload the checkpoint after changing this setting. The model status and training log show the actual device. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
+Chat has a separate **Inference device** selector. For chat, reload the checkpoint after changing this setting. The model status and training log show the actual device. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
 
 For a machine with an NVIDIA driver and CUDA 13 toolkit already installed:
 
@@ -84,10 +84,9 @@ Weights, activations, attention, handwritten gradients, and Adam state stay on G
 ## Workflow
 
 1. **Dataset library:** create a dataset, choose one or multiple files with **Import files**, or write examples manually. JSONL, JSON, CSV, TSV, tagged TXT and plain text are supported. Pandas parses tables and computes dataset statistics. Edit prompt/response pairs, full conversations or raw text; mark examples reviewed; export JSONL or CSV. Exact content duplicates are skipped. Existing workspace datasets are retained.
-2. **Synthesis lab:** expand template variables, generate arithmetic examples with computed answers, vary seed prompts while preserving conversation targets, or sample one of your own trained checkpoints. Generation is seeded and deduplicated. Drafts persist across restarts; edit, discard or keep selected examples. Generation may return fewer drafts than requested when the recipe's unique combinations are exhausted. Model-generated answers are unverified and require review.
-3. **Model blueprint:** set character/byte tokenization, embedding width, blocks, heads, context, feed-forward expansion and dropout. Configure learning rate, AdamW weight decay, batch size, gradient accumulation, optimizer steps, warmup, validation split and learning objective. Micro/Small/Medium presets specify dimensions; they contain no trained weights.
-4. **Training console:** view actual training and validation loss, token throughput and optimizer steps. Pause, stop and save, inspect saved runs, resume checkpoints or export a complete run ZIP. Training runs on a worker thread so the UI stays responsive.
-5. **Playground:** load a `.npz` checkpoint and sample with temperature, top-k and response-length controls. Use **Teach a correction** to edit the conversation and save it to the selected dataset. Train a new run on the revised data to incorporate corrections.
+2. **Model blueprint:** set character/byte tokenization, embedding width, blocks, heads, context, feed-forward expansion and dropout. Configure learning rate, AdamW weight decay, batch size, gradient accumulation, optimizer steps, warmup, validation split and learning objective. Micro/Small/Medium presets specify dimensions; they contain no trained weights.
+3. **Training console:** view actual training and validation loss, token throughput and optimizer steps. Pause, stop and save, inspect saved runs, resume checkpoints or export a complete run ZIP. Training runs on a worker thread so the UI stays responsive.
+4. **Playground:** load a `.npz` checkpoint and sample with temperature, top-k and response-length controls. Use **Teach a correction** to edit the conversation and save it to the selected dataset. Train a new run on the revised data to incorporate corrections.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
@@ -157,7 +156,6 @@ The repository is flat: entry points and `studio_*.py` modules sit in the root, 
 | GUI pages (mixins) | `studio_flow.py`, `studio_curriculum_page.py`, `studio_align.py`, `studio_network.py` | Guided workflow, sequential training card, post-training alignment, network/architecture editor. |
 | GUI helpers | `studio_widgets.py`, `studio_ux.py`, `studio_circuit.py`, `studio_glossary.py` | Shared widgets and example editor, Beginner/Advanced mode and time estimates, PCB-style network canvas, plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
-| Synthetic data | `studio_synthesis.py`, `studio_teacher_synth.py` | Reproducible recipes with computed targets, model-drafted data, and optional local Ollama teacher modes. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Architecture | `studio_arch.py`, `studio_archdb.py` | Per-block architecture specs and a versioned SQLite store of revisions and weight files. |
 | Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
@@ -171,7 +169,7 @@ app.py ──► studio_gui ──► page mixins (flow, network, align, curricu
 train.py ─┐
           ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
           │        ▲
-          │        └── studio_rlhf, studio_synthesis, studio_curriculum, studio_teacher_synth
+          │        └── studio_rlhf, studio_curriculum
           └──► studio_core, studio_backend
 ```
 
@@ -188,7 +186,7 @@ Created at run time and git-ignored:
 
 ### Tests
 
-`tests/` holds 15 `unittest` modules, one per major area (engine, architecture, data/catalog, synthesis, RLHF, curriculum, network, viewer bridge, GUI integration). GPU and GUI tests skip when the hardware or display is unavailable.
+`tests/` holds 13 `unittest` modules, one per major area (engine, architecture, data/catalog, RLHF, curriculum, network, viewer bridge, GUI integration). GPU and GUI tests skip when the hardware or display is unavailable.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

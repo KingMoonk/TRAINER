@@ -1,4 +1,4 @@
-"""Local workspace and reproducible, inspectable synthetic data recipes."""
+"""Local workspace: datasets, examples and runs stored on disk."""
 from __future__ import annotations
 
 import csv
@@ -498,69 +498,3 @@ class Workspace:
                     continue
         return sorted(runs, key=lambda r: r.get("createdAt", ""), reverse=True)
 
-
-def synthetic_recipe(mode, count=100, seed=42, variables=None, prompt="", response="", seeds=None, maximum=20):
-    """Generate labeled records without a pretrained teacher or invented answers."""
-    count = max(1, min(10000, int(count)))
-    rng = random.Random(seed)
-    rows, seen = [], set()
-
-    def collect(user, assistant, intent):
-        row = normalize({"user": user, "assistant": assistant, "intent": intent}, source="synthetic")
-        if row and fingerprint(row) not in seen:
-            seen.add(fingerprint(row))
-            rows.append(row)
-
-    if mode == "templates":
-        variables = variables or {}
-        if not isinstance(variables, dict) or not variables:
-            raise ValueError("Variables must be an object of non-empty lists.")
-        if any(not isinstance(values, list) or not values for values in variables.values()):
-            raise ValueError("Each template variable needs at least one value.")
-        keys = list(variables)
-        fields = {field for text in (prompt, response) for _, field, _, _ in string.Formatter().parse(text) if field is not None}
-        if not fields <= set(keys) or any(not re.fullmatch(r"[A-Za-z_]\w*", field) for field in fields):
-            raise ValueError("Template placeholders must match variable names, for example {topic}.")
-        total = math.prod(len(variables[k]) for k in keys)
-        # Mixed-radix indexing samples the Cartesian product without allocating it.
-        for index in rng.sample(range(total), min(total, count * 5)):
-            values = {}
-            for key in reversed(keys):
-                choices = variables[key]
-                values[key] = str(choices[index % len(choices)])
-                index //= len(choices)
-            collect(prompt.format_map(values), response.format_map(values), "template")
-            if len(rows) >= count:
-                break
-    elif mode == "arithmetic":
-        maximum = max(2, min(10000, int(maximum)))
-        phrasings = ["What is {a} {op} {b}?", "Calculate {a} {op} {b}.", "Solve: {a} {op} {b}", "{a} {op} {b} = ?"]
-        for _ in range(count * 25):
-            a, b = rng.randint(0, maximum), rng.randint(0, maximum)
-            op = rng.choice(["+", "-", "*"])
-            answer = a + b if op == "+" else a - b if op == "-" else a * b
-            collect(rng.choice(phrasings).format(a=a, b=b, op=op), str(answer), "arithmetic")
-            if len(rows) >= count:
-                break
-    elif mode == "seeds":
-        seeds = [s for s in (seeds or []) if not s.get("text") and s.get("user") and s.get("assistant")]
-        if not seeds:
-            raise ValueError("Choose a dataset containing chat examples to create prompt variants.")
-        wrappers = ["{q}", "Please answer this question: {q}", "Could you help me with this? {q}", "I have a question: {q}", "Can you explain this? {q}"]
-        pairs = list(itertools.product(range(len(seeds)), range(len(wrappers))))
-        rng.shuffle(pairs)
-        for i, j in pairs:
-            original = seeds[i]
-            # Preserve system instructions and all turns; change only the first user turn.
-            turns = [dict(m) for m in messages_of(original)]
-            first = next(m for m in turns if m["role"] == "user")
-            first["content"] = wrappers[j].format(q=first["content"])
-            row = normalize({"messages": turns, "intent": original.get("intent", "variant")}, source="synthetic")
-            if fingerprint(row) not in seen:
-                seen.add(fingerprint(row))
-                rows.append(row)
-            if len(rows) >= count:
-                break
-    else:
-        raise ValueError("Unknown recipe.")
-    return rows

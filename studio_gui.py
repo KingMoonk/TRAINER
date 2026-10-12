@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from studio_model import DEFAULT_CONFIG, LocalModel, Tokenizer, load_checkpoint, parameter_estimate, train, validate_config
 from studio_backend import gpu_status
-from studio_core import ROOT, Workspace, fingerprint, messages_of, normalize, now, synthetic_recipe, uid
+from studio_core import ROOT, Workspace, fingerprint, messages_of, normalize, now, uid
 
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, BLUE, FONT,
                             label, button, text_box, content, set_text, card, field, tree, ScrollPage, ExampleEditor,
@@ -25,10 +25,9 @@ from studio_ux import SIZE_PRESETS, device_kind, estimate_seconds, format_durati
 
 class NativeStudio(tk.Tk):
     PAGES = [("datasets", "01", "Dataset library", "Import, write, and review the examples your model will learn from."),
-             ("synthesis", "02", "Synthesis lab", "Create reproducible training data. Inspect every draft before keeping it."),
-             ("blueprint", "03", "Model blueprint", "Define your own transformer. Every new model starts with random weights."),
-             ("training", "04", "Training console", "Watch real optimization steps, compare losses, and save your progress."),
-             ("chat", "05", "Playground", "Talk to your trained checkpoint and turn corrections into better data.")]
+             ("blueprint", "02", "Model blueprint", "Define your own transformer. Every new model starts with random weights."),
+             ("training", "03", "Training console", "Watch real optimization steps, compare losses, and save your progress."),
+             ("chat", "04", "Playground", "Talk to your trained checkpoint and turn corrections into better data.")]
 
     def __init__(self, workspace=None):
         super().__init__()
@@ -43,7 +42,6 @@ class NativeStudio(tk.Tk):
         self.stop = threading.Event()
         self.pause = threading.Event()
         self.closing = False
-        self.drafts = copy.deepcopy(self.workspace.state.get("generated", []))
         self.history = []
         self.chat_messages = []
         self.chat_model = None
@@ -59,13 +57,11 @@ class NativeStudio(tk.Tk):
         self._style()
         self._layout()
         self._build_datasets()
-        self._build_synthesis()
         self._build_blueprint()
         self._build_training()
         self._build_chat()
         self.refresh_datasets()
         self.refresh_runs()
-        self.refresh_drafts()
         self.show_page("datasets")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(60, self.poll)
@@ -142,7 +138,7 @@ class NativeStudio(tk.Tk):
         self.page_host.columnconfigure(0, weight=1)
         self.pages = {}
         for key, *_ in self.PAGES:
-            frame = ScrollPage(self.page_host) if key in {"home", "catalog", "blueprint", "synthesis", "align", "training"} else ttk.Frame(self.page_host)
+            frame = ScrollPage(self.page_host) if key in {"home", "catalog", "blueprint", "align", "training"} else ttk.Frame(self.page_host)
             frame.grid(row=0, column=0, sticky="nsew")
             self.pages[key] = frame
 
@@ -836,7 +832,7 @@ class NativeStudio(tk.Tk):
         device_row.pack(fill="x", pady=(10, 0))
         label(device_row, "Run on", "Card.TLabel").pack(side="left", padx=(0, 8))
         ttk.Combobox(device_row, textvariable=self.inference_device, values=("auto", "cpu", "cuda"), state="readonly", width=12).pack(side="left", padx=(0, 12))
-        label(device_row, "Applies when loading a model \u00b7 auto prefers the GPU \u00b7 shared with synthesis", "CardMuted.TLabel").pack(side="left")
+        label(device_row, "Applies when loading a model \u00b7 auto prefers the GPU", "CardMuted.TLabel").pack(side="left")
         help_icon(device_row, "inference").pack(side="left", padx=(4, 0))
         button(device_row, "Clear conversation", self.clear_chat).pack_configure(side="right", padx=0)
         self.refresh_correction_note()
@@ -1058,7 +1054,7 @@ from studio_ux import UXMixin
 
 
 class Studio(UXMixin, CurriculumMixin, AlignMixin, NetworkMixin, WorkflowMixin, NativeStudio):
-    """Guided studio workflow with a scalable library and synthesis workbench."""
+    """Guided studio workflow with a scalable library."""
 
 
 def main():

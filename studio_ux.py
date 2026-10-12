@@ -153,8 +153,6 @@ class UXMixin:
         for entry in self.beginner_widgets:
             self._set_visible(entry, not advanced)
         self.refresh_nav()
-        if not advanced and getattr(self, "synth_advanced", None) is not None and self.synth_advanced.winfo_ismapped():
-            self.toggle_advanced()
         if hasattr(self, "mode_buttons"):
             for mode, button_ in self.mode_buttons.items():
                 button_.configure(style="ModeOn.TButton" if mode == self.ui_mode else "Mode.TButton")
