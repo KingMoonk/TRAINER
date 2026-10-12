@@ -1276,13 +1276,16 @@ class WorkflowMixin:
         first = page.winfo_children()[0]
         mixture = card(page, "Choose your data")
         mixture.pack(fill="x", before=first, pady=(0, 14))
-        label(mixture, "By default each run trains on the next dataset in your library, in order, then starts again at the first. "
-                       "Switch to Choose by hand to pick the datasets for a run yourself. The budget caps how many examples a run uses.",
+        label(mixture, "By default Start training trains on everything: every dataset, stage by stage (language, then instructions, code, "
+                       "reasoning, conversation, knowledge), one model throughout. Rotate trains on one dataset per run, cycling through your library; "
+                       "Choose by hand lets you pick the datasets for a run. The budget caps how many examples a run uses.",
               "CardMuted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(0, 10))
-        self.dataset_mode = tk.StringVar(value=self.workspace.state.get("datasetMode", "rotate"))
+        self.dataset_mode = tk.StringVar(value=self.workspace.state.get("datasetMode", "everything"))
         modes = ttk.Frame(mixture, style="Card.TFrame")
         modes.pack(fill="x")
-        ttk.Radiobutton(modes, text="Rotate automatically", value="rotate", variable=self.dataset_mode,
+        ttk.Radiobutton(modes, text="Train on everything", value="everything", variable=self.dataset_mode,
+                        command=self.dataset_mode_changed).pack(side="left", padx=(0, 20))
+        ttk.Radiobutton(modes, text="Rotate one dataset per run", value="rotate", variable=self.dataset_mode,
                         command=self.dataset_mode_changed).pack(side="left", padx=(0, 20))
         ttk.Radiobutton(modes, text="Choose by hand for this run", value="manual", variable=self.dataset_mode,
                         command=self.dataset_mode_changed).pack(side="left")
@@ -1362,6 +1365,11 @@ class WorkflowMixin:
         if self.dataset_mode.get() == "manual":
             self.rotation_text.set("Choosing by hand: the next run uses the datasets selected below. Rotation resumes where it left off when you switch back.")
             return
+        if self.dataset_mode.get() == "everything":
+            count = len(self.rotation_candidates())
+            self.rotation_text.set(f"Start training runs all {count} dataset(s) stage by stage; follow the stages in the Train on everything card on the Training page."
+                                   if count else "No dataset has examples yet. Download or import one first.")
+            return
         ids, pick = self.rotation_candidates(), self.rotation_pick()
         if not pick:
             self.rotation_text.set("No dataset has examples yet. Download or import one first.")
@@ -1372,10 +1380,14 @@ class WorkflowMixin:
                                + (f"  ·  then {names[after]}" if len(ids) > 1 else ""))
 
     def run_sources(self):
-        """Dataset ids the next run trains on: the rotation's next dataset, or the hand-picked ones."""
-        if getattr(self, "dataset_mode", None) is not None and self.dataset_mode.get() == "manual":
+        """Dataset ids a single run trains on: every dataset (Train on everything, e.g. a Network-page run),
+        the rotation's next dataset, or the hand-picked ones."""
+        mode = self.dataset_mode.get() if getattr(self, "dataset_mode", None) is not None else "rotate"
+        if mode == "manual":
             selected = list(self.mixture_tree.selection())
             return selected or [key for key in [self.selected_dataset()] if key]
+        if mode == "everything":
+            return self.rotation_candidates()
         pick = self.rotation_pick()
         return [pick] if pick else []
 
@@ -1431,6 +1443,12 @@ class WorkflowMixin:
         `sources` overrides the dataset choice for this one run (Quick start); otherwise rotation or the hand-picked set decides."""
         if self.busy():
             return False
+        if sources is None and config is None and self.dataset_mode.get() == "everything" and hasattr(self, "start_curriculum"):
+            # The Start training button in Train on everything mode runs the stage-by-stage plan.
+            if navigate:
+                self.show_page("training")
+            self.start_curriculum()
+            return self.job_kind == "curriculum"
         try:
             cfg = config if config is not None else self.read_config()
             rotating = sources is None and self.dataset_mode.get() == "rotate"

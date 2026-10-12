@@ -50,8 +50,12 @@ class DesktopWorkflow(unittest.TestCase):
                     learning = workspace.create_dataset("Tiny learning check")
                     workspace.add(learning, [{"user": "a", "assistant": "b"}])
                     app.refresh_datasets(learning)
-                    # Rotation is the default: runs cycle through the library in order, whatever Curate has selected.
-                    self.assertEqual(app.dataset_mode.get(), "rotate")
+                    # Train on everything is the default; a single run (e.g. from the Network page) mixes every dataset.
+                    self.assertEqual(app.dataset_mode.get(), "everything")
+                    self.assertEqual(app.run_sources(), [dataset, learning])
+                    # Rotation cycles through the library in order, whatever Curate has selected.
+                    app.dataset_mode.set("rotate")
+                    app.dataset_mode_changed()
                     self.assertEqual(app.run_sources(), [dataset])
                     app.workspace.state["rotationIndex"] = 1
                     self.assertEqual(app.run_sources(), [learning])
@@ -78,6 +82,15 @@ class DesktopWorkflow(unittest.TestCase):
                     app.send_chat()
                     settle()
                     self.assertEqual(app.last_answer, "b")
+                    # In Train on everything mode the Start training button launches the stage-by-stage plan.
+                    app.dataset_mode.set("everything")
+                    app.dataset_mode_changed()
+                    self.assertTrue(app.start_training())
+                    self.assertEqual(app.job_kind, "curriculum")
+                    self.assertTrue(app.curriculum["stages"])
+                    app.stop.set()
+                    settle()
+                    app.stop.clear()
             finally:
                 app.stop.set()
                 app.pause.clear()
