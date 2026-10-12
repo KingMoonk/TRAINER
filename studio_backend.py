@@ -44,11 +44,18 @@ class Backend:
             self.xp.cuda.get_current_stream().synchronize()
 
 
-def get_backend(device="auto"):
+# Below this many values per step (batch x context x width x layers) the GPU's per-kernel launch cost outweighs
+# its arithmetic, so "auto" stays on the CPU. Measured: CPU wins at ~1-1.5M, the GPU only pulls ahead near 4M.
+AUTO_GPU_MIN_WORK = 3_000_000
+
+
+def get_backend(device="auto", work=None):
     if device not in {"auto", "cpu", "cuda"}:
         raise ValueError("Device must be auto, cpu, or cuda.")
     if device == "cpu":
         return Backend(np, "cpu", "NumPy / CPU")
+    if device == "auto" and work is not None and work < AUTO_GPU_MIN_WORK:
+        return Backend(np, "cpu", "NumPy / CPU", f"auto chose CPU: model is small ({work:,} values per step)")
     status = gpu_status()
     if status["available"]:
         import cupy as cp

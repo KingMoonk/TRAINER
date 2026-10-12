@@ -174,7 +174,8 @@ class ScratchTransformer:
     def __init__(self, config, vocabulary):
         self.config = validate_config(config)
         cfg = self.config
-        self.backend = get_backend(cfg["device"])
+        work = cfg["batch_size"] * cfg["context"] * cfg["width"] * max(1, cfg["layers"])
+        self.backend = get_backend(cfg["device"], work=work)
         self.xp = xp = self.backend.xp
         # Keeping the stochastic stream on CPU makes old checkpoints and RNG state
         # portable between devices. Parameters and all learning operations live on xp.
@@ -232,7 +233,8 @@ class ScratchTransformer:
     def dropout(self, x, training):
         probability = self.config["dropout"]
         if training and probability:
-            mask = self.xp.asarray((self.rng.random(x.shape) >= probability).astype(x.dtype)) / (1 - probability)
+            # Same CPU random stream as before; only the boolean keep-mask crosses to the device (1 byte per value, not 4).
+            mask = self.xp.asarray(self.rng.random(x.shape) >= probability).astype(x.dtype) / (1 - probability)
             return x * mask, mask
         return x, None
 
