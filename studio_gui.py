@@ -1020,7 +1020,8 @@ class NativeStudio(tk.Tk):
         if self.job_kind:
             self.stop.set()
             self.pause.clear()
-            self.status_var.set("Stopping after the current operation · training progress will be saved")
+            teacher = self.job_kind in ("automated improvement", "checkpoint comparison")
+            self.status_var.set("Stopping · waiting for the teacher's current answer to arrive, which can take a minute" if teacher else "Stopping after the current operation · training progress will be saved")
 
     def close(self):
         if self.job_kind:

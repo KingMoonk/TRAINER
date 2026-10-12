@@ -543,6 +543,10 @@ class AlignMixin:
             val_loss = next((r["val_loss"] for r in reversed(rows) if r.get("val_loss") is not None), None)
 
         def done(report):
+            if report.get("stopped"):
+                self.ready_verdict.set("CHECK STOPPED  ·  it did not finish, so there is no verdict. Run the check again.")
+                self.ready_label.configure(foreground=WARN)
+                return
             self.ready_vars["token_error"].set(f"{report['token_error'] * 100:.1f}%")
             self.ready_vars["perplexity"].set(f"{report['perplexity']:.2f}")
             self.ready_vars["loss"].set(f"{report['loss']:.3f}")
@@ -635,6 +639,7 @@ class AlignMixin:
             self.vote_log.append({"ids": [record["id"]], "comparison": self.comparison})
         except ValueError as exc:
             self.status_var.set(str(exc) + " · skipped")
+        self.comparison = None  # one vote per comparison, even if the next one cannot start yet
         self.refresh_pref_stats()
         self.next_comparison(None)
 
@@ -690,6 +695,8 @@ class AlignMixin:
                                                         "quality": "Good", "intent": "correction"})])
                 self.refresh_datasets()
             dialog.destroy()
+            if self.comparison is comparison:
+                self.comparison = None
             self.refresh_pref_stats()
             self.next_comparison(None)
         row = ttk.Frame(outer)
@@ -856,10 +863,21 @@ class AlignMixin:
         self.persist_rubric()
 
     def refresh_ollama(self):
-        try:
-            models = OllamaTeacher(self.ollama_url.get()).models()
-        except RuntimeError as exc:
-            messagebox.showerror("Ollama", str(exc), parent=self)
+        url = self.ollama_url.get()
+
+        def work():
+            try:
+                return OllamaTeacher(url, timeout=10).models(), ""
+            except Exception as exc:
+                return [], str(exc) or exc.__class__.__name__
+        if self.start_job("model search", work, self.show_ollama_models):
+            self.auto_status.set("Looking for Ollama models…")
+
+    def show_ollama_models(self, result):
+        models, error = result
+        if error:
+            self.auto_status.set("Could not reach Ollama.")
+            messagebox.showerror("Ollama", error, parent=self)
             return
         self.ollama_box.configure(values=models)
         self.judge_box.configure(values=[SAME_AS_TEACHER] + models)
@@ -871,7 +889,7 @@ class AlignMixin:
     def make_teacher(self):
         judge = self.judge_model.get().strip()
         return OllamaTeacher(self.ollama_url.get(), self.ollama_model.get(), rubric=self.rubric,
-                             judge_model=None if judge in {"", SAME_AS_TEACHER} else judge)
+                             judge_model=None if judge in {"", SAME_AS_TEACHER} else judge, stop=self.stop)
 
     def dpo_config(self):
         cfg = {key: float(var.get()) for key, var in self.dpo_vars.items()}
@@ -915,8 +933,6 @@ class AlignMixin:
             return
         try:
             path = self.checkpoint_path()
-            if not self.ollama_model.get():
-                self.refresh_ollama()
             if not self.ollama_model.get():
                 raise ValueError("Choose an Ollama teacher model (press “Find models”).")
             cfg = self.auto_config()
@@ -1008,11 +1024,14 @@ class AlignMixin:
         self.show_page("training")
 
         def done(result):
+            self.refresh_runs()
+            if result["status"] == "stopped":  # a half-trained model must not replace the one in use
+                self.auto_status.set(f"Training was stopped, so the checkpoint in use is unchanged. The partial model is saved in {result['directory']}.")
+                return
             self.align_checkpoint.set(result["checkpoint"])
             self.align_model = None
             self.arena_a.set(result["checkpoint"])
             self.arena_b.set(path)
-            self.refresh_runs()
             self.auto_status.set("Training finished. Open “D · Compare” to check the new model against the original.")
             self.show_page("align")
             self.align_tabs.select(TAB_COMPARE)
@@ -1049,8 +1068,6 @@ class AlignMixin:
             a, b = self.arena_a.get().strip(), self.arena_b.get().strip()
             if not (a and b and Path(a).exists() and Path(b).exists()):
                 raise ValueError("Choose two existing checkpoints (.npz) to compare.")
-            if not self.ollama_model.get():
-                self.refresh_ollama()
             if not self.ollama_model.get():
                 raise ValueError("Choose an Ollama model on the “B · Auto teacher” tab: it acts as the judge.")
             count, samples = int(self.arena_prompts.get()), int(self.arena_samples.get())
