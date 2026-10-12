@@ -1,6 +1,6 @@
 """Tests for studio_widgets and studio_circuit bug fixes."""
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import sys
 from pathlib import Path
 
@@ -14,9 +14,9 @@ import studio_circuit
 class WheelDeltaTests(unittest.TestCase):
     """Test wheel delta conversion for cross-platform compatibility."""
 
+    @patch("studio_widgets.sys.platform", "win32")  # the 120-per-notch convention; macOS Tk 8.6 (the CI runner) differs
     def test_normalize_scroll_delta_windows_full_units(self):
         """Test that Windows 120-unit deltas give 1 scroll unit."""
-        # Assume we're testing on a system where _wheel_notches works correctly
         self.assertEqual(studio_widgets.normalize_scroll_delta(120), 1)
         self.assertEqual(studio_widgets.normalize_scroll_delta(-120), -1)
 
@@ -49,6 +49,14 @@ class WheelDeltaTests(unittest.TestCase):
         self.assertIsInstance(zoom_factor, float)
         self.assertGreater(zoom_factor, 1.0)
 
+    @patch("studio_widgets.sys.platform", "darwin")
+    @patch("studio_widgets.tk.TkVersion", 8.6)
+    def test_macos_tk86_delta_is_already_in_notches(self):
+        """Test that macOS Tk 8.6 deltas are used as they are, not divided by 120."""
+        self.assertEqual(studio_widgets._wheel_notches(3), 3.0)
+        self.assertEqual(studio_widgets.normalize_scroll_delta(-2), -2)
+
+    @patch("studio_widgets.sys.platform", "win32")
     def test_wheel_notches_sub_120_windows_delta(self):
         """Test that sub-120 Windows delta gives fractional notches."""
         # Precision mice can send deltas like 30 (quarter scroll)
