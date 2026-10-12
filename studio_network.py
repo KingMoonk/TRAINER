@@ -2,19 +2,41 @@
 from __future__ import annotations
 
 import copy
+import json
+import queue
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+import numpy as np
+
 from studio_arch import config_from_spec, default_spec, new_block, parameter_breakdown, spec_from_config, validate_spec
 from studio_archdb import ArchitectureStore
 from studio_circuit import ACCENT as CHIP_COLORS, CircuitCanvas, ERR
-from studio_core import module_command
+from studio_core import module_command, uid
 from studio_model import Tokenizer, load_checkpoint, validate_config
 from studio_vizbridge import VizBridge
+from studio_estimate import estimate as estimate_model
+from studio_spec import (config_from_spec as model_config_from_spec, from_legacy, to_legacy_view,
+                         set_block, validate_spec as validate_model_spec)
+from studio_summary import binned_attention, run_paths
+from studio_snapshot import one_step, save as save_snapshot
+from studio_validate import errors as model_errors
+from studio_net_design import DesignView
+from studio_net_sandbox import SandboxView
+from studio_net_variants import VariantsView
+from studio_net_experiments import ExperimentsView
+from studio_net_trace import TraceView
+from studio_net_head import InsideHeadView
+from studio_net_value import ValueMapView
+from studio_net_loss import LossView
+from studio_net_headlab import HeadLabView
+from studio_net_scene import SceneView
+from studio_net_versions import VersionsView
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, FONT, label, card,
                             Tooltip, help_icon, help_text, with_help)
 
@@ -55,6 +77,13 @@ class NetworkMixin:
         self.arch_store = ArchitectureStore(self.workspace.root)
         self.arch_id = None
         self.net_spec = None
+        self.net_model_spec = None
+        self.net_model_error = ""
+        self.net_model_estimate = None
+        self.net_modern = False
+        self.net_model_selected = "mixer"
+        self.net_model_undo, self.net_model_redo = [], []
+        self.net_view_events = queue.Queue()
         self.net_error = ""
         self.net_undo_stack, self.net_redo_stack = [], []
         self.net_selected = None
@@ -106,7 +135,11 @@ class NetworkMixin:
         menu_button.pack(side="left", padx=(0, 6), pady=3)
         self.net_summary = tk.StringVar()
         label(bar, textvariable=self.net_summary, style="Muted.TLabel").pack(side="right")
-        strip = ttk.Frame(page)
+        self.net_view_tabs = ttk.Notebook(page)
+        self.net_view_tabs.pack(fill="both", expand=True)
+        design = ttk.Frame(self.net_view_tabs)
+        self.net_view_tabs.add(design, text="Design")
+        strip = ttk.Frame(design)
         strip.pack(fill="x", pady=(0, 6))
         label(strip, "PARTS", "Muted.TLabel", font=(FONT, 9, "bold")).pack(side="left", padx=(0, 10))
         for kind, title, sub, color in PARTS:
@@ -121,11 +154,13 @@ class NetworkMixin:
         help_icon(strip, "block").pack(side="left", padx=(2, 0))
         for text, command in (("Panel", self.net_toggle_panel), ("Fit", lambda: self.net_canvas.fit()), ("−", lambda: self.net_canvas.zoom(1 / 1.25)), ("+", lambda: self.net_canvas.zoom(1.25))):
             ttk.Button(strip, text=text, command=command, style="Small.TButton", width=3 if len(text) < 2 else 4 if len(text) < 4 else 6).pack(side="right", padx=(5, 0))
-        body = ttk.Frame(page)
+        body = ttk.Frame(design)
         body.pack(fill="both", expand=True)
         side = self.net_side = ttk.Frame(body, width=360)
         side.pack(side="right", fill="y", padx=(10, 0))
         side.pack_propagate(False)
+        self.net_design = DesignView(body, self)
+        self.net_design.pack(side="left", fill="both", expand=True)
         self.net_canvas = CircuitCanvas(body, self)
         self.net_canvas.pack(side="left", fill="both", expand=True)
         notebook = self.net_tabs = ttk.Notebook(side)
@@ -137,7 +172,7 @@ class NetworkMixin:
         self._build_history(history)
         self._build_weights(weights)
         self._build_backups(backups)
-        foot = ttk.Frame(page)
+        foot = ttk.Frame(design)
         foot.pack(fill="x", pady=(8, 0))
         self.net_msg = ttk.Label(foot, text="", style="Ok.TLabel")
         self.net_msg.pack(side="left", fill="x", expand=True)
@@ -152,10 +187,20 @@ class NetworkMixin:
         self.net_live_button = ttk.Button(actions, text="Apply live edit", command=self.net_apply_live)
         self.net_live_button.pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Stop", command=self.stop_job).pack(side="left", padx=(8, 0))
-        meta = ttk.Frame(page)
+        meta = ttk.Frame(design)
         meta.pack(fill="x", pady=(4, 0))
         label(meta, textvariable=self.net_init_var, style="Muted.TLabel").pack(side="left")
         label(meta, textvariable=self.net_run_var, style="Muted.TLabel").pack(side="right")
+        self.net_views = {"Design": self.net_design}
+        for title, view_type in (("Sandbox", SandboxView), ("Variants", VariantsView),
+                                 ("Experiments", ExperimentsView), ("Trace a token", TraceView),
+                                 ("Inside a head", InsideHeadView), ("Value map", ValueMapView),
+                                 ("Loss", LossView), ("Head lab", HeadLabView),
+                                 ("3D", SceneView), ("Versions", VersionsView)):
+            view = view_type(self.net_view_tabs, self)
+            self.net_view_tabs.add(view, text=title)
+            self.net_views[title] = view
+        self.net_view_tabs.bind("<<NotebookTabChanged>>", lambda _event: self.net_refresh_model_views())
 
     def net_toggle_panel(self):
         """Hide or show the inspector dock to give the circuit the whole page."""
@@ -301,6 +346,12 @@ class NetworkMixin:
         self.net_flush()
         record = self.arch_store.get(arch_id)
         self.arch_id, self.net_spec = arch_id, record["spec"]
+        self.net_model_spec = self.arch_store.get_model_spec(arch_id)
+        try:
+            self.net_modern = self.net_model_spec != from_legacy(validate_spec(self.net_spec))
+        except (ValueError, KeyError, TypeError):
+            self.net_modern = True
+        self.net_model_undo, self.net_model_redo = [], []
         self.net_undo_stack, self.net_redo_stack = [], []
         self.net_selected, self.net_init_version = None, None
         self.net_tele = None
@@ -331,7 +382,8 @@ class NetworkMixin:
         name = name or simpledialog.askstring("Rename architecture", "Architecture name", initialvalue=current, parent=self)
         if name and name.strip():
             self.arch_store.rename(self.arch_id, name.strip())
-            self.net_edit(lambda spec: spec.__setitem__("name", name.strip()), f"rename to {name.strip()}")
+            (self.net_apply_model_edit if self.net_modern else self.net_edit)(
+                lambda spec: spec.__setitem__("name", name.strip()), f"rename to {name.strip()}")
             self.net_reload(self.arch_id)
 
     def net_delete(self, confirm=True):
@@ -340,7 +392,7 @@ class NetworkMixin:
             return False
         self.net_commit_job = self._cancel(self.net_commit_job)
         self.arch_store.delete(self.arch_id)
-        self.arch_id = self.net_spec = None
+        self.arch_id = self.net_spec = self.net_model_spec = None
         self.net_reload()
         return True
 
@@ -348,7 +400,10 @@ class NetworkMixin:
         path = path or filedialog.askopenfilename(parent=self, title="Import architecture", filetypes=[("Architecture", "*.json"), ("All files", "*.*")])
         if path:
             try:
-                self.net_reload(self.arch_store.import_spec(path))
+                data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+                imported = (self.arch_store.import_model_spec(path) if data.get("format") == "groundwork-model-spec-export/1"
+                            else self.arch_store.import_spec(path))
+                self.net_reload(imported)
             except ValueError as exc:
                 messagebox.showerror("Cannot import", str(exc), parent=self)
 
@@ -357,7 +412,7 @@ class NetworkMixin:
         self.net_flush()
         path = path or filedialog.asksaveasfilename(parent=self, title="Export architecture", defaultextension=".json", filetypes=[("Architecture", "*.json")])
         if path:
-            self.arch_store.export_spec(self.arch_id, path)
+            (self.arch_store.export_model_spec if self.net_modern else self.arch_store.export_spec)(self.arch_id, path)
             self.status_var.set(f"Architecture exported · {path}")
 
     def net_ensure(self):
@@ -380,15 +435,20 @@ class NetworkMixin:
     def net_edit(self, mutate, note, strict=False, record=True):
         """Apply `mutate(draft)`; a valid result is committed (debounced), an invalid one is shown in red."""
         self.net_ensure()
+        if self.net_modern:
+            self.status_var.set("Edit this ModelSpec in Design or Sandbox to keep its modules intact.")
+            return False
         draft = copy.deepcopy(self.net_spec)
         try:
             mutate(draft)
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             self.status_var.set(f"Edit not applied · {exc}")
             return False
+        valid_draft = True
         try:
             draft = validate_spec(draft)
         except ValueError as exc:
+            valid_draft = False
             if strict:
                 self.status_var.set(f"Edit rejected · {exc}")
                 return False
@@ -399,6 +459,8 @@ class NetworkMixin:
             del self.net_undo_stack[:-100]
             self.net_redo_stack.clear()
         self.net_spec = draft
+        if valid_draft:
+            self.net_model_spec = from_legacy(draft)
         self.net_refresh_view()
         if not self.net_error:
             self.net_schedule_commit(note)
@@ -407,11 +469,21 @@ class NetworkMixin:
 
     def net_undo(self):
         self.net_ensure()
+        if self.net_modern:
+            if not self.net_model_undo:
+                return False
+            self.net_model_redo.append(copy.deepcopy(self.net_model_spec))
+            self.net_apply_model_edit(lambda draft: (draft.clear(), draft.update(self.net_model_undo.pop())), "undo", record=False)
+            return True
         if not self.net_undo_stack:
             self.status_var.set("Nothing to undo")
             return False
         self.net_redo_stack.append(copy.deepcopy(self.net_spec))
         self.net_spec = self.net_undo_stack.pop()
+        try:
+            self.net_model_spec = from_legacy(validate_spec(self.net_spec))
+        except ValueError:
+            pass
         self.net_refresh_view()
         if not self.net_error:
             self.net_schedule_commit("undo")
@@ -420,11 +492,21 @@ class NetworkMixin:
 
     def net_redo(self):
         self.net_ensure()
+        if self.net_modern:
+            if not self.net_model_redo:
+                return False
+            self.net_model_undo.append(copy.deepcopy(self.net_model_spec))
+            self.net_apply_model_edit(lambda draft: (draft.clear(), draft.update(self.net_model_redo.pop())), "redo", record=False)
+            return True
         if not self.net_redo_stack:
             self.status_var.set("Nothing to redo")
             return False
         self.net_undo_stack.append(copy.deepcopy(self.net_spec))
         self.net_spec = self.net_redo_stack.pop()
+        try:
+            self.net_model_spec = from_legacy(validate_spec(self.net_spec))
+        except ValueError:
+            pass
         self.net_refresh_view()
         if not self.net_error:
             self.net_schedule_commit("redo")
@@ -434,7 +516,7 @@ class NetworkMixin:
     def net_schedule_commit(self, note):
         self.net_notes.append(note)
         self._cancel(self.net_commit_job)
-        self.net_commit_job = self.after(600, self.net_commit_now)
+        self.net_commit_job = self.after(150 if self.net_modern else 600, self.net_commit_now)
 
     def net_flush(self):
         """Commit any debounced edit immediately."""
@@ -453,13 +535,72 @@ class NetworkMixin:
         unique = list(dict.fromkeys(notes))
         note = "; ".join(unique[-3:]) + (f" (+{len(unique) - 3} more)" if len(unique) > 3 else "")
         try:
-            number = self.arch_store.commit(self.arch_id, validate_spec(self.net_spec), note)
+            number = (self.arch_store.commit_model_spec(self.arch_id, self.net_model_spec, note) if self.net_modern
+                      else self.arch_store.commit(self.arch_id, validate_spec(self.net_spec), note))
         except ValueError as exc:
             self.status_var.set(f"Could not save revision · {exc}")
             return None
         self.net_refresh_history()
         self.net_refresh_picker()
         return number
+
+    def net_apply_model_edit(self, mutate, note, record=True):
+        """Apply a canonical ModelSpec edit without projecting through the legacy canvas."""
+        self.net_ensure()
+        draft = copy.deepcopy(self.net_model_spec)
+        try:
+            mutate(draft)
+            draft = validate_model_spec(draft)
+            problems = model_errors(draft)
+            if problems:
+                raise ValueError(problems[0])
+        except (ValueError, KeyError, TypeError) as error:
+            self.net_model_error = str(error)
+            self.status_var.set(f"Edit rejected · {error}")
+            self.net_refresh_model_views()
+            return False
+        if draft == self.net_model_spec:
+            return False
+        if record:
+            self.net_model_undo.append(copy.deepcopy(self.net_model_spec))
+            del self.net_model_undo[:-100]
+            self.net_model_redo.clear()
+        self.net_model_spec, self.net_modern = draft, True
+        self.net_spec = to_legacy_view(draft)
+        self.net_model_error = ""
+        self.net_refresh_view()
+        self.net_schedule_commit(note)
+        self.net_send_spec()
+        return True
+
+    def net_show_view(self, title):
+        view = self.net_views[title]
+        if title == "Sandbox" and self.net_model_selected:
+            selected = self.net_model_selected
+            if selected.startswith("block:"):
+                _, block, slot = selected.split(":")
+                view.slot.set(slot)
+                view.scope.set(f"Block {int(block) + 1}")
+            elif selected in ("tokenizer", "embedding", "position", "head", "objective"):
+                view.slot.set(selected)
+        self.net_view_tabs.select(view if title != "Design" else self.net_view_tabs.tabs()[0])
+        view.refresh()
+
+    def net_refresh_model_views(self):
+        if self.net_model_spec is None:
+            return
+        try:
+            spec = validate_model_spec(self.net_model_spec)
+            problems = model_errors(spec)
+            self.net_model_error = problems[0] if problems else ""
+            self.net_model_estimate = estimate_model(spec) if not problems else None
+        except (ValueError, KeyError, TypeError) as error:
+            self.net_model_error, self.net_model_estimate = str(error), None
+        if hasattr(self, "net_views"):
+            self.net_design.refresh()
+            selected = self.net_view_tabs.nametowidget(self.net_view_tabs.select())
+            if selected in self.net_views.values() and selected is not self.net_design:
+                selected.refresh()
 
     # ------------------------------------------------------------------ editing operations
     @staticmethod
@@ -631,6 +772,18 @@ class NetworkMixin:
         self.net_refresh_picker()
 
     def net_refresh_view(self):
+        if self.net_modern and self.net_model_spec is not None:
+            self.net_refresh_model_views()
+            self.net_error = self.net_model_error
+            self.net_canvas.set_spec(self.net_spec, self.net_error, (), None, bool(self.net_error))
+            total = self.net_model_estimate["total"] if self.net_model_estimate else None
+            self.net_summary.set(f"{total:,} parameters · {self.net_model_spec['dims']['n_layer']} blocks · "
+                                 f"{self.net_model_spec['dims']['d_model']} wide" if total is not None else self.net_error)
+            self.net_msg.configure(text=self._net_status_text(), style="Err.TLabel" if self.net_error else "Ok.TLabel")
+            self.net_train_button.configure(state="disabled" if self.net_error else "normal")
+            self.net_live_button.configure(state="normal" if self.net_is_training() and not self.net_error else "disabled")
+            self.net_refresh_inspector()
+            return
         parts, total, stale = None, None, False
         try:
             valid = validate_spec(self.net_spec)
@@ -651,6 +804,7 @@ class NetworkMixin:
         self.net_train_button.configure(state="disabled" if self.net_error else "normal")
         self.net_live_button.configure(state="normal" if self.net_is_training() and not self.net_error else "disabled")
         self.net_refresh_inspector()
+        self.net_refresh_model_views()
 
     def net_refresh_picker(self):
         if self.arch_id is None:
@@ -940,6 +1094,11 @@ class NetworkMixin:
         self.net_undo_stack.append(previous)
         self.net_redo_stack.clear()
         self.net_spec = self.arch_store.get(self.arch_id)["spec"]
+        self.net_model_spec = self.arch_store.get_model_spec(self.arch_id)
+        try:
+            self.net_modern = self.net_model_spec != from_legacy(validate_spec(self.net_spec))
+        except (ValueError, KeyError, TypeError):
+            self.net_modern = True
         self.net_refresh_all()
         self.net_send_spec()
         self.status_var.set(f"Restored revision {number} as r{head}")
@@ -1028,8 +1187,8 @@ class NetworkMixin:
             messagebox.showerror("Fix the circuit first", self.net_error, parent=self)
             return False
         try:
-            spec = validate_spec(self.net_spec)
-            cfg = config_from_spec(spec)
+            spec = validate_model_spec(self.net_model_spec) if self.net_modern else validate_spec(self.net_spec)
+            cfg = model_config_from_spec(spec) if self.net_modern else config_from_spec(spec)
             if init_from is None and self.net_init_version is not None:
                 init_from = self.arch_store.weight_path(self.arch_id, self.net_init_version)
                 parent = self.net_init_version
@@ -1038,7 +1197,7 @@ class NetworkMixin:
             return False
         head = self.arch_store.get(self.arch_id)["head_revision"]
         run = {"arch": self.arch_id, "rev": head, "parent": parent}
-        options = {"telemetry_every": 5}
+        options = {"telemetry_every": 5, "snapshot_every": 50}
         if init_from:
             options["init_from"] = str(init_from)
         self.net_tele = None
@@ -1092,6 +1251,8 @@ class NetworkMixin:
         if event.get("type") == "telemetry":
             self.net_telemetry(event)
             return
+        if event.get("type") == "viz_snapshot":
+            self.net_send(event)
         super().training_event(event)
 
     def net_telemetry(self, event):
@@ -1117,7 +1278,105 @@ class NetworkMixin:
 
     def net_send_spec(self):
         if self.viz is not None and self.viz.running and not self.net_error and self.net_spec is not None:
-            self.viz.send({"type": "spec", "spec": validate_spec(self.net_spec), "selected": self._block_id()})
+            self.viz.send({"type": "spec", "spec": validate_model_spec(self.net_model_spec) if self.net_modern else validate_spec(self.net_spec),
+                           "selected": self._block_id()})
+
+    def net_replay_paths(self):
+        if self.arch_id is None:
+            return []
+        runs = [row["run_dir"] for row in self.arch_store.weights(self.arch_id) if row.get("run_dir")]
+        return sorted({str(path) for run in runs for path in (Path(run) / "viz").glob("*.npz")})
+
+    def net_send_summary(self):
+        if self.arch_id is None or not self.arch_store.weights(self.arch_id):
+            return
+        selected = self.arch_store.weights(self.arch_id)[0]
+        source = self.arch_store.weight_path(self.arch_id, selected["version"])
+        run_dirs = [row["run_dir"] for row in self.arch_store.weights(self.arch_id) if row.get("run_dir")]
+        def worker():
+            try:
+                summary = binned_attention(source, "The model reads this prompt.", n_bins=16)
+                result = {"type": "summary", "attention": {key: value.tolist() for key, value in summary["attention"].items()},
+                          "stream_norms": {key: value.tolist() for key, value in summary["stream_norms"].items()},
+                          "paths": run_paths(run_dirs)}
+                outcome = True, result
+            except Exception as error:
+                outcome = False, str(error)
+            self.net_view_events.put((self, self._net_summary_done, outcome))
+        threading.Thread(target=worker, daemon=True, name="network-summary").start()
+
+    def _net_summary_done(self, ok, result):
+        if ok:
+            self.net_send(result)
+        else:
+            self.status_var.set(f"Could not summarize checkpoint · {result}")
+
+    def net_exact_probe_step(self):
+        if self.arch_id is None or not self.arch_store.weights(self.arch_id):
+            self.net_send({"type": "error", "message": "Train or register a checkpoint first."})
+            return
+        source = self.arch_store.weight_path(self.arch_id, self.arch_store.weights(self.arch_id)[0]["version"])
+        prompt = self.net_views["Trace a token"].prompt.get()
+        output = self.workspace.run_dir / uid("probe")
+        def worker():
+            try:
+                data = load_checkpoint(source)
+                tokenizer = Tokenizer.restore(data["tokenizer"])
+                ids = np.asarray(tokenizer.encode(prompt), dtype=np.int64)[None, :]
+                if ids.shape[1] < 2:
+                    raise ValueError("Enter at least two tokens in the Trace prompt.")
+                ids = ids[:, -data["config"]["context"]:]
+                targets = np.roll(ids, -1, axis=1)
+                targets[:, -1] = -100
+                snapshot = one_step(source, ids, targets)
+                path = save_snapshot(output, snapshot)
+                outcome = True, str(path)
+            except Exception as error:
+                outcome = False, str(error)
+            self.net_view_events.put((self, self._net_probe_done, outcome))
+        threading.Thread(target=worker, daemon=True, name="network-exact-step").start()
+
+    def _net_probe_done(self, ok, result):
+        self.net_send({"type": "snapshot", "path": result} if ok else {"type": "error", "message": result})
+
+    def net_edit_viewer_weight(self, message):
+        if self.arch_id is None or not self.arch_store.weights(self.arch_id):
+            self.net_send({"type": "error", "message": "Train or register a checkpoint first."})
+            return
+        parent = self.arch_store.weights(self.arch_id)[0]["version"]
+        source = self.arch_store.weight_path(self.arch_id, parent)
+        name = message.get("weight")
+        row, column = int(message.get("row", -1)), int(message.get("column", -1))
+        delta = float(message.get("delta", 0))
+        output = self.workspace.run_dir / uid("weight_edit") / "edited.npz"
+        architecture_id = self.arch_id
+        def worker():
+            try:
+                with np.load(source, allow_pickle=False) as archive:
+                    arrays = {key: archive[key].copy() for key in archive.files}
+                key = f"weight::{name}"
+                value = arrays.get(key)
+                if value is None or value.ndim != 2 or not 0 <= row < value.shape[0] or not 0 <= column < value.shape[1]:
+                    raise ValueError("Select a valid matrix cell before editing a weight.")
+                value[row, column] += delta
+                output.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(output, **arrays)
+                version = self.arch_store.add_weights(architecture_id, output, source="viewer edit", parent=parent,
+                                                      note=f"{name}[{row},{column}] += {delta}")
+                outcome = True, version
+            except Exception as error:
+                outcome = False, str(error)
+            self.net_view_events.put((self, self._net_weight_done, outcome))
+        threading.Thread(target=worker, daemon=True, name="network-weight-edit").start()
+
+    def _net_weight_done(self, ok, result):
+        if ok:
+            self.net_refresh_weights()
+            self.net_views["Versions"].refresh()
+            self.status_var.set(f"Edited weight saved as v{result}.")
+            self.net_send_summary()
+        else:
+            self.net_send({"type": "error", "message": result})
 
     def net_open_viewer(self):
         script = Path(__file__).with_name("studio_brain3d.py")
@@ -1138,6 +1397,10 @@ class NetworkMixin:
             messagebox.showerror("Cannot open the 3D viewer", str(exc), parent=self)
             return False
         self.net_send_spec()
+        paths = self.net_replay_paths()
+        if paths:
+            self.net_send({"type": "replay", "paths": paths})
+            self.net_send_summary()
         if self.net_tele:
             self.viz.send(self.net_tele)
         self.status_var.set("3D brain opened · edits and telemetry are mirrored live")
@@ -1147,6 +1410,31 @@ class NetworkMixin:
         """Apply one viewer→GUI message through the same edit path as the inspector."""
         self.net_ensure()
         kind = message.get("type")
+        if kind == "module_swap":
+            index, slot, entry = message.get("block"), message.get("slot"), message.get("entry")
+            if not isinstance(index, int) or slot not in ("norm", "mixer", "channel") or not isinstance(entry, dict):
+                return False
+            applied = self.net_apply_model_edit(lambda draft: set_block(draft, index, slot, entry),
+                                                f"viewer swap block {index + 1} {slot}")
+            if applied:
+                self.net_flush()
+            self.net_send_spec()
+            return applied
+        if kind == "selection":
+            values = message.get("selection") or {}
+            if "layer" in values:
+                self.net_model_selected = f"block:{int(values['layer'])}:mixer"
+            return True
+        if kind == "load_replay":
+            self.net_send({"type": "replay", "paths": self.net_replay_paths()})
+            self.net_send_summary()
+            return True
+        if kind == "probe_step":
+            self.net_exact_probe_step()
+            return True
+        if kind == "edit_weight":
+            self.net_edit_viewer_weight(message)
+            return True
         if kind == "select":
             bid = message.get("block_id")
             self.net_select(f"b:{bid}" if bid else None, from_viewer=True)
@@ -1185,4 +1473,11 @@ class NetworkMixin:
 
     def poll(self):
         self.net_poll_viewer()
+        for _ in range(30):
+            try:
+                view, callback, outcome = self.net_view_events.get_nowait()
+            except queue.Empty:
+                break
+            if view.winfo_exists():
+                callback(*outcome)
         super().poll()

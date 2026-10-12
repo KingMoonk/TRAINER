@@ -28,6 +28,7 @@ jobs:
       # too slow for every push, so it gates the release instead: real watchdog + trainer processes (kill, pause/resume, finish on a 75 s time limit); installs and removes the real sign-in entry (CI is set)
       - run: python -m unittest tests.e2e_passive -v
         timeout-minutes: 10
+      - run: python -m unittest tests.test_module_packaging -v
       # studio_brain3d is only ever launched by name (the 3D viewer), so the import scan cannot see it
       - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_passive --hidden-import studio_passive_watch
       # the frozen executable must be able to run a module by name: that is how it starts the passive trainer, the watchdog and the 3D viewer

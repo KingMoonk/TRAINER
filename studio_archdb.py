@@ -20,9 +20,11 @@ from pathlib import Path
 
 from studio_arch import validate_spec
 from studio_core import atomic_json, now, replace_file, uid
+from studio_spec import is_model_spec, to_legacy_view, upgrade, validate_spec as validate_model_spec
 
 BACKUP_FORMAT = "groundwork-arch-backup/1"
 EXPORT_FORMAT = "groundwork-arch-export/1"
+MODEL_EXPORT_FORMAT = "groundwork-model-spec-export/1"
 CHUNK = 1 << 20
 MEMBER = re.compile(r"^(architectures\.sqlite|weights/[A-Za-z0-9_-]+/v\d{4}\.npz)\Z")
 SUMMARY = """SELECT a.id, a.name, a.created_at, a.updated_at, a.head_revision,
@@ -39,7 +41,7 @@ CREATE TABLE IF NOT EXISTS revisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     architecture_id TEXT NOT NULL REFERENCES architectures(id) ON DELETE CASCADE,
     number INTEGER NOT NULL, spec_json TEXT NOT NULL, spec_hash TEXT NOT NULL,
-    note TEXT, parent INTEGER, created_at TEXT, UNIQUE(architecture_id, number));
+    note TEXT, parent INTEGER, created_at TEXT, legacy_spec_json TEXT, UNIQUE(architecture_id, number));
 CREATE TABLE IF NOT EXISTS weight_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     architecture_id TEXT NOT NULL REFERENCES architectures(id) ON DELETE CASCADE,
@@ -52,6 +54,8 @@ INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
 
 
 def spec_hash(spec):
+    if is_model_spec(spec):
+        spec = validate_model_spec(spec)
     text = json.dumps(spec, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -122,16 +126,41 @@ class ArchitectureStore:
 
     @staticmethod
     def _revision_spec(conn, architecture_id, number):
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(revisions)")}
+        legacy = ", legacy_spec_json" if "legacy_spec_json" in columns else ""
+        row = conn.execute(f"SELECT spec_json{legacy} FROM revisions WHERE architecture_id=? AND number=?", (architecture_id, number)).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown revision {number} for architecture {architecture_id}")
+        raw = json.loads(row[0])
+        return json.loads(row[1]) if len(row) > 1 and row[1] else to_legacy_view(raw) if is_model_spec(raw) else raw
+
+    @staticmethod
+    def _revision_stored(conn, architecture_id, number):
         row = conn.execute("SELECT spec_json FROM revisions WHERE architecture_id=? AND number=?", (architecture_id, number)).fetchone()
         if row is None:
             raise ValueError(f"Unknown revision {number} for architecture {architecture_id}")
         return json.loads(row[0])
 
     @staticmethod
+    def _revision_model_spec(conn, architecture_id, number):
+        return upgrade(ArchitectureStore._revision_stored(conn, architecture_id, number))
+
+    @staticmethod
     def _commit_in(conn, architecture_id, spec, note):
         if not isinstance(spec, dict):
             raise ValueError("Architecture spec must be a dict.")
         head = ArchitectureStore._require(conn, architecture_id)
+        version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+        legacy = None
+        if version == "2":
+            try:
+                normalized = upgrade(spec)
+            except ValueError:
+                if is_model_spec(spec):
+                    raise
+            else:
+                legacy = json.dumps(spec, ensure_ascii=False) if not is_model_spec(spec) else None
+                spec = normalized
         digest = spec_hash(spec)
         if head:
             (head_digest,) = conn.execute("SELECT spec_hash FROM revisions WHERE architecture_id=? AND number=?", (architecture_id, head)).fetchone()
@@ -139,10 +168,18 @@ class ArchitectureStore:
                 return head
         number = head + 1
         stamp = now()
-        conn.execute(
-            "INSERT INTO revisions(architecture_id, number, spec_json, spec_hash, note, parent, created_at) VALUES (?,?,?,?,?,?,?)",
-            (architecture_id, number, json.dumps(spec, ensure_ascii=False), digest, note or "", head or None, stamp),
-        )
+        values = (architecture_id, number, json.dumps(spec, ensure_ascii=False), digest, note or "", head or None, stamp)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(revisions)")}
+        if "legacy_spec_json" in columns:
+            conn.execute(
+                "INSERT INTO revisions(architecture_id, number, spec_json, spec_hash, note, parent, created_at, legacy_spec_json) VALUES (?,?,?,?,?,?,?,?)",
+                (*values, legacy),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO revisions(architecture_id, number, spec_json, spec_hash, note, parent, created_at) VALUES (?,?,?,?,?,?,?)",
+                values,
+            )
         conn.execute("UPDATE architectures SET head_revision=?, updated_at=? WHERE id=?", (number, stamp, architecture_id))
         return number
 
@@ -177,6 +214,59 @@ class ArchitectureStore:
                 raise ValueError(f"Unknown architecture: {architecture_id}")
             spec = self._revision_spec(conn, architecture_id, row[4])
         return {**dict(zip(SUMMARY_KEYS, row)), "spec": spec}
+
+    def get_model_spec(self, architecture_id):
+        """Read a normalized ModelSpec without changing the legacy UI's get() result."""
+        with self.lock, self._connect() as conn:
+            head = self._require(conn, architecture_id)
+            return self._revision_model_spec(conn, architecture_id, head)
+
+    def revision_model_spec(self, architecture_id, number):
+        with self.lock, self._connect() as conn:
+            self._require(conn, architecture_id)
+            return self._revision_model_spec(conn, architecture_id, number)
+
+    def migrate_model_specs(self):
+        """Atomically convert valid legacy revisions; preserve their exact UI JSON and all links.
+
+        Incomplete historical records remain untouched and are reported. Repeating the migration
+        makes no changes, including to revision numbers, hashes, and timestamps.
+        """
+        with self.lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(revisions)")}
+            if "legacy_spec_json" not in columns:
+                conn.execute("ALTER TABLE revisions ADD COLUMN legacy_spec_json TEXT")
+            migrated, skipped = 0, 0
+            rows = conn.execute("SELECT id, spec_json FROM revisions ORDER BY id").fetchall()
+            for revision_id, source in rows:
+                raw = json.loads(source)
+                try:
+                    normalized = upgrade(raw)
+                except ValueError:
+                    skipped += 1
+                    continue
+                if is_model_spec(raw):
+                    if raw != normalized:
+                        conn.execute("UPDATE revisions SET spec_json=?, spec_hash=? WHERE id=?",
+                                     (json.dumps(normalized, ensure_ascii=False), spec_hash(normalized), revision_id))
+                        migrated += 1
+                    continue
+                conn.execute("UPDATE revisions SET spec_json=?, spec_hash=?, legacy_spec_json=? WHERE id=?",
+                             (json.dumps(normalized, ensure_ascii=False), spec_hash(normalized), source, revision_id))
+                migrated += 1
+            conn.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+        return {"migrated": migrated, "skipped": skipped}
+
+    def create_model_spec(self, name, spec, note="created"):
+        spec = validate_model_spec(spec)
+        self.migrate_model_specs()
+        return self.create(name, spec, note)
+
+    def commit_model_spec(self, architecture_id, spec, note=""):
+        spec = validate_model_spec(spec)
+        self.migrate_model_specs()
+        return self.commit(architecture_id, spec, note)
 
     def rename(self, architecture_id, name):
         name = self._name(name)
@@ -217,7 +307,7 @@ class ArchitectureStore:
         with self.lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._require(conn, architecture_id)
-            spec = self._revision_spec(conn, architecture_id, number)
+            spec = self._revision_stored(conn, architecture_id, number)
             return self._commit_in(conn, architecture_id, spec, note or f"restored from r{number}")
 
     def add_weights(self, architecture_id, npz_path, revision=None, step=None, loss=None, source="train", run_dir=None, note="", parent=None):
@@ -452,3 +542,20 @@ class ArchitectureStore:
             raise ValueError("Not a groundwork architecture export.")
         validate_spec(data["spec"])
         return self.create(name or data.get("name") or "Imported network", data["spec"], note=f"imported from {Path(path).name}")
+
+    def export_model_spec(self, architecture_id, path):
+        record = self.get(architecture_id)
+        atomic_json(path, {"format": MODEL_EXPORT_FORMAT, "name": record["name"],
+                           "spec": self.get_model_spec(architecture_id)})
+        return str(path)
+
+    def import_model_spec(self, path, name=None):
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"Cannot read spec file: {path}") from error
+        if not isinstance(data, dict) or data.get("format") != MODEL_EXPORT_FORMAT:
+            raise ValueError("Not a groundwork ModelSpec export.")
+        spec = validate_model_spec(data.get("spec"))
+        return self.create_model_spec(name or data.get("name") or "Imported network", spec,
+                                      note=f"imported from {Path(path).name}")

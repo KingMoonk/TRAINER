@@ -45,6 +45,9 @@ def validate(spec, vocab=None):
             issues.append(Issue("ERROR", f"Block {i + 1} needs a token mixer or a channel mixer.", "mixer", i))
         for need in sorted(position.requires - mixer.provides):
             issues.append(Issue("ERROR", f"Position is {position.name}, but block {i + 1}'s {mixer.name} {NEEDS.get(need, 'does not provide ' + need + '.')}", "position", i))
+        heads = block["mixer"]["config"].get("heads", 1)
+        if position.short == "rope" and "qk" in mixer.provides and spec["dims"]["d_model"] % (2 * heads):
+            issues.append(Issue("ERROR", f"RoPE needs an even head width; block {i + 1} has d_model {spec['dims']['d_model']} and {heads} heads.", "position", i))
     real = [m for m in mixers if not m.skip]
     attention = [m for m in real if "ordered" not in m.provides]
     if position.short == "none" and attention:

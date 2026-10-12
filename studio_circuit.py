@@ -11,6 +11,8 @@ import time
 import tkinter as tk
 
 from studio_widgets import FONT, _wheel_notches, _ZOOM_BASE
+from studio_spec import block_at
+from studio_registry import get as module_for
 
 BG, GRID, CHIP, BOARD, EDGE = "#060a12", "#0c1526", "#0c1626", "#09111e", "#2a3d5a"
 BUS, TEXT, MUTED, ERR, SEL = "#2ee6d0", "#e8f1ff", "#8fa3c0", "#ff4d5e", "#ffffff"
@@ -857,3 +859,70 @@ class CircuitCanvas(tk.Canvas):
         except tk.TclError:
             pass
         super().destroy()
+
+
+class ResidualStream(tk.Canvas):
+    """A vertical, scrollable view of the canonical ModelSpec residual path."""
+
+    def __init__(self, parent, select):
+        super().__init__(parent, bg=BG, highlightthickness=0, width=320)
+        self.select = select
+        self.spec = None
+        self.rows = []
+        self.bind("<Button-1>", self._select)
+        self.bind("<MouseWheel>", self._scroll)
+        self.bind("<Configure>", lambda _event: self.draw())
+
+    def set_spec(self, spec, estimate=None):
+        self.spec, self.estimate = spec, estimate or {}
+        self.draw()
+
+    def _scroll(self, event):
+        self.yview_scroll(-int(_wheel_notches(event.delta) or (1 if event.delta > 0 else -1)), "units")
+        return "break"
+
+    def _select(self, event):
+        y = self.canvasy(event.y)
+        for low, high, key in self.rows:
+            if low <= y < high:
+                self.select(key)
+                break
+
+    def draw(self):
+        self.delete("all")
+        self.rows = []
+        if not self.spec:
+            return
+        spec = self.spec
+        width = max(270, self.winfo_width())
+        mid, y = width / 2, 24
+        self.create_text(20, y, text=f"RESIDUAL STREAM · [B, T, {spec['dims']['d_model']}]", anchor="nw",
+                         fill=MUTED, font=(FONT, 10, "bold"))
+        y += 40
+
+        def card(key, title, detail, color, indent=0):
+            nonlocal y
+            left, right = 20 + indent, width - 20 - indent
+            self.create_rectangle(left, y, right, y + 51, fill=CHIP, outline=color, width=1)
+            self.create_text(left + 12, y + 10, text=title, anchor="nw", fill=TEXT, font=(FONT, 11, "bold"))
+            self.create_text(left + 12, y + 30, text=detail, anchor="nw", fill=MUTED, font=(FONT, 9))
+            self.rows.append((y, y + 51, key))
+            y += 51
+            self.create_line(mid, y, mid, y + 28, fill=BUS, width=3)
+            y += 28
+
+        card("tokenizer", "Tokenizer", module_for("tokenizer", spec["tokenizer"]["id"]).name, ACCENT["emb"])
+        card("embedding", "Token embedding", module_for("embedding", spec["embedding"]["id"]).name, ACCENT["emb"])
+        card("position", "Position", module_for("position", spec["position"]["id"]).name, ACCENT["emb"])
+        for i in range(spec["dims"]["n_layer"]):
+            block = block_at(spec, i)
+            self.create_text(mid, y + 3, text=f"BLOCK {i + 1}", fill=BUS, font=(FONT, 10, "bold"))
+            y += 27
+            for slot, color in (("norm", ACCENT["emb"]), ("mixer", ACCENT["att"]), ("channel", ACCENT["mlp"])):
+                module = module_for(slot, block[slot]["id"])
+                card(f"block:{i}:{slot}", module.name, "skip" if module.skip else f"{slot} · adds to residual stream", color, 12)
+            self.create_text(mid, y + 2, text="+ residual", fill=BUS, font=(FONT, 10, "bold"))
+            y += 26
+        card("head", "Output head", module_for("head", spec["head"]["id"]).name, ACCENT["out"])
+        card("objective", "Training objective", module_for("objective", spec["train"]["objective"]["id"]).name, ACCENT["train"])
+        self.configure(scrollregion=(0, 0, width, y + 20))

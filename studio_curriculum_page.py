@@ -206,9 +206,9 @@ class CurriculumMixin:
             self.net_flush()
             if self.net_error:
                 raise ValueError("Fix the Network circuit first: " + self.net_error)
-            from studio_arch import config_from_spec, validate_spec
-            spec = validate_spec(self.net_spec)
-            context = int(spec["embedding"]["context"])
+            from studio_spec import config_from_spec, upgrade
+            spec = upgrade(self.net_spec)
+            context = int(spec["dims"]["n_ctx"])
             self.curriculum_context.set(str(context))
             base = dict(config_from_spec(spec), device=base["device"], tokenizer="byte")
             register = self.arch_id

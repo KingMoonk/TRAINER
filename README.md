@@ -100,7 +100,7 @@ Weights, activations, attention, handwritten gradients, and Adam state stay on G
 ## Workflow
 
 1. **Dataset library:** create a dataset, choose one or multiple files with **Import files**, or write examples manually. JSONL, JSON, CSV, TSV, tagged TXT and plain text are supported. Pandas parses tables and computes dataset statistics. Edit prompt/response pairs, full conversations or raw text; mark examples reviewed; export JSONL or CSV. Exact content duplicates are skipped. Existing workspace datasets are retained.
-2. **Model blueprint:** set character/byte tokenization, embedding width, blocks, heads, context, feed-forward expansion and dropout. Configure learning rate, AdamW weight decay, batch size, gradient accumulation, optimizer steps, warmup, validation split and learning objective. Micro/Small/Medium presets specify dimensions; they contain no trained weights.
+2. **Model blueprint:** use the guided setup to choose data, tokenizer, dimensions, training settings and objective. **Network → Design** edits a canonical ModelSpec; **Sandbox** swaps registry modules and their settings, while **Variants** compares named presets and estimates. Incompatible modules show why they are unavailable. These presets describe architectures and do not include pretrained weights.
 3. **Training console:** view actual training and validation loss, token throughput and optimizer steps. Pause, stop and save, inspect saved runs, resume checkpoints or export a complete run ZIP. Training runs on a worker thread so the UI stays responsive.
 4. **Playground:** load a `.npz` checkpoint and sample with temperature, top-k and response-length controls. Use **This reply is wrong** to send the conversation to Improve with feedback, where you pick a better reply or write the right one; an answer you write is also saved to the selected dataset.
 
@@ -108,7 +108,7 @@ The file picker is the supported import method; operating-system drag-and-drop i
 
 ## The learning engine
 
-`studio_model.py` implements a decoder-only transformer using NumPy or CuPy arrays:
+`studio_model.py` retains the original decoder-only training path using NumPy or CuPy arrays:
 
 - Learned token/position embeddings, pre-layer normalization, multi-head causal self-attention, residual paths, tanh-approximation GELU, dropout, final normalization and tied output embeddings.
 - Explicit gradients for every operation, stable cross-entropy, global gradient clipping, gradient accumulation, AdamW with bias correction, warmup and cosine learning-rate decay.
@@ -116,6 +116,16 @@ The file picker is the supported import method; operating-system drag-and-drop i
 - Next-token prediction on raw text. Conversation targets can include every token or only assistant content and end-of-turn markers.
 
 This is a small-model experimentation studio. Training from scratch is suited to learning and narrow tasks; a generally capable chatbot needs far more data and compute. A falling training loss alone does not establish generalization. Short context windows can truncate conversational history. On GPU, batch size, context length and model width determine memory demand; reduce them if the device runs out of memory.
+
+## Network engine and inspection services
+
+The modular network engine represents a design as a validated, JSON-serializable `ModelSpec`. Its slots describe the tokenizer, embedding, position method, block norm/token mixer/channel mixer, output head, objective, optimizer, learning-rate schedule, initializer and precision. The compiler builds the residual-block template from that spec; registry metadata supplies module configuration fields, compatibility requirements, hooks and parameter/compute estimates. New modules live one per file under `studio_modules/<slot>/` and register themselves. The Network page now includes **Design**, **Sandbox**, **Variants**, **Experiments**, **Trace a token**, **Inside a head**, **Value map**, **Loss**, **Head lab**, **3D** and **Versions** tabs. Sandbox controls come from registry metadata; incompatible choices show their reason, and inspection controls are disabled when the selected block lacks required hooks.
+
+The inspection tabs read saved checkpoints and report measured values: token attention and intermediate predictions, a head's scores and probabilities, value/output projection summaries, selected-token loss and gradient, and head ablation statistics. **Versions** manages architecture revisions, checkpoint weights and backups. These views describe the selected checkpoint; they do not explain a head's behavior beyond the measured quantities shown.
+
+`Experiments` runs paired seeds and can hold tokens, estimated parameters, estimated compute or wall-clock time equal. It records width adjustments, achieved budgets and run metrics. Network training saves a snapshot every 50 steps. Each snapshot includes full model weights and gradients, plus full updates when available, so storage grows with model size and snapshot count. The 3D viewer is a separate window with five levels: Run, Model, Window, Head and Weights. Its menus choose level and Build/Train/Ride a token mode. Mouse drag orbits the camera, the wheel zooms between levels, and WASD/Q/E pans. Model shows binned attention and stream norms; Window and Head display at most 32 tokens. Replay controls play, pause and scrub saved snapshots; **1 real step** runs one optimizer step on a private copy from a checkpoint. At Weights, select weight/gradient/update and a matrix; keyboard `+`/`-` changes a weight by a small amount and saves a new checkpoint version.
+
+The `init/mup` option is a width-scaled initialization with hidden-matrix learning-rate multipliers from an explicit base width. It does not implement the full μP transfer recipe; the tied readout retains the existing scaling behavior.
 
 Exact duplicates are removed **before** the train/validation split. Validation is separated before character-vocabulary fitting. Each evaluation covers up to 20 batches. The chart's training curve uses baseline evaluation followed by sampled batch losses; validation uses dropout-free inference. With validation disabled or only one example, the validation curve is unavailable.
 
@@ -175,7 +185,7 @@ The builds are unsigned, so macOS Gatekeeper (right-click the app, Open) and Win
 
 ## Codebase structure
 
-The repository is flat: entry points and `studio_*.py` modules sit in the root, tests in `tests/`. There is no package directory and no build step.
+Entry points and engine services sit in the repository root; swappable model/training modules live in `studio_modules/`, tests in `tests/`, and packaging hooks in `packaging/`.
 
 ### Layers
 
@@ -183,12 +193,14 @@ The repository is flat: entry points and `studio_*.py` modules sit in the root, 
 |---|---|---|
 | Entry points | `app.py`, `train.py`, `start_studio.bat` | Launch the desktop GUI, run training from the command line, or set up and launch on Windows. |
 | GUI shell | `studio_gui.py` | `NativeStudio` (Tk window, page registry) and `Studio`, which mixes in every page. |
-| GUI pages (mixins) | `studio_flow.py`, `studio_curriculum_page.py`, `studio_align.py`, `studio_network.py` | Guided workflow, sequential training card, post-training alignment, network/architecture editor. |
+| GUI pages (mixins) | `studio_flow.py`, `studio_curriculum_page.py`, `studio_align.py`, `studio_network.py`, `studio_net_*.py` | Guided workflow, sequential training card, post-training alignment, and the Design, Sandbox, Variants, Experiments, inspection, 3D and Versions views. |
 | GUI helpers | `studio_widgets.py`, `studio_ux.py`, `studio_circuit.py`, `studio_glossary.py` | Shared widgets and example editor, Beginner/Advanced mode and time estimates, PCB-style network canvas, plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
-| Architecture | `studio_arch.py`, `studio_archdb.py` | Per-block architecture specs and a versioned SQLite store of revisions and weight files. |
+| Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
+| Network editing | `studio_arch.py`, `studio_archdb.py`, `studio_network.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
 | Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
+| Inspection and experiments | `studio_inspect.py`, `studio_summary.py`, `studio_experiments.py`, `studio_snapshot.py`, `studio_scene.py` | Probe, summary, experiment, snapshot/replay and renderer-independent scene services. |
 | 3D viewer | `studio_vizbridge.py`, `studio_brain3d.py` | `studio_brain3d.py` is a Panda3D viewer run as a separate process. `studio_vizbridge.py` connects it to the GUI over a loopback socket. |
 
 ### Dependency flow
@@ -203,7 +215,7 @@ train.py ─┐
           └──► studio_core, studio_backend
 ```
 
-`studio_model.py` is the centre of the engine: the GUI and both entry points depend on it, and it depends only on the lower-level data and backend modules. Pages import the engine and data layers; the engine never imports Tk.
+`studio_model.py` owns training and checkpoint compatibility. The modular compiler and its services sit alongside it; they do not import Tkinter. The Panda3D viewer stays in its separate process and communicates through `studio_vizbridge.py`.
 
 ### Runtime data
 
@@ -216,10 +228,10 @@ Created at run time and git-ignored:
 
 ### Tests
 
-`tests/` holds 13 `unittest` modules, one per major area (engine, architecture, data/catalog, RLHF, curriculum, network, viewer bridge, GUI integration). GPU and GUI tests skip when the hardware or display is unavailable.
+`tests/` contains focused `unittest` modules for the engine, modules, data, architecture, inspection services, viewer bridge and GUI integration. GPU and display-dependent tests may skip when that hardware or display is unavailable.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, checkpoint resumption and cancellation. CUDA tests compare GPU forward/backward/AdamW results against CPU, verify actual learning and inference on GPU, and resume checkpoints across devices.
+Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, module estimates and checkpoint resumption. CUDA tests compare supported GPU operations against CPU and skip when CUDA is unavailable. The PyInstaller hook `packaging/hook-studio_modules.py` collects all discovered modules so registry lookup also works in packaged builds.

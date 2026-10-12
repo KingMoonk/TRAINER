@@ -11,11 +11,13 @@ def estimate(spec, vocab=None):
     """{"total", "active", "embedding_params", "block_params", "train_flops_per_token", "kv_bytes_per_token",
         "activation_bytes_per_token", "rows": [{"slot", "block", "id", "name", "label", "params", ...}]}"""
     vocab = vocab or vocab_of(spec)
+    precision, precision_cfg = module_of("precision", spec["train"]["precision"])
+    dtype = precision.build(precision_cfg, None, None)
     rows = []
 
     def add(slot, entry, block=None, label=None):
         module, cfg = module_of(slot, entry)
-        e = Estimate() if module.skip else module.estimate(cfg, dims_of(spec, vocab, layer=block or 0))
+        e = Estimate() if module.skip else module.estimate(cfg, dims_of(spec, vocab, dtype=dtype, layer=block or 0))
         rows.append({"slot": slot, "block": block, "id": module.short, "name": module.name, "label": label or SLOTS[slot][0],
                      "params": e.params, "active_params": e.params if e.active_params is None else e.active_params,
                      "flops_per_token": 0 if slot in VOCAB_SLOTS else e.flops_per_token,

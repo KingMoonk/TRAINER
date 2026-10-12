@@ -254,7 +254,7 @@ def parse_config(cls, raw, label="config"):
                 raise ValueError(f"{where} must be true or false.")
             value = bool(value)
         elif isinstance(default, int):
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value != int(value):
                 raise ValueError(f"{where} must be a whole number.")
             value = int(value)
         elif isinstance(default, float):

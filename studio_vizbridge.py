@@ -17,7 +17,7 @@ from collections import deque
 from multiprocessing.connection import AuthenticationError, Client, Listener
 from pathlib import Path
 
-_COALESCE = ("telemetry", "spec")  # only the latest of each kind is kept while queued
+_COALESCE = ("telemetry", "spec", "viz_snapshot", "snapshot", "summary", "selection")
 _POLL_S = 0.1
 
 

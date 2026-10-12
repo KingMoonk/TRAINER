@@ -43,8 +43,11 @@ class MLP(Layer):
             act, keep = activate(self.xp, pre, self.kind)
             pres.append(pre)
             saved.append(keep)
-        ctx.emit("mlp.pre", pre)
-        ctx.emit("mlp.act", act)
+        # Only the final hidden layer exposes these hooks, also for legacy multi-layer MLPs.
+        pre = ctx.emit("mlp.pre", pre)
+        act, keep = activate(self.xp, pre, self.kind)
+        pres[-1], saved[-1] = pre, keep
+        act = ctx.emit("mlp.act", act)
         self.cache = (inputs, pres, saved, act)
         return linear(self, act, "f2")
 
@@ -64,6 +67,7 @@ class MLPSpec(ModuleSpec):
     blurb = "Two linear layers with a GELU between them, hidden width 4 × d."
     ref = "GPT-2"
     config = MLPConfig
+    glyph3d = {"kind": "tower", "hooks": ["mlp.act"]}
     hooks = (("mlp.pre", "B T F"), ("mlp.act", "B T F"))
 
     def symbols(self, cfg, dims):

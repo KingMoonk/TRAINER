@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -39,6 +39,8 @@ class Tape:
     caches: list        # each layer's cache, in the order the layers ran
     masks: list         # dropout masks, in the order they were drawn
     captured: dict
+    forward_values: dict = field(default_factory=dict)
+    backward_values: dict = field(default_factory=dict)
 
 
 class CompiledModel:
@@ -62,6 +64,7 @@ class CompiledModel:
         self.objective = objective.build(objective_cfg, self.dims, None)
         self.p, self.g, self.roles, self.lr_scale, self.owner, self.group = {}, {}, {}, {}, {}, {}
         self.layers = []
+        self.layer_names = {}
         self.keep_tape, self.last_tape = False, None
         self.embedding = self._make("embedding", spec["embedding"], "")
         self.position = self._make("position", spec["position"], "")
@@ -89,6 +92,7 @@ class CompiledModel:
         layer = module.build(cfg, dataclasses.replace(self.dims, layer=block or 0), self.rng)
         layer.module, layer.cfg = module, cfg
         self.layers.append(layer)
+        self.layer_names[id(layer)] = prefix + slot
         self._init.apply(layer, self.rng, self.dims)
         for name, value in layer.params.items():
             full = prefix + name
@@ -108,7 +112,7 @@ class CompiledModel:
         for grad in self.g.values():
             grad.fill(0)
 
-    def forward(self, ids, training=False, tape=False, hooks=None, patches=None):
+    def forward(self, ids, training=False, tape=False, hooks=None, patches=None, attention_summary=None, trace=False):
         """Logits [B, T, V]. tape=True also returns the Tape backward() needs.
 
         hooks: True, or a set of hook names ("block0.attn.pattern", "logits") to record on the tape.
@@ -119,11 +123,19 @@ class CompiledModel:
         if ids.shape[1] > self.dims.n_ctx:
             raise ValueError("Sequence exceeds the context length.")
         ctx = Ctx(xp, training, self.rng, self.dims.dropout, hooks, patches, self.position, self.embedding)
+        if attention_summary is not None:
+            if training or tape or patches or hooks:
+                raise ValueError("Attention summaries require unpatched inference without a tape or dense hooks.")
+            ctx.attention_summary = attention_summary
+            ctx.summaries = {}
         caches, masks = [], []
+        values = {}
 
         def run(layer, x):
             y = layer.forward(x, ctx)
             caches.append(layer.cache)
+            if trace:
+                values[self.layer_names[id(layer)]] = y.copy()
             return y
 
         def drop(x):
@@ -152,13 +164,20 @@ class CompiledModel:
                 else:
                     x = x + drop(run(block.channel, run(block.norm2, x) if block.norm2 is not None else x))
             x = ctx.emit("resid.post", x)
+            if attention_summary is not None:
+                from studio_summary import bin_edges
+                edges = bin_edges(ids.shape[1], attention_summary)
+                norms = xp.sqrt((x * x).sum(axis=-1))
+                ctx.summaries[f"block{block.index}.resid.norm"] = xp.stack([norms[:, a:b].mean() for a, b in zip(edges[:-1], edges[1:])])
         ctx.block = None
         if self.final is not None:
             x = run(self.final, x)
         x = ctx.emit("final", x)
         logits = ctx.emit("logits", run(self.head, x))
+        if attention_summary is not None:
+            return logits, ctx.summaries
         if tape:
-            return logits, Tape(ids, ctx, caches, masks, ctx.captured)
+            return logits, Tape(ids, ctx, caches, masks, ctx.captured, values)
         return logits
 
     def backward(self, dlogits, tape):
@@ -167,7 +186,10 @@ class CompiledModel:
 
         def back(layer, dy):
             layer.cache = caches.pop()  # the cache of the forward pass this tape came from, even if others ran since
-            return layer.backward(dy)
+            dx = layer.backward(dy)
+            if tape.forward_values and dx is not None:
+                tape.backward_values[self.layer_names[id(layer)]] = dx.copy()
+            return dx
 
         def undrop(dy):
             mask = masks.pop()

@@ -32,9 +32,15 @@ class Attention(Layer):
         position = ctx.position
         q, k, v = [split_heads(part, h) for part in xp.split(linear(self, x, "qkv"), 3, axis=-1)]
         q, k = position.rotate(q, k)
-        ctx.emit("attn.q", q)
-        ctx.emit("attn.k", k)
-        ctx.emit("attn.v", v)
+        q = ctx.emit("attn.q", q)
+        k = ctx.emit("attn.k", k)
+        v = ctx.emit("attn.v", v)
+        if hasattr(ctx, "attention_summary"):
+            from studio_summary import chunked_attention
+            output, mass = chunked_attention(q, k, v, position, ctx.attention_summary, xp=xp)
+            ctx.summaries[f"block{ctx.block}.attn.pattern"] = mass
+            self.cache = None
+            return linear(self, merge_heads(output), "proj")
         raw = ctx.emit("attn.scores", q @ k.swapaxes(-1, -2))
         scores = raw / math.sqrt(depth)
         bias = position.score_bias(length, h)
@@ -71,6 +77,7 @@ class AttentionSpec(ModuleSpec):
     ref = "Vaswani et al. 2017"
     config = AttentionConfig
     provides = frozenset({"qk", "scores", "attention"})
+    glyph3d = {"kind": "beams", "hooks": ["attn.pattern"]}
     hooks = (("attn.q", "B H T h"), ("attn.k", "B H T h"), ("attn.v", "B H T h"), ("attn.scores", "B H T T"),
              ("attn.pattern", "B H T T"), ("attn.head_out", "B H T h"))
 

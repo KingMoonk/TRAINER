@@ -44,6 +44,41 @@ def default_spec(name="My network"):
                           "blocks": blocks, "training": dict(TRAINING_DEFAULTS, objective="assistant")})
 
 
+def model_spec_presets():
+    """Ready-to-edit ModelSpecs built only from modules registered in this checkout.
+
+    The GPT-2-style preset uses the local byte tokenizer until GPT-2 BPE is installed;
+    it describes the network shape, not pretrained GPT-2 weights or vocabulary.
+    """
+    import studio_registry as registry
+    from studio_spec import validate_spec as validate_model_spec
+
+    presets = {
+        "starter": validate_model_spec({"schema": 1, "name": "Starter decoder",
+                                         "dims": {"d_model": 64, "n_layer": 2, "n_ctx": 256, "dropout": .1}}),
+        "gpt2_small_style": validate_model_spec({"schema": 1, "name": "GPT-2 small style · byte tokenizer",
+                                                  "dims": {"d_model": 768, "n_layer": 12, "n_ctx": 1024, "dropout": .1},
+                                                  "block": {"mixer": {"id": "attention", "config": {"heads": 12}},
+                                                            "channel": {"id": "mlp_gelu", "config": {"d_ff": 3072}}}}),
+    }
+    llama_modules = (("norm", "rmsnorm"), ("position", "rope"), ("mixer", "gqa"), ("channel", "swiglu"))
+    try:
+        for slot, short in llama_modules:
+            registry.get(slot, short)
+    except ValueError:
+        pass
+    else:
+        presets["tiny_llama_style"] = validate_model_spec({
+            "schema": 1, "name": "Tiny Llama style · byte tokenizer",
+            "dims": {"d_model": 256, "n_layer": 4, "n_ctx": 256, "dropout": 0},
+            "position": {"id": "rope"},
+            "block": {"norm": {"id": "rmsnorm"},
+                      "mixer": {"id": "gqa", "config": {"heads": 8, "kv_heads": 2, "bias": False}},
+                      "channel": {"id": "swiglu"}},
+        })
+    return presets
+
+
 def _int(value, label, low, high):
     if isinstance(value, bool) or (isinstance(value, float) and (math.isinf(value) or math.isnan(value) or value != int(value))):
         raise ValueError(f"{label} must be a whole number.")

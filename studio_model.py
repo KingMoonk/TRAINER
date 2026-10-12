@@ -434,10 +434,15 @@ def _initialize_from(model, tokenizer, path):
     return transplant(old, model)
 
 
-def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5):
+def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
+          snapshot_every=0, token_budget=None, wall_seconds=None):
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
+    if token_budget is not None and token_budget < 1:
+        raise ValueError("Token budget must be positive.")
+    if wall_seconds is not None and wall_seconds <= 0:
+        raise ValueError("Wall-clock budget must be positive.")
     if resume and init_from:
         raise ValueError("Resume and initialize-from cannot be combined.")
     directory = Path(output_dir)
@@ -474,10 +479,16 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         if "windowing" not in checkpoint["config"]:
             # Checkpoints from before windowing existed were trained with independent sequential chunks.
             previous["windowing"] = cfg["windowing"] = "sequential"
-        keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + ("seed", "validation", "objective", "windowing", "batch_size", "accumulation")
+        keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + (
+            "seed", "validation", "objective", "windowing", "batch_size", "accumulation",
+            "learning_rate", "weight_decay", "warmup",
+        )
+        current_spec, previous_spec = effective_spec(cfg), effective_spec(previous)
+        recipe = ("objective", "optimizer", "schedule")
         if (any(cfg[k] != previous[k] for k in keys)
-                or structure_key(effective_spec(cfg)) != structure_key(effective_spec(previous))):
-            raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective and batch settings.")
+                or structure_key(current_spec) != structure_key(previous_spec)
+                or any(current_spec["train"][key] != previous_spec["train"][key] for key in recipe)):
+            raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective, optimizer, schedule and batch settings.")
         tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
     else:
         module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
@@ -571,18 +582,28 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         emit({"type": "metric", **row, "total": cfg["steps"]})
 
     started = time.monotonic()
+    trained_tokens = 0
+    budget_reason = None
+    detector_state = set()
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
             if loss is not None:
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": 0., "lr": cfg["learning_rate"], "grad_norm": 0.})
         while step < cfg["steps"] and not stop.is_set():
+            if token_budget is not None and trained_tokens >= token_budget:
+                budget_reason = "tokens"
+                break
+            if wall_seconds is not None and time.monotonic() - started >= wall_seconds:
+                budget_reason = "wall-clock"
+                break
             while pause.is_set() and not stop.is_set():
                 time.sleep(.08)
             if stop.is_set():
                 break
             tick = time.monotonic()
             next_step = step + 1
+            snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
             rate = schedule.rate(next_step, cfg["steps"], cfg["learning_rate"])
             model.zero_grad()
             loss, token_count = 0., 0
@@ -597,13 +618,26 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 raise ValueError("Non-finite loss. Reduce the learning rate.")
             payload = model.telemetry(model.last_tape) if sample_telemetry and model.last_tape is not None else None
             model.keep_tape, model.last_tape = False, None
+            before = {key: model.backend.to_cpu(value).copy() for key, value in model.p.items()} if snapshot_due else None
             norm = optimizer.update(model, rate)
             step = next_step
+            trained_tokens += token_count
             model.backend.synchronize()
             speed = token_count / max(.001, time.monotonic() - tick)
             validation_loss = evaluate(val_samples) if step % cfg["eval_every"] == 0 or step == cfg["steps"] else None
-            if step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
-                report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm})
+            if snapshot_due:
+                from studio_snapshot import capture, save as save_snapshot
+                probe_ids, _ = batch_arrays(train_samples[:min(2, len(train_samples))])
+                snapshot = capture(model, probe_ids, step, before, loss=validation_loss)
+                active = {(marker['block'], marker['head'], marker['kind']) for marker in snapshot['markers']}
+                snapshot['markers'] = [marker for marker in snapshot['markers']
+                                       if (marker['block'], marker['head'], marker['kind']) not in detector_state]
+                detector_state = active
+                path = save_snapshot(directory, snapshot)
+                emit({"type": "viz_snapshot", "step": step, "path": str(path), "markers": snapshot["markers"]})
+            if token_budget is not None or wall_seconds is not None or step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
+                report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
+                        "trained_tokens": trained_tokens, "elapsed_seconds": time.monotonic() - started})
             if payload:
                 emit({"type": "telemetry", "step": step, "total": cfg["steps"], "loss": loss, "lr": rate, **payload})
             if step % cfg["eval_every"] == 0 or step == cfg["steps"]:
@@ -613,8 +647,15 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     save("best.npz")
                 record["best_loss"] = best
                 save("last.npz")
+        if budget_reason and not stop.is_set():
+            final_loss, final_validation = evaluate(train_samples), evaluate(val_samples)
+            if final_loss is not None:
+                report({"step": step, "loss": final_loss, "val_loss": final_validation, "tokens_per_second": 0.,
+                        "lr": rate if step else cfg["learning_rate"], "grad_norm": 0., "trained_tokens": trained_tokens,
+                        "elapsed_seconds": time.monotonic() - started})
         save("last.npz")
-        record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started, "finishedAt": now()})
+        record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started,
+                       "trained_tokens": trained_tokens, "budget_reached": budget_reason, "finishedAt": now()})
         atomic_json(directory / "run.json", record)
         emit({"type": "done", "run": record, "directory": str(directory)})
         return record
