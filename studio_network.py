@@ -114,7 +114,7 @@ class NetworkMixin:
             ttk.Button(strip, text=text, command=command, style="Small.TButton", width=3 if len(text) < 2 else 4 if len(text) < 4 else 6).pack(side="right", padx=(5, 0))
         body = ttk.Frame(page)
         body.pack(fill="both", expand=True)
-        side = self.net_side = ttk.Frame(body, width=326)
+        side = self.net_side = ttk.Frame(body, width=360)
         side.pack(side="right", fill="y", padx=(10, 0))
         side.pack_propagate(False)
         self.net_canvas = CircuitCanvas(body, self)

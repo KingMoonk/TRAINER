@@ -98,7 +98,7 @@ class NativeStudio(tk.Tk):
         style.configure("Treeview.Heading", background=PANEL, foreground=MUTED, font=(FONT, 10, "bold"), padding=9, relief="flat")
         style.configure("TNotebook", background=BG, borderwidth=0)
         style.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(15, 10))
-        style.map("TNotebook.Tab", background=[("selected", EDGE)], foreground=[("selected", TEXT)])
+        style.map("TNotebook.Tab", background=[("selected", EDGE)], foreground=[("selected", TEXT)], padding=[("selected", (15, 10))])
         style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=INPUT, borderwidth=0)
         style.configure("TScrollbar", background=EDGE, troughcolor=BG, arrowcolor=MUTED, borderwidth=0)
         self.option_add("*TCombobox*Listbox.background", INPUT)
