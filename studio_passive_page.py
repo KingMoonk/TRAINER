@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import traceback
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -69,6 +70,8 @@ def plan_from_form(v):
 
 
 def duration_words(seconds):
+    if not math.isfinite(seconds or 0):
+        return "longer than anyone will wait"
     seconds = int(seconds or 0)
     unit = lambda n, word: f"{n} {word}" + ("" if n == 1 else "s")  # noqa: E731
     if seconds < 60:
@@ -404,8 +407,9 @@ class PassiveMixin:
         if key != self._passive_key:
             for child in self.passive_frame.winfo_children():
                 child.destroy()
-            self._pv, self._passive_key = {"id": key[1]}, key
+            self._pv, self._passive_key = {"id": key[1]}, None
             {"start": self._passive_build_start, "running": self._passive_build_running, "catchup": self._passive_build_catchup}[view](self.passive_frame, session)
+            self._passive_key = key
         if view == "running":
             self._passive_update_running(session)
         if self._passive_job is None and view == "running" and self._passive_tab == "passive" and getattr(self, "active_page", None) == "training":
@@ -417,6 +421,11 @@ class PassiveMixin:
             self.refresh_passive()
         except tk.TclError:
             pass
+        except Exception as exc:
+            self.log(traceback.format_exc())
+            self.status_var.set(f"Passive page could not refresh: {exc}")
+            if self._passive_tab == "passive" and getattr(self, "active_page", None) == "training":
+                self._passive_job = self.after(2000, self._passive_tick)
 
     def _passive_dismiss(self, session_id=None):
         self.workspace.state["passiveDismissed"] = session_id or self._pv["id"]
@@ -446,7 +455,7 @@ class PassiveMixin:
     def _passive_summaries(self, *_):
         try:
             text = plan_summary(merge_plan(plan_from_form(self._passive_values())))
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, OverflowError):
             return
         teacher = self._pv["teacher"]
         out = dict(text, teacher=f"{teacher} · {text['teacher']}" if teacher else "No teacher set up — the Learn step is skipped.")
@@ -516,6 +525,8 @@ class PassiveMixin:
         except Exception as exc:
             self._passive_store().update(session_id, status="failed", error=f"The background trainer could not be started: {exc}")
             messagebox.showerror("Cannot start passive training", f"Groundwork could not start the background trainer.\n\n{exc}", parent=self)
+            self.refresh_passive()
+            return
         self.passive_base = None
         self.status_var.set("Passive training started")
         self.refresh_passive()
@@ -664,7 +675,14 @@ class PassiveMixin:
         row.pack(fill="x")
         button(row, "Chat with the best checkpoint", lambda: self.passive_chat(), True)
         button(row, "Continue from the best", self.passive_continue)
-        button(row, "Done", self._passive_dismiss)
+        button(row, "Done", self.passive_done)
+
+    def passive_done(self):
+        waiting = sum(r.get("status") == "pending" for r in self._passive_store().lessons(self._pv["id"]))
+        if waiting:
+            messagebox.showinfo("Lessons are waiting", f"{waiting} lesson{'' if waiting == 1 else 's'} from the teacher {'is' if waiting == 1 else 'are'} waiting for your review. Keep or drop them first, then press Done.", parent=self)
+            return
+        self._passive_dismiss()
 
     @staticmethod
     def _one_line(text, size=70):
