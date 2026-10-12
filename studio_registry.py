@@ -5,12 +5,14 @@ import dataclasses
 import importlib
 import inspect
 import pkgutil
+import threading
 from pathlib import Path
 
 from studio_slots import SLOTS, ModuleSpec, config_dict
 
 _MODULES = {}   # (slot, short id) -> ModuleSpec instance, in registration order
 _loaded = False
+_load_lock = threading.RLock()   # the trainer thread and the UI thread can both be first to ask
 
 
 def register(cls):
@@ -30,10 +32,13 @@ def load():
     global _loaded
     if _loaded:
         return
-    _loaded = True
-    import studio_modules
-    for info in pkgutil.walk_packages(studio_modules.__path__, "studio_modules."):
-        importlib.import_module(info.name)
+    with _load_lock:
+        if _loaded:
+            return
+        import studio_modules
+        for info in pkgutil.walk_packages(studio_modules.__path__, "studio_modules."):
+            importlib.import_module(info.name)
+        _loaded = True
 
 
 def get(slot, short):

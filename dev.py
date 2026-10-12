@@ -67,8 +67,9 @@ def rebuild(app, cls, *args):
 
 
 def project_modules():
-    return {name: mod for name, mod in sys.modules.items()
-            if name not in ("__main__", "dev") and getattr(mod, "__file__", None) and Path(mod.__file__).parent == ROOT}
+    # decided by name, never by touching the module: a lazily loaded third party module (cupyx.scipy) imports itself on any attribute read
+    return {name: mod for name, mod in list(sys.modules.items())
+            if name not in ("__main__", "dev") and "." not in name and (ROOT / f"{name}.py").is_file()}
 
 
 def reload(app):

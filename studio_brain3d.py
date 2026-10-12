@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from panda3d.core import (Geom, GeomNode, GeomTriangles, GeomVertexData, GeomVertexFormat,
+from panda3d.core import (Filename, Geom, GeomNode, GeomTriangles, GeomVertexData, GeomVertexFormat,
                           GeomVertexWriter, LineSegs, TextNode, TransparencyAttrib, Vec3,
                           loadPrcFileData)
 
@@ -563,7 +563,7 @@ def main(argv=None):
         for _ in range(args.selftest):
             app.taskMgr.step()
         if args.screenshot:
-            app.win.saveScreenshot(str(args.screenshot))
+            app.win.saveScreenshot(Filename.fromOsSpecific(str(Path(args.screenshot).resolve())))
         print(f'fps(24 blocks): {args.selftest / max(1e-6, time.monotonic() - started):.1f}')
         app.destroy()
     else:
