@@ -50,6 +50,17 @@ class DesktopWorkflow(unittest.TestCase):
                     learning = workspace.create_dataset("Tiny learning check")
                     workspace.add(learning, [{"user": "a", "assistant": "b"}])
                     app.refresh_datasets(learning)
+                    # Rotation is the default: runs cycle through the library in order, whatever Curate has selected.
+                    self.assertEqual(app.dataset_mode.get(), "rotate")
+                    self.assertEqual(app.run_sources(), [dataset])
+                    app.workspace.state["rotationIndex"] = 1
+                    self.assertEqual(app.run_sources(), [learning])
+                    app.workspace.state["rotationIndex"] = 2
+                    self.assertEqual(app.run_sources(), [dataset])
+                    # Choose by hand with nothing selected falls back to the working dataset.
+                    app.dataset_mode.set("manual")
+                    app.dataset_mode_changed()
+                    self.assertEqual(app.run_sources(), [learning])
                     for key, value in dict(device="cpu", width=32, layers=1, heads=2, context=32, expansion=2, dropout=0, batch_size=4, steps=45, learning_rate=.004, warmup=0, validation=0, eval_every=15, objective="assistant").items():
                         app.config_vars[key].set(str(value))
                     app.start_training()

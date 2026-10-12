@@ -360,7 +360,6 @@ class WorkflowMixin:
         for key, value in cfg.items():
             if key in self.config_vars:
                 self.config_vars[key].set("" if value is None else str(value))
-        self.use_mixture.set(False)
         self.use_all_records.set(False)
         self.reviewed_only.set(False)
         self.train_limit.set(str(plan["limit"]))
@@ -368,7 +367,7 @@ class WorkflowMixin:
         if label_for:
             self.dataset_var.set(label_for)
             self.select_dataset()
-        return bool(self.start_training())
+        return bool(self.start_training(sources=[plan["dataset_id"]]))
 
     def _build_catalog(self):
         page = self.pages["catalog"].body
@@ -452,6 +451,7 @@ class WorkflowMixin:
                 self.target_dataset.set("Create a new synthetic collection")
         if hasattr(self, "mixture_tree"):
             self.refresh_mixture()
+        self.refresh_rotation_text()
         self.refresh_home()
         self.refresh_catalog()
 
@@ -1276,17 +1276,25 @@ class WorkflowMixin:
         first = page.winfo_children()[0]
         mixture = card(page, "Choose your data")
         mixture.pack(fill="x", before=first, pady=(0, 14))
-        label(mixture, "Training learns from your working dataset (change it in the Training plan below). The budget caps how many of its examples are used.", "CardMuted.TLabel").pack(anchor="w", pady=(0, 10))
-        self.use_mixture = tk.BooleanVar(value=False)
+        label(mixture, "By default each run trains on the next dataset in your library, in order, then starts again at the first. "
+                       "Switch to Choose by hand to pick the datasets for a run yourself. The budget caps how many examples a run uses.",
+              "CardMuted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(0, 10))
+        self.dataset_mode = tk.StringVar(value=self.workspace.state.get("datasetMode", "rotate"))
+        modes = ttk.Frame(mixture, style="Card.TFrame")
+        modes.pack(fill="x")
+        ttk.Radiobutton(modes, text="Rotate automatically", value="rotate", variable=self.dataset_mode,
+                        command=self.dataset_mode_changed).pack(side="left", padx=(0, 20))
+        ttk.Radiobutton(modes, text="Choose by hand for this run", value="manual", variable=self.dataset_mode,
+                        command=self.dataset_mode_changed).pack(side="left")
+        self.rotation_text = tk.StringVar()
+        label(mixture, textvariable=self.rotation_text, style="Card.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(8, 12))
         self.reviewed_only = tk.BooleanVar(value=False)
         self.use_all_records = tk.BooleanVar(value=False)
         self.balance_var = tk.StringVar(value="tokens")
         self.train_limit = tk.StringVar(value="10000")
         row = ttk.Frame(mixture, style="Card.TFrame")
         row.pack(fill="x")
-        used = ttk.Checkbutton(row, text="Mix several datasets (choose below)", variable=self.use_mixture)
-        used.pack(side="left", padx=(0, 20))
-        only = ttk.Checkbutton(row, text="Good examples only", variable=self.reviewed_only)
+        only =ttk.Checkbutton(row, text="Good examples only", variable=self.reviewed_only)
         only.pack(side="left", padx=(0, 20))
         with_help(row, "Example budget", "record_budget").pack(side="left", padx=(0, 8))
         ttk.Entry(row, textvariable=self.train_limit, width=10).pack(side="left", padx=(0, 12))
@@ -1296,18 +1304,22 @@ class WorkflowMixin:
         balance_label.pack(side="left", padx=(0, 8))
         balance_box = ttk.Combobox(row, textvariable=self.balance_var, values=["tokens", "records"], state="readonly", width=8)
         balance_box.pack(side="left")
-        for widget in (used, only, everything, balance_label, balance_box):
+        for widget in (only, everything, balance_label, balance_box):
             self.mark_advanced(widget)
-        Tooltip(used, help_text("mixture"))
         Tooltip(only, help_text("reviewed_only"))
         detail = label(mixture, "Budget: 1\u20131,000,000 records, or Use all examples for every example in the selected sources. Balance 'tokens' gives each source an equal share of text, so long-answer sets do not dominate; 'records' splits by count.\n"
                        "Good examples only: Good means you marked the example as approved. Downloaded datasets arrive unchecked, so a source with none marked Good is included anyway (with a warning) rather than blocking the run.", "CardMuted.TLabel", wraplength=950, justify="left")
         detail.pack(anchor="w", pady=(6, 8))
         self.mark_advanced(detail)
         self.mixture_weights = {}
-        self.mixture_tree = tree(mixture, [("name", "SOURCE \u00b7 CTRL/SHIFT TO SELECT MULTIPLE", 440), ("records", "EXAMPLES", 110), ("weight", "WEIGHT", 90)], 5)
-        self.mark_advanced(self.mixture_tree.master)
-        weight_row = ttk.Frame(mixture, style="Card.TFrame")
+        # Only shown in "Choose by hand" mode (see apply_dataset_mode).
+        self.manual_frame = ttk.Frame(mixture, style="Card.TFrame")
+        self.manual_frame.pack(fill="x")
+        label(self.manual_frame, "Select the datasets for this run (Ctrl/Shift to pick several). With none selected, the working dataset from Curate is used.",
+              "CardMuted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(0, 6))
+        self.mixture_tree = tree(self.manual_frame, [("name", "SOURCE \u00b7 CTRL/SHIFT TO SELECT MULTIPLE", 440), ("records", "EXAMPLES", 110), ("weight", "WEIGHT", 90)], 5)
+        self.mixture_tree.bind("<<TreeviewSelect>>", lambda _: self.update_estimate())
+        weight_row = ttk.Frame(self.manual_frame, style="Card.TFrame")
         weight_row.pack(fill="x", pady=(8, 0))
         self.weight_value = tk.StringVar(value="1")
         with_help(weight_row, "Selected source weight", "weight").pack(side="left", padx=(0, 8))
@@ -1316,7 +1328,56 @@ class WorkflowMixin:
         button(weight_row, "Select all sources", lambda: self.mixture_tree.selection_set(self.mixture_tree.get_children()))
         self.mark_advanced(weight_row)
         self.mixture_report = tk.StringVar(value="Pick a model size below, then press Start training.")
-        label(mixture, textvariable=self.mixture_report, style="CardMuted.TLabel", wraplength=950).pack(anchor="w", pady=(10, 0))
+        self.mixture_report_label = label(mixture, textvariable=self.mixture_report, style="CardMuted.TLabel", wraplength=950)
+        self.mixture_report_label.pack(anchor="w", pady=(10, 0))
+        self.apply_dataset_mode()
+
+    # ---- which datasets a run uses: rotation by default, hand-picked on request
+    def dataset_mode_changed(self):
+        self.workspace.state["datasetMode"] = self.dataset_mode.get()
+        self.workspace.save()
+        self.apply_dataset_mode()
+
+    def apply_dataset_mode(self):
+        if not hasattr(self, "manual_frame"):
+            return
+        if self.dataset_mode.get() == "manual":
+            self.manual_frame.pack(fill="x", before=self.mixture_report_label)
+        else:
+            self.manual_frame.pack_forget()
+        self.refresh_rotation_text()
+        self.update_estimate()
+
+    def rotation_candidates(self):
+        """Datasets with examples, in library order. Rotation cycles through these one run at a time."""
+        return [d["id"] for d in self.workspace.state["datasets"] if self.dataset_stats(d["id"])["records"] > 0]
+
+    def rotation_pick(self):
+        ids = self.rotation_candidates()
+        return ids[self.workspace.state.get("rotationIndex", 0) % len(ids)] if ids else None
+
+    def refresh_rotation_text(self):
+        if not hasattr(self, "rotation_text"):
+            return
+        if self.dataset_mode.get() == "manual":
+            self.rotation_text.set("Choosing by hand: the next run uses the datasets selected below. Rotation resumes where it left off when you switch back.")
+            return
+        ids, pick = self.rotation_candidates(), self.rotation_pick()
+        if not pick:
+            self.rotation_text.set("No dataset has examples yet. Download or import one first.")
+            return
+        names = {d["id"]: d["name"] for d in self.workspace.state["datasets"]}
+        after = ids[(ids.index(pick) + 1) % len(ids)]
+        self.rotation_text.set(f"Next run: {names[pick]}  ({ids.index(pick) + 1} of {len(ids)})"
+                               + (f"  ·  then {names[after]}" if len(ids) > 1 else ""))
+
+    def run_sources(self):
+        """Dataset ids the next run trains on: the rotation's next dataset, or the hand-picked ones."""
+        if getattr(self, "dataset_mode", None) is not None and self.dataset_mode.get() == "manual":
+            selected = list(self.mixture_tree.selection())
+            return selected or [key for key in [self.selected_dataset()] if key]
+        pick = self.rotation_pick()
+        return [pick] if pick else []
 
     def refresh_mixture(self):
         selected = self.mixture_tree.selection()
@@ -1337,16 +1398,11 @@ class WorkflowMixin:
         except ValueError as exc:
             messagebox.showerror("Invalid source weight", str(exc), parent=self)
 
-    def mixture_sources(self):
-        """Dataset ids the next run trains on: the selected mixture sources, else the working dataset."""
-        selected = list(self.mixture_tree.selection()) if getattr(self, "use_mixture", None) is not None and self.use_mixture.get() else []
-        return selected or [key for key in [self.selected_dataset()] if key]
-
     def vocabulary_estimate(self, cfg, rows=5000):
         """(vocab size, description). Byte is fixed; a character vocabulary is fitted on >= `rows` rows across the sources."""
         if cfg["tokenizer"] == "byte":
             return Tokenizer("byte").vocab_size, "byte vocabulary"
-        sources = self.mixture_sources()
+        sources = self.run_sources()
         key = (tuple(sources), tuple(self.dataset_stats(source)["records"] for source in sources))
         cache = self.__dict__.setdefault("_vocab_cache", {})
         if key not in cache:
@@ -1361,25 +1417,26 @@ class WorkflowMixin:
             return
         try:
             cfg = self.read_config()
-            stats = self.dataset_stats(self.selected_dataset())
+            records = sum(self.dataset_stats(source)["records"] for source in self.run_sources())
             vocab, basis = self.vocabulary_estimate(cfg)
             count = parameter_estimate(cfg, vocab)
             self._set_time_estimate(cfg, count)
-            self.estimate_var.set(f"\u2248 {count:,} parameters \u00b7 {vocab:,} tokens ({basis}) \u00b7 {stats['records']:,} source examples\n\u2248 {count * 16 / 1024**2:.1f} MB for weights, gradients and Adam state + activations")
+            self.estimate_var.set(f"\u2248 {count:,} parameters \u00b7 {vocab:,} tokens ({basis}) \u00b7 {records:,} source examples\n\u2248 {count * 16 / 1024**2:.1f} MB for weights, gradients and Adam state + activations")
         except (ValueError, TypeError) as exc:
             self.estimate_var.set(str(exc))
             self.time_var.set("")
 
-    def start_training(self, config=None, train_options=None, navigate=True, persist_config=True, on_finished=None):
-        """Train on a bounded mixture. The Network page passes its own config, train() options and a finish hook."""
+    def start_training(self, config=None, train_options=None, navigate=True, persist_config=True, on_finished=None, sources=None):
+        """Train on a bounded mixture. The Network page passes its own config, train() options and a finish hook.
+        `sources` overrides the dataset choice for this one run (Quick start); otherwise rotation or the hand-picked set decides."""
         if self.busy():
             return False
         try:
             cfg = config if config is not None else self.read_config()
-            identifiers = list(self.mixture_tree.selection()) if self.use_mixture.get() else [self.selected_dataset()]
-            identifiers = [key for key in identifiers if key]
+            rotating = sources is None and self.dataset_mode.get() == "rotate"
+            identifiers = [key for key in (sources if sources is not None else self.run_sources()) if key]
             if not identifiers:
-                raise ValueError("Select a working dataset or at least one mixture source.")
+                raise ValueError("No dataset to train on. Download or import one first, or choose datasets by hand.")
             use_all = self.use_all_records.get()
             limit = 1 if use_all else int(self.train_limit.get())
             if not 1 <= limit <= 1000000:
@@ -1413,7 +1470,12 @@ class WorkflowMixin:
                 self.refresh_runs()
                 if on_finished:
                     on_finished(directory, record)
-            return self.start_job("training", work, finished)
+            started = self.start_job("training", work, finished)
+            if started and rotating:
+                self.workspace.state["rotationIndex"] = self.workspace.state.get("rotationIndex", 0) + 1
+                self.workspace.save()
+                self.refresh_rotation_text()
+            return started
         except (ValueError, TypeError) as exc:
             messagebox.showerror("Check your training plan", str(exc), parent=self)
             return False
