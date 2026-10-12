@@ -104,8 +104,9 @@ class UXMixin:
             captured.pop("in", None)
             captured.update(info)
             siblings = widget.master.pack_slaves()
-            after = siblings[siblings.index(widget) + 1:] if widget in siblings else []
-            return {"widget": widget, "manager": "pack", "info": captured, "after": after}
+            index = siblings.index(widget) if widget in siblings else len(siblings)
+            # Later siblings may not exist yet when this is called, so remember the earlier ones too.
+            return {"widget": widget, "manager": "pack", "info": captured, "after": siblings[index + 1:], "before": siblings[:index]}
         if kind == "grid":
             captured = widget.grid_info() if manager == "grid" else {}
             captured.pop("in", None)
@@ -129,8 +130,11 @@ class UXMixin:
                 if visible and not widget.winfo_manager():
                     anchor = next((s for s in entry["after"] if s.winfo_exists() and s.winfo_manager() == "pack"), None)
                     options = dict(entry["info"])
+                    previous = next((s for s in reversed(entry["before"]) if s.winfo_exists() and s.winfo_manager() == "pack"), None)
                     if anchor is not None:
                         options["before"] = anchor
+                    elif previous is not None:
+                        options["after"] = previous
                     widget.pack(**options)
                 elif not visible and widget.winfo_manager():
                     widget.pack_forget()
