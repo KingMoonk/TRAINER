@@ -67,7 +67,7 @@ class NetworkMixin:
         self.viz = None
         self._build_network()
         for sequence, action in (("<Control-z>", self.net_undo), ("<Control-y>", self.net_redo), ("<Control-Shift-Z>", self.net_redo),
-                                 ("<Delete>", self.net_delete_selected)):
+                                 ("<Delete>", self.net_delete_selected), ("<BackSpace>", self.net_delete_selected)):
             self.bind_all(sequence, lambda event, a=action: self._net_key(event, a), add="+")
 
     def _net_style(self):

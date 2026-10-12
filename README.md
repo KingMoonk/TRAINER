@@ -6,7 +6,7 @@ A native Python desktop studio for creating datasets, generating synthetic examp
 
 ## Quickstart
 
-Requires Python 3.10 or newer with Tkinter.
+Requires Python 3.9 or newer with Tkinter.
 
 macOS / Linux:
 
