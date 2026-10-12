@@ -67,7 +67,7 @@ GLOSSARY = {
     "max_tokens": ("New tokens", "The longest reply the model may write, counted in tokens. About 4 tokens is one word for characters, so 160 is a short paragraph."),
     "npz": (".npz file", "The file format of a saved model checkpoint. Your trained models are stored as best.npz (lowest error) and last.npz (most recent)."),
     "system_prompt": ("System prompt", "Standing instructions placed before the conversation, e.g. 'Answer briefly'. Optional. Small models follow it only if they were trained with it."),
-    "correction": ("Teach a correction", "If the model answers badly, write the answer it should have given. It is saved as a new example in your working dataset; train again to learn it."),
+    "correction": ("This reply is wrong", "Sends the conversation to Improve with feedback, where you pick a better reply or write the right one. An answer you write is also saved as a new example in your working dataset."),
     "inference": ("Inference device", "Where the model runs when you chat with it. 'auto' picks the GPU if available."),
     # ---- network
     "block": ("Block", "One repeatable layer of the network: it reads the text so far, combines information, and passes it on. A model stacks several blocks."),

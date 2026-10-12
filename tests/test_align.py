@@ -59,6 +59,14 @@ class AlignPage(unittest.TestCase):
                     self.assertIsNotNone(app.comparison)
                     self.assertEqual(len(app.comparison["replies"]), 2)
                     self.assertIn("Aim for at least 20", app.pref_hint.get())
+                    # chat's "This reply is wrong" brings the conversation (minus the bad reply) to the Vote step
+                    app.chat_messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "bad"}]
+                    app.show_page("chat")
+                    app.teach_correction()
+                    settle()
+                    self.assertEqual(app.active_page, "align")
+                    self.assertEqual(app.comparison["prompt"]["messages"], [{"role": "user", "content": "hi"}])
+                    self.assertEqual(app.chat_messages[-1]["content"], "bad")
 
                     def vote(winner, replies=("YES", "yes")):
                         app.comparison = {**app.comparison, "replies": replies}

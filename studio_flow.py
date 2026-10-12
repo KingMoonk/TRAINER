@@ -1,4 +1,4 @@
-"""Guided native workflow: acquire, curate, blend, train and teach."""
+"""Guided native workflow: acquire, curate, blend, train and improve."""
 from __future__ import annotations
 
 import copy
@@ -58,8 +58,8 @@ class WorkflowMixin:
              ("blueprint", "03", "Training setup", "Choose your data and a model size, then start training."),
              ("network", "04", "Network designer", "Advanced: snap together the model's blocks, watch signals flow, and version every change."),
              ("training", "05", "Training", "Watch the model learn. Lower error is better."),
-             ("align", "06", "Improve with feedback", "Optional: tell the model which replies are better (or let a teacher do it) and polish it."),
-             ("chat", "07", "Chat & teach", "Talk to your model and save corrections that make it better next time.")]
+             ("align", "06", "Improve with feedback", "Optional: pick the better reply or write the right one (or let a teacher do it) to polish the model."),
+             ("chat", "07", "Chat", "Talk to your model. If a reply is wrong, send it to Improve with feedback.")]
 
     def __init__(self, workspace=None):
         self.record_page = 0
@@ -178,8 +178,8 @@ class WorkflowMixin:
     def home_steps():
         return [{"key": "data", "title": "Get data", "desc": "Download a starter collection or import your own examples.", "page": "catalog", "action": "Get data", "optional": False},
                 {"key": "train", "title": "Train", "desc": "Pick a model size and let it learn from your data.", "page": "blueprint", "action": "Set up training", "optional": False},
-                {"key": "improve", "title": "Improve with feedback", "desc": "Say which replies are better to polish the model.", "page": "align", "action": "Give feedback", "optional": True},
-                {"key": "chat", "title": "Chat", "desc": "Talk to your model and teach it corrections.", "page": "chat", "action": "Open chat", "optional": False}]
+                {"key": "improve", "title": "Improve with feedback", "desc": "Pick the better reply or write the right one to polish the model.", "page": "align", "action": "Give feedback", "optional": True},
+                {"key": "chat", "title": "Chat", "desc": "Talk to your model.", "page": "chat", "action": "Open chat", "optional": False}]
 
     def home_progress(self):
         """Which checklist steps are done, derived from what exists in the workspace. Returns [{key, done, ...}] in order."""

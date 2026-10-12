@@ -27,7 +27,7 @@ class NativeStudio(tk.Tk):
     PAGES = [("datasets", "01", "Dataset library", "Import, write, and review the examples your model will learn from."),
              ("blueprint", "02", "Model blueprint", "Define your own transformer. Every new model starts with random weights."),
              ("training", "03", "Training console", "Watch real optimization steps, compare losses, and save your progress."),
-             ("chat", "04", "Playground", "Talk to your trained checkpoint and turn corrections into better data.")]
+             ("chat", "04", "Playground", "Talk to your trained checkpoint.")]
 
     def __init__(self, workspace=None):
         super().__init__()
@@ -198,7 +198,6 @@ class NativeStudio(tk.Tk):
         self.workspace.save()
         self.refresh_examples()
         self.update_estimate()
-        self.refresh_correction_note()
 
     def refresh_datasets(self, selected=None):
         selected = selected or self.selected_dataset() or self.workspace.state.get("selectedDatasetId")
@@ -209,7 +208,6 @@ class NativeStudio(tk.Tk):
         self.dataset_var.set(next((key for key, value in self.dataset_map.items() if value == selected), keys[0] if keys else ""))
         self.refresh_examples()
         self.update_estimate()
-        self.refresh_correction_note()
 
     def dataset_labels(self):
         """Display names for the dataset pickers. A short id suffix appears only when two datasets share a name."""
@@ -812,9 +810,7 @@ class NativeStudio(tk.Tk):
         controls.pack(fill="x", pady=(8, 0))
         button(controls, "Send  Ctrl+Enter", self.send_chat, True)
         button(controls, "Stop", self.stop_job)
-        Tooltip(button(controls, "Teach a correction", self.teach_correction), help_text("correction"))
-        self.correction_note = tk.StringVar()
-        label(page, textvariable=self.correction_note, style="Muted.TLabel", wraplength=1020, justify="left").pack(anchor="w", pady=(6, 0))
+        Tooltip(button(controls, "This reply is wrong", self.teach_correction), help_text("correction"))
         self.temperature = tk.StringVar(value="0.8")
         self.top_k = tk.StringVar(value="40")
         self.max_tokens = tk.StringVar(value="160")
@@ -835,14 +831,6 @@ class NativeStudio(tk.Tk):
         label(device_row, "Applies when loading a model \u00b7 auto prefers the GPU", "CardMuted.TLabel").pack(side="left")
         help_icon(device_row, "inference").pack(side="left", padx=(4, 0))
         button(device_row, "Clear conversation", self.clear_chat).pack_configure(side="right", padx=0)
-        self.refresh_correction_note()
-
-    def refresh_correction_note(self):
-        if not hasattr(self, "correction_note"):
-            return
-        name = self.dataset_var.get() or "your working dataset"
-        self.correction_note.set(f"Teach a correction saves your better answer as a new example in \u201c{name}\u201d (the working dataset picked on the Your data page). "
-                                 "Train again to make the model learn it.")
 
     def latest_checkpoint(self):
         """Newest run that left a checkpoint behind, or None."""
@@ -940,24 +928,6 @@ class NativeStudio(tk.Tk):
             if not answer:
                 self.chat_info.set("The model ended without text. Try more training or a different sampling temperature.")
         self.start_job("chat", lambda: self.chat_model.generate(messages, max_tokens, temperature, top_k, self.stop, lambda text: self.events.put(("chat_text", text))), completed)
-
-    def teach_correction(self):
-        if self.job_kind == "chat" or not self.last_prompt:
-            return
-        if not self.selected_dataset():
-            self.new_dataset()
-        if not self.selected_dataset():
-            return
-        turns = copy.deepcopy(self.chat_messages)
-        if not turns or turns[-1]["role"] != "assistant":
-            turns.append({"role": "assistant", "content": "Write the correct response here."})
-        example = normalize({"messages": turns, "quality": "Good", "intent": "correction"})
-        dialog = ExampleEditor(self, example, "Teach the correct response")
-        self.wait_window(dialog)
-        if dialog.result:
-            added, duplicates, _ = self.workspace.add(self.selected_dataset(), [dialog.result])
-            self.refresh_datasets()
-            self.status_var.set(f"{added} correction saved to {self.dataset_var.get()} · train a new run to learn the updated dataset")
 
     def busy(self):
         if self.job_kind is not None:

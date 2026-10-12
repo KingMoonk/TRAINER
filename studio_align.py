@@ -1,6 +1,7 @@
 """Align page: check the model → collect preferences → improve with feedback → compare results."""
 from __future__ import annotations
 
+import copy
 import json
 import queue
 import random
@@ -8,7 +9,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from studio_core import uid
+from studio_core import normalize, uid
 from studio_model import LocalModel
 from studio_rlhf import (AUTO_DEFAULTS, DEFAULT_RUBRIC, DPO_DEFAULTS, LOSS_TYPES, MIN_PAIRS_TO_TRAIN, OllamaTeacher,
                          PreferenceStore, auto_rlhf, compare_checkpoints, dpo_train, evaluate_checkpoint, load_settings,
@@ -19,7 +20,7 @@ from studio_widgets import (ACCENT, BG, FONT, MUTED, TEXT, Tooltip, help_icon, h
 WARN = "#ffb86b"
 SAME_AS_TEACHER = "(same as teacher)"
 STEPS = [("1", "Check the model", "Is it trained enough to be worth polishing?"),
-         ("2", "Vote", "Say which replies are better, or let an Ollama teacher do it."),
+         ("2", "Vote", "Pick the better reply or write the right one, or let an Ollama teacher do it."),
          ("3", "Train", "Train the model toward the replies that were preferred."),
          ("4", "Compare", "Check that the new model really beats the old one.")]
 TAB_TO_STEP = {0: 0, 1: 1, 2: 1, 3: 1, 4: 2, 5: 3}
@@ -573,7 +574,18 @@ class AlignMixin:
         reference = comparison["prompt"].get("reference")
         self.reference_text.set(f"Dataset reference answer: {reference[:400]}" if reference else "")
 
-    def next_comparison(self, own_prompt):
+    def teach_correction(self):
+        """Chat's "This reply is wrong": bring the conversation to the Vote step to pick or write a better reply."""
+        turns = copy.deepcopy(self.chat_messages)
+        if turns and turns[-1]["role"] == "assistant":
+            turns.pop()
+        if self.job_kind == "chat" or not turns:
+            return
+        self.show_page("align")
+        self.align_tabs.select(TAB_RATE)
+        self.next_comparison(None, turns)
+
+    def next_comparison(self, own_prompt, messages=None):
         if self.busy():
             return
         try:
@@ -581,7 +593,9 @@ class AlignMixin:
             temps = float(self.temp_a.get()), float(self.temp_b.get())
             tokens = int(self.compare_tokens.get())
             device = self.inference_device.get()
-            if own_prompt:
+            if messages:
+                prompt = {"messages": messages, "reference": None}
+            elif own_prompt:
                 prompt = {"messages": [{"role": "user", "content": own_prompt}], "reference": None}
             else:
                 if not self.align_prompts:
@@ -650,7 +664,10 @@ class AlignMixin:
         dialog.transient(self)
         outer = ttk.Frame(dialog, padding=18)
         outer.pack(fill="both", expand=True)
-        label(outer, "The answer you write is preferred over both model replies.", "Muted.TLabel").pack(anchor="w", pady=(0, 8))
+        # A prompt from the dataset already has its example there; a chat or hand-typed prompt gains one.
+        dataset = None if comparison["prompt"].get("reference") else self.selected_dataset()
+        label(outer, "The answer you write is preferred over both model replies"
+                     + (f", and saved as a new example in \u201c{self.dataset_var.get()}\u201d." if dataset else "."), "Muted.TLabel").pack(anchor="w", pady=(0, 8))
         box = text_box(outer, 12)
         box.pack(fill="both", expand=True)
         set_text(box, comparison["prompt"].get("reference") or "")
@@ -668,6 +685,10 @@ class AlignMixin:
                     ids.append(record["id"])
             if ids:
                 self.vote_log.append({"ids": ids, "comparison": comparison})
+            if dataset:
+                self.workspace.add(dataset, [normalize({"messages": comparison["prompt"]["messages"] + [{"role": "assistant", "content": answer}],
+                                                        "quality": "Good", "intent": "correction"})])
+                self.refresh_datasets()
             dialog.destroy()
             self.refresh_pref_stats()
             self.next_comparison(None)
