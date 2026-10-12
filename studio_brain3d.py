@@ -29,6 +29,7 @@ from panda3d.core import (AntialiasAttrib, BitMask32, ClockObject, CollisionBox,
                           TextNode, TextProperties, TextPropertiesManager, TransparencyAttrib, Vec3, loadPrcFileData)
 
 MLP_SLOTS = 48        # telemetry neurons per block
+FWD_SPEED = 3.0       # slabs per second the forward pulse climbs (two slabs per block)
 MAX_HEADS = 16
 MAX_BLOCKS = 24
 
@@ -39,6 +40,7 @@ def _hex(h: str) -> np.ndarray:
 
 BLUE, BLUE_E, TEAL = _hex("#58C4DD"), _hex("#1C758A"), _hex("#5CD0B3")
 YELLOW, YELLOW_C, GOLD = _hex("#FFFF00"), _hex("#F4D345"), _hex("#C78D46")
+FIRE_C = _hex("#8CF2FF")   # forward-pass spikes
 RED, GREY, WHITE = _hex("#FC6255"), _hex("#888888"), np.ones(3, np.float32)
 CELL0 = _hex("#23262d")
 GREYBLUE = _hex("#4f6573")
@@ -775,6 +777,7 @@ class _BrainMixin:
         self.traverser.addCollider(self.camera.attachNewNode(self.pick_node), self.cqueue)
         # state
         self.t_anim = 0.0
+        self.fwd_t0 = -1e9       # when the latest forward pass (telemetry sample) arrived
         self.tele = None
         self.step_info = (0, 0, 0.0, 0.0)
         self.demo_step = 0
@@ -1055,6 +1058,7 @@ class _BrainMixin:
         self.step_info = (int(msg.get("step", 0)), int(msg.get("total", 0)), float(msg.get("loss", 0.0)),
                           float(msg.get("lr", 0.0)))
         self.tele = msg
+        self.fwd_t0 = self.t_anim
         nb = len(self.ids)
         lnctx = math.log(max(self.ctx, 2.0))
         for pos, e in enumerate(msg.get("blocks") or []):
@@ -1181,10 +1185,18 @@ class _BrainMixin:
             ac[:, :3] = YELLOW_C * (1 - hot) + np.array([1.0, 0.97, 0.75], np.float32) * hot
             ac[:, 3] = np.clip(0.05 + 1.6 * aw, 0, 1)
             self.rm.set(width.astype(np.float32), ac)
+        # ---- forward pass: a cyan front climbs the slabs once per telemetry sample; neurons flash by their real activity
+        front = (t - self.fwd_t0) * FWD_SPEED - 1.0
+        sl = np.arange(ns, dtype=np.float32)
+        fire = np.exp(-((sl - front) / 1.1) ** 2) + np.where(sl < front, 0.3 * np.exp(-(front - sl) / 3.0), 0.0)
+        fire = np.clip(fire, 0.0, 1.0).astype(np.float32)
+        bf = fire[1::2]                                   # per block: the MLP slab fires with the front
         # ---- MLP neurons + halos
         mflat = c["mlp"].ravel()
         if len(lay["neur_idx"]):
+            ff = bf[lay["neur_slot"] // MLP_SLOTS]
             a = mflat[lay["neur_slot"]]
+            a = np.clip(a + ff * (0.25 + 0.75 * a), 0, 1)
             dyn[lay["neur_idx"], 0:3] = (np.array([0.09, 0.1, 0.12], np.float32)
                                          + (np.array([0.96, 0.98, 1.0], np.float32) - [0.09, 0.1, 0.12]) * (a ** 1.2)[:, None])
             self.hm.dyn[lay["neur_halo"], 8] = np.clip((a - 0.62) * 2.6, 0, 1) * 0.55
@@ -1194,6 +1206,7 @@ class _BrainMixin:
         lc[:] = self.line_base
         if len(lay["fan_idx"]):
             a = mflat[lay["fan_slot"]]
+            a = np.clip(a + bf[lay["fan_slot"] // MLP_SLOTS] * (0.25 + 0.75 * a), 0, 1)
             fw = np.abs(lay["fan_w"])
             hue = np.where((lay["fan_w"] > 0)[:, None], BLUE, RED)
             m = (a ** 2 * np.minimum(fw, 1.5) / 1.5)[:, None]
@@ -1204,6 +1217,9 @@ class _BrainMixin:
             sh = shim[es][:, None]
             lc[ei, 0:3] += (GOLD - lc[ei, 0:3]) * np.clip(sh * 0.8, 0, 1)
             lc[ei, 3] = np.clip(lc[ei, 3] + sh[:, 0] * 0.4, 0, 1)
+            fe = fire[es][:, None]
+            lc[ei, 0:3] += (FIRE_C - lc[ei, 0:3]) * np.clip(fe * 0.9, 0, 1)
+            lc[ei, 3] = np.clip(lc[ei, 3] + fe[:, 0] * 0.5, 0, 1)
             if self.sel is not None:
                 m = (es // 2) == self.sel
                 lc[ei[m], 0:3] = YELLOW_C
