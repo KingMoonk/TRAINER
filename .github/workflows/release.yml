@@ -19,8 +19,8 @@ jobs:
           - {os: macos-latest, name: macos}
           - {os: windows-latest, name: windows}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -47,7 +47,7 @@ jobs:
         if: matrix.name == 'windows'
         shell: pwsh
         run: Compress-Archive -Path dist/Groundwork -DestinationPath Groundwork-windows.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Groundwork-${{ matrix.name }}
           path: Groundwork-${{ matrix.name }}.zip
@@ -60,7 +60,7 @@ jobs:
     permissions:
       contents: write  # create the release and attach the zips
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
