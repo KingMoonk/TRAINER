@@ -232,7 +232,8 @@ class CircuitCanvas(tk.Canvas):
 
     def _wheel(self, event):
         cx, cy = self.winfo_pointerx() - self.winfo_rootx(), self.winfo_pointery() - self.winfo_rooty()
-        self.zoom(1.12 ** (event.delta / 120), cx, cy)
+        from studio_widgets import normalize_scroll_delta
+        self.zoom(1.12 ** normalize_scroll_delta(event.delta), cx, cy)
         return "break"
 
     def world(self, x, y):
@@ -383,6 +384,8 @@ class CircuitCanvas(tk.Canvas):
             last = layer == self.s["blocks"][index]["layers"] - 1
             live = f" · activity {neurons[min(len(neurons) - 1, unit * len(neurons) // max(1, self._unit_count(index)))]:.2f}" if neurons and last else ""
             return f"Block {index + 1} · MLP layer {layer + 1} neuron pad {unit + 1}{live}"
+        if kind == "e" and ident == "out":
+            return "Output head pad"
         return "Embedding dimension sample"
 
     def _unit_count(self, index):

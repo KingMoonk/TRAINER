@@ -16,6 +16,19 @@ BLUE = "#78a9ff"
 FONT = "Segoe UI"
 
 
+def normalize_scroll_delta(delta):
+    """Convert mouse wheel delta to scroll units. Windows uses 120 per unit; macOS uses 1/-1."""
+    if delta == 0:
+        return 0
+    # Windows: delta is a multiple of 120; macOS: delta is 1 or -1
+    # Scale by 120 on Windows (int(delta / 120) rounds to 0 for delta=1)
+    # On macOS, delta is already ±1, so multiply by 1; on Windows, divide by 120
+    if abs(delta) >= 120:
+        return delta // 120
+    else:
+        return 1 if delta > 0 else -1
+
+
 def label(parent, text="", style="TLabel", **kwargs):
     return ttk.Label(parent, text=text, style=style, **kwargs)
 
@@ -100,7 +113,7 @@ class ScrollPage(ttk.Frame):
         widget = event.widget
         while widget is not None:
             if widget is self:
-                self.canvas.yview_scroll(-int(event.delta / 120), "units")
+                self.canvas.yview_scroll(-normalize_scroll_delta(event.delta), "units")
                 return "break"
             widget = widget.master
 
