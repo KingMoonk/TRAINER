@@ -27,6 +27,7 @@ class Rig:
         self.store = PassiveStore(self.root)
         self.id = self.store.create(merge_plan({"limits": limits}))
         self.t, self.living, self.spawned, self.killed, self.battery = NOW, set(), [], [], False
+        self.strangers = set()  # live pids that belong to some other program
 
     def spawn(self, command, log, cwd):
         self.spawned.append((command, Path(log), cwd))
@@ -34,7 +35,7 @@ class Rig:
         return 5000 + len(self.spawned)
 
     def check(self):
-        return watch.check(self.store, now=lambda: self.t, spawn=self.spawn, alive=lambda pid: pid in self.living, kill=self.killed.append, on_battery=lambda: self.battery)
+        return watch.check(self.store, now=lambda: self.t, spawn=self.spawn, alive=lambda pid: pid in self.living, ours=lambda pid, *needles: pid not in self.strangers, kill=self.killed.append, on_battery=lambda: self.battery)
 
     def row(self):
         return self.store.get(self.id)
@@ -205,11 +206,35 @@ class CheckTests(unittest.TestCase):
         rig.battery = True
         self.assertEqual(rig.check(), "ok")
 
+    def test_a_recycled_pid_is_a_dead_trainer_and_is_never_killed(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.strangers.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5)
+        self.assertEqual(rig.check(), "restarted")
+        self.assertEqual((rig.killed, rig.row()["trainer_pid"], rig.store.journal(rig.id)[0]["reason"]), ([], 5001, "stopped"))
+
+    def test_giving_up_does_not_kill_a_recycled_pid(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.strangers.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 500, restarts=[NOW - i for i in range(1, 6)])
+        self.assertEqual(rig.check(), "gave_up")
+        self.assertEqual(rig.killed, [])
+
+    def test_ours_compares_the_command_line(self):
+        line = "/usr/bin/python -m studio_passive run passive_1 --root /tmp/w"
+        self.assertTrue(watch.ours(5, "studio_passive", "passive_1", read=lambda pid: line))
+        self.assertFalse(watch.ours(5, "studio_passive", "passive_2", read=lambda pid: line))
+        self.assertFalse(watch.ours(5, "studio_passive", read=lambda pid: ""))  # no such process
+        self.assertTrue(watch.ours(5, "studio_passive", read=lambda pid: None))  # unreadable: trust it
+        self.assertTrue(watch.command_line(os.getpid()))
+
     def test_status_for_the_table(self):
         rig = Rig(self)
         rig.living.update({7, 8})
         rig.set(status="running", trainer_pid=7, watchdog_pid=8, heartbeat=NOW - 12, restarts=[1.0, 2.0])
-        table = lambda: watch.status(rig.store, rig.row(), now=lambda: rig.t, alive=lambda pid: pid in rig.living)  # noqa: E731
+        table = lambda: watch.status(rig.store, rig.row(), now=lambda: rig.t, alive=lambda pid: pid in rig.living, ours=lambda *a: True)  # noqa: E731
         self.assertEqual(table(), {"trainer": "Running", "heard": 12, "watchdog": "Running", "restarts": 2})
         rig.t = NOW + 100
         self.assertEqual(table()["trainer"], "Restarting")
@@ -236,37 +261,68 @@ class WatchTests(unittest.TestCase):
             if len(passes) == 2:
                 rig.set(status="finished")
         with patch.object(watch, "uninstall"):
-            watch.watch(rig.root, poll=3, sleep=sleep, me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living)
+            watch.watch(rig.root, poll=3, sleep=sleep, me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living, ours=lambda *a: True)
         self.assertEqual((passes, len(rig.spawned)), ([3, 3], 1))
         self.assertEqual(rig.row()["watchdog_pid"], 4242)
+
+    def test_waking_from_sleep_gives_the_trainer_a_fresh_grace_period(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5)
+        passes = []
+
+        def sleep(seconds):
+            passes.append(seconds)
+            rig.t += 3 if len(passes) == 1 else 8 * 3600 if len(passes) == 2 else 0  # the second sleep is the computer sleeping
+            if len(passes) == 4:
+                rig.set(status="finished")
+        with patch.object(watch, "uninstall"):
+            watch.watch(rig.root, poll=3, sleep=sleep, me=4242, now=lambda: rig.t, spawn=rig.spawn, alive=lambda pid: pid in rig.living, ours=lambda *a: True, kill=rig.killed.append)
+        self.assertEqual((rig.killed, rig.spawned), ([], []))
+
+    def test_a_silent_trainer_is_still_killed_without_a_sleep(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 500)
+        with patch.object(watch, "uninstall"):
+            watch.watch(rig.root, poll=3, sleep=lambda s: rig.set(status="finished"), me=4242, now=lambda: rig.t, spawn=rig.spawn, alive=lambda pid: pid in rig.living, ours=lambda *a: True, kill=rig.killed.append)
+        self.assertEqual(rig.killed, [7])
 
     def test_second_watchdog_exits_at_once(self):
         rig = Rig(self)
         rig.set(watchdog_pid=99)
         rig.living.add(99)
         with patch.object(watch, "uninstall") as uninstall:
-            watch.watch(rig.root, sleep=lambda s: self.fail("slept"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living)
+            watch.watch(rig.root, sleep=lambda s: self.fail("slept"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living, ours=lambda *a: True)
         self.assertEqual((rig.row()["watchdog_pid"], rig.spawned), (99, []))
         uninstall.assert_not_called()
+
+    def test_a_recycled_watchdog_pid_is_taken_over(self):
+        rig = Rig(self)
+        rig.set(watchdog_pid=99)
+        rig.living.add(99)
+        with patch.object(watch, "uninstall"):
+            watch.watch(rig.root, sleep=lambda s: rig.set(status="finished"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living, ours=lambda *a: False)
+        self.assertEqual(rig.row()["watchdog_pid"], 4242)
 
     def test_a_dead_watchdog_pid_is_taken_over(self):
         rig = Rig(self)
         rig.set(watchdog_pid=99)
         with patch.object(watch, "uninstall"):
-            watch.watch(rig.root, sleep=lambda s: rig.set(status="finished"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living)
+            watch.watch(rig.root, sleep=lambda s: rig.set(status="finished"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living, ours=lambda *a: True)
         self.assertEqual(rig.row()["watchdog_pid"], 4242)
 
     def test_start_spawns_once(self):
         rig = Rig(self)
         installed = []
-        pid = watch.start(rig.root, rig.id, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living)
+        pid = watch.start(rig.root, rig.id, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living, ours=lambda *a: True)
         command, log, cwd = rig.spawned[0]
         self.assertEqual((command[1:], log, cwd), (["-m", "studio_passive_watch", "--root", str(rig.root.resolve())], rig.root / "data" / "passive-watchdog.log", watch.REPO))
         self.assertEqual((pid, rig.row()["watchdog_pid"], installed), (5001, 5001, [rig.root]))
-        self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living), 5001)
+        self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living, ours=lambda *a: True), 5001)
         self.assertEqual(len(rig.spawned), 1)
         rig.living.clear()
-        self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living), 5002)
+        self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living, ours=lambda *a: True), 5002)
 
     def test_start_without_a_session_says_so(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):

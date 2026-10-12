@@ -53,6 +53,24 @@ def alive(pid):
     return True
 
 
+def command_line(pid):
+    """The command line of process `pid`: "" when there is no such process, None when it could not be read."""
+    try:
+        if sys.platform == "win32":
+            # ponytail: one PowerShell start per call (about half a second) on Windows; cache by start time if the poll ever feels heavy.
+            command = ["powershell", "-NoProfile", "-Command", f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"]
+            return subprocess.run(command, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip()
+        return subprocess.run(["ps", "-o", "command=", "-p", str(int(pid))], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def ours(pid, *needles, read=command_line):
+    """True when `pid` is still the process we started: its command line holds every needle. After a reboot or a long sleep a pid can belong to anything."""
+    line = read(pid)
+    return line is None or (bool(line) and all(n in line for n in needles))  # unreadable: trust the pid rather than start a second trainer
+
+
 def spawn(command, log_path, cwd):
     """Start `command` fully detached, output appended to `log_path`; returns its pid."""
     Path(log_path).parent.mkdir(parents=True, exist_ok=True)
@@ -199,13 +217,13 @@ def _power(store, session, memo, battery):
     return word
 
 
-def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_battery=on_battery):
+def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_battery=on_battery, ours=ours):
     """One watchdog pass. Returns none | ok | paused | started | restarted | gave_up | battery_paused | battery_resumed."""
     session = store.active()
     if session is None:
         return "none"
     sid, pid, t, memo = session["id"], session["trainer_pid"], now(), _memo(store, session["id"])
-    running = alive(pid)
+    running = alive(pid) and ours(pid, "studio_passive", sid)  # a live pid that is not our trainer counts as a dead trainer and is never killed
     # a trainer spawned moments ago has not beaten yet, and the heartbeat column still holds the old value
     if running and t - max(session["heartbeat"] or 0, memo.get("spawned", 0)) < HEARTBEAT_SECONDS:
         word = _power(store, session, memo, on_battery)
@@ -236,18 +254,22 @@ def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_
 
 def watch(root, *, poll=POLL_SECONDS, sleep=time.sleep, me=None, **hooks):
     """Check every `poll` seconds until no session is active; then remove the sign-in entry and return."""
-    store, me = PassiveStore(root), me or os.getpid()
+    store, me, clock, last = PassiveStore(root), me or os.getpid(), hooks.get("now", time.time), None
     while True:
         session = store.active()
         if session is None:
             uninstall(root)
             return
         other = session["watchdog_pid"]
-        # ponytail: a recycled pid could look like a live watchdog; it only delays a restart of the watchdog until that process exits.
-        if other and other != me and hooks.get("alive", alive)(other):
+        if other and other != me and hooks.get("alive", alive)(other) and hooks.get("ours", ours)(other, "studio_passive_watch"):
             return
         if other != me:
             store.update(session["id"], watchdog_pid=me)
+        t = clock()
+        gap, last = None if last is None else t - last, t
+        if gap is not None and gap > 6 * poll and session["trainer_pid"]:
+            # this loop was asleep (the computer slept): the heartbeat looks old only because nobody was awake to hear it, so the trainer gets a fresh grace period
+            _remember(store, session["id"], {**_memo(store, session["id"]), "spawned": t})
         try:
             check(store, **hooks)
         except Exception:
@@ -255,13 +277,13 @@ def watch(root, *, poll=POLL_SECONDS, sleep=time.sleep, me=None, **hooks):
         sleep(poll)
 
 
-def start(root, session_id=None, *, spawn=spawn, install=install, alive=alive):
+def start(root, session_id=None, *, spawn=spawn, install=install, alive=alive, ours=ours):
     """Called by the app after `PassiveStore.create`: spawn the detached watchdog, register it for sign-in, return its pid."""
     store = PassiveStore(root)
     session = store.get(session_id) if session_id else store.active()
     if session is None or session["status"] not in ACTIVE:
         raise ValueError("There is no passive training session to keep going.")
-    if alive(session["watchdog_pid"]):
+    if alive(session["watchdog_pid"]) and ours(session["watchdog_pid"], "studio_passive_watch"):
         return session["watchdog_pid"]
     pid = spawn(_watch_command(root), Path(root) / "data" / "passive-watchdog.log", REPO)
     store.update(session["id"], watchdog_pid=pid)
@@ -269,12 +291,12 @@ def start(root, session_id=None, *, spawn=spawn, install=install, alive=alive):
     return pid
 
 
-def status(store, session, *, now=time.time, alive=alive):
+def status(store, session, *, now=time.time, alive=alive, ours=ours):
     """The plain facts for the 'Keeping it going' table."""
     t, beat = now(), session["heartbeat"]
     fresh = t - max(beat or 0, _memo(store, session["id"]).get("spawned", 0)) < HEARTBEAT_SECONDS
-    trainer = "Stopped" if not alive(session["trainer_pid"]) else "Running" if fresh else "Restarting"
-    return {"trainer": trainer, "heard": None if beat is None else max(0.0, t - beat), "watchdog": "Running" if alive(session["watchdog_pid"]) else "Stopped", "restarts": len(session["restarts"])}
+    trainer = "Stopped" if not (alive(session["trainer_pid"]) and ours(session["trainer_pid"], "studio_passive", session["id"])) else "Running" if fresh else "Restarting"
+    return {"trainer": trainer, "heard": None if beat is None else max(0.0, t - beat), "watchdog": "Running" if alive(session["watchdog_pid"]) and ours(session["watchdog_pid"], "studio_passive_watch") else "Stopped", "restarts": len(session["restarts"])}
 
 
 def main(argv=None):
