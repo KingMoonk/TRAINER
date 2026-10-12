@@ -10,6 +10,7 @@ import random
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 import threading
 import uuid
@@ -55,9 +56,15 @@ def uid(prefix):
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    replace_file(temporary, path)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(value, ensure_ascii=False, indent=2))
+        replace_file(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def replace_file(source, target, attempts=40):
@@ -73,6 +80,11 @@ def replace_file(source, target, attempts=40):
             if attempt == attempts - 1:
                 raise
             time.sleep(min(.5, .01 * (attempt + 1)))
+
+
+def truthy(value):
+    """bool() that reads the strings "False", "0", "no" and "" as false (CSV and JSON imports carry flags as text)."""
+    return value.strip().lower() not in {"", "false", "0", "no", "none", "null"} if isinstance(value, str) else bool(value)
 
 
 def messages_of(example):
@@ -124,8 +136,8 @@ def normalize(row, dataset_id="", source="import"):
         "id": uid("ex"), "datasetId": dataset_id, "messages": messages, "text": text,
         "user": text if text else "\n".join(m["content"] for m in messages if m["role"] == "user"),
         "assistant": "\n".join(m["content"] for m in messages if m["role"] == "assistant"),
-        "intent": str(row.get("intent", row.get("category", "general"))), "quality": row.get("quality", "Review"),
-        "synthetic": bool(row.get("synthetic", source == "synthetic")), "source": row.get("source", source), "updatedAt": now(),
+        "intent": str(row.get("intent", row.get("category", "general"))), "quality": row.get("quality") or "Review",
+        "synthetic": truthy(row.get("synthetic", source == "synthetic")), "source": row.get("source", source), "updatedAt": now(),
     }
     # Keep audit and attribution information when a draft is accepted or edited.
     for key in ("provenance", "validation", "qualityScore", "quality_score", "flags", "recipe", "recipeVersion",
@@ -146,7 +158,7 @@ def parse_file(path):
     ext = path.suffix.lower()
     if ext in {".jsonl", ".ndjson"}:
         rows = []
-        for line_number, line in enumerate(text.splitlines(), 1):
+        for line_number, line in enumerate(text.split("\n"), 1):
             if line.strip():
                 try:
                     rows.append(json.loads(line))
@@ -257,8 +269,8 @@ class Workspace:
     @staticmethod
     def _db_row(example):
         return (example["id"], example["datasetId"], fingerprint(example), json.dumps(example, ensure_ascii=False),
-                example.get("user", ""), example.get("assistant", ""), example.get("intent", "general"),
-                example.get("quality", "Review"), len(example.get("user", "")) + len(example.get("assistant", "")))
+                example.get("user") or "", example.get("assistant") or "", example.get("intent") or "general",
+                example.get("quality") or "Review", len(example.get("user", "")) + len(example.get("assistant", "")))
 
     def set_dataset_metadata(self, dataset_id, **fields):
         dataset = self._dataset(dataset_id)
@@ -275,9 +287,12 @@ class Workspace:
         if dataset.get("storage") == "sqlite":
             return
         with self.lock, self._connect() as connection:
-            for row in self.examples(dataset_id):
+            rows = self.examples(dataset_id)
+            for row in rows:
                 connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", self._db_row(row))
             count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+            if count < len({fingerprint(row) for row in rows}):
+                raise ValueError("Some records could not be moved to disk storage; nothing was changed.")
         self.state["examples"] = [row for row in self.state["examples"] if row.get("datasetId") != dataset_id]
         dataset.update(storage="sqlite", recordCount=count)
         self.save()
@@ -462,10 +477,21 @@ class Workspace:
                     rows = parse_file(path)
                     if not any(normalize(row) for row in rows):
                         raise ValueError("No chat pairs or text records found.")
+                selected, created = self.state.get("selectedDatasetId"), dataset_id is None
                 target = dataset_id or self.create_dataset(path.stem, storage="sqlite" if large else "json")
-                if large:
-                    self.use_disk_storage(target)
-                added, duplicate, invalid = self.add(target, rows, "import")
+                try:
+                    if large:
+                        self.use_disk_storage(target)
+                    added, duplicate, invalid = self.add(target, rows, "import")
+                except BaseException:
+                    if created:
+                        self.remove_dataset(target)
+                        if selected is None:
+                            self.state.pop("selectedDatasetId", None)
+                        else:
+                            self.state["selectedDatasetId"] = selected
+                        self.save()
+                    raise
                 report.append(f"{Path(path).name}: {added} added, {duplicate} duplicates, {invalid} invalid")
             except (OSError, ValueError, csv.Error) as exc:
                 report.append(f"{Path(path).name}: {exc}")

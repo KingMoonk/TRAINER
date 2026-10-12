@@ -18,12 +18,13 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
+from studio_arch import validate_spec
 from studio_core import atomic_json, now, replace_file, uid
 
 BACKUP_FORMAT = "groundwork-arch-backup/1"
 EXPORT_FORMAT = "groundwork-arch-export/1"
 CHUNK = 1 << 20
-MEMBER = re.compile(r"^(architectures\.sqlite|weights/[A-Za-z0-9_-]+/v\d{4}\.npz)$")
+MEMBER = re.compile(r"^(architectures\.sqlite|weights/[A-Za-z0-9_-]+/v\d{4}\.npz)\Z")
 SUMMARY = """SELECT a.id, a.name, a.created_at, a.updated_at, a.head_revision,
     (SELECT COUNT(*) FROM revisions r WHERE r.architecture_id = a.id),
     (SELECT COUNT(*) FROM weight_versions w WHERE w.architecture_id = a.id)
@@ -390,21 +391,27 @@ class ArchitectureStore:
             connection.close()
 
     def _swap(self, staging, include_weights):
-        if include_weights:
-            old = None
-            if self.weights_dir.exists():
-                old = self.path.parent / f"weights-old-{uid('tmp')}"
-                replace_file(self.weights_dir, old)
-            incoming = staging / "weights"
-            if incoming.exists():
-                replace_file(incoming, self.weights_dir)
-            else:
-                self.weights_dir.mkdir(parents=True, exist_ok=True)
-            if old is not None:
-                shutil.rmtree(old, ignore_errors=True)
-        for suffix in ("-wal", "-shm"):
-            self.path.with_name(self.path.name + suffix).unlink(missing_ok=True)
-        replace_file(staging / "architectures.sqlite", self.path)
+        old = None
+        if include_weights and self.weights_dir.exists():
+            old = self.path.parent / f"weights-old-{uid('tmp')}"
+            replace_file(self.weights_dir, old)
+        try:
+            if include_weights:
+                incoming = staging / "weights"
+                if incoming.exists():
+                    replace_file(incoming, self.weights_dir)
+                else:
+                    self.weights_dir.mkdir(parents=True, exist_ok=True)
+            for suffix in ("-wal", "-shm"):
+                self.path.with_name(self.path.name + suffix).unlink(missing_ok=True)
+            replace_file(staging / "architectures.sqlite", self.path)
+        except BaseException:
+            if old is not None:  # put the old weights back so they still match the old database
+                shutil.rmtree(self.weights_dir, ignore_errors=True)
+                replace_file(old, self.weights_dir)
+            raise
+        if old is not None:
+            shutil.rmtree(old, ignore_errors=True)
 
     def restore(self, zip_path):
         path = Path(zip_path)
@@ -438,9 +445,10 @@ class ArchitectureStore:
 
     def import_spec(self, path, name=None):
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as error:
             raise ValueError(f"Cannot read spec file: {path}") from error
         if not isinstance(data, dict) or data.get("format") != EXPORT_FORMAT or not isinstance(data.get("spec"), dict):
             raise ValueError("Not a groundwork architecture export.")
+        validate_spec(data["spec"])
         return self.create(name or data.get("name") or "Imported network", data["spec"], note=f"imported from {Path(path).name}")

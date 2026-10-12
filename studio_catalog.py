@@ -17,7 +17,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file
+from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file, truthy
 
 
 def _hf(repo, revision, filename):
@@ -394,7 +394,7 @@ def convert_record(raw, entry):
             if role is None or not node.get("text", "").strip():
                 continue
             turns = ancestors + [{"role": role, "content": node["text"]}]
-            synthetic = synthetic or bool(node.get("synthetic"))
+            synthetic = synthetic or truthy(node.get("synthetic"))
             if role == "assistant":
                 yield {"messages": turns, "intent": "conversation", "synthetic": synthetic,
                        "sourceId": node.get("message_id", ""), "groupId": f"oasst1:{tree_id}",
@@ -526,7 +526,10 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
             atomic_json(receipt_path, receipt)
         card_url = entry.get("card_url") or _hf(entry["repo"], entry["revision"], "README.md")
         if not (folder / "SOURCE_README.md").exists():
-            _fetch(card_url, folder / "SOURCE_README.md", stop, emit, maximum=5_000_000)
+            try:
+                _fetch(card_url, folder / "SOURCE_README.md", stop, emit, maximum=5_000_000)
+            except (OSError, ValueError):  # the card is optional
+                pass
         if entry.get("license_url") and not (folder / "SOURCE_LICENSE.txt").exists():
             _fetch(entry["license_url"], folder / "SOURCE_LICENSE.txt", stop, emit, maximum=5_000_000)
         records, invalid, duplicate = 0, 0, 0
@@ -601,7 +604,8 @@ def register_download(workspace, result, stop=None, emit=None):
     _entry(catalog_id)
     dataset_id = f"catalog_{catalog_id}"
     existing = workspace._dataset(dataset_id)
-    if existing is not None and workspace.db_path.exists():
+    stale = existing is not None and existing.get("sourceSha256") != result.get("sha256")
+    if existing is not None and workspace.db_path.exists() and not stale:
         return dataset_id
     _cancel(stop)
     path = Path(result["path"])
@@ -611,10 +615,12 @@ def register_download(workspace, result, stop=None, emit=None):
         backup = workspace.path.with_name("workspace.before-catalog-" + time.strftime("%Y%m%d-%H%M%S") + ".json")
         if not backup.exists():
             shutil.copy2(workspace.path, backup)
+        for old in sorted(workspace.path.parent.glob("workspace.before-catalog-*.json"))[:-3]:
+            old.unlink(missing_ok=True)
     count = 0
     with workspace.lock, workspace._connect() as connection:
         count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
-        if count != result["records"]:
+        if count != result["records"] or stale:
             connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
             count = 0
             with path.open(encoding="utf-8") as stream:
