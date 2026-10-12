@@ -108,16 +108,54 @@ Workspace datasets and drafts live in `data/workspace.json`. Existing exports ar
 
 `--steps` is the total optimizer-step target, including resumed steps. Pass `--config config.json` for model/training settings or `--output path` for a run folder. Press Ctrl+C to stop after the current optimizer step and save.
 
-## Source and checks
+## Codebase structure
 
-- `studio_gui.py`: Tkinter pages, background tasks, plots and review tools.
-- `studio_core.py`: pandas dataset import/audit, persistence, normalization and synthetic recipes.
-- `studio_model.py`: NumPy model, handwritten gradients, optimizer, training and inference.
-- `studio_backend.py`: optional CuPy loading, verified CUDA detection and CPU fallback.
-- `app.py` and `train.py`: desktop and command-line entry points.
+The repository is flat: entry points and `studio_*.py` modules sit in the root, tests in `tests/`. There is no package directory and no build step.
+
+### Layers
+
+| Layer | Modules | Role |
+|---|---|---|
+| Entry points | `app.py`, `train.py`, `start_studio.bat` | Launch the desktop GUI, run training from the command line, or set up and launch on Windows. |
+| GUI shell | `studio_gui.py` | `NativeStudio` (Tk window, page registry) and `Studio`, which mixes in every page. |
+| GUI pages (mixins) | `studio_flow.py`, `studio_curriculum_page.py`, `studio_align.py`, `studio_network.py` | Guided workflow, sequential training card, post-training alignment, network/architecture editor. |
+| GUI helpers | `studio_widgets.py`, `studio_ux.py`, `studio_circuit.py`, `studio_glossary.py` | Shared widgets and example editor, Beginner/Advanced mode and time estimates, PCB-style network canvas, plain-English glossary. |
+| Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
+| Synthetic data | `studio_synthesis.py`, `studio_teacher_synth.py` | Reproducible recipes with computed targets, model-drafted data, and optional local Ollama teacher modes. |
+| Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
+| Architecture | `studio_arch.py`, `studio_archdb.py` | Per-block architecture specs and a versioned SQLite store of revisions and weight files. |
+| Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
+| 3D viewer | `studio_vizbridge.py`, `studio_brain3d.py` | `studio_brain3d.py` is a Panda3D viewer run as a separate process. `studio_vizbridge.py` connects it to the GUI over a loopback socket. |
+
+### Dependency flow
+
+```
+app.py ──► studio_gui ──► page mixins (flow, network, align, curriculum)
+                     └──► studio_widgets, studio_ux, studio_glossary
+train.py ─┐
+          ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
+          │        ▲
+          │        └── studio_rlhf, studio_synthesis, studio_curriculum, studio_teacher_synth
+          └──► studio_core, studio_backend
+```
+
+`studio_model.py` is the centre of the engine: the GUI and both entry points depend on it, and it depends only on the lower-level data and backend modules. Pages import the engine and data layers; the engine never imports Tk.
+
+### Runtime data
+
+Created at run time and git-ignored:
+
+- `data/`: `workspace.json` (datasets and drafts), `architectures.sqlite`, `weights/`, `backups/`, downloaded corpora.
+- `runs/run_<id>/`: checkpoints (`last.npz`, `best.npz`), dataset snapshot, config, metrics.
+- `exports/`, `artifacts/`: user exports.
+- `.venv/`: local virtual environment.
+
+### Tests
+
+`tests/` holds 15 `unittest` modules, one per major area (engine, architecture, data/catalog, synthesis, RLHF, curriculum, network, viewer bridge, GUI integration). GPU and GUI tests skip when the hardware or display is unavailable.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, checkpoint resumption and cancellation. CUDA tests compare GPU forward/backward/AdamW results against CPU, verify actual learning and inference on GPU, and resume checkpoints across devices. CUDA tests skip when a working GPU installation is unavailable.
+Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, checkpoint resumption and cancellation. CUDA tests compare GPU forward/backward/AdamW results against CPU, verify actual learning and inference on GPU, and resume checkpoints across devices.
