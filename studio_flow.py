@@ -1308,7 +1308,7 @@ class WorkflowMixin:
         ttk.Radiobutton(modes, text="Choose by hand for this run", value="manual", variable=self.dataset_mode,
                         command=self.dataset_mode_changed).pack(side="left")
         self.rotation_text = tk.StringVar()
-        label(mixture, textvariable=self.rotation_text, style="Card.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(8, 12))
+        label(self.data_card, textvariable=self.rotation_text, style="CardMuted.TLabel", wraplength=950, justify="left").pack(anchor="w", pady=(4, 0), before=drawer)
         self.reviewed_only = tk.BooleanVar(value=False)
         self.use_all_records = tk.BooleanVar(value=False)
         self.balance_var = tk.StringVar(value="tokens")
@@ -1448,7 +1448,8 @@ class WorkflowMixin:
         try:
             cfg = self.read_config()
             records = sum(self.dataset_stats(source)["records"] for source in self.run_sources())
-            self._set_data_summary(records)
+            mode = {"everything": "Train on everything", "rotate": "One dataset per run", "manual": "Chosen by hand"}[self.dataset_mode.get()]
+            self.data_summary.set(f"{mode}  \u00b7  {records:,} examples")
             vocab, basis = self.vocabulary_estimate(cfg)
             count = parameter_estimate(cfg, vocab)
             self._set_time_estimate(cfg, count)

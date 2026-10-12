@@ -85,7 +85,7 @@ class CurriculumMixin:
     def _build_curriculum_card(self):
         page = self.pages["training"].body
         box = card(page)
-        box.pack(fill="x", pady=(0, 8))
+        box.pack(fill="x", pady=(0, 8), before=self.reading_drawer)
         self.curriculum_box = box
         self.curriculum_open = False
         self.curriculum_toggle = ttk.Button(box, text="▸  Train on everything: stage-by-stage training", command=self.toggle_curriculum)

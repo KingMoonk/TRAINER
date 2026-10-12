@@ -563,7 +563,7 @@ class NativeStudio(tk.Tk):
         button(controls, "Stop & save", self.stop_job)
         self.chat_button = ttk.Button(controls, text="Chat with this model", command=self.play_run, style="Accent.TButton")
         label(controls, "Green = training error    Blue = test error (validation)", "Muted.TLabel").pack(side="right")
-        reading = Collapsible(page, "Reading the chart")
+        reading = self.reading_drawer = Collapsible(page, "Reading the chart")
         reading.pack(fill="x", pady=(0, 8))
         label(reading.body, "\u2022 The green line should fall: the model is getting less wrong. Lower is better; a brand-new model starts near 5.5.\n"
                             "\u2022 The blue line is the honest score. It uses examples the model never studied.\n"
