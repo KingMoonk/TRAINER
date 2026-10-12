@@ -73,6 +73,14 @@ class VizBridgeTests(unittest.TestCase):
         self.assertEqual(echoes[1]["block_id"], "blk_ab12cd")
         self.assertTrue(bridge.running)
 
+    def test_command_replaces_the_python_and_script_pair(self):
+        bridge = VizBridge("ignored.py", command=[sys.executable, str(self.echo)])
+        self.addCleanup(bridge.stop)
+        bridge.start()
+        bridge.send({"type": "select", "block_id": "blk_ab12cd"})
+        got = _wait_for(bridge, lambda r: any(m.get("type") == "echo" for m in r))
+        self.assertEqual([m["msg"]["block_id"] for m in got if m.get("type") == "echo"], ["blk_ab12cd"])
+
     def test_telemetry_coalesces_and_keeps_last(self):
         bridge = self._bridge()
         bridge.start()

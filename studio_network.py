@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import re
+import sys
 import time
 from pathlib import Path
 import tkinter as tk
@@ -11,6 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from studio_arch import config_from_spec, default_spec, new_block, parameter_breakdown, spec_from_config, validate_spec
 from studio_archdb import ArchitectureStore
 from studio_circuit import ACCENT as CHIP_COLORS, CircuitCanvas, ERR
+from studio_core import module_command
 from studio_model import Tokenizer, load_checkpoint, validate_config
 from studio_vizbridge import VizBridge
 from studio_widgets import (BG, PANEL, INPUT, EDGE, TEXT, MUTED, ACCENT, FONT, label, card,
@@ -1119,7 +1121,8 @@ class NetworkMixin:
 
     def net_open_viewer(self):
         script = Path(__file__).with_name("studio_brain3d.py")
-        if not script.exists():
+        frozen = getattr(sys, "frozen", False)  # the viewer is bundled inside the executable, not a file beside it
+        if not frozen and not script.exists():
             self.status_var.set("The 3D viewer (studio_brain3d.py) is not installed yet.")
             self.net_msg.configure(text="The 3D viewer (studio_brain3d.py) is not installed yet.", style="Err.TLabel")
             return False
@@ -1128,7 +1131,7 @@ class NetworkMixin:
             messagebox.showerror("Fix the circuit first", self.net_error, parent=self)
             return False
         if self.viz is None:
-            self.viz = VizBridge(script)
+            self.viz = VizBridge(script, command=module_command("studio_brain3d") if frozen else None)
         try:
             self.viz.start()
         except OSError as exc:

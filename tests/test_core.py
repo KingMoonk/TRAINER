@@ -8,7 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from studio_core import Workspace, atomic_json, normalize, parse_file, replace_file
+import studio_core
+from studio_core import Workspace, atomic_json, module_command, normalize, parse_file, replace_file
 
 ROOT = Path(__file__).resolve().parent.parent
 PAIRS = [{"user": f"q{i}", "assistant": f"a{i}"} for i in range(4)]
@@ -319,6 +320,29 @@ class TrainCli(unittest.TestCase):
             self.assertIn("step=9 loss=", result.stdout)
             self.assertNotIn("step=3 ", result.stdout)
             self.assertEqual(json.loads((resumed / "run.json").read_text(encoding="utf-8"))["step"], 9)
+
+
+class SelfLaunch(unittest.TestCase):
+    def test_module_command_from_source_is_python_dash_m(self):
+        self.assertEqual(module_command("studio_passive", "run", "id", "--root", "/r"), [sys.executable, "-m", "studio_passive", "run", "id", "--root", "/r"])
+        self.assertEqual(module_command("studio_brain3d"), [sys.executable, "-m", "studio_brain3d"])
+
+    def test_module_command_frozen_dispatches_on_the_executable(self):
+        with patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(module_command("studio_passive", "run", "id"), [sys.executable, "--run-module", "studio_passive", "run", "id"])
+
+    def test_app_dispatch_runs_a_module_with_its_own_arguments(self):
+        code = subprocess.run([sys.executable, str(ROOT / "app.py"), "--run-module", "studio_passive", "run", "--help"], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(code.returncode, 0, code.stderr)
+        self.assertIn("usage: studio_passive run", code.stdout)
+
+    def test_workspace_root_is_the_source_folder_but_a_user_folder_when_frozen(self):
+        self.assertEqual(studio_core.ROOT, ROOT)
+        with tempfile.TemporaryDirectory() as home, patch.object(sys, "frozen", True, create=True), patch("pathlib.Path.home", return_value=Path(home)), \
+                patch.dict("os.environ", {"APPDATA": home, "XDG_DATA_HOME": home}):
+            root = studio_core._root()
+            self.assertEqual((root.name, root.parent.is_relative_to(home), root.is_dir()), ("Groundwork", True, True))
+            self.assertNotEqual(root, ROOT)
 
 
 if __name__ == "__main__":

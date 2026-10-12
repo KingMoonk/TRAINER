@@ -6,3 +6,6 @@ __pycache__/
 /artifacts/
 .venv/
 .claude/worktrees/
+/build/
+/dist/
+*.spec

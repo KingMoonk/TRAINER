@@ -23,3 +23,9 @@ jobs:
       - run: python -m compileall -q .
       # only test_gpu should skip here (no CUDA); -v lists every test so a skip is visible in the log
       - run: python -m unittest discover -s tests -v
+      # real training run on a committed sample (about 1 s of compute)
+      - run: python -m unittest tests.e2e_train -v
+        timeout-minutes: 5
+      # real watchdog + trainer processes: kill, pause/resume, finish on a 75 s time limit; installs and removes the real sign-in entry (CI is set)
+      - run: python -m unittest tests.e2e_passive -v
+        timeout-minutes: 10

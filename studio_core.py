@@ -5,9 +5,11 @@ import csv
 import hashlib
 import io
 import json
+import os
 import random
 import re
 import sqlite3
+import sys
 import time
 import threading
 import uuid
@@ -17,7 +19,28 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parent
+
+
+def _root():
+    """The folder holding data/ and runs/. Next to the code when run from source; a frozen bundle is read-only and replaced on upgrade, so it goes in the user's data folder."""
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    (base / "Groundwork").mkdir(parents=True, exist_ok=True)
+    return base / "Groundwork"
+
+
+def module_command(module, *args):
+    """Command line that runs `module` as a script in a new process. A frozen app has no python: its executable dispatches on --run-module (see app.py)."""
+    return [sys.executable, *(["--run-module"] if getattr(sys, "frozen", False) else ["-m"]), module, *args]
+
+
+ROOT = _root()
 SUPPORTED = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt"}
 
 

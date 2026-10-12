@@ -1020,10 +1020,11 @@ from studio_flow import WorkflowMixin
 from studio_align import AlignMixin
 from studio_network import NetworkMixin
 from studio_curriculum_page import CurriculumMixin
+from studio_passive_page import PassiveMixin
 from studio_ux import UXMixin
 
 
-class Studio(UXMixin, CurriculumMixin, AlignMixin, NetworkMixin, WorkflowMixin, NativeStudio):
+class Studio(UXMixin, PassiveMixin, CurriculumMixin, AlignMixin, NetworkMixin, WorkflowMixin, NativeStudio):
     """Guided studio workflow with a scalable library."""
 
 

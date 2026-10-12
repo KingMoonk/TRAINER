@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:  # builds and uploads the workflow artifacts only; no release
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-latest, name: macos}
+          - {os: windows-latest, name: windows}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt pyinstaller  # PyInstaller is build-only, so it stays out of requirements.txt
+      # studio_brain3d is only ever launched by name (the 3D viewer), so the import scan cannot see it
+      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_passive --hidden-import studio_passive_watch
+      # the frozen executable must be able to run a module by name: that is how it starts the passive trainer, the watchdog and the 3D viewer
+      - name: Smoke test (macOS)
+        if: matrix.name == 'macos'
+        run: dist/Groundwork.app/Contents/MacOS/Groundwork --run-module studio_passive run --help
+      - name: Smoke test (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/Groundwork/Groundwork.exe -ArgumentList '--run-module','studio_passive','run','--help' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
+      - name: Zip (macOS)
+        if: matrix.name == 'macos'
+        run: ditto -c -k --keepParent dist/Groundwork.app Groundwork-macos.zip
+      - name: Zip (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/Groundwork -DestinationPath Groundwork-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Groundwork-${{ matrix.name }}
+          path: Groundwork-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the release and attach the zips
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" dist/Groundwork-macos.zip dist/Groundwork-windows.zip --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,430 @@
+"""Passive training watchdog: one pass of check() with fake processes and clock, sign-in install, keep-awake, battery, and a real detached spawn."""
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import studio_passive_watch as watch
+from studio_passive import PassiveStore, merge_plan
+
+NOW = 100000.0
+
+
+class Rig:
+    """A session in a temp workspace plus fake spawn / alive / kill / battery."""
+
+    def __init__(self, test, **limits):
+        tmp = tempfile.TemporaryDirectory()
+        test.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.store = PassiveStore(self.root)
+        self.id = self.store.create(merge_plan({"limits": limits}))
+        self.t, self.living, self.spawned, self.killed, self.battery = NOW, set(), [], [], False
+
+    def spawn(self, command, log, cwd):
+        self.spawned.append((command, Path(log), cwd))
+        self.living.add(5000 + len(self.spawned))
+        return 5000 + len(self.spawned)
+
+    def check(self):
+        return watch.check(self.store, now=lambda: self.t, spawn=self.spawn, alive=lambda pid: pid in self.living, kill=self.killed.append, on_battery=lambda: self.battery)
+
+    def row(self):
+        return self.store.get(self.id)
+
+    def set(self, **columns):
+        self.store.update(self.id, **columns)
+
+    def memo(self):
+        return json.loads((self.store.directory(self.id) / "watchdog.json").read_text())
+
+    def types(self):
+        return [e["type"] for e in self.store.journal(self.id)]
+
+
+class CheckTests(unittest.TestCase):
+    def test_no_active_session(self):
+        rig = Rig(self)
+        rig.set(status="finished")
+        self.assertEqual(rig.check(), "none")
+        self.assertEqual(rig.spawned, [])
+
+    def test_healthy_trainer_is_left_alone(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 59)
+        self.assertEqual(rig.check(), "ok")
+        self.assertEqual((rig.spawned, rig.killed), ([], []))
+
+    def test_first_start_of_a_queued_session_is_not_a_restart(self):
+        rig = Rig(self)
+        self.assertEqual(rig.check(), "started")
+        command, log, cwd = rig.spawned[0]
+        self.assertEqual(command[1:], ["-m", "studio_passive", "run", rig.id, "--root", str(rig.root)])
+        self.assertEqual((log, cwd), (rig.store.directory(rig.id) / "trainer.log", watch.REPO))
+        self.assertTrue((cwd / "studio_passive.py").exists())
+        self.assertEqual((rig.row()["trainer_pid"], rig.row()["restarts"], rig.types()), (5001, [], []))
+
+    def test_dead_trainer_is_restarted_and_recorded(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5)
+        self.assertEqual(rig.check(), "restarted")
+        row = rig.row()
+        self.assertEqual((row["trainer_pid"], row["restarts"], row["status"], rig.killed), (5001, [NOW], "running", []))
+        event = rig.store.journal(rig.id)[0]
+        self.assertEqual((event["type"], event["reason"], event["pid"]), ("restart", "stopped", 5001))
+
+    def test_silent_live_trainer_is_terminated_then_restarted(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 61)
+        self.assertEqual(rig.check(), "restarted")
+        self.assertEqual((rig.killed, rig.row()["trainer_pid"], rig.store.journal(rig.id)[0]["reason"]), ([7], 5001, "silent"))
+
+    def test_a_just_spawned_trainer_gets_time_to_beat(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 500)
+        rig.living.add(7)
+        self.assertEqual(rig.check(), "restarted")
+        for later in (1, 30, 59):  # the heartbeat column still holds the old value
+            rig.t = NOW + later
+            self.assertEqual(rig.check(), "ok", later)
+        self.assertEqual((len(rig.spawned), rig.killed, len(rig.row()["restarts"])), (1, [7], 1))
+        rig.t = NOW + 61  # it never beat: now it is silent
+        self.assertEqual(rig.check(), "restarted")
+        self.assertEqual((len(rig.spawned), rig.killed[-1]), (2, 5001))
+
+    def test_a_first_start_that_never_beats_gets_the_same_grace(self):
+        rig = Rig(self)
+        self.assertEqual(rig.check(), "started")
+        rig.t = NOW + 10
+        self.assertEqual(rig.check(), "ok")
+        self.assertEqual(len(rig.spawned), 1)
+
+    def test_gives_up_after_five_restarts_in_ten_minutes(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5, restarts=[NOW - 500, NOW - 400, NOW - 300, NOW - 200, NOW - 100])
+        self.assertEqual(rig.check(), "gave_up")
+        row = rig.row()
+        self.assertEqual((row["status"], rig.spawned, rig.store.active()), ("failed", [], None))
+        self.assertIn("gave up after 5 restarts in 10 minutes", row["error"])
+        self.assertIn("See trainer.log", row["error"])
+        self.assertEqual(rig.store.journal(rig.id)[-1]["type"], "error")
+
+    def test_giving_up_keeps_the_trainers_last_error(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5, error="ValueError: needs two examples", restarts=[NOW - 500, NOW - 400, NOW - 300, NOW - 200, NOW - 100])
+        self.assertEqual(rig.check(), "gave_up")
+        self.assertIn("The last problem: ValueError: needs two examples", rig.row()["error"])
+        self.assertNotIn("See trainer.log", rig.row()["error"])
+
+    def test_old_restarts_do_not_count(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5, restarts=[NOW - 2000, NOW - 1500, NOW - 1000, NOW - 700, NOW - 601, NOW - 100])
+        self.assertEqual(rig.check(), "restarted")
+        self.assertEqual(len(rig.row()["restarts"]), 7)
+
+    def test_paused_session_whose_trainer_died_is_restarted_still_paused(self):
+        rig = Rig(self)
+        rig.set(status="paused", trainer_pid=7, heartbeat=NOW - 90)
+        self.assertEqual(rig.check(), "restarted")
+        self.assertEqual((rig.row()["status"], rig.row()["command"]), ("paused", ""))  # the engine reads status paused and starts paused
+        rig.living.add(5001)
+        rig.t = NOW + 1
+        self.assertEqual(rig.check(), "paused")
+
+    def test_pauses_on_battery_and_resumes_on_mains(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 1)
+        rig.battery = True
+        self.assertEqual(rig.check(), "battery_paused")
+        self.assertEqual((rig.row()["command"], rig.memo()["paused"]), ("pause", True))
+        rig.set(command="", status="paused")  # the trainer took the command
+        self.assertEqual(rig.check(), "paused")
+        self.assertEqual(rig.row()["command"], "")
+        rig.battery = False
+        self.assertEqual(rig.check(), "battery_resumed")
+        self.assertEqual((rig.row()["command"], rig.memo()["paused"]), ("resume", False))
+        rig.set(command="", status="running")
+        self.assertEqual(rig.check(), "ok")
+        self.assertEqual(rig.row()["command"], "")
+
+    def test_battery_pause_and_resume_are_journalled_with_their_reason(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 1)
+        rig.battery = True
+        rig.check()
+        rig.check()  # nothing new to say while it stays paused on battery
+        rig.battery = False
+        rig.set(status="paused", command="")
+        rig.check()
+        self.assertEqual([e["reason"] for e in rig.store.journal(rig.id) if e["type"] == "power"], ["battery_paused", "battery_resumed"])
+
+    def test_mains_returns_before_the_trainer_took_the_pause(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 1)
+        rig.battery = True
+        rig.check()
+        rig.battery = False
+        self.assertEqual(rig.check(), "battery_resumed")
+        self.assertEqual(rig.row()["command"], "resume")
+
+    def test_never_resumes_a_pause_the_user_made(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="paused", trainer_pid=7, heartbeat=NOW - 1)
+        for battery in (True, False, True, False):
+            rig.battery = battery
+            self.assertEqual(rig.check(), "paused")
+            self.assertEqual(rig.row()["command"], "")
+
+    def test_a_user_resume_on_battery_is_not_fought(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 1)
+        rig.battery = True
+        rig.check()
+        rig.set(command="", status="running")  # the user resumed anyway
+        self.assertEqual(rig.check(), "ok")
+        self.assertEqual(rig.row()["command"], "")
+
+    def test_setting_off_means_no_pause(self):
+        rig = Rig(self, pause_on_battery=False)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 1)
+        rig.battery = True
+        self.assertEqual(rig.check(), "ok")
+
+    def test_status_for_the_table(self):
+        rig = Rig(self)
+        rig.living.update({7, 8})
+        rig.set(status="running", trainer_pid=7, watchdog_pid=8, heartbeat=NOW - 12, restarts=[1.0, 2.0])
+        table = lambda: watch.status(rig.store, rig.row(), now=lambda: rig.t, alive=lambda pid: pid in rig.living)  # noqa: E731
+        self.assertEqual(table(), {"trainer": "Running", "heard": 12, "watchdog": "Running", "restarts": 2})
+        rig.t = NOW + 100
+        self.assertEqual(table()["trainer"], "Restarting")
+        rig.living.clear()
+        self.assertEqual((table()["trainer"], table()["watchdog"]), ("Stopped", "Stopped"))
+        rig.set(heartbeat=None)
+        self.assertIsNone(table()["heard"])
+
+
+class WatchTests(unittest.TestCase):
+    def test_exits_and_uninstalls_when_nothing_is_active(self):
+        rig = Rig(self)
+        rig.set(status="stopped")
+        with patch.object(watch, "uninstall") as uninstall:
+            watch.watch(rig.root, sleep=lambda s: self.fail("slept"), me=1)
+        uninstall.assert_called_once_with(rig.root)
+
+    def test_loops_until_the_session_ends_and_claims_the_record(self):
+        rig = Rig(self)
+        passes = []
+
+        def sleep(seconds):
+            passes.append(seconds)
+            if len(passes) == 2:
+                rig.set(status="finished")
+        with patch.object(watch, "uninstall"):
+            watch.watch(rig.root, poll=3, sleep=sleep, me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living)
+        self.assertEqual((passes, len(rig.spawned)), ([3, 3], 1))
+        self.assertEqual(rig.row()["watchdog_pid"], 4242)
+
+    def test_second_watchdog_exits_at_once(self):
+        rig = Rig(self)
+        rig.set(watchdog_pid=99)
+        rig.living.add(99)
+        with patch.object(watch, "uninstall") as uninstall:
+            watch.watch(rig.root, sleep=lambda s: self.fail("slept"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living)
+        self.assertEqual((rig.row()["watchdog_pid"], rig.spawned), (99, []))
+        uninstall.assert_not_called()
+
+    def test_a_dead_watchdog_pid_is_taken_over(self):
+        rig = Rig(self)
+        rig.set(watchdog_pid=99)
+        with patch.object(watch, "uninstall"):
+            watch.watch(rig.root, sleep=lambda s: rig.set(status="finished"), me=4242, spawn=rig.spawn, alive=lambda pid: pid in rig.living)
+        self.assertEqual(rig.row()["watchdog_pid"], 4242)
+
+    def test_start_spawns_once(self):
+        rig = Rig(self)
+        installed = []
+        pid = watch.start(rig.root, rig.id, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living)
+        command, log, cwd = rig.spawned[0]
+        self.assertEqual((command[1:], log, cwd), (["-m", "studio_passive_watch", "--root", str(rig.root.resolve())], rig.root / "data" / "passive-watchdog.log", watch.REPO))
+        self.assertEqual((pid, rig.row()["watchdog_pid"], installed), (5001, 5001, [rig.root]))
+        self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living), 5001)
+        self.assertEqual(len(rig.spawned), 1)
+        rig.living.clear()
+        self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living), 5002)
+
+    def test_start_without_a_session_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            watch.start(tmp, spawn=lambda *a: 1, install=lambda r: None)
+
+
+class InstallTests(unittest.TestCase):
+    def test_macos_writes_a_launch_agent_under_the_given_home(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as root:
+            run = MagicMock()
+            real = Path.home() / "Library" / "LaunchAgents"
+            before = sorted(real.glob("com.groundwork.passive.*")) if real.exists() else []
+            path = watch.install(root, home=home, run=run, platform="darwin")
+            self.assertTrue(path.startswith(home))
+            plist = plistlib.loads(Path(path).read_bytes())
+            self.assertEqual(plist["ProgramArguments"], [sys.executable, "-m", "studio_passive_watch", "--root", str(Path(root).resolve())])
+            self.assertEqual((plist["WorkingDirectory"], plist["RunAtLoad"], plist["KeepAlive"]), (str(watch.REPO), True, False))
+            self.assertTrue(plist["Label"].startswith("com.groundwork.passive.") and Path(path).name == plist["Label"] + ".plist")
+            self.assertTrue(plist["StandardOutPath"].startswith(str(Path(root).resolve())))
+            run.assert_not_called()
+            self.assertEqual(sorted(real.glob("com.groundwork.passive.*")) if real.exists() else [], before)
+            watch.uninstall(root, home=home, run=run, platform="darwin")
+            self.assertFalse(Path(path).exists())
+            watch.uninstall(root, home=home, run=run, platform="darwin")  # already gone is fine
+
+    def test_frozen_build_points_at_its_own_executable(self):
+        run = MagicMock()
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as root, patch.object(sys, "frozen", True, create=True):
+            expected = [sys.executable, "--run-module", "studio_passive_watch", "--root", str(Path(root).resolve())]
+            self.assertEqual(watch._watch_command(root), expected)
+            path = watch.install(root, home=home, run=run, platform="darwin")
+            self.assertEqual(plistlib.loads(Path(path).read_bytes())["ProgramArguments"], expected)
+            watch.install(root, run=run, platform="win32")
+            self.assertEqual(run.call_args[0][0][run.call_args[0][0].index("/TR") + 1], subprocess.list2cmdline(expected))
+
+    def test_windows_creates_and_deletes_a_scheduled_task(self):
+        run = MagicMock()
+        with tempfile.TemporaryDirectory() as root:
+            name = watch.install(root, run=run, platform="win32")
+            args = run.call_args[0][0]
+            self.assertEqual(args[:4], ["schtasks", "/Create", "/TN", name])
+            self.assertEqual(args[args.index("/SC") + 1], "ONLOGON")
+            self.assertIn("/F", args)
+            task = args[args.index("/TR") + 1]
+            self.assertIn("studio_passive_watch.py", task)
+            self.assertIn(str(Path(root).resolve()), task)
+            watch.uninstall(root, run=run, platform="win32")
+            self.assertEqual(run.call_args[0][0], ["schtasks", "/Delete", "/TN", name, "/F"])
+
+    def test_failures_never_raise(self):
+        with tempfile.TemporaryDirectory() as root:
+            boom = MagicMock(side_effect=subprocess.CalledProcessError(1, "schtasks"))
+            self.assertIsNone(watch.install(root, run=boom, platform="win32"))
+            watch.uninstall(root, run=boom, platform="win32")
+            blocker = Path(root) / "file"
+            blocker.write_text("x")
+            self.assertIsNone(watch.install(root, home=blocker, platform="darwin"))
+
+    def test_other_platforms_do_nothing(self):
+        run = MagicMock()
+        self.assertIsNone(watch.install("x", run=run, platform="linux"))
+        watch.uninstall("x", run=run, platform="linux")
+        run.assert_not_called()
+
+
+AC = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged; 0:00 remaining present: true\n"
+BATTERY = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t80%; discharging; 3:10 remaining present: true\n"
+
+
+class PowerTests(unittest.TestCase):
+    def test_on_battery_reads_pmset(self):
+        run = lambda out: MagicMock(return_value=SimpleNamespace(stdout=out))  # noqa: E731
+        self.assertTrue(watch.on_battery(platform="darwin", run=run(BATTERY)))
+        self.assertFalse(watch.on_battery(platform="darwin", run=run(AC)))
+        self.assertFalse(watch.on_battery(platform="darwin", run=run("")))
+        self.assertFalse(watch.on_battery(platform="darwin", run=MagicMock(side_effect=FileNotFoundError)))
+        self.assertFalse(watch.on_battery(platform="linux", run=MagicMock(side_effect=AssertionError)))
+
+    def test_on_battery_windows_reads_the_line_status(self):
+        import ctypes
+        for line, expected in ((0, True), (1, False)):
+            def fill(ref, line=line):
+                ref._obj.ACLineStatus = line
+                return 1
+            fake = SimpleNamespace(kernel32=SimpleNamespace(GetSystemPowerStatus=fill))
+            with patch.object(ctypes, "windll", fake, create=True):
+                self.assertEqual(watch.on_battery(platform="win32"), expected)
+
+    def test_keep_awake_macos_watches_the_pid(self):
+        popen = MagicMock()
+        self.assertIs(watch.keep_awake(123, platform="darwin", popen=popen), popen.return_value)
+        self.assertEqual(popen.call_args[0][0], ["caffeinate", "-i", "-w", "123"])
+        self.assertIsNone(watch.keep_awake(123, platform="darwin", popen=MagicMock(side_effect=FileNotFoundError)))
+
+    def test_keep_awake_windows_sets_the_execution_state(self):
+        import ctypes
+        call = MagicMock()
+        with patch.object(ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(SetThreadExecutionState=call)), create=True):
+            self.assertTrue(watch.keep_awake(123, platform="win32"))
+        call.assert_called_once_with(0x80000001)
+
+    def test_keep_awake_elsewhere_does_nothing(self):
+        popen = MagicMock()
+        self.assertIsNone(watch.keep_awake(1, platform="linux", popen=popen))
+        popen.assert_not_called()
+
+
+class ProcessTests(unittest.TestCase):
+    def test_alive(self):
+        self.assertTrue(watch.alive(os.getpid()))
+        for pid in (None, 0, -1):
+            self.assertFalse(watch.alive(pid))
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        self.assertFalse(watch.alive(child.pid))
+
+    def test_terminate_escalates_to_kill_after_the_grace(self):
+        if sys.platform == "win32":
+            self.skipTest("POSIX signals")
+        with patch("os.kill") as kill:
+            watch.terminate(77, is_alive=lambda pid: True, sleep=lambda s: None, grace=0.3)
+        self.assertEqual([c[0][1] for c in kill.call_args_list], [15, 9])
+        with patch("os.kill") as kill:
+            watch.terminate(77, is_alive=lambda pid: False, sleep=lambda s: None)
+        self.assertEqual(kill.call_count, 1)
+
+    def test_terminate_windows_uses_taskkill(self):
+        run = MagicMock()
+        watch.terminate(77, run=run, platform="win32")
+        self.assertEqual(run.call_args[0][0], ["taskkill", "/PID", "77", "/T", "/F"])
+
+    def test_real_detached_spawn_runs_logs_and_exits(self):
+        from studio_passive import merge_plan as merge
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PassiveStore(tmp)
+            sid = store.create(merge({"stop": {"duration": 0.0001, "unit": "minutes", "patience_rounds": 0}, "teacher": {"polish": False, "lessons": False}, "plateau": {"checks": 2, "max_steps": 5}}))
+            code = ("import sys, studio_passive as p\n"
+                    "def train(config, examples, out, emit, stop, pause, init_from=None):\n"
+                    "    out.mkdir(parents=True); (out / 'best.npz').write_text('x')\n"
+                    "p.run_session(sys.argv[1], sys.argv[2], train=train, evaluate=lambda path, ex: 1.0, build=lambda r, d: [{'n': i} for i in range(5)])\n"
+                    "print('child done')\n")
+            log = Path(tmp) / "child.log"
+            pid = watch.spawn([sys.executable, "-c", code, tmp, sid], log, watch.REPO)
+            self.addCleanup(lambda: watch.alive(pid) and os.kill(pid, 9))
+            self.assertGreater(pid, 0)
+            deadline = time.time() + 20
+            while watch.alive(pid) and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(watch.alive(pid), log.read_text())
+            self.assertIn("child done", log.read_text())
+            self.assertEqual(store.get(sid)["status"], "finished")
+
+    def test_cli_exits_at_once_without_a_session(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as home:
+            env = {**os.environ, "HOME": home, "USERPROFILE": home}
+            done = subprocess.run([sys.executable, "-m", "studio_passive_watch", "--root", root], cwd=watch.REPO, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+
+if __name__ == "__main__":
+    unittest.main()

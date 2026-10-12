@@ -109,9 +109,10 @@ def _poke(port, authkey):
 class VizBridge:
     """GUI-side end of the viewer link. Every method returns promptly; safe on the GUI thread."""
 
-    def __init__(self, script_path, python=sys.executable, extra_args=()):
+    def __init__(self, script_path, python=sys.executable, extra_args=(), command=None):
         self.script = Path(script_path).resolve()
         self.python = str(python)
+        self.command = list(command) if command else None  # frozen app: the executable plus its run-this-module arguments, no script path
         self.extra_args = [str(a) for a in extra_args]
         self._proc = None
         self._sess = None
@@ -131,9 +132,9 @@ class VizBridge:
         self._listener = Listener(("127.0.0.1", 0), authkey=self._authkey)
         self._port = self._listener.address[1]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        cmd = [self.python, str(self.script), "--port", str(self._port),
+        cmd = [*(self.command or [self.python, str(self.script)]), "--port", str(self._port),
                "--authkey", self._authkey.hex(), *self.extra_args]
-        self._proc = subprocess.Popen(cmd, cwd=str(self.script.parent), creationflags=flags)
+        self._proc = subprocess.Popen(cmd, cwd=None if self.command else str(self.script.parent), creationflags=flags)
         threading.Thread(target=_accept, args=(self._listener, self._sess), daemon=True).start()
         if not self._atexit:
             atexit.register(self.stop)
