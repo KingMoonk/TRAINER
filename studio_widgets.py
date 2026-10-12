@@ -1,5 +1,6 @@
 """Shared native widgets and the training-example editor."""
 import json
+import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 from studio_core import messages_of, normalize
@@ -15,18 +16,31 @@ ACCENT = "#65e0bd"
 BLUE = "#78a9ff"
 FONT = "Segoe UI"
 
+# Zoom base: gentler on macOS Tk 8.6 trackpad to avoid too-fast zoom; exact on Windows
+_ZOOM_BASE = 1.08 if (sys.platform == "darwin" and tk.TkVersion < 8.7) else 1.12
+
+
+def _wheel_notches(delta):
+    """Convert raw wheel delta to notches (float) for zoom calculations.
+    Windows and Tk 8.7+: 120 per notch, return delta/120.
+    macOS Tk 8.6: raw delta already in small units, return as-is."""
+    if delta == 0:
+        return 0.0
+    if sys.platform == "darwin" and tk.TkVersion < 8.7:
+        return float(delta)  # macOS Tk 8.6: delta is already in notch-like units
+    return delta / 120.0  # Windows, Tk 8.7+: 120 per notch
+
 
 def normalize_scroll_delta(delta):
-    """Convert mouse wheel delta to scroll units. Windows uses 120 per unit; macOS uses 1/-1."""
+    """Convert wheel delta to scroll units (integer).
+    Rounds symmetrically (toward zero), never returns 0 for non-zero input."""
     if delta == 0:
         return 0
-    # Windows: delta is a multiple of 120; macOS: delta is 1 or -1
-    # Scale by 120 on Windows (int(delta / 120) rounds to 0 for delta=1)
-    # On macOS, delta is already ±1, so multiply by 1; on Windows, divide by 120
-    if abs(delta) >= 120:
-        return delta // 120
-    else:
-        return 1 if delta > 0 else -1
+    notches = _wheel_notches(delta)
+    # Round toward zero: int() truncates toward zero for both positive and negative
+    units = int(notches)
+    # If rounding gave 0 for non-zero input, return 1 with the sign of delta
+    return units if units != 0 else (1 if delta > 0 else -1)
 
 
 def label(parent, text="", style="TLabel", **kwargs):

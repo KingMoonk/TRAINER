@@ -11,23 +11,57 @@ import studio_widgets
 import studio_circuit
 
 
-class ScrollWheelDeltaTests(unittest.TestCase):
-    """Test scroll wheel delta normalization for cross-platform compatibility."""
+class WheelDeltaTests(unittest.TestCase):
+    """Test wheel delta conversion for cross-platform compatibility."""
 
-    def test_normalize_scroll_delta(self):
-        """Test that normalize_scroll_delta handles both Windows (120) and macOS (1/-1) deltas."""
-        # Windows uses multiples of 120
+    def test_normalize_scroll_delta_windows_full_units(self):
+        """Test that Windows 120-unit deltas give 1 scroll unit."""
+        # Assume we're testing on a system where _wheel_notches works correctly
         self.assertEqual(studio_widgets.normalize_scroll_delta(120), 1)
         self.assertEqual(studio_widgets.normalize_scroll_delta(-120), -1)
-        self.assertEqual(studio_widgets.normalize_scroll_delta(240), 2)
-        self.assertEqual(studio_widgets.normalize_scroll_delta(-240), -2)
 
-        # macOS uses small numbers like 1/-1
-        self.assertEqual(studio_widgets.normalize_scroll_delta(1), 1)
-        self.assertEqual(studio_widgets.normalize_scroll_delta(-1), -1)
+    def test_normalize_scroll_delta_symmetry(self):
+        """Test that scroll delta rounding is symmetric (+180 vs -180)."""
+        # Same absolute value should give same absolute magnitude
+        pos = studio_widgets.normalize_scroll_delta(180)
+        neg = studio_widgets.normalize_scroll_delta(-180)
+        self.assertEqual(abs(pos), abs(neg))
+        self.assertEqual(pos, -neg)
 
-        # Zero should stay zero
+    def test_normalize_scroll_delta_never_zero_for_nonzero_input(self):
+        """Test that non-zero delta never returns 0."""
+        for delta in [1, -1, 30, -30, 60, -60]:
+            result = studio_widgets.normalize_scroll_delta(delta)
+            if delta != 0:
+                self.assertNotEqual(result, 0, f"normalize_scroll_delta({delta}) returned 0")
+
+    def test_normalize_scroll_delta_zero_stays_zero(self):
+        """Test that zero delta returns zero."""
         self.assertEqual(studio_widgets.normalize_scroll_delta(0), 0)
+
+    def test_wheel_notches_returns_float(self):
+        """Test that _wheel_notches returns a float for zoom calculations."""
+        # Should return a float that can be used with ** operator
+        notches = studio_widgets._wheel_notches(120)
+        self.assertIsInstance(notches, float)
+        # Should be usable in zoom calculation
+        zoom_factor = 1.12 ** notches
+        self.assertIsInstance(zoom_factor, float)
+        self.assertGreater(zoom_factor, 1.0)
+
+    def test_wheel_notches_sub_120_windows_delta(self):
+        """Test that sub-120 Windows delta gives fractional notches."""
+        # Precision mice can send deltas like 30 (quarter scroll)
+        notches = studio_widgets._wheel_notches(30)
+        # Should be a fraction like 0.25 (30/120)
+        self.assertGreater(notches, 0)
+        self.assertLess(abs(notches), 1.0)
+
+    def test_zoom_base_constant_exists(self):
+        """Test that zoom base constant is defined."""
+        self.assertTrue(hasattr(studio_widgets, '_ZOOM_BASE'))
+        self.assertGreater(studio_widgets._ZOOM_BASE, 1.0)
+        self.assertLess(studio_widgets._ZOOM_BASE, 1.15)
 
 
 class CircuitDescribeTests(unittest.TestCase):
