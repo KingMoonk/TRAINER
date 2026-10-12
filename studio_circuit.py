@@ -10,7 +10,7 @@ import re
 import time
 import tkinter as tk
 
-from studio_widgets import FONT
+from studio_widgets import FONT, _wheel_notches, _ZOOM_BASE
 
 BG, GRID, CHIP, BOARD, EDGE = "#060a12", "#0c1526", "#0c1626", "#09111e", "#2a3d5a"
 BUS, TEXT, MUTED, ERR, SEL = "#2ee6d0", "#e8f1ff", "#8fa3c0", "#ff4d5e", "#ffffff"
@@ -232,7 +232,8 @@ class CircuitCanvas(tk.Canvas):
 
     def _wheel(self, event):
         cx, cy = self.winfo_pointerx() - self.winfo_rootx(), self.winfo_pointery() - self.winfo_rooty()
-        self.zoom(1.12 ** (event.delta / 120), cx, cy)
+        notches = _wheel_notches(event.delta)
+        self.zoom(_ZOOM_BASE ** notches, cx, cy)
         return "break"
 
     def world(self, x, y):
@@ -383,6 +384,8 @@ class CircuitCanvas(tk.Canvas):
             last = layer == self.s["blocks"][index]["layers"] - 1
             live = f" · activity {neurons[min(len(neurons) - 1, unit * len(neurons) // max(1, self._unit_count(index)))]:.2f}" if neurons and last else ""
             return f"Block {index + 1} · MLP layer {layer + 1} neuron pad {unit + 1}{live}"
+        if kind == "e" and ident == "out":
+            return "Output head pad"
         return "Embedding dimension sample"
 
     def _unit_count(self, index):
