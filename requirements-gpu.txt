@@ -1,0 +1,4 @@
+# Optional NVIDIA CUDA 13 backend. The standard requirements remain CPU-only.
+# Requires a compatible NVIDIA driver and CUDA 13 toolkit.
+-r requirements.txt
+cupy-cuda13x>=14.2,<15

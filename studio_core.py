@@ -1,0 +1,566 @@
+"""Local workspace and reproducible, inspectable synthetic data recipes."""
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import itertools
+import json
+import math
+import random
+import re
+import sqlite3
+import string
+import time
+import threading
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parent
+SUPPORTED = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".txt"}
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def uid(prefix):
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def atomic_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    replace_file(temporary, path)
+
+
+def replace_file(source, target, attempts=40):
+    """Atomic rename that tolerates Windows' transient sharing locks.
+
+    A reader (the runs list, antivirus, the search indexer) holding the target
+    open makes os.replace fail with Access denied for a few milliseconds.
+    """
+    for attempt in range(attempts):
+        try:
+            return Path(source).replace(target)
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(min(.5, .01 * (attempt + 1)))
+
+
+def messages_of(example):
+    if example.get("messages"):
+        return example["messages"]
+    return [{"role": "user", "content": example.get("user", "")},
+            {"role": "assistant", "content": example.get("assistant", "")}]
+
+
+def fingerprint(example):
+    value = {"text": example["text"]} if example.get("text") else {"messages": messages_of(example)}
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def normalize(row, dataset_id="", source="import"):
+    if isinstance(row, str):
+        row = {"text": row}
+    if not isinstance(row, dict):
+        return None
+    raw_messages = row.get("messages", row.get("conversation", row.get("conversations")))
+    if isinstance(raw_messages, str) and raw_messages.strip().startswith("["):
+        try:
+            raw_messages = json.loads(raw_messages)
+        except ValueError:
+            pass
+    messages = []
+    if isinstance(raw_messages, list):
+        for item in raw_messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", item.get("from", ""))).lower()
+            role = {"human": "user", "gpt": "assistant", "bot": "assistant"}.get(role, role)
+            content = str(item.get("content", item.get("value", "")) or "").strip()
+            if role in {"system", "user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+    if not messages:
+        prompt = row.get("user", row.get("prompt", row.get("question", row.get("instruction", ""))))
+        if row.get("instruction") and row.get("input"):
+            prompt = str(prompt) + "\n" + str(row["input"])
+        answer = row.get("assistant", row.get("completion", row.get("answer", row.get("output", row.get("response", "")))))
+        prompt = "" if prompt is None else str(prompt).strip()
+        answer = "" if answer is None else str(answer).strip()
+        if prompt and answer:
+            messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": answer}]
+    text = str(row.get("text", "") or "").strip() if not messages else ""
+    if not text and not ({m["role"] for m in messages} >= {"user", "assistant"}):
+        return None
+    result = {
+        "id": uid("ex"), "datasetId": dataset_id, "messages": messages, "text": text,
+        "user": text if text else "\n".join(m["content"] for m in messages if m["role"] == "user"),
+        "assistant": "\n".join(m["content"] for m in messages if m["role"] == "assistant"),
+        "intent": str(row.get("intent", row.get("category", "general"))), "quality": row.get("quality", "Review"),
+        "synthetic": bool(row.get("synthetic", source == "synthetic")), "source": row.get("source", source), "updatedAt": now(),
+    }
+    # Keep audit and attribution information when a draft is accepted or edited.
+    for key in ("provenance", "validation", "qualityScore", "quality_score", "flags", "recipe", "recipeVersion",
+                "seed", "difficulty", "tags", "sourceId", "source_url", "license", "split", "metadata",
+                "generation", "reviewNotes", "groupId", "computedVerified", "qualityReport"):
+        if key in row:
+            result[key] = row[key]
+    return result
+
+
+def parse_file(path):
+    path = Path(path)
+    if path.suffix.lower() not in SUPPORTED:
+        raise ValueError(f"Unsupported file: {path.name}")
+    if path.stat().st_size > 100 * 1024 * 1024:
+        raise ValueError("Import files in chunks below 100 MB.")
+    text = path.read_text(encoding="utf-8-sig")
+    ext = path.suffix.lower()
+    if ext in {".jsonl", ".ndjson"}:
+        rows = []
+        for line_number, line in enumerate(text.splitlines(), 1):
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path.name}, line {line_number}: {exc.msg}") from exc
+        return rows
+    if ext == ".json":
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for key in ("examples", "data", "records"):
+                if isinstance(parsed.get(key), list):
+                    return parsed[key]
+            return [parsed]
+        raise ValueError("JSON must contain records or a record array.")
+    if ext in {".csv", ".tsv"}:
+        frame = pd.read_csv(io.StringIO(text), sep="," if ext == ".csv" else "\t", dtype=str, keep_default_na=False)
+        frame.columns = [str(k).strip().lower().replace(" ", "_") for k in frame.columns]
+        return frame.to_dict(orient="records")
+    # Tagged TXT preserves turn order. Plain TXT is a language-model corpus.
+    blocks = re.split(r"\n\s*\n", text.strip())
+    records = []
+    for block in blocks:
+        messages = []
+        for line in block.splitlines():
+            match = re.match(r"^\s*(system|user|human|assistant|bot)\s*:\s*(.*)$", line, re.I)
+            if match:
+                role = {"human": "user", "bot": "assistant"}.get(match[1].lower(), match[1].lower())
+                messages.append({"role": role, "content": match[2]})
+            elif messages:
+                messages[-1]["content"] += "\n" + line
+        if messages:
+            records.append({"messages": messages})
+        elif block.strip():
+            records.append({"text": block})
+    return records
+
+
+class Workspace:
+    def __init__(self, root=ROOT):
+        self.root = Path(root)
+        self.path = self.root / "data" / "workspace.json"
+        self.run_dir = self.root / "runs"
+        self.db_path = self.root / "data" / "records.sqlite"
+        self.lock = threading.RLock()
+        if self.path.exists():
+            self.state = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(self.state, dict) or any(not isinstance(self.state.get(k), list) for k in ("datasets", "examples")):
+                raise ValueError(f"Invalid workspace file: {self.path}")
+        else:
+            self.state = {"datasets": [], "examples": [], "generated": [], "runs": []}
+        self.state.setdefault("generated", [])
+        self.state.setdefault("studioConfig", {})
+        # External catalogue metadata survives saves made by an older running GUI.
+        registry = self.root / "data" / "catalog_registry.json"
+        if registry.exists():
+            try:
+                entries = json.loads(registry.read_text(encoding="utf-8"))
+                known = {d["id"] for d in self.state["datasets"]}
+                self.state["datasets"].extend(d for d in entries if d.get("id") not in known)
+            except (ValueError, TypeError, AttributeError):
+                pass
+
+    def save(self):
+        with self.lock:
+            atomic_json(self.path, self.state)
+
+    def create_dataset(self, name, description="", storage="json", **metadata):
+        if not name.strip():
+            raise ValueError("Enter a dataset name.")
+        dataset = {"id": uid("data"), "name": name.strip(), "description": description, "createdAt": now()}
+        if storage == "sqlite":
+            dataset.update(storage="sqlite", recordCount=0)
+        dataset.update(metadata)
+        self.state["datasets"].append(dataset)
+        self.state["selectedDatasetId"] = dataset["id"]
+        self.save()
+        return dataset["id"]
+
+    def _dataset(self, dataset_id):
+        return next((d for d in self.state["datasets"] if d["id"] == dataset_id), None)
+
+    @contextmanager
+    def _connect(self):
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.db_path, timeout=30)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("""CREATE TABLE IF NOT EXISTS records (
+            id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            payload TEXT NOT NULL, user TEXT NOT NULL, assistant TEXT NOT NULL,
+            intent TEXT NOT NULL, quality TEXT NOT NULL, characters INTEGER NOT NULL,
+            UNIQUE(dataset_id, fingerprint))""")
+        connection.execute("CREATE INDEX IF NOT EXISTS records_dataset ON records(dataset_id)")
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _where(dataset_id, query=""):
+        if not query.strip():
+            return "dataset_id=?", [dataset_id]
+        escaped = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return "dataset_id=? AND (user LIKE ? ESCAPE '\\' OR assistant LIKE ? ESCAPE '\\' OR intent LIKE ? ESCAPE '\\')", [dataset_id] + [f"%{escaped}%"] * 3
+
+    @staticmethod
+    def _db_row(example):
+        return (example["id"], example["datasetId"], fingerprint(example), json.dumps(example, ensure_ascii=False),
+                example.get("user", ""), example.get("assistant", ""), example.get("intent", "general"),
+                example.get("quality", "Review"), len(example.get("user", "")) + len(example.get("assistant", "")))
+
+    def set_dataset_metadata(self, dataset_id, **fields):
+        dataset = self._dataset(dataset_id)
+        if dataset is None:
+            raise ValueError("Dataset no longer exists.")
+        dataset.update({key: value for key, value in fields.items() if key != "id"})
+        self.save()
+
+    def use_disk_storage(self, dataset_id):
+        """Move one existing local dataset into SQLite without changing record IDs."""
+        dataset = self._dataset(dataset_id)
+        if dataset is None:
+            raise ValueError("Choose a dataset first.")
+        if dataset.get("storage") == "sqlite":
+            return
+        with self.lock, self._connect() as connection:
+            for row in self.examples(dataset_id):
+                connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", self._db_row(row))
+            count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+        self.state["examples"] = [row for row in self.state["examples"] if row.get("datasetId") != dataset_id]
+        dataset.update(storage="sqlite", recordCount=count)
+        self.save()
+
+    def examples(self, dataset_id, limit=None, offset=0, query=""):
+        dataset = self._dataset(dataset_id) or {}
+        if dataset.get("storage") == "sqlite":
+            where, parameters = self._where(dataset_id, query)
+            with self._connect() as connection:
+                cursor = connection.execute(f"SELECT payload FROM records WHERE {where} ORDER BY rowid LIMIT ? OFFSET ?",
+                                            parameters + [-1 if limit is None else max(0, int(limit)), max(0, int(offset))])
+                return [json.loads(row[0]) for row in cursor]
+        rows = [e for e in self.state["examples"] if e.get("datasetId") == dataset_id]
+        if query.strip():
+            needle = query.casefold().strip()
+            rows = [e for e in rows if needle in " ".join(str(e.get(k, "")) for k in ("user", "assistant", "intent")).casefold()]
+        return rows[max(0, int(offset)):None if limit is None else max(0, int(offset)) + max(0, int(limit))]
+
+    def count(self, dataset_id, query=""):
+        if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            where, parameters = self._where(dataset_id, query)
+            with self._connect() as connection:
+                return connection.execute(f"SELECT COUNT(*) FROM records WHERE {where}", parameters).fetchone()[0]
+        return len(self.examples(dataset_id, query=query))
+
+    def iter_examples(self, dataset_id):
+        if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            with self._connect() as connection:
+                for row in connection.execute("SELECT payload FROM records WHERE dataset_id=? ORDER BY rowid", (dataset_id,)):
+                    yield json.loads(row[0])
+        else:
+            yield from self.examples(dataset_id)
+
+    def sample(self, dataset_id, limit=20000, seed=42, reviewed_only=False):
+        """Uniform deterministic sampling with O(limit) record memory, including disk datasets."""
+        limit = max(0, int(limit))
+        if not limit:
+            return []
+        rng = random.Random(seed)
+        if (self._dataset(dataset_id) or {}).get("storage") != "sqlite":
+            rows = [e for e in self.examples(dataset_id) if not reviewed_only or e.get("quality") == "Good"]
+            return rng.sample(rows, min(limit, len(rows)))
+        chosen = []
+        with self._connect() as connection:
+            suffix = " AND quality='Good'" if reviewed_only else ""
+            for index, (rowid,) in enumerate(connection.execute("SELECT rowid FROM records WHERE dataset_id=?" + suffix + " ORDER BY rowid", (dataset_id,))):
+                if index < limit:
+                    chosen.append(rowid)
+                else:
+                    slot = rng.randint(0, index)
+                    if slot < limit:
+                        chosen[slot] = rowid
+            values = {}
+            for start in range(0, len(chosen), 800):
+                ids = chosen[start:start + 800]
+                for rowid, payload in connection.execute("SELECT rowid,payload FROM records WHERE rowid IN (" + ",".join("?" for _ in ids) + ")", ids):
+                    values[rowid] = json.loads(payload)
+        rng.shuffle(chosen)
+        return [values[i] for i in chosen]
+
+    def get_example(self, example_id):
+        found = next((e for e in self.state["examples"] if e["id"] == example_id), None)
+        if found is not None:
+            return found
+        if not self.db_path.exists():
+            return None
+        with self._connect() as connection:
+            row = connection.execute("SELECT payload FROM records WHERE id=?", (example_id,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def update_example(self, example):
+        old = self.get_example(example.get("id"))
+        if old is None:
+            raise ValueError("Example no longer exists.")
+        value = normalize({**old, **example}, old["datasetId"], old.get("source", "manual"))
+        if value is None:
+            raise ValueError("An example needs text or a user/assistant exchange.")
+        value["id"] = old["id"]
+        dataset_id = old["datasetId"]
+        if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            row = self._db_row(value)
+            try:
+                with self._connect() as connection:
+                    connection.execute("UPDATE records SET dataset_id=?,fingerprint=?,payload=?,user=?,assistant=?,intent=?,quality=?,characters=? WHERE id=?", row[1:] + (row[0],))
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("This edit duplicates another example in this dataset.") from exc
+        else:
+            if any(e["id"] != value["id"] and fingerprint(e) == fingerprint(value) for e in self.examples(dataset_id)):
+                raise ValueError("This edit duplicates another example in this dataset.")
+            old.clear()
+            old.update(value)
+            self.save()
+        return value
+
+    def remove_examples(self, ids):
+        ids = set(ids)
+        self.state["examples"] = [e for e in self.state["examples"] if e["id"] not in ids]
+        if self.db_path.exists():
+            with self._connect() as connection:
+                connection.executemany("DELETE FROM records WHERE id=?", ((i,) for i in ids))
+                for dataset in self.state["datasets"]:
+                    if dataset.get("storage") == "sqlite":
+                        dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset["id"],)).fetchone()[0]
+        self.save()
+
+    def mark_reviewed(self, ids):
+        for example_id in ids:
+            example = self.get_example(example_id)
+            if example:
+                self.update_example({**example, "quality": "Good"})
+
+    def audit(self, dataset_id):
+        if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            with self._connect() as connection:
+                row = connection.execute("SELECT COUNT(*),COALESCE(SUM(quality!='Good'),0),COALESCE(SUM(characters),0),COUNT(DISTINCT intent) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()
+            return {"records": row[0], "duplicates": 0, "review": row[1], "characters": row[2], "categories": row[3]}
+        records = self.examples(dataset_id)
+        if not records:
+            return {"records": 0, "duplicates": 0, "review": 0, "characters": 0, "categories": 0}
+        frame = pd.DataFrame(records).fillna("")
+        texts = frame.get("user", pd.Series("", index=frame.index)).astype(str) + frame.get("assistant", pd.Series("", index=frame.index)).astype(str)
+        return {"records": len(frame), "duplicates": int(pd.Series([fingerprint(e) for e in records]).duplicated().sum()),
+                "review": int((frame.get("quality", pd.Series("Review", index=frame.index)) != "Good").sum()),
+                "characters": int(texts.str.len().sum()), "categories": int(frame.get("intent", pd.Series("general", index=frame.index)).nunique())}
+
+    def add(self, dataset_id, rows, source="manual"):
+        dataset = self._dataset(dataset_id)
+        if dataset is None:
+            raise ValueError("Choose or create a dataset first.")
+        if dataset.get("storage") != "sqlite" and hasattr(rows, "__len__") and len(rows) + self.count(dataset_id) > 10000:
+            self.use_disk_storage(dataset_id)
+        if dataset.get("storage") == "sqlite":
+            added, duplicate, invalid = 0, 0, 0
+            with self._connect() as connection:
+                for row in rows:
+                    example = normalize(row, dataset_id, source)
+                    if example is None:
+                        invalid += 1
+                        continue
+                    cursor = connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", self._db_row(example))
+                    added += cursor.rowcount
+                    duplicate += 1 - cursor.rowcount
+                dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+            self.save()
+            return added, duplicate, invalid
+        known = {fingerprint(e) for e in self.examples(dataset_id)}
+        added, duplicate, invalid = 0, 0, 0
+        for row in rows:
+            example = normalize(row, dataset_id, source)
+            if example is None:
+                invalid += 1
+                continue
+            key = fingerprint(example)
+            if key in known:
+                duplicate += 1
+                continue
+            known.add(key)
+            self.state["examples"].append(example)
+            added += 1
+        self.save()
+        return added, duplicate, invalid
+
+    def import_files(self, paths, dataset_id=None):
+        report = []
+        for path in paths:
+            try:
+                path = Path(path)
+                large = path.stat().st_size > 10 * 1024 * 1024
+                if large and path.suffix.lower() in {".jsonl", ".ndjson"}:
+                    def streamed(source_path=path):
+                        with source_path.open(encoding="utf-8-sig") as stream:
+                            for line_number, line in enumerate(stream, 1):
+                                if len(line) > 16_000_000:
+                                    raise ValueError(f"{source_path.name}, line {line_number}: record exceeds 16 MB")
+                                if line.strip():
+                                    try:
+                                        yield json.loads(line)
+                                    except ValueError as exc:
+                                        raise ValueError(f"{source_path.name}, line {line_number}: invalid JSON") from exc
+                    rows = streamed()
+                else:
+                    rows = parse_file(path)
+                    if not any(normalize(row) for row in rows):
+                        raise ValueError("No chat pairs or text records found.")
+                target = dataset_id or self.create_dataset(path.stem, storage="sqlite" if large else "json")
+                if large:
+                    self.use_disk_storage(target)
+                added, duplicate, invalid = self.add(target, rows, "import")
+                report.append(f"{Path(path).name}: {added} added, {duplicate} duplicates, {invalid} invalid")
+            except (OSError, ValueError, csv.Error) as exc:
+                report.append(f"{Path(path).name}: {exc}")
+        return report
+
+    def remove_dataset(self, dataset_id):
+        dataset = self._dataset(dataset_id)
+        if self.db_path.exists():
+            with self._connect() as connection:
+                connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
+        self.state["datasets"] = [d for d in self.state["datasets"] if d["id"] != dataset_id]
+        self.state["examples"] = [e for e in self.state["examples"] if e.get("datasetId") != dataset_id]
+        registry = self.root / "data" / "catalog_registry.json"
+        if registry.exists():
+            entries = json.loads(registry.read_text(encoding="utf-8"))
+            atomic_json(registry, [entry for entry in entries if entry.get("id") != dataset_id])
+        if dataset and dataset.get("catalogId"):
+            tombstones = self.root / "data" / "catalog_removed.json"
+            removed = json.loads(tombstones.read_text(encoding="utf-8")) if tombstones.exists() else []
+            atomic_json(tombstones, sorted(set(removed + [dataset_id])))
+        self.save()
+
+    def export(self, dataset_id, path):
+        if not self.count(dataset_id):
+            raise ValueError("This dataset is empty.")
+        examples = self.iter_examples(dataset_id)
+        path = Path(path)
+        if path.suffix.lower() == ".csv":
+            with path.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["user", "assistant", "text", "intent", "messages"])
+                for e in examples:
+                    turns = [] if e.get("text") else messages_of(e)
+                    writer.writerow([e.get("user", ""), e.get("assistant", ""), e.get("text", ""), e.get("intent", ""), json.dumps(turns, ensure_ascii=False)])
+        else:
+            with path.open("w", encoding="utf-8") as stream:
+                for e in examples:
+                    record = {key: value for key, value in e.items() if key not in {"id", "datasetId", "updatedAt", "user", "assistant"}}
+                    stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def runs(self):
+        runs = []
+        if self.run_dir.exists():
+            for path in self.run_dir.glob("*/run.json"):
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                    record["directory"] = str(path.parent)
+                    runs.append(record)
+                except (ValueError, OSError):
+                    continue
+        return sorted(runs, key=lambda r: r.get("createdAt", ""), reverse=True)
+
+
+def synthetic_recipe(mode, count=100, seed=42, variables=None, prompt="", response="", seeds=None, maximum=20):
+    """Generate labeled records without a pretrained teacher or invented answers."""
+    count = max(1, min(10000, int(count)))
+    rng = random.Random(seed)
+    rows, seen = [], set()
+
+    def collect(user, assistant, intent):
+        row = normalize({"user": user, "assistant": assistant, "intent": intent}, source="synthetic")
+        if row and fingerprint(row) not in seen:
+            seen.add(fingerprint(row))
+            rows.append(row)
+
+    if mode == "templates":
+        variables = variables or {}
+        if not isinstance(variables, dict) or not variables:
+            raise ValueError("Variables must be an object of non-empty lists.")
+        if any(not isinstance(values, list) or not values for values in variables.values()):
+            raise ValueError("Each template variable needs at least one value.")
+        keys = list(variables)
+        fields = {field for text in (prompt, response) for _, field, _, _ in string.Formatter().parse(text) if field is not None}
+        if not fields <= set(keys) or any(not re.fullmatch(r"[A-Za-z_]\w*", field) for field in fields):
+            raise ValueError("Template placeholders must match variable names, for example {topic}.")
+        total = math.prod(len(variables[k]) for k in keys)
+        # Mixed-radix indexing samples the Cartesian product without allocating it.
+        for index in rng.sample(range(total), min(total, count * 5)):
+            values = {}
+            for key in reversed(keys):
+                choices = variables[key]
+                values[key] = str(choices[index % len(choices)])
+                index //= len(choices)
+            collect(prompt.format_map(values), response.format_map(values), "template")
+            if len(rows) >= count:
+                break
+    elif mode == "arithmetic":
+        maximum = max(2, min(10000, int(maximum)))
+        phrasings = ["What is {a} {op} {b}?", "Calculate {a} {op} {b}.", "Solve: {a} {op} {b}", "{a} {op} {b} = ?"]
+        for _ in range(count * 25):
+            a, b = rng.randint(0, maximum), rng.randint(0, maximum)
+            op = rng.choice(["+", "-", "*"])
+            answer = a + b if op == "+" else a - b if op == "-" else a * b
+            collect(rng.choice(phrasings).format(a=a, b=b, op=op), str(answer), "arithmetic")
+            if len(rows) >= count:
+                break
+    elif mode == "seeds":
+        seeds = [s for s in (seeds or []) if not s.get("text") and s.get("user") and s.get("assistant")]
+        if not seeds:
+            raise ValueError("Choose a dataset containing chat examples to create prompt variants.")
+        wrappers = ["{q}", "Please answer this question: {q}", "Could you help me with this? {q}", "I have a question: {q}", "Can you explain this? {q}"]
+        pairs = list(itertools.product(range(len(seeds)), range(len(wrappers))))
+        rng.shuffle(pairs)
+        for i, j in pairs:
+            original = seeds[i]
+            # Preserve system instructions and all turns; change only the first user turn.
+            turns = [dict(m) for m in messages_of(original)]
+            first = next(m for m in turns if m["role"] == "user")
+            first["content"] = wrappers[j].format(q=first["content"])
+            row = normalize({"messages": turns, "intent": original.get("intent", "variant")}, source="synthetic")
+            if fingerprint(row) not in seen:
+                seen.add(fingerprint(row))
+                rows.append(row)
+            if len(rows) >= count:
+                break
+    else:
+        raise ValueError("Unknown recipe.")
+    return rows

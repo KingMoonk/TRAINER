@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+/data/
+/exports/
+/runs/
+/artifacts/
+.venv/
