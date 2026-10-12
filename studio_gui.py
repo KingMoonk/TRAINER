@@ -422,7 +422,6 @@ class NativeStudio(tk.Tk):
         self.mark_advanced(notes)
         action = ttk.Frame(launch, style="Card.TFrame")
         action.pack(fill="x", pady=(10, 0))
-        self.dataset_picker(action)
         button(action, "Start training", self.start_training, True)
         self.mark_advanced(button(action, "Save blueprint", self.save_blueprint))
         unlock = label(launch, "Want to design the layers yourself? Switch to Advanced (bottom-left) to unlock the Network designer.", "Hint.TLabel", background=PANEL)
