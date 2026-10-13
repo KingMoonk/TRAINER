@@ -30,11 +30,12 @@ class MuPInit:
         m = dims.d_model / self.cfg.base_width
         sgd = self.cfg.optimizer_family == "sgd"
         kind = type(layer).__name__.lower()
+        unit = getattr(layer, "depth", dims.d_model)  # grouped-query k/v projections are kv_heads * depth wide and still scale with width
         for name, role in layer.roles.items():
             parameter = layer.params[name]
             readout = parameter.ndim == 2 and role == "weight" and "untied" in kind
             hidden = (parameter.ndim == 2 and role in ("weight", "residual_out")
-                      and all(size >= dims.d_model and size % dims.d_model == 0 for size in parameter.shape)
+                      and all(size >= unit and size % unit == 0 for size in parameter.shape)
                       and "head" not in kind and "embedding" not in kind)
             if role in ("weight", "embedding", "residual_out"):
                 std = self.cfg.std / (m if readout else math.sqrt(m) if hidden else 1)
