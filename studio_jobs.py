@@ -21,7 +21,8 @@ def pretrain(job, services, emit, stop, pause):
     init = p.get("init_from") if p.get("mode") == "catch_up" else None
     job.params["output_dir"] = str(out)
     return studio_model.train(cfg, _examples(job, services), out, emit=emit, stop=stop, pause=pause, init_from=init,
-                              wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"))
+                              wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
+                              snapshot_every=p.get("snapshot_every", 50))  # feeds the 3D page's scrubber; newest 20 kept
 
 
 def checkpoint_now(job, services, emit, stop, pause):

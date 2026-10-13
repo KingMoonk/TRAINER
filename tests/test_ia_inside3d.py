@@ -104,6 +104,8 @@ class Inside3DLogic(unittest.TestCase):
         self.assertEqual(p.stats_message({"job": "j", "step": 5, "total": 9, "loss": 1.5, "lr": 1e-3, "tokens_per_second": 900, "extra": 1}),
                          {"type": "stats", "step": 5, "total": 9, "loss": 1.5, "lr": 1e-3, "tokens_per_second": 900})
         self.assertIsNone(p.stats_message({"type": "heat"}))
+        self.assertEqual(p.stats_message({"job": "j", "type": "viz_snapshot", "step": 50, "path": "s.npz", "markers": []}),
+                         {"type": "viz_snapshot", "path": "s.npz"})
         self.assertIsNone(p.stats_message(None))
 
 

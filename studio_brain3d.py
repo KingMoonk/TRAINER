@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 from pathlib import Path
 
@@ -513,8 +514,8 @@ class _SceneRenderer:
         elif kind in ('viz_snapshot', 'snapshot'):
             try:
                 self.read_snapshot(message['path'])
-                if message['path'] not in self.snapshot_paths:
-                    self.snapshot_paths.append(message['path'])
+                # training keeps only the newest snapshots on disk; forget the pruned ones so scrubbing never opens a missing file
+                self.snapshot_paths = [p for p in self.snapshot_paths if p != message['path'] and os.path.exists(p)] + [message['path']]
                 self.snapshot_index = len(self.snapshot_paths) - 1
                 self.send({'type': 'replay_state', 'index': self.snapshot_index, 'count': len(self.snapshot_paths)})
             except (OSError, ValueError, KeyError) as error:

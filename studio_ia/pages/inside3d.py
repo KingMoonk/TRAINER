@@ -120,8 +120,12 @@ def save_swap(services, message):
 
 
 def stats_message(payload):
-    """The compact snapshot the viewer shows while a job trains, from a 'train' queue event; None for other events."""
-    if not isinstance(payload, dict) or payload.get("step") is None or payload.get("loss") is None:
+    """What the viewer gets from a 'train' queue event: compact stats, or a saved snapshot to load; None for other events."""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") == "viz_snapshot":  # a saved training snapshot: the viewer loads it and the scrubber follows
+        return {"type": "viz_snapshot", "path": payload["path"]}
+    if payload.get("step") is None or payload.get("loss") is None:
         return None
     return {"type": "stats", **{k: payload.get(k) for k in ("step", "total", "loss", "lr", "tokens_per_second")}}
 
@@ -265,7 +269,7 @@ class Inside3DPage(Page):
             self.send_view({"type": "scrub", "index": round(float(value))})
 
     def on_event(self, kind, payload):
-        """Training progress goes to the viewer as one compact 'stats' message (the link keeps only the latest)."""
+        """Training progress goes to the viewer: compact 'stats' (the link keeps only the latest) and each saved snapshot."""
         message = stats_message(payload) if kind == "train" else None
         if message:
             self.send_view(message)
