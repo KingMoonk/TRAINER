@@ -1,4 +1,5 @@
 """Integration check of Tk event delivery and the dataset -> train -> chat flow."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tempfile
 import time
 import unittest

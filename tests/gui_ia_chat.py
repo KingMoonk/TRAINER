@@ -1,4 +1,5 @@
 """Chat page on FakeServices: renders, compare toggles two panes, picking a version updates the header."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tkinter as tk
 import unittest
 from tkinter import ttk

@@ -1,4 +1,5 @@
 """Regression tests for the Align page: stopped checks, duplicate votes, Ollama lookup off the UI thread, stopped training."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import shutil
 import tempfile
 import time

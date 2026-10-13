@@ -1,4 +1,5 @@
 """Sequential training: stage ordering, weight hand-off, forgetting table, stop/resume and the Tk page."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import json
 import tempfile
 import threading

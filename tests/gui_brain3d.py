@@ -1,4 +1,5 @@
 """Offscreen checks for the Panda3D network-brain viewer (demo selftest + link protocol)."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import os
 import subprocess
 import sys

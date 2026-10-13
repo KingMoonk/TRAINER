@@ -1,4 +1,5 @@
 """Post-training page: renders on FakeServices, a click on a round changes the card kicker, buttons enqueue post_round jobs."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tkinter as tk
 import unittest
 from tkinter import ttk

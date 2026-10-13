@@ -1,4 +1,5 @@
 """Align page: vote, undo, preference browser, rubric editor (skipped when no display is available)."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import json
 import tempfile
 import time

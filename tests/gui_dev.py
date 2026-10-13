@@ -1,4 +1,5 @@
 """Hot reload (dev.py): the window is rebuilt in place, without stacking handlers or timers, and bad code is rolled back."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import shutil
 import sys
 import tempfile

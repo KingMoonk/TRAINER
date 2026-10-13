@@ -1,4 +1,5 @@
 """Pretraining and Pretraining-run pages on FakeServices."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import unittest
 import tkinter as tk
 from tkinter import ttk

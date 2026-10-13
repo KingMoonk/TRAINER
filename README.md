@@ -54,7 +54,7 @@ git config core.hooksPath .githooks
 ```
 
 - **pre-commit** lints the staged Python files with [ruff](https://docs.astral.sh/ruff/) and applies its safe fixes. The rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
-- **pre-push** runs `ruff check .` and the fast tests (about 3 seconds); a failure stops the push. The GUI, network and 3D viewer tests take about 40 seconds more and run in CI, or locally with `python -m unittest discover -s tests -p "gui_*.py"` (these open windows; they are named `gui_*.py` so a plain discover skips them).
+- **pre-push** runs `ruff check .` and the fast tests (about 3 seconds); a failure stops the push. The GUI, network and 3D viewer tests take about 40 seconds more and run in CI only. They open windows, so every `gui_*.py` skips itself unless `CI` is set (GitHub Actions does) or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`).
 
 ## Launch
 

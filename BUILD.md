@@ -62,6 +62,10 @@ Scopes extend this file; add methods, never rename existing ones.
 Every scope: minimal code, no new dependencies, `ruff check .` clean, its tests green, do not commit, do not
 edit files outside the scope's list. Report what was built, what was skipped and the verbatim test tail.
 
+**Tests.** Locally run only `.venv/bin/python -m unittest discover -s tests` and `ruff check .`; never run `tests/gui_*.py`
+or open an app window. Every `gui_*` gate named below (`gui_ia_*` etc.) is a CI gate: it skips unless `CI` is set
+(`tests/windows.py`), so "green" for it means the CI run. Check those scopes by reading the code and with the non-window tests.
+
 ### S1 · UI foundation (sonnet) — `studio_ia/__init__.py, theme.py, widgets.py, shell.py, services.py, pages/__init__.py, pages/base.py`, `tests/gui_ia_shell.py`
 Shell: 220px sidebar (4 areas: Network designer · Pretraining · Post-training · Chat, each with its gloss line),
 machine strip at the bottom of the sidebar (what is training, progress bar, time left + queued count, which
@@ -71,7 +75,7 @@ BpcPlot (per-step faint, smoothed bold, held-back dots, reference lines with an 
 remainder, LR lane with warm-up/steady/cool-down bands), HeatGrid, Progress. Page base class with
 `refresh()` and `on_event(kind, payload)`. Routes for all 16 boards registered with placeholder pages that
 render the board's h1 + lead line.
-Gate: `gui_ia_shell.py` builds the window with `FixtureServices` (stub it with an in-memory fake until S10 lands),
+Gate (CI): `gui_ia_shell.py` builds the window with `FixtureServices` (stub it with an in-memory fake until S10 lands),
 visits all 16 routes, asserts no Tk error and that the machine strip text updates from a fake queue event.
 
 ### S2 · Queue and plan (sonnet) — `studio_queue.py`, `studio_jobs.py`, `studio_ia/pages/queue.py`, `tests/test_queue.py`
@@ -168,5 +172,5 @@ Gate: builds in < 20 s on CPU, re-entrant, used by every `gui_ia_*` test.
 ### S11 · 3D page (later) — hosts the existing Panda3D viewer with the three modes; not in wave 1 or 2.
 
 ### Cut-over gate
-All `gui_ia_*` tests and `tests/test_*.py` green; `app.py` starts the new shell; the old pages are deleted
+All `gui_ia_*` tests (in CI) and `tests/test_*.py` green; `app.py` starts the new shell; the old pages are deleted
 in a final clean-up scope.

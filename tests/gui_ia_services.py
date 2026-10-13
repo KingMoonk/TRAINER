@@ -1,4 +1,5 @@
 """The shell on FixtureServices visits all 16 routes without error (skips without a display)."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tempfile
 import tkinter as tk
 import unittest

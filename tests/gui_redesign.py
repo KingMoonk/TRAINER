@@ -3,6 +3,7 @@
 One Studio window is shared by the whole class (building it is the slow part); each test restores what it changes.
 The class skips when Tk has no display.
 """
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import json
 import os
 import shutil

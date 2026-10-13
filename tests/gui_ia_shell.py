@@ -1,4 +1,5 @@
 """Shell check: all 16 routes render their h1, and a queue event updates the machine strip."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import unittest
 import tkinter as tk
 from tkinter import ttk

@@ -1,4 +1,5 @@
 """Regression tests for event-loop, run-table and folder-opening fixes in the main window."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import shutil
 import tempfile
 import unittest

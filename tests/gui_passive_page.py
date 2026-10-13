@@ -1,4 +1,5 @@
 """Passive tab on the Training page: pure helpers (no display) and the three views (skipped without a display)."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import shutil
 import tempfile
 import unittest

@@ -1,4 +1,5 @@
 """Compare runs and Quick test render on FakeServices; the queue label counts runs and sweeps; modes change the note."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import copy
 import unittest
 import tkinter as tk

@@ -1,4 +1,5 @@
 """Network page: circuit editing, revisions, training with telemetry, weight registry, backups and viewer messages."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tempfile
 import time
 import unittest

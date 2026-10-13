@@ -1,4 +1,5 @@
 """Builder page on FakeServices: renders, edits update the tray, save shows the warm-start sentence."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tkinter as tk
 import unittest
 from tkinter import ttk

@@ -1,4 +1,5 @@
 """The five look-inside pages render on FakeServices; step buttons change the grid; head lab experiments run."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import time
 import tkinter as tk
 import unittest

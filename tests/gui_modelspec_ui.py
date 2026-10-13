@@ -1,4 +1,5 @@
 """Canonical Network designer host and registry-driven views."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tempfile
 import tkinter as tk
 import unittest
