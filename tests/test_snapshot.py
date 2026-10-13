@@ -55,3 +55,67 @@ class Snapshots(unittest.TestCase):
             first, second = map(load, paths)
             np.testing.assert_array_equal(first['arrays']['ids'], second['arrays']['ids'])
             self.assertEqual(second['step'], 2)
+
+    def test_retention_keeps_only_newest_snapshots(self):
+        """Saving 25 snapshots with keep=20 leaves exactly the 20 newest."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            # Save 25 snapshots
+            for step in range(1, 26):
+                snapshot = capture(self.model(), [[1, 2]], step)
+                save(root, snapshot, keep=20)
+            # Check that we have exactly 20 files
+            viz_dir = Path(root) / 'viz'
+            files = sorted(viz_dir.glob('step_*.npz'))
+            self.assertEqual(len(files), 20)
+            # Check that the oldest ones are deleted (steps 1-5) and newest ones remain (steps 6-25)
+            steps = [int(f.stem.split('_')[1]) for f in files]
+            self.assertEqual(steps, list(range(6, 26)))
+
+    def test_retention_with_keep_none_keeps_all(self):
+        """With keep=None or 0, all snapshots are kept."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            # Save 25 snapshots with keep=None
+            for step in range(1, 26):
+                snapshot = capture(self.model(), [[1, 2]], step)
+                save(root, snapshot, keep=None)
+            viz_dir = Path(root) / 'viz'
+            files = sorted(viz_dir.glob('step_*.npz'))
+            self.assertEqual(len(files), 25)
+
+    def test_retention_with_keep_zero_keeps_all(self):
+        """With keep=0, all snapshots are kept."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            # Save 25 snapshots with keep=0
+            for step in range(1, 26):
+                snapshot = capture(self.model(), [[1, 2]], step)
+                save(root, snapshot, keep=0)
+            viz_dir = Path(root) / 'viz'
+            files = sorted(viz_dir.glob('step_*.npz'))
+            self.assertEqual(len(files), 25)
+
+    def test_retention_does_not_delete_unrelated_files(self):
+        """Unrelated files in the directory are never deleted."""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            viz_dir = Path(root) / 'viz'
+            viz_dir.mkdir(parents=True, exist_ok=True)
+            # Create an unrelated file
+            unrelated = viz_dir / 'important_data.txt'
+            unrelated.write_text('important')
+            # Save 25 snapshots with keep=20
+            for step in range(1, 26):
+                snapshot = capture(self.model(), [[1, 2]], step)
+                save(root, snapshot, keep=20)
+            # Check that the unrelated file still exists
+            self.assertTrue(unrelated.exists())
+            self.assertEqual(unrelated.read_text(), 'important')
+            # Check that we have 20 snapshots + the unrelated file
+            all_files = list(viz_dir.iterdir())
+            self.assertEqual(len(all_files), 21)

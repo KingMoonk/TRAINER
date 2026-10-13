@@ -50,7 +50,7 @@ def capture(model, ids, step, before=None, loss=None, trace=None):
             'gradient_norms': norms, 'update_ratios': ratios, 'markers': markers, 'lens': lens, 'arrays': arrays}
 
 
-def save(directory, snapshot):
+def save(directory, snapshot, keep=None):
     folder = Path(directory) / 'viz'
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"step_{snapshot['step']:08d}.npz"
@@ -59,6 +59,12 @@ def save(directory, snapshot):
     with temporary.open('wb') as handle:
         np.savez_compressed(handle, metadata=np.array(json.dumps(metadata)), **snapshot['arrays'])
     temporary.replace(path)
+    # Delete old snapshots if we exceed the retention limit
+    if keep and keep > 0:
+        snapshots = sorted(folder.glob('step_*.npz'), key=lambda f: int(f.stem.split('_')[1]))
+        while len(snapshots) > keep:
+            oldest = snapshots.pop(0)
+            oldest.unlink()
     return path
 
 

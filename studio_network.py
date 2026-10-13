@@ -1197,7 +1197,7 @@ class NetworkMixin:
             return False
         head = self.arch_store.get(self.arch_id)["head_revision"]
         run = {"arch": self.arch_id, "rev": head, "parent": parent}
-        options = {"telemetry_every": 5, "snapshot_every": 50}
+        options = {"telemetry_every": 5, "snapshot_every": 50, "snapshot_keep": 20}
         if init_from:
             options["init_from"] = str(init_from)
         self.net_tele = None
@@ -1329,7 +1329,7 @@ class NetworkMixin:
                 targets = np.roll(ids, -1, axis=1)
                 targets[:, -1] = -100
                 snapshot = one_step(source, ids, targets)
-                path = save_snapshot(output, snapshot)
+                path = save_snapshot(output, snapshot, keep=20)
                 outcome = True, str(path)
             except Exception as error:
                 outcome = False, str(error)

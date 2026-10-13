@@ -435,7 +435,7 @@ def _initialize_from(model, tokenizer, path):
 
 
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
-          snapshot_every=0, token_budget=None, wall_seconds=None):
+          snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None):
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
@@ -633,7 +633,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 snapshot['markers'] = [marker for marker in snapshot['markers']
                                        if (marker['block'], marker['head'], marker['kind']) not in detector_state]
                 detector_state = active
-                path = save_snapshot(directory, snapshot)
+                path = save_snapshot(directory, snapshot, keep=snapshot_keep)
                 emit({"type": "viz_snapshot", "step": step, "path": str(path), "markers": snapshot["markers"]})
             if token_budget is not None or wall_seconds is not None or step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
