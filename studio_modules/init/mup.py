@@ -1,8 +1,7 @@
 """Maximal Update Parametrization (μP): width-aware initialization and learning rate scaling.
 
-Implements complete μP (Yang et al. 2022, Tensor Programs V) with adaptive (Adam-like) and
-first-order (SGD-like) optimizer families. Transfer learning works across any model widths
-at the same hyperparameters.
+Follows Yang et al. 2022 (Tensor Programs V) for Adam-like and SGD-like optimizers, relative
+to an explicit base width. Attention and the tied head apply the score/logit multipliers set here.
 """
 from __future__ import annotations
 
@@ -28,83 +27,33 @@ class MuPInit:
 
     def apply(self, layer, rng, dims):
         xp = layer.xp
-        width_mult = dims.d_model / self.cfg.base_width
-        base_d_head = self.cfg.base_width // (self._infer_heads(layer, dims) or 1)  # for attention scaling
-
+        m = dims.d_model / self.cfg.base_width
+        sgd = self.cfg.optimizer_family == "sgd"
+        kind = type(layer).__name__.lower()
         for name, role in layer.roles.items():
             parameter = layer.params[name]
-
-            # Classify the parameter
-            is_hidden_matrix = (parameter.ndim == 2 and role in ("weight", "residual_out")
-                                and all(size >= dims.d_model and size % dims.d_model == 0 for size in parameter.shape)
-                                and "head" not in type(layer).__name__.lower()
-                                and "embedding" not in type(layer).__name__.lower())
-            is_readout = (parameter.ndim == 2 and role == "weight"
-                          and "untied" in type(layer).__name__.lower())
-
+            readout = parameter.ndim == 2 and role == "weight" and "untied" in kind
+            hidden = (parameter.ndim == 2 and role in ("weight", "residual_out")
+                      and all(size >= dims.d_model and size % dims.d_model == 0 for size in parameter.shape)
+                      and "head" not in kind and "embedding" not in kind)
             if role in ("weight", "embedding", "residual_out"):
-                # Initialization: std varies by parameter type
-                if is_readout:
-                    # Untied readout: std / m
-                    std = self.cfg.std / width_mult
-                elif is_hidden_matrix:
-                    # Hidden matrices: std / sqrt(m)
-                    std = self.cfg.std / math.sqrt(width_mult)
-                else:
-                    # Input-like (embeddings, position): std
-                    std = self.cfg.std
-
+                std = self.cfg.std / (m if readout else math.sqrt(m) if hidden else 1)
                 if role == "residual_out" and self.cfg.scale_residual:
                     std /= math.sqrt(2 * dims.n_layer)
-
                 parameter[...] = xp.asarray(rng.normal(0, std, parameter.shape).astype(np.dtype(layer.dtype)))
-
-                # Learning rate scaling: depends on parameter type and optimizer family
-                if is_readout:
-                    # Untied readout: always 1/m for both families
-                    layer.lr_scale[name] = 1 / width_mult
-                elif is_hidden_matrix:
-                    if self.cfg.optimizer_family == "adam":
-                        # Hidden matrices with Adam: 1/m
-                        layer.lr_scale[name] = 1 / width_mult
-                    else:
-                        # Hidden matrices with SGD: no scaling (default 1)
-                        pass
-                elif role == "embedding":
-                    if self.cfg.optimizer_family == "sgd":
-                        # Input-like with SGD: m
-                        layer.lr_scale[name] = width_mult
-                    # Adam: no scaling needed (default 1)
-
             elif role == "gain":
                 parameter.fill(1)
             elif role == "bias":
                 parameter.fill(0)
-
-        # Set multiplicative scale factors on the layer for forward/backward passes
-        # These are applied by the specific layer types (Attention, TiedHead)
-        if width_mult != 1:
-            # For attention: scale pre-softmax scores by 1/sqrt(m_head)
-            if hasattr(layer, 'heads'):
-                # Attention-like layer with heads
-                d_head = dims.d_model // layer.heads
-                m_head = d_head / base_d_head
-                if m_head > 0:
-                    layer.score_scale = 1.0 / math.sqrt(m_head)
-
-            # For tied readout: scale logits by 1/m
-            if "tied" in type(layer).__name__.lower():
-                layer.logit_scale = 1.0 / width_mult
-
-    @staticmethod
-    def _infer_heads(layer, dims):
-        """Infer the number of attention heads from the layer."""
-        if hasattr(layer, 'heads'):
-            return layer.heads
-        # For GQA, use the query head count
-        if hasattr(layer, 'heads') and hasattr(layer, 'kv_heads'):
-            return layer.heads
-        return None
+            # LR multipliers (Tensor Programs V, table 8): readout 1/m; hidden 1/m for Adam, 1 for SGD; input-like 1 for Adam, m for SGD
+            if readout or (hidden and not sgd):
+                layer.lr_scale[name] = 1 / m
+            elif sgd and not hidden and role in ("weight", "embedding", "gain", "bias"):
+                layer.lr_scale[name] = m
+        if hasattr(layer, "score_scale"):  # heads stay fixed across widths, so the head width multiplier is m
+            layer.score_scale = 1 / math.sqrt(m)
+        if hasattr(layer, "logit_scale"):
+            layer.logit_scale = 1 / m
 
 
 @register
@@ -112,7 +61,7 @@ class MuP(ModuleSpec):
     id = "init/mup"
     slot = "init"
     name = "Width-scaled μP initialization"
-    blurb = "Complete Maximal Update Parametrization: transfers hyperparameters across model widths for both adaptive and first-order optimizers."
+    blurb = "Maximal Update Parametrization: width-scaled initialization, learning rates, attention scores and tied-readout logits from an explicit base width."
     ref = "Yang et al. 2022 (Tensor Programs V)"
     config = MuPConfig
     backward = "Initialization and LR multipliers; score/logit scaling in layer-specific forward/backward passes"
