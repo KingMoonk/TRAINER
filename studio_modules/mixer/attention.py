@@ -20,6 +20,7 @@ class Attention(Layer):
         super().__init__(dims)
         d = dims.d_model
         self.heads = cfg.heads
+        self.score_scale = 1.0  # μP: set by init/mup if width_mult != 1
         self.add("qkv.w", (d, 3 * d))
         self.add("proj.w", (d, d), "residual_out")
         if cfg.bias:
@@ -42,7 +43,7 @@ class Attention(Layer):
             self.cache = None
             return linear(self, merge_heads(output), "proj")
         raw = ctx.emit("attn.scores", q @ k.swapaxes(-1, -2))
-        scores = raw / math.sqrt(depth)
+        scores = raw / math.sqrt(depth) * self.score_scale
         bias = position.score_bias(length, h)
         if bias is not None:
             scores = scores + bias
@@ -62,7 +63,7 @@ class Attention(Layer):
         if mask is not None:
             dattention = dattention * mask
         # softmax backward, one row (query) at a time; masked keys have probability 0 so they get no gradient
-        dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(depth)
+        dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(depth) * self.score_scale
         dq, dk = position.rotate_back(dscores @ k, dscores.swapaxes(-1, -2) @ q)
         dqkv = self.xp.concatenate([merge_heads(value) for value in (dq, dk, dv)], axis=-1)
         return linear_back(self, dqkv, x, "qkv")

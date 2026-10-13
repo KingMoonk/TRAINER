@@ -23,6 +23,7 @@ class GQALayer(Layer):
         self.heads, self.kv_heads = cfg.heads, cfg.kv_heads
         self.depth = d // cfg.heads
         self.group = cfg.heads // cfg.kv_heads
+        self.score_scale = 1.0  # μP: set by init/mup if width_mult != 1
         kv_width = cfg.kv_heads * self.depth
         self.add("gqa.q.w", (d, d))
         self.add("gqa.k.w", (d, kv_width))
@@ -52,7 +53,7 @@ class GQALayer(Layer):
             self.cache = None
             return linear(self, merge_heads(output), "gqa.proj")
         raw = ctx.emit("attn.scores", q @ expanded_k.swapaxes(-1, -2))
-        scores = raw / math.sqrt(self.depth)
+        scores = raw / math.sqrt(self.depth) * self.score_scale
         bias = position.score_bias(length, h)
         if bias is not None:
             scores = scores + bias
@@ -70,7 +71,7 @@ class GQALayer(Layer):
         dattention = dcontext @ v.swapaxes(-1, -2)
         if mask is not None:
             dattention *= mask
-        dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(self.depth)
+        dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(self.depth) * self.score_scale
         dq = dscores @ k
         dk = dscores.swapaxes(-1, -2) @ q
         shape = (x.shape[0], self.kv_heads, self.group, x.shape[1], self.depth)
