@@ -1329,7 +1329,7 @@ class NetworkMixin:
                 targets = np.roll(ids, -1, axis=1)
                 targets[:, -1] = -100
                 snapshot = one_step(source, ids, targets)
-                path = save_snapshot(output, snapshot, keep=20)
+                path = save_snapshot(output, snapshot)
                 outcome = True, str(path)
             except Exception as error:
                 outcome = False, str(error)

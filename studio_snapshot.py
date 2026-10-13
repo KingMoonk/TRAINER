@@ -59,12 +59,9 @@ def save(directory, snapshot, keep=None):
     with temporary.open('wb') as handle:
         np.savez_compressed(handle, metadata=np.array(json.dumps(metadata)), **snapshot['arrays'])
     temporary.replace(path)
-    # Delete old snapshots if we exceed the retention limit
-    if keep and keep > 0:
-        snapshots = sorted(folder.glob('step_*.npz'), key=lambda f: int(f.stem.split('_')[1]))
-        while len(snapshots) > keep:
-            oldest = snapshots.pop(0)
-            oldest.unlink()
+    if keep:
+        for old in sorted(folder.glob('step_*.npz'))[:-keep]:
+            old.unlink()
     return path
 
 
