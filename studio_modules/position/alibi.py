@@ -22,6 +22,8 @@ def slopes(heads):
 
 
 class ALiBiPosition(Layer):
+    cacheable = True
+
     def forward(self, x, ctx):
         return x
 

@@ -129,16 +129,17 @@ class CompiledModel:
             return ids.to(device=self.device, dtype=torch.long)
         return torch.as_tensor(np.asarray(ids), dtype=torch.long, device=self.device)
 
-    def forward(self, ids, training=False, tape=False, hooks=None, patches=None, attention_summary=None, trace=False):
+    def forward(self, ids, training=False, tape=False, hooks=None, patches=None, attention_summary=None, trace=False, cache=None):
         """Logits [B, T, V]. tape=True also returns the Tape backward() needs.
 
         hooks: True, or a set of hook names ("block0.attn.pattern", "logits") to record on the tape.
+        cache: {"n": 0} makes this a KV-cached pass (see can_cache): it appends to the cache and continues at index cache["n"].
         patches: {hook name: function(value) -> value} to intervene on a hook that feeds the computation.
         """
         ids = self._ids(ids)
-        if ids.shape[1] > self.dims.n_ctx:
+        if ids.shape[1] + (cache["n"] if cache else 0) > self.dims.n_ctx:
             raise ValueError("Sequence exceeds the context length.")
-        ctx = Ctx(torch, training, self.rng, self.dims.dropout, hooks, patches, self.position, self.embedding, self.device)
+        ctx = Ctx(torch, training, self.rng, self.dims.dropout, hooks, patches, self.position, self.embedding, self.device, cache)
         if attention_summary is not None:
             if training or tape or patches or hooks:
                 raise ValueError("Attention summaries require unpatched inference without a tape or dense hooks.")
@@ -158,9 +159,16 @@ class CompiledModel:
         if attention_summary is not None:
             return result
         logits, values, backward_values = result
+        if cache is not None:
+            cache["n"] += ids.shape[1]
         if tape:
             return logits, Tape(ids, ctx, logits, live, ctx.captured, values, backward_values)
         return logits.detach() if graph else logits
+
+    @property
+    def can_cache(self):
+        """True when every mixer and the position module support a KV cache; otherwise generation re-runs the whole window."""
+        return all(block.mixer is None or block.mixer.cacheable for block in self.stack) and (self.position is None or self.position.cacheable)
 
     def _run(self, ids, ctx, trace, summary):
         values, backward_values = {}, {}

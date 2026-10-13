@@ -575,6 +575,8 @@ import threading  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
+CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
+
 LN2 = math.log(2)
 
 
@@ -1213,9 +1215,10 @@ class WorkspaceServices(Services):
         from studio_model import LocalModel
         ckpt = self._checkpoint(version)
         with self._lock:
-            if ckpt not in self._models:
-                self._models[ckpt] = LocalModel(ckpt, device="cpu")
-            model = self._models[ckpt]
+            model = self._models.pop(ckpt, None) or LocalModel(ckpt, device="cpu")
+            self._models[ckpt] = model  # most recently used last; the dict is the LRU order
+            while len(self._models) > CHAT_MODELS:
+                del self._models[next(iter(self._models))]
         return model.generate(messages, on_text=on_text, stop=stop)
 
     def inspect_forward(self, version, text, hooks=True):

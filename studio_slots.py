@@ -90,7 +90,7 @@ class Ctx:
     """Per-forward-pass context handed to every Layer.forward."""
 
     def __init__(self, xp=torch, training=False, rng=None, dropout=0.0, hooks=None, patches=None, position=None,
-                 embedding=None, device="cpu"):
+                 embedding=None, device="cpu", cache=None):
         self.xp, self.training, self.rng, self.dropout, self.device = torch, training, rng, dropout, device
         self.capture = hooks        # None: record nothing · True: record every hook · a set of full hook names
         self.patches = patches or {}  # full hook name -> function(value) -> replacement value
@@ -98,6 +98,8 @@ class Ctx:
         self.block = None           # index of the block being run, or None outside the stack
         self.position = position if position is not None else NO_POSITION
         self.embedding = embedding
+        self.cache = cache          # KV cache for incremental decoding ({"n": tokens cached, block index: state}) or None
+        self.offset = cache["n"] if cache else 0  # absolute index of this pass's first token
         self.aux = 0.0              # auxiliary loss a module adds on top of the objective (MoE balance loss)
         self.scale = 1.0            # multiplier for the auxiliary loss in backward()
         self._mask = {}
@@ -144,6 +146,7 @@ class Layer:
     - register every weight with add(); read it as self.params[name] each time (never rebind it)
     - forward() keeps no state on self; everything it needs comes from its arguments
     """
+    cacheable = False           # True: works with Ctx.cache (mixers) / Ctx.offset (positions); otherwise generation re-runs the whole window
     elementwise = frozenset()   # names of 2-D weights that are filters, not linear maps (Muon leaves them to AdamW)
 
     def __init__(self, dims):
@@ -164,8 +167,8 @@ class Layer:
         raise NotImplementedError
 
     # Position modules that act inside attention override these; attention-style mixers call them on ctx.position.
-    def rotate(self, q, k):
-        """q [B, H, T, h], k [B, Hk, T, h] -> the same shapes, position applied."""
+    def rotate(self, q, k, offset=0):
+        """q [B, H, T, h], k [B, Hk, T, h] -> the same shapes, position applied (the first token sits at index `offset`)."""
         return q, k
 
     def score_bias(self, length, heads):

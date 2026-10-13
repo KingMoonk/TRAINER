@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from studio_modules.mixer.attention import causal_softmax_attention
+from studio_modules.mixer.attention import cached, causal_softmax_attention
 from studio_modules.ops import linear, merge_heads, split_heads
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Issue, Layer
@@ -18,6 +18,8 @@ class GQAConfig:
 
 
 class GQALayer(Layer):
+    cacheable = True
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         d = dims.d_model
@@ -40,10 +42,11 @@ class GQALayer(Layer):
         q = split_heads(linear(self, x, "gqa.q"), h)
         k = split_heads(linear(self, x, "gqa.k"), self.kv_heads)
         v = split_heads(linear(self, x, "gqa.v"), self.kv_heads)
-        q, k = position.rotate(q, k)
+        q, k = position.rotate(q, k, ctx.offset)
         q = ctx.emit("attn.q", q)
         k = ctx.emit("attn.k", k)
         v = ctx.emit("attn.v", v)
+        k, v = cached(ctx, k, v)
         expanded_k = k.repeat_interleave(groups, dim=1)
         expanded_v = v.repeat_interleave(groups, dim=1)
         if hasattr(ctx, "attention_summary"):

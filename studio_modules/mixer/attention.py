@@ -19,20 +19,32 @@ class AttentionConfig:
 
 def causal_softmax_attention(ctx, q, k, v, scale, position, heads):
     """Scores → scale → bias → emit logits → mask → softmax → dropout → weighted values. Shared by attention and GQA."""
-    length = q.shape[-2]
+    length, offset = q.shape[-2], ctx.offset
     raw = ctx.emit("attn.scores", q @ k.transpose(-1, -2))
     scores = raw * scale
-    bias = position.score_bias(length, heads)
+    bias = position.score_bias(length, heads) if not offset or not hasattr(position, "score_bias_rows") else position.score_bias_rows(offset, offset + length, k.shape[-2], heads)
     if bias is not None:
         scores = scores + bias
     scores = ctx.emit("attn.logits", scores)
-    scores = scores.masked_fill(ctx.mask(length), -1e9)
+    mask = ctx.mask(length) if not offset else torch.triu(torch.ones((length, k.shape[-2]), dtype=torch.bool, device=ctx.device), offset + 1)
+    scores = scores.masked_fill(mask, -1e9)
     probabilities = ctx.emit("attn.pattern", torch.softmax(scores, dim=-1))
     attention, _ = ctx.drop(probabilities)
     return merge_heads(ctx.emit("attn.head_out", attention @ v))
 
 
+def cached(ctx, k, v):
+    """With a KV cache: append this pass's keys/values to the block's stored ones and return them all."""
+    if ctx.cache is not None:
+        if ctx.block in ctx.cache:
+            k, v = torch.cat((ctx.cache[ctx.block][0], k), dim=-2), torch.cat((ctx.cache[ctx.block][1], v), dim=-2)
+        ctx.cache[ctx.block] = (k, v)
+    return k, v
+
+
 class Attention(Layer):
+    cacheable = True
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         d = dims.d_model
@@ -49,10 +61,11 @@ class Attention(Layer):
         depth = x.shape[2] // h
         position = ctx.position
         q, k, v = [split_heads(part, h) for part in linear(self, x, "qkv").chunk(3, dim=-1)]
-        q, k = position.rotate(q, k)
+        q, k = position.rotate(q, k, ctx.offset)
         q = ctx.emit("attn.q", q)
         k = ctx.emit("attn.k", k)
         v = ctx.emit("attn.v", v)
+        k, v = cached(ctx, k, v)
         if hasattr(ctx, "attention_summary"):
             from studio_summary import chunked_attention
             output, mass = chunked_attention(q, k, v, position, ctx.attention_summary)

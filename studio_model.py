@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import array
 import bisect
+import gc
 import hashlib
 import json
 import math
@@ -361,7 +362,8 @@ def batch_arrays(samples):
     return x, y
 
 
-def load_checkpoint(path):
+def load_checkpoint(path, weights_only=False):
+    """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads."""
     with np.load(Path(path), allow_pickle=False) as archive:
         metadata = json.loads(str(archive["metadata"].item()))
         if metadata.get("architecture") != "groundwork_numpy_decoder" or metadata.get("format_version") != 1:
@@ -369,7 +371,7 @@ def load_checkpoint(path):
         metadata["model"] = {key.removeprefix("weight::"): archive[key].copy() for key in archive.files if key.startswith("weight::")}
         # optimizer state arrays are stored as adam_<state>::<parameter>, whatever the optimizer (the prefix is historical)
         metadata["optimizer_state"] = {}
-        for key in archive.files:
+        for key in () if weights_only else archive.files:
             if key.startswith("adam_"):
                 state, name = key[5:].split("::", 1)
                 metadata["optimizer_state"].setdefault(state, {})[name] = archive[key].copy()
@@ -655,10 +657,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         """Plain cross-entropy over a fixed, evenly spread subset of the windows (all of them when few)."""
         total, count = 0., 0
         chosen = np.linspace(0, len(samples) - 1, min(len(samples), limit), dtype=int) if len(samples) > limit else np.arange(len(samples))
-        for start in range(0, len(chosen), cfg["batch_size"]):
+        for start in range(0, len(chosen), shape[0]):
             if stop.is_set():
                 return None  # a part-way result must never pick the best checkpoint
-            x, y = batch_arrays([samples[int(i)] for i in chosen[start:start + cfg["batch_size"]]])
+            x, y = batch_arrays([samples[int(i)] for i in chosen[start:start + shape[0]]])
             targets = int((y != -100).sum())
             total += model.loss(x, y) * targets
             count += targets
@@ -684,6 +686,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     rate = cfg["learning_rate"]
     first_step, planned = step, cfg["steps"]
     last_report = 0.
+    shape = [cfg["batch_size"], cfg["accumulation"]]  # runtime batch/accumulation: cfg keeps the declared values (resume checks those); an OOM shrinks this
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
@@ -713,15 +716,29 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
             rate = schedule.rate(next_step, planned, cfg["learning_rate"])
-            model.zero_grad()
-            loss, token_count = 0., 0
             sample_telemetry = bool(telemetry_every) and (next_step == 1 or next_step % telemetry_every == 0)
-            model.keep_tape, model.last_tape = sample_telemetry, None
-            for _ in range(cfg["accumulation"]):
-                batch = [train_samples[sampler.randrange(len(train_samples))] for _ in range(cfg["batch_size"])]
-                x, y = batch_arrays(batch)
-                loss += model.loss_and_backward(x, y, 1 / cfg["accumulation"]) / cfg["accumulation"]
-                token_count += int((y != -100).sum())
+            while True:
+                model.zero_grad()
+                loss, token_count = 0., 0
+                model.keep_tape, model.last_tape = sample_telemetry, None
+                try:
+                    for _ in range(shape[1]):
+                        batch = [train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]
+                        x, y = batch_arrays(batch)
+                        loss += model.loss_and_backward(x, y, 1 / shape[1]) / shape[1]
+                        token_count += int((y != -100).sum())
+                    break
+                except RuntimeError as exc:  # torch.cuda.OutOfMemoryError is one; MPS raises a plain RuntimeError
+                    if shape[0] == 1 or not (isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()):
+                        raise
+                model.last_tape = None  # the tape and the failed step's activations die with the exception
+                gc.collect()
+                if model.device == "cuda":
+                    torch.cuda.empty_cache()
+                elif model.device == "mps":
+                    torch.mps.empty_cache()
+                shape[:] = [shape[0] // 2, shape[1] * 2]  # ponytail: an odd batch loses a sample per halving; pad instead if it matters
+                emit({"type": "info", "text": f"Out of memory at step {next_step}: batch size now {shape[0]}, accumulation {shape[1]}."})
             if not math.isfinite(loss):
                 raise ValueError("Non-finite loss. Reduce the learning rate.")
             payload = model.telemetry(model.last_tape) if sample_telemetry and model.last_tape is not None else None
@@ -782,12 +799,24 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise
 
 
+def last_logits(model, window, sliding, cache):
+    """Logits of the position after `window`. With a KV cache only the tokens it has not seen are run;
+    once the text outgrows the context (`sliding`) every position shifts, so the cache is dropped and the window re-prefilled."""
+    if cache is None:
+        return model.forward(np.array([window], dtype=np.int64))[0, -1]
+    if sliding:
+        cache.clear()
+        cache["n"] = 0
+    return model.forward(np.array([window[cache["n"]:]], dtype=np.int64), cache=cache)[0, -1]
+
+
 def complete(model, tokenizer, prompt, max_tokens=48):
     """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
     tokens, result = [BOS] + tokenizer.encode(prompt), []
+    cache = {"n": 0} if model.can_cache else None
     with torch.no_grad():
         for _ in range(max_tokens):
-            logits = model.backend.to_cpu(model.forward(np.array([tokens[-model.dims.n_ctx:]], dtype=np.int64))[0, -1]).astype(np.float64)
+            logits = model.backend.to_cpu(last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)).astype(np.float64)
             logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
             token = int(logits.argmax())
             if token == EOS:
@@ -799,7 +828,7 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 class LocalModel:
     def __init__(self, path, seed=42, device="auto"):
-        data = load_checkpoint(path)
+        data = load_checkpoint(path, weights_only=True)
         self.config = validate_config(data["config"])
         self.config["device"] = device
         self.tokenizer = Tokenizer.restore(data["tokenizer"])
@@ -833,12 +862,12 @@ class LocalModel:
                 cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
             return cut
 
+        cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
             # Transfer only the final vocabulary vector for seeded CPU sampling.
-            output = self.model.forward(np.array([window()], dtype=np.int64))
-            logits = self.model.backend.to_cpu(output[0, -1]).astype(np.float64)
+            logits = self.model.backend.to_cpu(last_logits(self.model, window(), len(tokens) > context, cache)).astype(np.float64)
             logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
             if temperature <= 0:
                 token = int(logits.argmax())

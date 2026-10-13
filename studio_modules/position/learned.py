@@ -6,12 +6,14 @@ from studio_slots import Estimate, Layer
 
 
 class LearnedPosition(Layer):
+    cacheable = True
+
     def __init__(self, dims):
         super().__init__(dims)
         self.add("position", (dims.n_ctx, dims.d_model), "embedding")
 
     def forward(self, x, ctx):
-        return x + self.params["position"][:x.shape[1]]
+        return x + self.params["position"][ctx.offset:ctx.offset + x.shape[1]]
 
 
 @register

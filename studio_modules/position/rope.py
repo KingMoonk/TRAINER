@@ -15,6 +15,8 @@ class RoPEConfig:
 
 
 class RotaryPosition(Layer):
+    cacheable = True
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         self.base = cfg.base
@@ -22,22 +24,22 @@ class RotaryPosition(Layer):
     def forward(self, x, ctx):
         return x
 
-    def _angles(self, x):
+    def _angles(self, x, offset=0):
         depth = x.shape[-1]
-        positions = torch.arange(x.shape[-2], dtype=x.dtype, device=x.device)
+        positions = torch.arange(offset, offset + x.shape[-2], dtype=x.dtype, device=x.device)
         inv = self.base ** (-2 * torch.arange(depth // 2, dtype=x.dtype, device=x.device) / depth)
         angle = positions[:, None] * inv[None, :]
         return torch.cos(angle)[None, None], torch.sin(angle)[None, None]
 
-    def _turn(self, x):
+    def _turn(self, x, offset=0):
         if x.shape[-1] % 2:
             raise ValueError("RoPE requires an even query/key head width.")
-        cosine, sine = self._angles(x)
+        cosine, sine = self._angles(x, offset)
         even, odd = x[..., 0::2], x[..., 1::2]
         return torch.stack((even * cosine - odd * sine, even * sine + odd * cosine), dim=-1).reshape(x.shape)
 
-    def rotate(self, q, k):
-        return self._turn(q), self._turn(k)
+    def rotate(self, q, k, offset=0):
+        return self._turn(q, offset), self._turn(k, offset)
 
 
 @register

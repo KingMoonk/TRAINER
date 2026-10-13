@@ -75,7 +75,7 @@ For a machine with an NVIDIA driver and CUDA 13 toolkit already installed:
 
 PyTorch's default wheel from PyPI already includes Apple Metal (MPS) support. For an NVIDIA GPU install the CUDA build of PyTorch that matches your driver (see requirements-gpu.txt), then restart the studio. The backend targets one GPU (device 0).
 
-Weights, activations and optimizer state stay on the GPU during GPU training. Initialization and dropout random draws remain NumPy-based so saved random states stay portable; batches and dropout masks transfer to the GPU. Checkpoints store NumPy arrays (`.npz`), so a checkpoint trained on one device loads on any other. GPU reductions may differ slightly from CPU floating-point results. Small models or batches run faster on the CPU because kernel launch and transfer overhead dominate; `auto` keeps them there.
+Weights, activations and optimizer state stay on the GPU during GPU training. Initialization draws remain NumPy-based so saved random states stay portable. Dropout masks are drawn on the training device from a generator seeded by that saved NumPy state, so a run is reproducible per seed and per device, not across devices. Checkpoints store NumPy arrays (`.npz`), so a checkpoint trained on one device loads on any other. GPU reductions may differ slightly from CPU floating-point results. Small models or batches run faster on the CPU because kernel launch and transfer overhead dominate; `auto` keeps them there.
 
 ## Workflow
 
@@ -99,7 +99,7 @@ The file picker is the supported import method; operating-system drag-and-drop i
 - Character vocabularies fitted to the training split, or a fixed UTF-8 byte vocabulary with special conversation tokens. Character tokenizers use an unknown token for unseen characters; bytes cover all UTF-8 text.
 - Next-token prediction on raw text. Conversation targets can include every token or only assistant content and end-of-turn markers.
 
-This is a small-model experimentation studio. Training from scratch is suited to learning and narrow tasks; a generally capable chatbot needs far more data and compute. A falling training loss alone does not establish generalization. Short context windows can truncate conversational history. On GPU, batch size, context length and model width determine memory demand; reduce them if the device runs out of memory.
+This is a small-model experimentation studio. Training from scratch is suited to learning and narrow tasks; a generally capable chatbot needs far more data and compute. A falling training loss alone does not establish generalization. Short context windows can truncate conversational history. On GPU, batch size, context length and model width determine memory demand. If a training step runs out of memory, the run halves the batch, doubles gradient accumulation (same effective batch) and retries. Generation keeps a key/value cache for attention and grouped-query attention, so each new token costs one position until the text outgrows the context; other mixers recompute the window. Chat keeps at most three models loaded.
 
 ## Network engine and inspection services
 

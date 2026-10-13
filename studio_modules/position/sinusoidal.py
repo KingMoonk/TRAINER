@@ -9,6 +9,8 @@ from studio_slots import Estimate, Layer
 
 
 class SinusoidalPosition(Layer):
+    cacheable = True
+
     def __init__(self, dims):
         super().__init__(dims)
         positions = np.arange(dims.n_ctx, dtype=np.float64)[:, None]
@@ -19,10 +21,10 @@ class SinusoidalPosition(Layer):
         self.encoding = torch.as_tensor(encoding, dtype=self.dtype, device=self.device)
 
     def forward(self, x, ctx):
-        length = x.shape[1]
+        length = ctx.offset + x.shape[1]
         if length > self.encoding.shape[0]:
             raise ValueError(f"Sequence length {length} exceeds positional capacity {self.encoding.shape[0]}.")
-        return x + self.encoding[:length]
+        return x + self.encoding[ctx.offset:length]
 
 
 @register
