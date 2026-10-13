@@ -75,3 +75,4 @@ class TracePage(Page):
                 tk_label(table, text, 14, color, font=font(14, mono=c > 0)).grid(row=2 * r, column=c, sticky="w", padx=(0, GUTTER))
             tk_label(table, what[row["kind"]], 12, "dim").grid(row=2 * r + 1, column=0, columnspan=5, sticky="w", pady=(0, 8))
         tk_label(self.body, TRACE["relative_note"], 13, "muted", wraplength=760).pack(anchor="w")
+        tk_label(self.body, TRACE["approx_legend"], 13, "muted", wraplength=760).pack(anchor="w", pady=(6, 0))

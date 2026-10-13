@@ -45,6 +45,21 @@ class QueueState:
     plan: dict = field(default_factory=dict)
 
 
+def problem_items(rule, n, rng):
+    """n rule-made problems; rule None/"" spreads n evenly over every rule."""
+    import studio_rules
+    names = studio_rules.RULES if not rule else (rule,)
+    return [i for j, r in enumerate(names) for i in studio_rules.generate(r, rng, n // len(names) + (j < n % len(names)))]
+
+
+def problem_report(items, added=0, duplicates=0):
+    """{items, added, duplicates, checked, passed}: checked = items with a canonical answer, passed = those the rule accepts."""
+    import studio_rules
+    with_answer = [i for i in items if "answer" in i]
+    return {"items": items, "added": added, "duplicates": duplicates, "checked": len(with_answer),
+            "passed": sum(studio_rules.check(i["rule"], i["prompt"], i["answer"]) for i in with_answer)}
+
+
 class Services:
     """Synchronous façade; long work runs through the queue. Subclasses override; scopes add methods, never rename."""
 
@@ -72,6 +87,16 @@ class Services:
             deliver()
         else:
             self._ui.after(0, deliver)
+
+    # staged design change: the Network designer's unsaved draft, read by Quick test and Compare runs ----------------
+    _staged = None
+
+    def stage_draft(self, spec):
+        """Builder publishes its unsaved draft spec (None = no change staged); other pages may also set it to reopen a design."""
+        self._staged = spec
+
+    def draft_spec(self):
+        return self._staged
 
     # versions (S3) --------------------------------------------------------
     def versions(self) -> list:
@@ -114,6 +139,13 @@ class Services:
     def set_plan(self, plan):
         raise NotImplementedError
 
+    def storage(self, days=None, data=False):
+        """(items, bytes) that clean_storage would delete. days=None: all history; data=True: your data too."""
+        raise NotImplementedError
+
+    def clean_storage(self, days=None, data=False):
+        raise NotImplementedError
+
     def pretrain_preview(self, dataset_ids, rows=16):
         """{pieces, params, context, first_rows}: pieces = tokenised size of the chosen text, params = current
         version's parameter count, first_rows = first `rows` rows of token groups, each a list of example numbers
@@ -121,7 +153,33 @@ class Services:
         raise NotImplementedError
 
     # data (S5) / evaluation (S4) / chat ------------------------------------
-    def data(self, kind):
+    def data(self, kind, query=""):
+        """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
+        raise NotImplementedError
+
+    def add_data(self, kind, fields):
+        """fields: text -> {text}; conversations -> {user, assistant}; problems -> {prompt, rule}. True if added."""
+        raise NotImplementedError
+
+    def import_data(self, kind, paths):
+        """Import files into the kind's own set. Returns one report line per file."""
+        raise NotImplementedError
+
+    def generate_problems(self, rule, n, store=True, rng=None):
+        """Rule-made problems (rule None = all rules). store=False previews. Returns problem_report(...)."""
+        raise NotImplementedError
+
+    def make_drafts(self, kind, n):
+        """Local-model drafts ("conversations" rewrites, "text" prose), stored with status Review. Returns how many.
+        Raises RuntimeError with a plain message when no local model is reachable."""
+        raise NotImplementedError
+
+    def draft_count(self):
+        """Drafts still waiting for review."""
+        raise NotImplementedError
+
+    def review_data(self, example_id, keep):
+        """keep -> mark Good; otherwise delete the example."""
         raise NotImplementedError
 
     def references(self, version):
@@ -151,20 +209,24 @@ class Services:
         """{'tokens', 'pos', 'probabilities' [V], 'target' id, 'pieces' [str per id]}; trained=False uses fresh weights."""
         raise NotImplementedError
 
-    def inspect_value_map(self, version, heads):
-        """{'d_model', 'heads' (the real count), 'singular' list | None}: singular values of W_V^h W_O^h when heads matches."""
+    def inspect_value_map(self, version, heads, block=0, head=0):
+        """{'d_model', 'heads' (the real count), 'blocks' {block: heads}, 'singular' list | None}: singular values of W_V^h W_O^h when heads matches."""
         raise NotImplementedError
 
     def inspect_rank_heads(self, version, mode="mean"):
         """studio_inspect.rank_heads on a fixed held-back batch: [{'block','head','rise'}]. Slow; call off the UI thread."""
         raise NotImplementedError
 
-    def inspect_heads_off(self, version, off):
-        """Held-back bits/char with the (block, head) pairs in `off` mean-ablated: {'before', 'after'}."""
+    def inspect_heads_off(self, version, off, mode="mean"):
+        """Held-back bits/char with the (block, head) pairs in `off` switched off (mode mean | zero): {'before', 'after'}."""
         raise NotImplementedError
 
-    def teach_correction(self, version, messages, correction):
-        """Save a correction as a Post-training round 3 item (teacher sees it, student does not)."""
+    def inspect_reply(self, version, prompt, off=(), mode="mean"):
+        """Greedy answer to `prompt` with the (block, head) pairs in `off` switched off for this reply only."""
+        raise NotImplementedError
+
+    def teach_correction(self, version, messages, correction, whole_answer=False):
+        """Save a correction as a Post-training round 3 item (teacher sees it, student does not); whole_answer=True saves a round 1 conversation instead."""
         raise NotImplementedError
 
     def rate_pair(self, messages, chosen, rejected):
@@ -184,6 +246,26 @@ class Services:
         """Rows for a post_round job: conversations | problems | pairs | heldout_docs | heldout_problems."""
         raise NotImplementedError
 
+    # 3D viewer (S11): a separate Panda3D process; Services only starts, stops and talks to it -------------------
+    def viewer_status(self) -> dict:
+        """{'available': bool, 'running': bool, 'connected': bool}. available False = the viewer cannot be launched here."""
+        raise NotImplementedError
+
+    def viewer_start(self, scene=None):
+        """Launch the viewer (no-op if running), send the current version's spec and `scene` ({'level','mode'}) when given."""
+        raise NotImplementedError
+
+    def viewer_stop(self):
+        raise NotImplementedError
+
+    def viewer_send(self, message):
+        """Queue one dict message for a running viewer (e.g. {'type': 'scene', 'level': 'Window', 'mode': 'Train'})."""
+        raise NotImplementedError
+
+    def viewer_poll(self) -> list:
+        """Messages the viewer sent back since the last call."""
+        raise NotImplementedError
+
 
 class FakeServices(Services):
     """Empty, in-memory placeholder data so pages render before real services exist."""
@@ -192,6 +274,26 @@ class FakeServices(Services):
         super().__init__()
         self._versions: list[Version] = []
         self._queue = QueueState()
+        self.viewer_log: list = []  # (action, payload): the fake viewer records calls and spawns nothing
+        self._viewer_running = False
+
+    def viewer_status(self):
+        return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
+
+    def viewer_start(self, scene=None):
+        self._viewer_running = True
+        self.viewer_log.append(("start", scene))
+
+    def viewer_stop(self):
+        self._viewer_running = False
+        self.viewer_log.append(("stop", None))
+
+    def viewer_send(self, message):
+        if self._viewer_running:
+            self.viewer_log.append(("send", message))
+
+    def viewer_poll(self):
+        return []
 
     def versions(self):
         return list(self._versions)
@@ -228,6 +330,13 @@ class FakeServices(Services):
             q[i - 1], q[i] = q[i], q[i - 1]
         self.emit("queue", self._queue)
 
+    def storage(self, days=None, data=False):
+        return (0, 0)
+
+    def clean_storage(self, days=None, data=False):
+        self.cleaned = (days, data)
+        return (0, 0)
+
     def remove(self, job_id):
         self._queue.up_next = [j for j in self._queue.up_next if j.id != job_id]
         self.emit("queue", self._queue)
@@ -254,8 +363,76 @@ class FakeServices(Services):
         self._queue.plan = dict(plan)
         self.emit("queue", self._queue)
 
-    def data(self, kind):
-        return {"kind": kind, "count": 0, "sets": []}
+    # data: a few canned rows per kind so the pages render without a workspace -------------------------------
+    draft_source = None  # callable(kind, n) -> rows, standing in for the local model
+
+    def _rows(self):
+        if not hasattr(self, "_data_rows"):
+            self._data_rows = {
+                "text": [dict(id="t1", a="Short stories", b="The lamp was lit before the tide came in.", status="In use", dataset="Your files"),
+                         dict(id="t2", a="Short stories", b="Nobody asked the heron.", status="Held back", dataset="Your files")],
+                "conversations": [dict(id="c1", a="Name a prime.", b="7 is a prime number.", status="Good", dataset="Your conversations"),
+                                  dict(id="c2", a="Say hello.", b="Hello there.", status="Review", dataset="Your conversations"),
+                                  dict(id="c3", a="Shorter, please.", b="Done.", status="From Chat", dataset="Your corrections")],
+                "problems": [dict(id="p1", a="Reverse: groundwork", b="reverse", status="Ready", dataset="Your problems"),
+                             dict(id="p2", a="17 + 25 =", b="small addition", status="Ready", dataset="Your problems")],
+            }
+        return self._data_rows
+
+    def data(self, kind, query=""):
+        import studio_data_kinds as dk
+        rows = self._rows()[kind]
+        out = dk.DataSummary(kind, count=len(rows), used_by=dk.USED_BY[kind])
+        out.characters = sum(len(r["a"]) + len(r["b"]) for r in rows)
+        for r in rows:
+            sets = {x["name"]: x for x in out.sets}
+            sets.setdefault(r["dataset"], {"id": r["dataset"], "name": r["dataset"], "count": 0})["count"] += 1
+            out.sets = list(sets.values())
+            if kind == "problems":
+                out.rules[r["b"]] = out.rules.get(r["b"], 0) + 1
+        out.near_duplicates = sum(r["status"] == "Near-duplicate" for r in rows)
+        needle = query.casefold().strip()
+        out.rows = [dict(r) for r in rows if needle in f"{r['a']} {r['b']}".casefold()]
+        return out
+
+    def _add_row(self, kind, a, b, status="Good", dataset="Your data", draft=False):
+        rows = self._rows()[kind]
+        if not (a.strip() and b.strip()) or any((r["a"], r["b"]) == (a, b) for r in rows):
+            return False
+        rows.append(dict(id=f"{kind[0]}{len(rows) + 1}-{a[:8]}", a=a, b=b, status=status, dataset=dataset, draft=draft))
+        return True
+
+    def add_data(self, kind, fields):
+        a, b = {"text": ("Your files", fields.get("text", "")), "conversations": (fields.get("user", ""), fields.get("assistant", "")),
+                "problems": (fields.get("prompt", ""), fields.get("rule", ""))}[kind]
+        return self._add_row(kind, a, b, "In use" if kind == "text" else "Ready" if kind == "problems" else "Good")
+
+    def import_data(self, kind, paths):
+        return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
+
+    def generate_problems(self, rule, n, store=True, rng=None):
+        import random
+        items = problem_items(rule, n, rng or random.Random())
+        added = sum(self._add_row("problems", i["prompt"], i["rule"], "Ready", "Generated from rules") for i in items) if store else 0
+        return problem_report(items, added, len(items) - added if store else 0)
+
+    def make_drafts(self, kind, n):
+        if self.draft_source is None:
+            raise RuntimeError("No local model connected.")
+        pairs = [("Generated prose", r["text"]) if kind == "text" else (r["user"], r["assistant"]) for r in self.draft_source(kind, n)]
+        return sum(self._add_row(kind, a, b, "Review", "Drafts", True) for a, b in pairs)
+
+    def draft_count(self):
+        return sum(1 for rows in self._rows().values() for r in rows if r.get("draft") and r["status"] == "Review")
+
+    def review_data(self, example_id, keep):
+        for rows in self._rows().values():
+            for r in list(rows):
+                if r["id"] == example_id:
+                    if keep:
+                        r["status"] = "Good"
+                    else:
+                        rows.remove(r)
 
     def references(self, version):
         return {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None, "noise_band": None}
@@ -266,7 +443,7 @@ class FakeServices(Services):
     def chat(self, version, messages, on_text, stop, ablate=None):
         return f"[reply with {len(ablate)} heads off]" if ablate else "[reply]"
 
-    def teach_correction(self, version, messages, correction):
+    def teach_correction(self, version, messages, correction, whole_answer=False):
         pass
 
     def rate_pair(self, messages, chosen, rejected):
@@ -316,14 +493,18 @@ class FakeServices(Services):
             p[3] = 1 - .02 * (V - 1)
         return {"tokens": ["a", "b"], "pos": 1, "probabilities": p, "target": 3, "pieces": [f"t{i}" for i in range(V)]}
 
-    def inspect_value_map(self, version, heads):
-        return {"d_model": 256, "heads": 4, "singular": [3.0, 1.5, .7, .1] if heads == 4 else None}
+    def inspect_value_map(self, version, heads, block=0, head=0):
+        return {"d_model": 256, "heads": 4, "blocks": {0: 4, 1: 4}, "block": block, "head": head,
+                "singular": [3.0, 1.5, .7, .1] if heads == 4 else None}
 
     def inspect_rank_heads(self, version, mode="mean"):
         return [{"block": b, "head": h, "rise": .05 * (4 * b + h)} for b in range(2) for h in range(4)]
 
-    def inspect_heads_off(self, version, off):
-        return {"before": 2.0, "after": 2.0 + .1 * len(off)}
+    def inspect_heads_off(self, version, off, mode="mean"):
+        return {"before": 2.0, "after": 2.0 + .1 * len(off) * (2 if mode == "zero" else 1)}
+
+    def inspect_reply(self, version, prompt, off=(), mode="mean"):
+        return f"[reply with {len(off)} heads off]" if off else "[reply]"
 
 
 # ---- the real façade -------------------------------------------------------------------------------------------
@@ -335,6 +516,26 @@ from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 LN2 = math.log(2)
+
+
+def layout_rows(lengths, context, rows, cells=32):
+    """First `rows` rows of the batch picture: documents laid end to end (one end-of-text piece each), cut into rows of
+    `context` pieces and drawn as `cells` cells per row. Each cell holds its document number, -1 where a document ends."""
+    out, doc, left, n = [], 0, list(lengths), 0
+    per = max(1, context // cells)
+    while len(out) < rows and doc < len(left):
+        row = []
+        for _ in range(cells):
+            cell, end = doc, False
+            for _ in range(per):
+                if doc >= len(left):
+                    break
+                n += 1
+                if n >= left[doc]:
+                    n, doc, end = 0, doc + 1, True
+            row.append(-1 if end else cell)
+        out.append(row)
+    return out
 
 
 def _doc(row):
@@ -361,11 +562,52 @@ class WorkspaceServices(Services):
         self.store.versions = lambda: self._rows()  # tolerant of the simpler list schema
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS, services=self)
         self.runner.subscribe(self.emit)
+        self.runner.subscribe(self._record_job)
         self._models, self._cache = {}, {}
         self._lock = threading.RLock()
 
     def close(self):
+        if getattr(self, "_viz", None) is not None:
+            self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
+
+    # 3D viewer --------------------------------------------------------------
+    _viz = None
+
+    def viewer_status(self):
+        import sys
+        script = Path(__file__).resolve().parent.parent / "studio_brain3d.py"
+        frozen = getattr(sys, "frozen", False)  # bundled: no script beside the executable
+        viz = self._viz
+        return {"available": frozen or script.exists(), "running": bool(viz and viz.running), "connected": bool(viz and viz.connected)}
+
+    def viewer_start(self, scene=None):
+        import sys
+
+        from studio_core import module_command
+        from studio_vizbridge import VizBridge
+        if self._viz is None:
+            frozen = getattr(sys, "frozen", False)
+            self._viz = VizBridge(Path(__file__).resolve().parent.parent / "studio_brain3d.py",
+                                  command=module_command("studio_brain3d") if frozen else None)
+        if not self._viz.running:
+            self._viz.start(log_path=self.root / "logs" / "viewer.log")
+        version = self.current_version()
+        if version is not None and version.spec:
+            self._viz.send({"type": "spec", "spec": version.spec})
+        if scene:
+            self._viz.send({"type": "scene", **scene})
+
+    def viewer_stop(self):
+        if self._viz is not None:
+            self._viz.stop(wait=False)
+
+    def viewer_send(self, message):
+        if self._viz is not None:
+            self._viz.send(message)
+
+    def viewer_poll(self):
+        return self._viz.poll() if self._viz is not None else []
 
     # versions ---------------------------------------------------------------
     def _rows(self):
@@ -422,10 +664,29 @@ class WorkspaceServices(Services):
             job = studio_queue.Job(**asdict(job))
         if self.runner.thread is None:
             self.runner.start()
+        if job.kind == "pretrain" and job.params.get("version"):
+            self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
 
     def move_up(self, job_id):
         self.runner.move_up(job_id)
+
+    def storage(self, days=None, data=False):
+        import studio_cleanup
+        paths = studio_cleanup.plan(self.root, days, data)
+        return len(paths), studio_cleanup.size(paths)
+
+    def clean_storage(self, days=None, data=False):
+        import studio_cleanup
+        with self.runner.lock:
+            if self.runner.running:
+                raise RuntimeError("Stop the running job first.")
+            if days is None:  # every job points at a version or run that is about to go
+                self.runner.jobs = []
+                self.runner._save()
+            out = studio_cleanup.clean(self.workspace, days, data)
+        self.runner._emit("queue", {})
+        return out
 
     def remove(self, job_id):
         self.runner.remove(job_id)
@@ -442,10 +703,262 @@ class WorkspaceServices(Services):
     def set_plan(self, plan):
         self.runner.set_plan(plan)
 
-    # data / evaluation ------------------------------------------------------
-    def data(self, kind):
+    # training pages: pretraining data, job results, post-training rounds, verdict ------------------------------------
+    def stop_after_cooldown(self):
+        self.runner.stop_after_cooldown()
+
+    def _text_rows(self, dataset_ids):
         import studio_data_kinds
-        return studio_data_kinds.summarize(self.workspace, kind)
+        ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
+        return [e for e in studio_data_kinds.pretraining_examples(self.workspace, ids) if e.get("text")]
+
+    def examples(self, params):
+        """Plain-text rows of params["datasets"] (default: every set) without the held-back documents. data/heldout.json is
+        fixed the first time (exact duplicates removed, seeded split) and then kept, so every version is scored on the same text."""
+        import studio_eval
+        rows = self._text_rows(params.get("datasets"))
+        path = self.root / "data" / "heldout.json"
+        if not path.exists() and len(rows) > 1:  # ponytail: later sets never join the held-back text; delete the file to re-split
+            _, held = studio_eval.heldout_split([e["text"] for e in rows], params.get("heldout_fraction", .05))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
+        held = set(self._heldout())
+        return [e for e in rows if e["text"] not in held]
+
+    def pretrain_preview(self, dataset_ids, rows=16):
+        import studio_estimate
+        import studio_spec
+        from studio_model import read_metrics
+        v = self.current_version()
+        if v is None or not v.spec:
+            return {}
+        held = set(self._heldout())
+        docs = [e["text"] for e in self._text_rows(dataset_ids) if e["text"] not in held]
+        module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
+        tok = module.fit(cfg, [{"text": d} for d in docs])
+        context = v.spec["dims"]["n_ctx"]
+        small = sum(map(len, docs)) <= 5_000_000  # larger text: the size stays [N] rather than a guess
+        encoded = [tok.encode(d) for d in docs] if small else []
+        speed = None
+        for ver in reversed(self.versions()):
+            for run in reversed(ver.runs):
+                got = [r["tokens_per_second"] for r in read_metrics(Path(run) / "metrics.jsonl") if r.get("tokens_per_second")]
+                speed = speed or (got[-1] if got else None)
+        return {"pieces": sum(map(len, encoded)) + len(docs) if small else None, "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
+                "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows), "tokens_per_second": speed}
+
+    # job results -> versions
+    def _to(self, number, status):
+        try:
+            self.store.set_status(number, status)
+        except (ValueError, KeyError):
+            pass
+
+    def _record_job(self, kind, payload):
+        """Runner event: a pretrain job moves its version to training, then records the run, its best checkpoint and its
+        held-back bits per character (the scorecard Chat follows) when it ends."""
+        if kind != "job" or not isinstance(payload, dict):
+            return
+        job = next((j for j in self.runner.jobs if j.id == payload.get("job")), None)
+        number = job.params.get("version") if job and job.kind == "pretrain" else None
+        if not number:
+            return
+        if payload["status"] == "running":
+            return self._to(number, "training")
+        out = Path(job.params.get("output_dir") or "")
+        ckpt = next((p for p in (out / "best.npz", out / "last.npz") if p.exists()), None)
+        if ckpt:
+            import studio_eval
+            self.store.add_run(number, out)
+            self.store.set_best_checkpoint(number, ckpt)
+            docs = self._heldout()
+            if docs:
+                card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.bits_per_char(ckpt, docs)}
+                self.store.set_scorecard(number, card)
+        self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
+        self.emit("versions", None)
+
+    def _json(self, name, default):
+        path = self.root / "data" / name
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+
+    def _save_json(self, name, value):
+        from studio_core import atomic_json
+        atomic_json(self.root / "data" / name, value)
+
+    def record_round(self, number, version, result):
+        """A finished post-training round: keep the result; only a passed gate moves the version's checkpoint (Chat follows it)."""
+        v = self._as_version(version) if version else self.current_version()
+        if v is None:
+            return
+        done = self._json("post_training.json", {})
+        done.setdefault(str(v.number), {})[str(number)] = {k: result.get(k) for k in ("ok", "checks", "verdict", "before", "after", "band", "checkpoint")}
+        self._save_json("post_training.json", done)
+        if result.get("ok"):
+            card = dict(v.scorecard or {})
+            after = result.get("after") or {}
+            card.update({"bpc": after.get("bpc", card.get("bpc")), "problems": [after.get("pass_k"), after.get("pass_n")] if after.get("pass_n") else card.get("problems")})
+            if number == 1:
+                card["answers"] = True
+            self.store.set_best_checkpoint(v.number, result["checkpoint"])
+            self.store.set_scorecard(v.number, card)
+        self.emit("versions", None)
+
+    def _human_pairs(self):
+        from studio_rlhf import PreferenceStore
+        return PreferenceStore(self.root).all(["human"])
+
+    def post_training(self, version):
+        v = self._as_version(version) if version else self.current_version()
+        done = self._json("post_training.json", {}).get(str(v.number), {}) if v else {}
+        q = self.queue()
+
+        def round_of(job):
+            return 3 if job.kind == "restore_answers" else int(job.params.get("round", 0))
+        running = round_of(q.job) if q.job and q.job.kind in ("post_round", "restore_answers") else None
+        waiting = {round_of(j) for j in q.up_next if j.kind in ("post_round", "restore_answers")}
+        rounds = {}
+        for n in range(1, 5):
+            g = done.get(str(n))
+            status = "running" if running == n else "queued" if n in waiting else "done" if g else "idle"
+            rounds[n] = {"status": status, "note": ("live" if g["ok"] else "kept, not live") if g and status == "done" else ""}
+        convs = self.data("conversations")
+        prompt = next((r for r in self.post_rows("conversations")), None)
+        return {"rounds": rounds, "gates": {int(n): g for n, g in done.items()},
+                "counts": {"conversations": convs.count, "corrections": len(self._json("corrections.json", [])),
+                           "problems": self.data("problems").count, "pairs": len(self._human_pairs())},
+                "example": {"prompt": prompt["user"], "answer": prompt["assistant"]} if prompt and prompt.get("user") else {}}
+
+    def post_rows(self, kind):
+        import studio_data_kinds as dk
+        if kind == "heldout_docs":
+            return self._heldout()
+        if kind == "pairs":
+            return self._human_pairs()
+        if kind == "corrections":
+            return self._json("corrections.json", [])
+        want = "problems" if kind.endswith("problems") else "conversations"
+        held = kind == "heldout_problems"
+        out = []
+        for d in self.workspace.state["datasets"]:
+            for e in self.workspace.iter_examples(d["id"]):
+                if dk.classify(e) == want and dk.held_back(e) == held:
+                    out.append({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
+                               if want == "problems" else e)
+        return out
+
+    def teach_correction(self, version, messages, correction, whole_answer=False):
+        """A whole new answer becomes a conversation for round 1 (dataset "From Chat"); anything else is a correction the
+        round-3 teacher sees in front of the conversation (the student never does)."""
+        if whole_answer:
+            import studio_data_kinds as dk
+            prompt = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            self.workspace.add(dk.ensure_dataset(self.workspace, "From Chat", "Answers you wrote in Chat"),
+                               [{"user": prompt, "assistant": correction, "quality": "Good"}], source="correction")
+            return
+        saved = self._json("corrections.json", [])
+        saved.append({"messages": [dict(m) for m in messages], "correction": correction, "version": getattr(self._as_version(version), "number", None)})
+        self._save_json("corrections.json", saved)
+
+    def rate_pair(self, messages, chosen, rejected):
+        from studio_rlhf import PreferenceStore
+        return PreferenceStore(self.root).add(messages, chosen["reply"], rejected["reply"], "human",
+                                              chosen_version=chosen.get("version"), rejected_version=rejected.get("version"))
+
+    def _curve_for(self, number):
+        """(points [(trained tokens, held-back bits/char)], schedule id, finished) of a version's latest run."""
+        from studio_model import read_metrics
+        v = self._as_version(number)
+        run = Path(v.runs[-1]) if v and v.runs else None
+        if run is None or not (run / "metrics.jsonl").exists():
+            return [], "", False
+        curve = self.run_curve(run)
+        tokens = {r["step"]: r.get("trained_tokens") or r["step"] for r in read_metrics(run / "metrics.jsonl")}
+        spec = json.loads((run / "spec.json").read_text(encoding="utf-8")) if (run / "spec.json").exists() else {}
+        status = json.loads((run / "run.json").read_text(encoding="utf-8")).get("status") if (run / "run.json").exists() else None
+        return [(tokens.get(s, s), y) for s, y in curve["heldout"]], json.dumps([spec.get("train", {}).get("schedule"), curve["total"]]), status == "completed"
+
+    def verdict(self, a, b):
+        """Training saved by the newer of versions a, b over the older; no verdict unless both finished the same schedule."""
+        import studio_eval
+        older, newer = sorted((a, b))
+        (po, so, fo), (pn, sn, fn) = self._curve_for(older), self._curve_for(newer)
+        for number, done in ((older, fo), (newer, fn)):
+            if not done:
+                return {"percent": None, "comparable": False, "reason": f"Version {number} has no finished run to read."}
+        return studio_eval.training_saved(pn, po, sn, so)
+
+    # data / evaluation ------------------------------------------------------
+    def data(self, kind, query=""):
+        import studio_data_kinds as dk
+        return dk.summarize(self.workspace, kind, query=query)
+
+    _OWN_SETS = {"text": "Your files", "conversations": "Your conversations", "problems": "Your problems"}
+    _DRAFT_SETS = {"conversations": "Rewritten conversations", "text": "Generated prose"}
+
+    def add_data(self, kind, fields):
+        import studio_data_kinds as dk
+        ws, target = self.workspace, dk.ensure_dataset(self.workspace, self._OWN_SETS[kind])
+        if kind == "problems":
+            return bool(dk.add_problems(ws, target, [{"prompt": fields["prompt"], "rule": fields["rule"], "params": {}}])[0])
+        return bool(ws.add(target, [{**fields, "quality": "Good"}], "manual")[0])
+
+    def import_data(self, kind, paths):
+        import studio_data_kinds as dk
+        return self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
+
+    def generate_problems(self, rule, n, store=True, rng=None):
+        import random
+        import studio_data_kinds as dk
+        items = problem_items(rule, n, rng or random.Random())
+        if not store:
+            return problem_report(items)
+        return problem_report(items, *dk.add_problems(self.workspace, dk.ensure_dataset(self.workspace, "Generated from rules"), items))
+
+    def make_drafts(self, kind, n):
+        import json
+        import random
+        import studio_data_kinds as dk
+        from studio_rlhf import OllamaTeacher
+        teacher = OllamaTeacher(timeout=120)
+        models = teacher.models()
+        if not models:
+            raise RuntimeError("Ollama has no models installed.")
+        teacher.model = models[0]
+        rng, rows = random.Random(), []
+        if kind == "conversations":
+            pool = [e for d in self.workspace.state["datasets"] for e in self.workspace.iter_examples(d["id"])
+                    if dk.classify(e) == "conversations" and e.get("quality") == "Good"]
+            if not pool:
+                raise RuntimeError("There are no good conversations to rewrite yet.")
+            work = [(json.dumps({"user": e["user"], "assistant": e["assistant"]}), True) for e in rng.sample(pool, min(n, len(pool)))]
+            system = ("Reword this prompt and its answer without changing what the answer says. "
+                      'Reply as JSON: {"user": "...", "assistant": "..."}.')
+        else:
+            work = [("Write one short passage of plain English on a topic of your choice.", False)] * n
+            system = "Write plain prose only, no title and no list."
+        for text, as_json in work:
+            try:
+                got = teacher.chat(system, text, json_mode=as_json, temperature=0.8)
+            except RuntimeError:
+                if rows:
+                    break
+                raise
+            row = {"user": got.get("user"), "assistant": got.get("assistant")} if as_json else {"text": got}
+            if all(row.values()):
+                rows.append({**row, "quality": "Review", "synthetic": True})
+        return self.workspace.add(dk.ensure_dataset(self.workspace, self._DRAFT_SETS[kind]), rows, "synthetic")[0]
+
+    def draft_count(self):
+        names = set(self._DRAFT_SETS.values())
+        return sum(1 for d in self.workspace.state["datasets"] if d["name"] in names
+                   for e in self.workspace.iter_examples(d["id"]) if e.get("quality") == "Review")
+
+    def review_data(self, example_id, keep):
+        if keep:
+            self.workspace.mark_reviewed([example_id])
+        else:
+            self.workspace.remove_examples([example_id])
 
     def _heldout(self):
         path = self.root / "data" / "heldout.json"
@@ -541,6 +1054,58 @@ class WorkspaceServices(Services):
         import studio_inspect
         return studio_inspect.head_stats(pattern)
 
+    # Look-inside pages (S7) ---------------------------------------------------
+    def _batch(self, version):
+        """(checkpoint, ids [N, L], characters per piece) for the fixed held-back batch of this checkpoint."""
+        import studio_inspect
+        ckpt = self._checkpoint(version)
+        docs = self._heldout()
+        if not docs:
+            raise ValueError("No held-back text yet, so there is nothing to measure the error on.")
+
+        def make():
+            model, tok = studio_inspect.probe_model(ckpt)
+            return studio_inspect.heldout_batch(tok, docs, min(64, model.dims.n_ctx))
+        ids, cpp = self._cached(("batch", ckpt), make)
+        return ckpt, ids, cpp
+
+    def inspect_trace(self, version, text, pos=-1):
+        import studio_inspect
+        return studio_inspect.trace(self._checkpoint(version), text, pos)
+
+    def inspect_prepared(self, version):
+        import studio_inspect
+        return studio_inspect.prepared(self._checkpoint(version))
+
+    def inspect_loss(self, version, text, pos=-1, trained=True):
+        import studio_inspect
+        return studio_inspect.loss_view(self._checkpoint(version), text, pos, trained)
+
+    def inspect_value_map(self, version, heads, block=0, head=0):
+        import studio_inspect
+        info = studio_inspect.value_map(self._checkpoint(version), block, head)
+        if heads != info["heads"]:
+            info["singular"] = None
+        return info
+
+    def inspect_rank_heads(self, version, mode="mean"):
+        """Rise in held-back error when each head is switched off alone, in bits per character ('rise'), largest first."""
+        import studio_inspect
+        ckpt, ids, cpp = self._batch(version)
+        rows = self._cached(("rank", ckpt, mode), lambda: studio_inspect.rank_heads(ckpt, ids, mode))
+        rows = [dict(r, rise_nats=r["rise"], rise=studio_inspect.bits_per_char(r["rise"], cpp)) for r in rows]
+        return sorted(rows, key=lambda r: -r["rise"])
+
+    def inspect_heads_off(self, version, off, mode="mean"):
+        import studio_inspect
+        ckpt, ids, cpp = self._batch(version)
+        got = studio_inspect.ablate_set(ckpt, ids, list(off), mode)
+        return {"before": studio_inspect.bits_per_char(got["baseline"], cpp), "after": studio_inspect.bits_per_char(got["loss"], cpp)}
+
+    def inspect_reply(self, version, prompt, off=(), mode="mean"):
+        import studio_inspect
+        return studio_inspect.greedy_reply(self._checkpoint(version), prompt, list(off), mode)
+
 
 class FixtureServices(WorkspaceServices):
     """WorkspaceServices over the committed fixture workspace (built once into `directory`)."""
@@ -549,18 +1114,3 @@ class FixtureServices(WorkspaceServices):
         from tests.fixtures.ia_workspace import build
         super().__init__(build(directory))
 
-    def teach_correction(self, version, messages, correction):
-        pass
-
-    def rate_pair(self, messages, chosen, rejected):
-        pass
-
-    def verdict(self, a, b):
-        from studio_eval import training_saved
-        return training_saved([], [])
-
-    def post_training(self, version):
-        return {"rounds": {}, "counts": {}, "gates": {}}
-
-    def post_rows(self, kind):
-        return []

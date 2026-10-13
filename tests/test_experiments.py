@@ -6,7 +6,8 @@ import unittest
 import copy
 import math
 
-from studio_experiments import ExperimentSpec, best_lr, match, plan, scaled_spec, seed_stats, shrunk, start, summarize
+from studio_experiments import (ExperimentSpec, best_lr, load_results, match, plan, scaled_spec, seed_stats, shrunk, spec_changes, start,
+                                summarize, variant_outcome)
 from studio_model import train
 from studio_spec import default_spec, validate_spec
 
@@ -119,6 +120,31 @@ class Planned(unittest.TestCase):
         self.assertFalse(better['inside_spread'])
         self.assertEqual(better['curve'], [[1., 3.5], [2., 2.5]])
         self.assertIsNone(summarize([run(0, 1, 3.), run(1, 1, 2.)])[1]['inside_spread'])  # one seed: no spread
+
+    def test_plan_reports_how_far_off_each_match_is(self):
+        p = plan(ExperimentSpec(self.spec(), self.variants(1), seeds=1))
+        self.assertEqual(p['variants'][0]['relative_error'], 0.)
+        self.assertLessEqual(p['variants'][1]['relative_error'], .02)
+
+    def test_raw_changes_and_verdicts(self):
+        base, wide = self.spec(), self.variants(1)[0]
+        wide['block']['mixer']['config']['heads'] = 2
+        changes = spec_changes(base, wide)
+        self.assertIn(f"block.mixer.config.heads: {base['block']['mixer']['config']['heads']} → 2", changes)
+        self.assertTrue(any(c.startswith('block.channel.config.d_ff:') for c in changes))
+        self.assertEqual(spec_changes(base, base), [])
+        self.assertEqual(variant_outcome({'delta': -.5, 'inside_spread': False}), 'better')
+        self.assertEqual(variant_outcome({'delta': .5, 'inside_spread': False}), 'worse')
+        self.assertEqual(variant_outcome({'delta': .01, 'inside_spread': True}), 'about the same')
+        self.assertIsNone(variant_outcome({'delta': .5, 'inside_spread': None}))  # one seed: no spread, no verdict
+        self.assertIsNone(variant_outcome(None))
+
+    def test_finished_results_are_found_again(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(load_results(root, 'abc'))
+            (__import__('pathlib').Path(root) / 'compare_abc').mkdir()
+            (__import__('pathlib').Path(root) / 'compare_abc' / 'results.json').write_text('{"variants": []}')
+            self.assertEqual(load_results(root, 'abc'), {'variants': []})
 
     def test_schedule_scales_and_shrink_uses_mup(self):
         a, b = scaled_spec(self.spec(), 100), scaled_spec(self.spec(), 1000)

@@ -55,16 +55,21 @@ class ValueMapPage(Page):
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
-        self.heads = 4
+        self.heads, self.block, self.head = 4, 0, 0
 
     def set_heads(self, heads):
         self.heads = int(heads)
+        self.block = self.head = 0
+        self.refresh()
+
+    def pick(self, block, head):
+        self.block, self.head = block, head
         self.refresh()
 
     def refresh(self):
         for child in self.body.winfo_children():
             child.destroy()
-        info, error = ask(self.services, "inspect_value_map", self.heads)
+        info, error = ask(self.services, "inspect_value_map", self.heads, block=self.block, head=self.head)
         if info is None:
             tk_label(self.body, error, 14, "muted", wraplength=720).pack(anchor="w")
             return
@@ -86,14 +91,22 @@ class ValueMapPage(Page):
         self.funnels.pack(anchor="w")
         self.funnels.set(d, hd, heads, dict(x=fit(VALUE_MAP["x_label"]), dx=fit(VALUE_MAP["delta_x"]), v=VALUE_MAP["v_label"].format(hd=hd),
                                             w_v=f"{VALUE_MAP['w_v']}  {d} → {hd}", w_o=f"{VALUE_MAP['w_o']}  {hd} → {d}"))
-        tk_label(card, f"{VALUE_MAP['together']} {hd}. " + VALUE_MAP["each_head"].format(hd=hd), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(8, 0))
+        tk_label(card, f"{fit(VALUE_MAP['together'])} {hd}. " + VALUE_MAP["each_head"].format(hd=hd), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(8, 0))
         tk_label(card, VALUE_MAP["weighting"].format(hd=hd), 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
-        tk_label(card, f"Per head W_V and W_O hold {2 * d * hd:,} numbers; all {heads} heads together hold {2 * d * d:,} = 2 · {d}², whatever the head count.",
+        tk_label(card, VALUE_MAP["params"].format(per_head=f"{2 * d * hd:,}", heads=heads, total=f"{2 * d * d:,}", d=d),
                  13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
         singular = info.get("singular")
         if singular is not None and heads == info["heads"]:
             rank = rank_of(singular)
-            tk_label(card, f"Measured on this model (one head): the rank of W_V · W_O is {rank}, at most {hd}. Singular values, largest first:",
+            blocks = info.get("blocks") or {}
+            if len(blocks) > 1 or heads > 1:
+                pickers = tk.Frame(card, bg=C["panel"])
+                pickers.pack(anchor="w", pady=(GUTTER, 0))
+                Segmented(pickers, [f"Block {b + 1}" for b in blocks], f"Block {self.block + 1}",
+                          command=lambda v: self.pick(int(v.split()[1]) - 1, 0)).pack(side="left", padx=(0, GUTTER))
+                Segmented(pickers, [f"Head {h + 1}" for h in range(heads)], f"Head {self.head + 1}",
+                          command=lambda v: self.pick(self.block, int(v.split()[1]) - 1)).pack(side="left")
+            tk_label(card, VALUE_MAP["measured"].format(block=self.block + 1, head=self.head + 1, rank=rank, hd=hd),
                      13, "text2", "panel", wraplength=760).pack(anchor="w", pady=(GUTTER, 4))
             bars = tk.Canvas(card, width=420, height=60, bg=C["panel"], highlightthickness=0)
             bars.pack(anchor="w")
@@ -102,5 +115,7 @@ class ValueMapPage(Page):
             for i, s in enumerate(singular):
                 h = 56 * float(s) / top
                 bars.create_rectangle(i * 420 / n + 1, 58 - h, (i + 1) * 420 / n - 1, 58, fill=C["violet"] if i < hd else C["border"], width=0)
-        elif singular is None:
-            tk_label(card, "Real singular values appear when a trained checkpoint is available.", 13, "dim", "panel").pack(anchor="w", pady=(GUTTER, 0))
+        elif heads == info["heads"]:
+            tk_label(card, VALUE_MAP["measured_none"], 13, "dim", "panel").pack(anchor="w", pady=(GUTTER, 0))
+        else:
+            tk_label(card, VALUE_MAP["measured_other"].format(heads=info["heads"]), 13, "dim", "panel").pack(anchor="w", pady=(GUTTER, 0))

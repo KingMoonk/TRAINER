@@ -1,5 +1,6 @@
 """Chat page on FakeServices: renders, compare toggles two panes, picking a version updates the header."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import time
 import tkinter as tk
 import unittest
 from tkinter import ttk
@@ -24,14 +25,16 @@ class Fake(FakeServices):
         return min(self.versions(), key=lambda v: v.scorecard["bpc"])
 
     def chat(self, version, messages, on_text, stop):
+        text = ""
         for word in (f"v{version} ", "says ", "hi"):
-            on_text(word)
-        return ""
+            text += word
+            on_text(text)  # cumulative, like LocalModel.generate
+        return text
 
     def rate_pair(self, messages, chosen, rejected):
         self.rated.append((chosen, rejected))
 
-    def teach_correction(self, version, messages, correction):
+    def teach_correction(self, version, messages, correction, whole_answer=False):
         self.taught.append((version, correction))
 
 
@@ -70,10 +73,11 @@ class ChatTest(unittest.TestCase):
         self.assertTrue(self.page.verdict_line.startswith("No verdict yet"))
         self.page.entry.insert(0, "hello")
         self.page.send()
-        for _ in range(100):
+        end = time.time() + 10
+        while self.page.pending and time.time() < end:
             self.app.update()
-            if not self.page.pending:
-                break
+            time.sleep(.01)
+        self.app.update()
         self.assertEqual(self.page.replies, {0: "v2 says hi", 1: "v1 says hi"})
         self.page.better(1)
         self.assertEqual(self.fake.rated[0][0]["version"], 1)
@@ -81,6 +85,7 @@ class ChatTest(unittest.TestCase):
         self.assertEqual(len(self.page.panes()), 1)
 
     def test_teach_correction(self):
+        self.page.messages = [{"role": "user", "content": "Largest planet?"}]
         self.page.correction.insert(0, "Jupiter")
         self.page.teach()
         self.assertEqual(self.fake.taught, [(2, "Jupiter")])

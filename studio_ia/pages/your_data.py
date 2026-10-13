@@ -1,161 +1,232 @@
-"""Your data: three tabs (text, conversations, problems) with counts, search, a table with STATUS and actions.
+"""Your data: three tabs (text, conversations, problems) with counts, search, a table with STATUS, review and actions.
 
-Plain ttk.Frame with refresh(); reads through services.data(kind) when given, else studio_data_kinds.summarize.
-ponytail: stand-alone until studio_ia.pages.base / widgets land; swap the Frame base for the shared Page then.
+Reads and writes only through services (data, add_data, import_data, review_data). Decision logic is in plain
+functions at the top so it runs without Tk.
 """
+from __future__ import annotations
+
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-import studio_data_kinds as dk
-import studio_rules as rules
+import studio_rules as rules  # names and labels of the rules only
+from studio_ia.copy import YOURDATA as T
+from studio_ia.pages.base import Page
+from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.widgets import _activate
 
-BG, PANEL, EDGE, TEXT, MUTED, VIOLET = "#0e1014", "#15181e", "#2a2f3a", "#e6e8ec", "#8f97a6", "#9f8cff"
-STATUS_COLOR = {"In use": "#c3c8d1", "Held back": "#6cb4ee", "Near-duplicate": "#e5b567", "Good": VIOLET,
-                "Review": "#8f97a6", "From Chat": "#e58fb0", "Ready": "#c3c8d1"}
-TABS = {
-    "text": dict(name="Text it reads", back="Back to Pretraining", lead="Plain text. It learns by predicting the next piece.",
-                 cols=("DOCUMENT", "FIRST LINE"), search="Search text", add="Add a document", make="Generate prose",
-                 note="Held-back text is split off by document, after exact duplicates are removed, and never trained on."),
-    "conversations": dict(name="Conversations it practises", back="Back to Post-training",
-                          lead="A prompt and a good answer. Only the answer is trained on.", cols=("PROMPT", "ANSWER"),
-                          search="Search conversations", add="Write a conversation", make="Make extra conversations",
-                          note="Open one to read, edit or mark it Good. Corrections you teach in Chat appear here."),
-    "problems": dict(name="Problems with a checkable answer", back="Back to Post-training",
-                     lead="A prompt and a rule that decides if an answer is right. No answer key needed.", cols=("PROMPT", "RULE"),
-                     search="Search problems", add="Write a problem", make="Generate problems a rule can check",
-                     note="A rule decides what is right, so these can be generated safely in any amount."),
-}
+KINDS = ("text", "conversations", "problems")
+STATUS_COLOR = {"In use": "text2", "Held back": "blue", "Near-duplicate": "amber", "Good": "violet", "Review": "muted",
+                "From Chat": "pink", "Ready": "text2"}
 
 
-class YourDataPage(ttk.Frame):
-    def __init__(self, master, workspace=None, services=None, kind="conversations", on_navigate=None):
-        super().__init__(master)
-        self.services = services
-        self.workspace = workspace or services.workspace
-        self.kind = kind
-        self.on_navigate = on_navigate or (lambda page, **kw: None)
-        self.only_dups = False
-        self.summaries = {}
-        self.configure(style="YD.TFrame")
-        style = ttk.Style(self)
-        style.configure("YD.TFrame", background=BG)
-        style.configure("YD.Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT, rowheight=26, borderwidth=0)
-        style.configure("YD.Treeview.Heading", background=BG, foreground=MUTED)
-        tk.Label(self, text="Your data", bg=BG, fg=TEXT, font=("TkDefaultFont", 24, "bold")).pack(anchor="w", padx=16, pady=(14, 0))
-        tk.Label(self, text="Three kinds, because each one trains a different stage.", bg=BG, fg=MUTED).pack(anchor="w", padx=16)
-        self.back = tk.Button(self, command=lambda: self.on_navigate("pretraining" if self.kind == "text" else "post_training"),
-                              bd=0, bg=BG, fg=VIOLET, activeforeground=TEXT)
-        self.back.pack(anchor="w", padx=16, pady=4)
-        tabs = tk.Frame(self, bg=BG)
-        tabs.pack(fill="x", padx=16, pady=6)
-        self.tab_buttons = {}
-        for k in dk.KINDS:
-            b = tk.Button(tabs, justify="left", anchor="w", bd=0, padx=10, pady=6, command=lambda k=k: self.show(k),
-                          highlightthickness=1, highlightbackground=EDGE, fg=TEXT)
-            b.pack(side="left", expand=True, fill="x", padx=3)
-            self.tab_buttons[k] = b
-        self.lead = tk.Label(self, bg=BG, fg=TEXT, anchor="w")
-        self.lead.pack(fill="x", padx=16)
-        self.sets = tk.Label(self, bg=BG, fg=MUTED, anchor="w")
-        self.sets.pack(fill="x", padx=16)
-        bar = tk.Frame(self, bg=BG)
-        bar.pack(fill="x", padx=16, pady=6)
-        tk.Label(bar, text="Search", bg=BG, fg=MUTED).pack(side="left")
+def back_link(kind):
+    """(label, route) of the back link: text trains in Pretraining, the other two in Post-training."""
+    return (T["back_pretraining"], "pretraining") if kind == "text" else (T["back_post"], "post_training")
+
+
+def visible_rows(rows, only_dups):
+    return [r for r in rows if r["status"] == "Near-duplicate"] if only_dups else list(rows)
+
+
+def dup_label(found, only_dups):
+    return T["near_duplicates"].replace("[N]", f"{found:,}") + (" · showing" if only_dups else "")
+
+
+def shown_line(summary, query):
+    """'Showing the first N of M.' when the table holds fewer rows than exist and nothing is filtered, else ''."""
+    return T["shown"].format(shown=len(summary.rows), count=summary.count) if not query.strip() and len(summary.rows) < summary.count else ""
+
+
+def parse_rule(text):
+    """A rule key or its plain label (either case) -> key, else None."""
+    word = (text or "").strip().casefold()
+    return next((k for k in rules.RULES if word in (k, k.replace("_", " "), rules.LABELS[k].casefold())), None)
+
+
+def collect_fields(kind, ask, say):
+    """Ask for the fields of one new item. ask(prompt) -> str | None; say(message) reports a problem. None = cancelled."""
+    if kind == "text":
+        text = ask(T["ask_text"])
+        return {"text": text} if text and text.strip() else None
+    if kind == "conversations":
+        prompt = ask(T["ask_prompt"])
+        answer = ask(T["ask_answer"]) if prompt else None
+        return {"user": prompt, "assistant": answer} if prompt and answer else None
+    prompt = ask(T["ask_problem"])
+    if not prompt:
+        return None
+    names = ", ".join(rules.RULES)
+    rule = parse_rule(ask(T["ask_rule"].format(rules=names)))
+    if rule is None:
+        say(T["unknown_rule"].format(rules=names))
+        return None
+    return {"prompt": prompt, "rule": rule}
+
+
+class YourDataPage(Page):
+    title = T["h1"]
+    lead = T["lead"]
+
+    def __init__(self, parent, services, navigate=None, **kw):
+        super().__init__(parent, services, navigate, **kw)
+        self.kind, self.only_dups, self.summaries, self.selected = "conversations", False, {}, None
         self.query = tk.StringVar()
-        entry = tk.Entry(bar, textvariable=self.query, width=40)
-        entry.pack(side="left", padx=6)
-        entry.bind("<KeyRelease>", lambda _e: self.refresh())
-        self.table = ttk.Treeview(self, columns=("a", "b", "status"), show="headings", style="YD.Treeview", height=10)
-        self.table.pack(fill="both", expand=True, padx=16)
-        self.table.column("a", width=320)
-        self.table.column("b", width=320)
-        self.table.column("status", width=120, anchor="w")
-        self.table.heading("status", text="STATUS")
+        style = ttk.Style(self)
+        style.configure("YD.Treeview", background=C["panel"], fieldbackground=C["panel"], foreground=C["text"], rowheight=28,
+                        borderwidth=0, font=font(14))
+        style.configure("YD.Treeview.Heading", background=C["bg"], foreground=C["muted"], font=font(12, bold=True))
+        style.map("YD.Treeview", background=[("selected", C["violet_bg"])], foreground=[("selected", C["text"])])
+        body = self.body
+        self.back = tk_label(body, "", 14, "violet", cursor="hand2", takefocus=1)
+        self.back.pack(anchor="w")
+        self.tabs = {}
+        row = tk.Frame(body, bg=C["bg"])
+        row.pack(fill="x", pady=GUTTER)
+        for k in KINDS:
+            tab = tk.Frame(row, bg=C["panel"], takefocus=1, cursor="hand2", highlightthickness=1, highlightbackground=C["border"],
+                           highlightcolor=C["violet"], padx=GUTTER, pady=10)
+            tab.pack(side="left", fill="x", expand=True, padx=(0, 8))
+            name, used, count = (tk_label(tab, "", s, c, "panel", font=font(s, bold=b)) for s, c, b in ((15, "text", True), (12, "muted", False), (13, "text2", False)))
+            for w in (name, used, count):
+                w.pack(fill="x")
+            for w in (tab, name, used, count):
+                _activate(w, lambda k=k: self.show(k))
+            self.tabs[k] = (tab, name, used, count)
+        self.lead_line = tk_label(body, "", 15, "text")
+        self.lead_line.pack(fill="x")
+        self.sets_line = tk_label(body, "", 13, "muted")
+        self.sets_line.pack(fill="x", pady=(2, 0))
+        bar = tk.Frame(body, bg=C["bg"])
+        bar.pack(fill="x", pady=GUTTER)
+        tk_label(bar, T["search"], 13, "muted").pack(side="left")
+        self.entry = tk.Entry(bar, textvariable=self.query, width=40, bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
+                              relief="flat", highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
+        self.entry.pack(side="left", padx=8, ipady=6)
+        self.entry.bind("<KeyRelease>", lambda _e: self._search())
+        self.table = ttk.Treeview(body, columns=("a", "b", "status"), show="headings", style="YD.Treeview", height=9)
+        self.table.pack(fill="x")
+        self.table.column("a", width=340)
+        self.table.column("b", width=340)
+        self.table.column("status", width=130, anchor="w")
+        self.table.heading("status", text=T["status"])
         for status, color in STATUS_COLOR.items():
-            self.table.tag_configure(status, foreground=color)
-        self.note = tk.Label(self, bg=BG, fg=MUTED, anchor="w", wraplength=900, justify="left")
-        self.note.pack(fill="x", padx=16, pady=6)
-        buttons = tk.Frame(self, bg=BG)
-        buttons.pack(fill="x", padx=16, pady=(0, 14))
-        self.add_button = tk.Button(buttons, command=self.add)
-        self.add_button.pack(side="left", padx=3)
-        tk.Button(buttons, text="Import files", command=self.import_files).pack(side="left", padx=3)
-        self.dup_button = tk.Button(buttons, command=self.toggle_duplicates)
-        self.dup_button.pack(side="left", padx=3)
-        self.make_button = tk.Button(buttons, command=lambda: self.on_navigate("make_data", kind=self.kind))
-        self.make_button.pack(side="left", padx=3)
-        self.refresh()
+            self.table.tag_configure(status, foreground=C[color])
+        self.table.tag_configure("mono", font=font(13, mono=True))
+        self.table.bind("<<TreeviewSelect>>", lambda _e: self._select())
+        self.shown = tk_label(body, "", 12, "dim")
+        self.shown.pack(fill="x")
+        self.detail = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
+        self.detail.pack(fill="x", pady=(8, 0))
+        self.detail_text = tk_label(self.detail, T["pick_row"], 14, "text2", "panel", wraplength=760)
+        self.detail_text.pack(fill="x")
+        self.review_row = tk.Frame(self.detail, bg=C["panel"])
+        ttk.Button(self.review_row, text=T["mark_good"], style="Primary.TButton", command=lambda: self._review(True)).pack(side="left")
+        ttk.Button(self.review_row, text=T["discard"], command=lambda: self._review(False)).pack(side="left", padx=8)
+        self.note = tk_label(body, "", 13, "muted", wraplength=760)
+        self.note.pack(fill="x", pady=GUTTER)
+        buttons = tk.Frame(body, bg=C["bg"])
+        buttons.pack(fill="x")
+        self.add_button = ttk.Button(buttons, style="Primary.TButton", command=self.add)
+        self.add_button.pack(side="left")
+        ttk.Button(buttons, text=T["import"], command=self.import_files).pack(side="left", padx=8)
+        self.dup_button = ttk.Button(buttons, command=self.toggle_duplicates)
+        self.dup_button.pack(side="left")
+        self.make_button = ttk.Button(buttons, command=self.make)
+        self.make_button.pack(side="left", padx=8)
+        _activate(self.back, self.go_back)
 
+    # navigation ---------------------------------------------------------------------
     def show(self, kind):
-        self.kind, self.only_dups = kind, False
+        """Open on one tab (links from other pages call this after navigating here)."""
+        self.kind, self.only_dups, self.selected = kind, False, None
+        self.query.set("")
         self.refresh()
 
-    def _summary(self, kind, query=""):
-        if self.services is not None and not query:
-            return self.services.data(kind)
-        return dk.summarize(self.workspace, kind, query=query)
+    def go_back(self):
+        self.navigate(back_link(self.kind)[1])
+
+    def make(self):
+        page = self.navigate("make_data")
+        if page is not None:
+            page.show(self.kind)
+
+    # data ---------------------------------------------------------------------------
+    def _load(self, kind):
+        self.summaries[kind] = self.services.data(kind, self.query.get().strip() if kind == self.kind else "")
 
     def refresh(self):
-        tab = TABS[self.kind]
-        self.summaries = {k: self._summary(k, self.query.get() if k == self.kind else "") for k in dk.KINDS}
-        for k, button in self.tab_buttons.items():
-            s, on = self.summaries[k], k == self.kind
-            button.configure(text=f"{TABS[k]['name']}\n{dk.USED_BY[k]}\n{s.count_line}", bg="#1b1f27" if on else PANEL,
-                             highlightbackground=VIOLET if on else EDGE, activebackground="#1b1f27")
-        s = self.summaries[self.kind]
-        self.back.configure(text=tab["back"])
-        self.lead.configure(text=tab["lead"])
-        self.sets.configure(text=" · ".join(f"{x['name']} ({x['count']:,})" for x in s.sets) or "No sets yet")
-        self.table.heading("a", text=tab["cols"][0])
-        self.table.heading("b", text=tab["cols"][1])
-        self.table.delete(*self.table.get_children())
-        for r in s.rows:
-            if self.only_dups and r["status"] != "Near-duplicate":
-                continue
-            self.table.insert("", "end", iid=r["id"], values=(r["a"], r["b"], r["status"]), tags=(r["status"],))
-        self.note.configure(text=tab["note"])
-        self.add_button.configure(text=tab["add"])
-        self.dup_button.configure(text=f"Near-duplicates ({s.near_duplicates} found)" + (" · showing" if self.only_dups else ""),
-                                  state="disabled" if self.kind == "problems" else "normal")
-        self.make_button.configure(text=tab["make"])
+        for k in KINDS:
+            self._load(k)
+        self._render()
 
+    def _search(self):
+        self.selected = None
+        self._load(self.kind)
+        self._render()
+
+    def _render(self):
+        kind, s = self.kind, self.summaries[self.kind]
+        for k, (tab, name, used, count) in self.tabs.items():
+            on, sk = k == kind, self.summaries[k]
+            bg = C["panel2"] if on else C["panel"]
+            tab.configure(bg=bg, highlightbackground=C["violet"] if on else C["border"])
+            name.configure(text=T[f"{k}_tab"], bg=bg)
+            used.configure(text=sk.used_by, bg=bg)
+            count.configure(text=sk.count_line, bg=bg)
+        self.back.configure(text="‹ " + back_link(kind)[0])
+        self.lead_line.configure(text=T[f"{kind}_lead"])
+        self.sets_line.configure(text=" · ".join(f"{x['name']} ({x['count']:,})" for x in s.sets) or T["no_sets"])
+        self.table.heading("a", text=T[f"{kind}_col_a"])
+        self.table.heading("b", text=T[f"{kind}_col_b"])
+        self.table.delete(*self.table.get_children())
+        for r in visible_rows(s.rows, self.only_dups):
+            self.table.insert("", "end", iid=r["id"], values=(r["a"], r["b"], r["status"]),
+                              tags=(r["status"], "mono") if kind == "problems" else (r["status"],))
+        if self.selected and self.table.exists(self.selected):
+            self.table.selection_set(self.selected)
+        self.shown.configure(text=shown_line(s, self.query.get()))
+        self.note.configure(text=T[f"{kind}_note"])
+        self.add_button.configure(text=T[f"{kind}_add"])
+        self.make_button.configure(text=T[f"{kind}_make"])
+        self.dup_button.configure(text=dup_label(s.near_duplicates, self.only_dups), state="normal" if s.near_duplicates else "disabled")
+        self._detail()
+
+    def _row(self):
+        return next((r for r in self.summaries[self.kind].rows if r["id"] == self.selected), None)
+
+    def _select(self):
+        picked = self.table.selection()
+        self.selected = picked[0] if picked else None
+        self._detail()
+
+    def _detail(self):
+        row = self._row()
+        self.detail_text.configure(text=T["pick_row"] if row is None else f"{row['a']}\n\n{row['b']}")
+        if row is not None and row["status"] == "Review":
+            self.review_row.pack(anchor="w", pady=(8, 0))
+        else:
+            self.review_row.pack_forget()
+
+    def _review(self, keep):
+        if self.selected:
+            self.services.review_data(self.selected, keep)
+            self.selected = None
+            self.refresh()
+
+    # actions ------------------------------------------------------------------------
     def toggle_duplicates(self):
         self.only_dups = not self.only_dups
-        self.refresh()
-
-    def _target(self, name):
-        return dk.ensure_dataset(self.workspace, name)
+        self._render()
 
     def add(self):
-        ask = lambda t: simpledialog.askstring("Your data", t, parent=self)  # noqa: E731
-        if self.kind == "text":
-            text = ask("Document text")
-            row = {"text": text} if text else None
-            name = "Your files"
-        elif self.kind == "conversations":
-            prompt, answer = ask("Prompt"), None
-            answer = ask("Good answer") if prompt else None
-            row = {"user": prompt, "assistant": answer, "quality": "Good"} if prompt and answer else None
-            name = "Your conversations"
-        else:
-            prompt = ask("Problem prompt")
-            rule = ask("Rule (" + ", ".join(rules.RULES) + ")") if prompt else None
-            if rule not in rules.RULES:
-                row = None
-            else:
-                row = dict(dk.make_problem({"prompt": prompt, "rule": rule, "params": {}}), source="manual")
-            name = "Your problems"
-        if row is None:
-            return
-        added = dk.add_problems(self.workspace, self._target(name), [{"prompt": row["prompt"], "rule": row["rule"], "params": {}}])[0] \
-            if self.kind == "problems" else self.workspace.add(self._target(name), [row], "manual")[0]
-        if not added:
-            messagebox.showinfo("Your data", "That is already in this set (or empty).", parent=self)
+        ask = lambda t: simpledialog.askstring(T["dialog"], t, parent=self)  # noqa: E731
+        fields = collect_fields(self.kind, ask, lambda m: messagebox.showinfo(T["dialog"], m, parent=self))
+        if fields is not None and not self.services.add_data(self.kind, fields):
+            messagebox.showinfo(T["dialog"], T["already"], parent=self)
         self.refresh()
 
     def import_files(self):
         paths = filedialog.askopenfilenames(parent=self)
         if paths:
-            self.workspace.import_files(list(paths), self._target({"text": "Your files", "conversations": "Your conversations",
-                                                                  "problems": "Your problems"}[self.kind]))
+            messagebox.showinfo(T["dialog"], "\n".join(self.services.import_data(self.kind, paths)), parent=self)
             self.refresh()

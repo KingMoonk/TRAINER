@@ -1,115 +1,160 @@
 """Make extra data: problems a rule can check (safe), or local-model drafts that go to review (never straight to training).
 
-Plain ttk.Frame with refresh(). `drafter(kind, n) -> list[row]` is the local-model hook (None = no model connected);
-rows are {"user","assistant"} for rewrites and {"text"} for prose. Drafts are stored with quality "Review".
-ponytail: stand-alone until studio_ia.pages.base / widgets land; swap the Frame base for the shared Page then.
+Talks only to services (generate_problems, make_drafts, draft_count). Decision logic is in plain functions at the top.
 """
+from __future__ import annotations
+
 import random
 import tkinter as tk
 from tkinter import ttk
 
-import studio_data_kinds as dk
-import studio_rules as rules
+import studio_rules as rules  # rule names only
+from studio_ia.copy import MAKEDATA as T
+from studio_ia.pages.base import Page
+from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.widgets import Kicker, _activate
 
-BG, PANEL, EDGE, TEXT, MUTED, VIOLET = "#0e1014", "#15181e", "#2a2f3a", "#e6e8ec", "#8f97a6", "#9f8cff"
-KINDS = [
-    dict(name="Problems a rule can check", note="Sort, reverse, count, copy, small addition, length limits, ending cleanly.",
-         makes="problems", safe="safe: the rule decides what is right", color="#6cb4ee", go="Generate problems",
-         example="Reverse: groundwork  →  rule: reverse", where="Goes to Your data → Problems. Used by Post-training round 2.",
-         dataset="Generated from rules"),
-    dict(name="Rewrite with your local model", makes="conversations", color="#e5b567", go="Make drafts",
-         note="Rephrases prompts and answers you already have, so round 1 sees more variety. Uses your local model (Ollama).",
-         safe="for review only: it can introduce mistakes", example="[your prompt, reworded]  →  [the same answer, reworded]",
-         where="Goes to Your data → Conversations as drafts. Nothing is used until you mark it Good.", dataset="Rewritten conversations"),
-    dict(name="Generate prose with your local model", makes="text", color="#e5b567", go="Make drafts",
-         note="Short passages in a style or topic you pick.", safe="for review only: it can introduce mistakes",
-         example="[a paragraph about tides, in plain English]", where="Goes to Your data → Text as drafts. Kept small next to real text.",
-         dataset="Generated prose"),
-]
-ALL = "All rules"
+MAX_N = 100000
+# Which card makes which data kind, how it is described, and how it is labelled for safety.
+CARDS = (
+    dict(key="problems", makes="problems", safe_color="blue", name=T["problems_rule"], note=T["problems_note"], makes_line=T["problems_makes"],
+         safe=T["problems_safe"], example=T["problems_example"], where=T["problems_where"], go=T["problems_go"]),
+    dict(key="rewrite", makes="conversations", safe_color="amber", name=T["rewrite_model"], note=T["rewrite_note"], makes_line=T["rewrite_makes"],
+         safe=T["rewrite_safe"], example=T["rewrite_example"], where=T["rewrite_where"], go=T["rewrite_go"]),
+    dict(key="prose", makes="text", safe_color="amber", name=T["prose_model"], note=T["prose_note"], makes_line=T["prose_makes"],
+         safe=T["prose_safe"], example=T["prose_example"], where=T["prose_where"], go=T["prose_go"]),
+)
 
 
-class MakeDataPage(ttk.Frame):
-    def __init__(self, master, workspace=None, services=None, drafter=None, on_navigate=None, seed=None):
-        super().__init__(master)
-        self.workspace = workspace or services.workspace
-        self.drafter = drafter
-        self.on_navigate = on_navigate or (lambda page, **kw: None)
-        self.rng = random.Random(seed)
-        self.k = 0
-        self.configure(style="MD.TFrame")
-        ttk.Style(self).configure("MD.TFrame", background=BG)
-        tk.Label(self, text="Make extra data", bg=BG, fg=TEXT, font=("TkDefaultFont", 24, "bold")).pack(anchor="w", padx=16, pady=(14, 0))
-        tk.Label(self, text="Optional. Generate more, then keep what passes review.", bg=BG, fg=MUTED).pack(anchor="w", padx=16)
-        row = tk.Frame(self, bg=BG)
-        row.pack(fill="x", padx=16, pady=8)
+def card_for(kind):
+    """Index of the card that makes `kind`, 0 if unknown."""
+    return next((i for i, c in enumerate(CARDS) if c["makes"] == kind), 0)
+
+
+def stores_directly(card):
+    """Only rule-made problems skip review: the rule decides what is right. Local-model output is always a draft."""
+    return card["makes"] == "problems"
+
+
+def parse_count(text):
+    """A whole number 1..MAX_N, else None."""
+    try:
+        n = int(str(text).strip())
+    except ValueError:
+        return None
+    return n if 1 <= n <= MAX_N else None
+
+
+def preview_lines(report):
+    """Lines of the 'Try 5 first' preview: each prompt with its answer, then k of n answers passing their own rule."""
+    lines = [f"{i['prompt']}  →  {i.get('answer', T['rule_decides'])}" for i in report["items"][:5]]
+    if report["checked"]:
+        lines.append(T["checked"].format(passed=report["passed"], checked=report["checked"]))
+    return [T["preview"], *lines]
+
+
+def problems_summary(report):
+    return T["added_problems"].format(added=report["added"]) + (T["dup_skipped"].format(dup=report["duplicates"]) if report["duplicates"] else ".")
+
+
+def drafts_summary(kind, added):
+    return T["drafts_waiting"].format(added=added, kind=kind.title())
+
+
+class MakeDataPage(Page):
+    title = T["h1"]
+    lead = T["lead"]
+
+    def __init__(self, parent, services, navigate=None, seed=None, **kw):
+        super().__init__(parent, services, navigate, **kw)
+        self.rng, self.k = random.Random(seed), 0
+        body = self.body
+        row = tk.Frame(body, bg=C["bg"])
+        row.pack(fill="x")
         self.cards = []
-        for i, kind in enumerate(KINDS):
-            card = tk.Button(row, justify="left", anchor="w", bd=0, padx=10, pady=8, wraplength=260, command=lambda i=i: self.pick(i),
-                             highlightthickness=1, fg=TEXT, text=f"{kind['name']}\n{kind['note']}\nmakes: {kind['makes']}\n{kind['safe']}")
-            card.pack(side="left", expand=True, fill="both", padx=3)
-            self.cards.append(card)
-        self.kicker = tk.Label(self, text="EXAMPLE OF WHAT IT MAKES", bg=BG, fg=MUTED, anchor="w")
-        self.kicker.pack(fill="x", padx=16)
-        self.example = tk.Label(self, bg=PANEL, fg=TEXT, anchor="w", justify="left", padx=10, pady=8)
-        self.example.pack(fill="x", padx=16)
-        self.where = tk.Label(self, bg=BG, fg=MUTED, anchor="w")
-        self.where.pack(fill="x", padx=16, pady=4)
-        ctl = tk.Frame(self, bg=BG)
-        ctl.pack(fill="x", padx=16)
-        tk.Label(ctl, text="How many", bg=BG, fg=TEXT).pack(side="left")
-        self.n = tk.IntVar(value=100)
-        tk.Spinbox(ctl, from_=1, to=100000, textvariable=self.n, width=8).pack(side="left", padx=6)
-        self.rule = ttk.Combobox(ctl, values=[ALL, *rules.RULES], state="readonly", width=16)
-        self.rule.set(ALL)
-        self.rule.pack(side="left", padx=6)
-        self.go = tk.Button(ctl, command=lambda: self.run(self.n.get()))
-        self.go.pack(side="left", padx=3)
-        tk.Button(ctl, text="Try 5 first", command=lambda: self.run(5, trial=True)).pack(side="left", padx=3)
-        self.review = tk.Button(ctl, command=lambda: self.on_navigate("your_data", kind=KINDS[self.k]["makes"]))
-        self.review.pack(side="right", padx=3)
-        tk.Button(ctl, text="Your data", command=lambda: self.on_navigate("your_data")).pack(side="right", padx=3)
-        self.status = tk.Label(self, bg=BG, fg=MUTED, anchor="w", justify="left")
-        self.status.pack(fill="x", padx=16, pady=6)
+        for i, card in enumerate(CARDS):
+            box = tk.Frame(row, bg=C["panel"], takefocus=1, cursor="hand2", highlightthickness=1, highlightbackground=C["border"],
+                           highlightcolor=C["violet"], padx=GUTTER, pady=GUTTER)
+            box.pack(side="left", fill="both", expand=True, padx=(0, 8))
+            labels = [tk_label(box, card["name"], 15, "text", "panel", font=font(15, bold=True), wraplength=250),
+                      tk_label(box, card["note"], 13, "muted", "panel", wraplength=250),
+                      tk_label(box, card["makes_line"], 13, "text2", "panel"),
+                      tk_label(box, card["safe"], 13, card["safe_color"], "panel", wraplength=250)]
+            for w in labels:
+                w.pack(fill="x", pady=2)
+            for w in (box, *labels):
+                _activate(w, lambda i=i: self.pick(i))
+            self.cards.append((box, labels))
+        Kicker(body, T["kicker"]).pack(fill="x", pady=(GUTTER, 4))
+        self.example = tk_label(body, "", 14, "text", "panel", font=font(14, mono=True), padx=GUTTER, pady=10)
+        self.example.pack(fill="x")
+        self.where = tk_label(body, "", 13, "muted")
+        self.where.pack(fill="x", pady=GUTTER // 2)
+        ctl = tk.Frame(body, bg=C["bg"])
+        ctl.pack(fill="x")
+        tk_label(ctl, T["how_many"], 14, "text").pack(side="left")
+        self.n = tk.StringVar(value="100")
+        tk.Entry(ctl, textvariable=self.n, width=8, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat",
+                 highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"]).pack(side="left", padx=8, ipady=6)
+        self.rule = ttk.Combobox(ctl, values=[T["all_rules"], *(rules.LABELS[r] for r in rules.RULES)], state="readonly", width=22)
+        self.rule.set(T["all_rules"])
+        self.rule.pack(side="left", padx=8)
+        self.go = ttk.Button(ctl, style="Primary.TButton", command=lambda: self.run(trial=False))
+        self.go.pack(side="left", padx=4)
+        self.try5 = ttk.Button(ctl, text=T["try_5"], command=lambda: self.run(trial=True))
+        self.try5.pack(side="left", padx=4)
+        self.review = ttk.Button(ctl, command=lambda: self.open_data(CARDS[self.k]["makes"]))
+        self.review.pack(side="right", padx=4)
+        ttk.Button(ctl, text=T["your_data"], command=lambda: self.open_data(None)).pack(side="right", padx=4)
+        self.status = tk_label(body, "", 14, "text2", wraplength=760)
+        self.status.pack(fill="x", pady=GUTTER)
+        self.show(CARDS[0]["makes"])
+
+    def show(self, kind):
+        """Select the card that makes `kind` (links from Your data call this)."""
+        self.k = card_for(kind)
+        self.status.configure(text="")
         self.refresh()
 
-    def pick(self, k):
-        self.k = k
-        self.refresh()
+    def pick(self, i):
+        self.show(CARDS[i]["makes"])
 
-    def drafts(self):
-        return sum(1 for d in self.workspace.state["datasets"] if d["name"] in {x["dataset"] for x in KINDS[1:]}
-                   for e in self.workspace.iter_examples(d["id"]) if e.get("quality") == "Review")
+    def open_data(self, kind):
+        page = self.navigate("your_data")
+        if page is not None and kind:
+            page.show(kind)
 
     def refresh(self):
-        kind = KINDS[self.k]
-        for i, card in enumerate(self.cards):
+        card = CARDS[self.k]
+        for i, (box, labels) in enumerate(self.cards):
             on = i == self.k
-            card.configure(bg="#1b1f27" if on else BG, highlightbackground=VIOLET if on else EDGE)
-        self.example.configure(text=kind["example"])
-        self.where.configure(text=kind["where"])
-        self.go.configure(text=kind["go"])
-        self.rule.configure(state="readonly" if kind["makes"] == "problems" else "disabled")
-        self.review.configure(text=f"Review drafts ({self.drafts()})")
+            bg = C["panel2"] if on else C["panel"]
+            box.configure(bg=bg, highlightbackground=C["violet"] if on else C["border"])
+            for w in labels:
+                w.configure(bg=bg)
+        self.example.configure(text=card["example"])
+        self.where.configure(text=card["where"])
+        self.go.configure(text=card["go"])
+        self.rule.configure(state="readonly" if stores_directly(card) else "disabled")
+        self.try5.configure(state="normal" if stores_directly(card) else "disabled")
+        self.review.configure(text=T["review_drafts"].format(count=self.services.draft_count()))
 
-    def run(self, n, trial=False):
-        """Problems: Try 5 previews without storing; Generate stores them. Local model: always stored as drafts (Review)."""
-        kind = KINDS[self.k]
-        if n < 1:
+    def run(self, trial=False):
+        """Problems: Try 5 first previews without storing; Generate stores them. Local model: always stored as drafts."""
+        card = CARDS[self.k]
+        n = 5 if trial else parse_count(self.n.get())
+        if n is None:
+            self.status.configure(text=T["bad_count"])
             return
-        if kind["makes"] == "problems":
-            names = rules.RULES if self.rule.get() == ALL else (self.rule.get(),)
-            items = [i for j, r in enumerate(names) for i in rules.generate(r, self.rng, n // len(names) + (j < n % len(names)))]
-            if trial:
-                self.status.configure(text="Preview, nothing saved:\n" + "\n".join(f"{i['prompt']}  →  {i.get('answer', '(rule decides)')}" for i in items[:5]))
-                return
-            added, dup = dk.add_problems(self.workspace, dk.ensure_dataset(self.workspace, kind["dataset"]), items)
-            self.status.configure(text=f"Added {added} problems to Your data → Problems" + (f" ({dup} duplicates skipped)." if dup else "."))
+        if stores_directly(card):
+            chosen = next((r for r in rules.RULES if rules.LABELS[r] == self.rule.get()), None)
+            report = self.services.generate_problems(chosen, n, store=not trial, rng=self.rng)
+            self.status.configure(text="\n".join(preview_lines(report)) if trial else problems_summary(report))
         else:
-            if self.drafter is None:
-                self.status.configure(text="No local model connected. Set up Ollama in Post-training, then try again.")
+            try:
+                added = self.services.make_drafts(card["makes"], n)
+            except RuntimeError as error:
+                self.status.configure(text=T["draft_failed"].format(why=error))
                 return
-            rows = [{**r, "quality": "Review", "synthetic": True, "source": "synthetic"} for r in self.drafter(kind["makes"], n)]
-            added = self.workspace.add(dk.ensure_dataset(self.workspace, kind["dataset"]), rows, "synthetic")[0]
-            self.status.configure(text=f"{added} drafts waiting in Your data → {kind['makes'].title()} with status Review. Nothing is used until you mark it Good.")
+            self.status.configure(text=drafts_summary(card["makes"], added))
         self.refresh()

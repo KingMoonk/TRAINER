@@ -12,10 +12,36 @@ from studio_ia.widgets import Card, Kicker, Segmented, button
 
 ROWS = ("8", "16", "32")
 HOLD = ("2%", "5%", "10%")
-LENGTHS = {"Short": 200, "Medium": 1000, "Long": 5000}  # ponytail: fixed step counts; scale to the data later
+LENGTHS = {"Short": 1, "Medium": 2, "Long": 4}  # passes over the chosen text
 RULE = 20  # word pieces per parameter, a rule of thumb only
 PALETTE = ("#3a3560", "#2a4558", "#4a3a2a", "#2f4a36", "#4a2f45")
 END = "#0a0b0e"
+
+
+def word_list_changed(v, parent):
+    """A different word list (tokenizer) makes a warm start invalid."""
+    return parent is not None and v is not None and v.spec.get("tokenizer") != parent.spec.get("tokenizer")
+
+
+def can_continue(v, parent):
+    """Continue needs a parent version with a trained checkpoint and the same word list."""
+    return parent is not None and bool(parent.best_checkpoint) and not word_list_changed(v, parent)
+
+
+def forced_mode(v, parent, requested):
+    """The mode a run may use: catch_up only when continuing is valid, otherwise from_scratch."""
+    return requested if requested == "from_scratch" or can_continue(v, parent) else "from_scratch"
+
+
+def steps_for(pieces, per_step, passes):
+    """Steps for `passes` passes over `pieces` word pieces at `per_step` pieces a step; None when the size is unknown."""
+    return max(1, -(-int(pieces) * passes // per_step)) if pieces and per_step else None
+
+
+def pretrain_config(spec, steps, rows, hold):
+    """Engine config for a plain-text run of `spec`: loss on every piece, `hold` of the text held back for testing."""
+    from studio_spec import config_from_spec
+    return {**config_from_spec(spec), "steps": steps, "batch_size": rows, "validation": hold, "objective": "all"}
 
 
 def sets_of(summary):
@@ -133,14 +159,16 @@ class PretrainingPage(Page):
             return None
         return next((p for p in self.services.versions() if p.number == v.parent), None)
 
-    def word_list_changed(self, v, parent):
-        return parent is not None and v.spec.get("tokenizer") != parent.spec.get("tokenizer")
-
     def chosen(self):
         return [i for i, on in self.use.items() if on]
 
+    def user_text(self):
+        """True when a chosen set is the person's own text (not the bundled library): the queue then adds a restore job."""
+        return any(not s.get("library") for s in sets_of(self.services.data("text")) if s["id"] in self.chosen())
+
     def steps(self):
-        return LENGTHS[self.length.value]
+        p = self.preview
+        return steps_for(p.get("pieces"), self.rows_n() * p.get("context", 256), LENGTHS[self.length.value])
 
     def rows_n(self):
         return int(self.rows.value)
@@ -207,7 +235,9 @@ class PretrainingPage(Page):
         else:
             self.enough.configure(text=T["text_estimate"])
             self.enough_note.configure(text=T["word_pieces_rule"])
-        self.steps_line.configure(text=T["steps_time"].replace("[N]", f"{self.steps():,}", 1))
+        steps, tps = self.steps(), p.get("tokens_per_second")
+        minutes = f"{max(1, round(steps * per_step / tps / 60)):,}" if steps and tps else "[N]"
+        self.steps_line.configure(text=T["steps_time"].replace("[N]", f"{steps:,}" if steps else "[N]", 1).replace("[N]", minutes, 1))
         self.draw_rows()
 
     def draw_rows(self):
@@ -225,36 +255,39 @@ class PretrainingPage(Page):
             c.create_text(0, 10, text="[N]", anchor="w", fill=C["dim"], font=font(14, mono=True))
 
     def paint_modes(self, v, parent):
-        changed = self.word_list_changed(v, parent) if v else False
-        can_continue = parent is not None and not changed
-        if not can_continue:
-            self.mode = "from_scratch"
+        self.mode = forced_mode(v, parent, self.mode)
+        ok = can_continue(v, parent)
         pn = parent.number if parent else "[N]"
         texts = {"catch_up": (f"Continue from version {pn}", "Recommended. Keeps what version %s learned; parts that are new in version %s start empty, so the curve starts at version %s’s level." % (pn, v.number if v else "[N]", pn)),
                  "from_scratch": ("Start from scratch", "New random weights. Only required when the word list changes. Slower to reach the same error.")}
         for key, (box, title, sub) in self.mode_boxes.items():
-            on, blocked = self.mode == key, key == "catch_up" and not can_continue
+            on, blocked = self.mode == key, key == "catch_up" and not ok
             title.configure(text=texts[key][0])
-            sub.configure(text="The word list changed, so version %s must start from scratch." % (v.number if v else "[N]") if blocked else texts[key][1])
+            why = "The word list changed" if word_list_changed(v, parent) else "There is no trained earlier version to continue from"
+            sub.configure(text="%s, so version %s must start from scratch." % (why, v.number if v else "[N]") if blocked else texts[key][1])
             box.configure(highlightbackground=C["violet"] if on else C["border"], highlightthickness=2 if on else 1)
         self.need.configure(text=f"version {v.number} needs catch-up training" if v else "")
         self.footer.configure(text=T["queue_note"].replace("version 4", f"version {pn}").replace("version 5", f"version {v.number if v else '[N]'}"))
-        self.add_btn.state(["!disabled" if v and self.chosen() else "disabled"])
+        self.add_btn.state(["!disabled" if v and self.chosen() and self.steps() else "disabled"])
 
     def pick_mode(self, key):
         v, parent = self.v, self.parent_v
-        if key == "catch_up" and (parent is None or self.word_list_changed(v, parent)):
-            return
-        self.mode = key
+        self.mode = forced_mode(v, parent, key)
         self.paint_modes(v, parent)
 
     def add_to_queue(self):
         v = self.v
         if v is None or not self.chosen():
             return
-        cfg = {**v.spec, "steps": self.steps(), "batch_size": self.rows_n(), "heldout_fraction": int(self.hold.value[:-1]) / 100}
-        init = self.parent_v.best_checkpoint if self.parent_v and self.mode == "catch_up" else None
+        steps = self.steps()
+        if not steps:
+            return
+        cfg = pretrain_config(v.spec, steps, self.rows_n(), int(self.hold.value[:-1]) / 100)
+        self.mode = forced_mode(v, self.parent_v, self.mode)
+        init = self.parent_v.best_checkpoint if self.mode == "catch_up" else None
         label = f"Version {v.number} {'catch-up' if self.mode == 'catch_up' else 'from scratch'}"
         self.services.enqueue(Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=label, params={
             "config": cfg, "datasets": self.chosen(), "mode": self.mode, "init_from": init, "output_dir": None,
-            "user_text": False, "version": v.number}))
+            "user_text": self.user_text(), "previous_best": self.parent_v.best_checkpoint if self.parent_v else None,
+            "version": v.number, "heldout_fraction": cfg["validation"],
+            "pieces_per_pass": self.preview.get("pieces")}))

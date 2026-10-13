@@ -157,8 +157,10 @@ class Teacher:
         self.model.load_weights(data["model"])
         self.correction = correction
 
-    def messages(self, messages):
-        return [{"role": "system", "content": self.correction}, *messages] if self.correction else list(messages)
+    def messages(self, messages, correction=None):
+        """The conversation as the teacher sees it: `correction` (or the teacher's own) goes first as a system message."""
+        correction = correction or self.correction
+        return [{"role": "system", "content": correction}, *messages] if correction else list(messages)
 
 
 def privileged(checkpoint, correction, device="auto"):
@@ -201,7 +203,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     and the verdict counts the words where the student's log-prob moved closer to the teacher's after the round
     (|student - teacher| shrank), measured teacher-forced on those same answers."""
     emit, stop, pause = emit or (lambda event: None), stop or threading.Event(), pause or threading.Event()
-    prompts = [_messages(p) for p in prompts]
+    prompts = [(_messages(p), p.get("correction") if isinstance(p, dict) else None) for p in prompts]  # (messages, its own correction)
     if not prompts:
         raise ValueError("Round 3 needs prompts to practise on.")
     local, optimizer = _setup(checkpoint, device)
@@ -214,18 +216,19 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     directory, cfg, extra = _begin(output_dir, local, checkpoint, "teacher")
     base_step, rng = load_checkpoint(checkpoint)["step"], random.Random(seed)
 
-    def encode(messages, answer):
-        return _encode_pair(tokenizer, messages, answer, cfg["context"]), _encode_pair(tokenizer, teacher.messages(messages), answer, cfg["context"])
+    def encode(item, answer):
+        messages, correction = item
+        return _encode_pair(tokenizer, messages, answer, cfg["context"]), _encode_pair(tokenizer, teacher.messages(messages, correction), answer, cfg["context"])
 
     def probe_gaps(rows):
         s_rows, t_rows = [r[0] for r in rows], [r[1] for r in rows]
         with torch.no_grad():
             return reverse_kl(student, teacher.model, s_rows, t_rows)[1]
 
-    fixed = [encode(m, local.generate(m, max_tokens=max_tokens, temperature=temperature)) for m in prompts[:probe]]
+    fixed = [encode(m, local.generate(m[0], max_tokens=max_tokens, temperature=temperature)) for m in prompts[:probe]]
     before = probe_gaps(fixed)
     words = [tokenizer.decode([t]) for t in fixed[0][0][1] if t != -100]
-    emit({"type": "heat", "prompt": _prompt_text(prompts[0]), "words": words, "surprise": [float(-t) for t in before[0][1]]})
+    emit({"type": "heat", "prompt": _prompt_text(prompts[0][0]), "words": words, "surprise": [float(-t) for t in before[0][1]]})
     record = {"name": "learn from a teacher", "createdAt": now(), "status": "training", "stage": "teacher", "steps": steps,
               "base_checkpoint": str(checkpoint), "privileged": bool(teacher.correction)}
     atomic_json(directory / "run.json", record)
@@ -234,7 +237,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     while step < steps and not stop.is_set():
         while pause.is_set() and not stop.is_set():
             threading.Event().wait(.05)
-        pairs = [encode(m, local.generate(m, max_tokens=max_tokens, temperature=temperature))
+        pairs = [encode(m, local.generate(m[0], max_tokens=max_tokens, temperature=temperature))
                  for m in rng.sample(prompts, min(prompts_per_step, len(prompts)))]
         student.zero_grad()
         kl, _ = reverse_kl(student, teacher.model, [p[0] for p in pairs], [p[1] for p in pairs], backward=True)
@@ -290,6 +293,8 @@ def run_round(number, job, services, emit, stop, pause):
     job.params["output_dir"] = str(out)
     docs, held = _rows(job, services, "heldout_docs", "heldout_docs"), _rows(job, services, "heldout_problems", "heldout_problems")
     before = measure(checkpoint, docs, held)
+    import studio_eval
+    band = studio_eval.noise_band(checkpoint, [_doc(d) for d in docs]) if docs else None
     kw = {k: p[k] for k in ("steps", "learning_rate") if p.get(k) is not None}
     verdict = VERDICTS.get(number, "")
     if number == 1:
@@ -301,8 +306,12 @@ def run_round(number, job, services, emit, stop, pause):
         if (record.get("last_mean") or 0) < (record.get("first_mean") or 0):
             verdict = "Answers that passed the check did not become more likely than ones that failed."
     elif number == 3:
-        teacher = privileged(checkpoint, p["correction"]) if p.get("correction") else p.get("teacher") or getattr(services.best_version(), "best_checkpoint", None)
-        prompts = p["prompts"] if "prompts" in p else studio_rlhf.prompts_from(_rows(job, services, "conversations", "conversations"))
+        if p.get("teacher_choice") == "correction":   # the same model with each saved correction in front of it
+            teacher = Teacher(checkpoint)
+            prompts = _rows(job, services, "corrections", "corrections")
+        else:
+            teacher = privileged(checkpoint, p["correction"]) if p.get("correction") else p.get("teacher") or getattr(services.best_version(), "best_checkpoint", None)
+            prompts = p["prompts"] if "prompts" in p else studio_rlhf.prompts_from(_rows(job, services, "conversations", "conversations"))
         record = learn_from_teacher(checkpoint, prompts, teacher, out, emit=emit, stop=stop, pause=pause, **kw)
         verdict = f"Its answers moved toward the teacher's at {record['moved']} of {record['words']} words."
     elif number == 4:
@@ -315,6 +324,9 @@ def run_round(number, job, services, emit, stop, pause):
         raise ValueError(f"Unknown round: {number}")
     candidate = record.get("checkpoint") or str(out / "last.npz")
     after = measure(candidate, docs, held)
-    ok, checks = studio_gate.passes(before, after)
-    emit({"type": "gate", "round": number, "ok": ok, "checks": checks, "verdict": verdict, "before": before, "after": after, "checkpoint": candidate})
+    ok, checks = studio_gate.passes(before, after, band)
+    result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict, "before": before, "after": after, "band": band, "checkpoint": candidate}
+    emit({"type": "gate", **result})
+    if getattr(services, "record_round", None):   # the real services keep the result and move Chat only when ok
+        services.record_round(number, p.get("version"), result)
     return {"round": number, "ok": ok, "checkpoint": candidate}

@@ -295,7 +295,7 @@ class RedesignedUI(unittest.TestCase):
         device.toggle(True)
         combo = next(w for w in walk(device.body) if isinstance(w, ttk.Combobox))
         self.assertEqual(str(combo.cget("textvariable")), str(self.app.config_vars["device"]))
-        self.assertEqual(list(combo.cget("values")), ["auto", "cpu", "cuda"])
+        self.assertEqual(list(combo.cget("values")), ["auto", "cpu", "cuda", "mps"])
         for box in boxes.values():
             box.toggle(False)
 

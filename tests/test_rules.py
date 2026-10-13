@@ -92,6 +92,12 @@ class Kinds(unittest.TestCase):
         texts = list(dk.pretraining_examples(ws, [a, b]))
         self.assertEqual([e["text"] for e in texts], ["one document"])
 
+    def test_unreviewed_text_drafts_never_enter_pretraining(self):
+        ws = workspace()
+        a = ws.create_dataset("a")
+        ws.add(a, ["a kept document", {"text": "a draft document", "quality": "Review", "synthetic": True}])
+        self.assertEqual([e["text"] for e in dk.pretraining_examples(ws, [a])], ["a kept document"])
+
     def test_sqlite_storage_problems(self):
         ws = workspace()
         d = ws.create_dataset("disk", storage="sqlite")

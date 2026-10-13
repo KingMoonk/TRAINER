@@ -200,6 +200,16 @@ QUEUE = {
     "chat_follows_best": "Chat follows the best checkpoint",
     "chat_follows_desc": "Chat uses the checkpoint with the lowest error on held-back text, not simply the newest.",
     "answering_note": "Answering in Chat never stops training. It shares the computer, so training slows while it answers.",
+    "storage": "Storage",
+    "storage_desc": "History is run folders, checkpoints, saved versions, logs, exports and backups. Settings and chat ratings are never deleted.",
+    "storage_older": "Older than {days} days",
+    "storage_all": "All history",
+    "storage_data": "Also delete my datasets and downloads",
+    "storage_frees": "This frees {size} in {n} items",
+    "storage_nothing": "Nothing to delete",
+    "storage_freed": "Freed {size}",
+    "storage_delete": "Delete…",
+    "storage_confirm": "Delete {n} items and free {size}? This cannot be undone."
 }
 
 QUICKTEST = {
@@ -284,6 +294,7 @@ TRACE = {
     "block_what": "attention adds, then MLP adds",
     "output": "Output",
     "output_what": "final norm, then unembedding to logits",
+    "approx_legend": "≈ marks a guess read before the last layer: approximate, because those layers are not trained to be read this way. Only the output row is the model's real prediction.",
     "relative_note": "Relative change says how much a stage added compared with what was already there; the cosine says whether it kept the direction (near 1) or turned it. Size alone grows steadily through most models and says little. The guess column is the logit lens: the final norm and unembedding applied early. Layers before the last are not trained to be read this way, so early guesses can look odd. Numbers appear when the engine has run your prompt.",
 }
 
@@ -370,6 +381,12 @@ HEAD_ZOOM = {
     "weighted_formula": "out_j = Σ_i a[i, j] · v_i",
     "weighted_why": "Each position collects a blend of earlier value vectors, weighted by its column. This is the only place in the block where information moves between positions.",
     "weighted_note": 'Showing the column for "{token}". Every column does the same in parallel.',
+    "raw_unit": "q · k",
+    "scale_unit": "q · k / {sqrt_d}",
+    "mask_unit": "masked",
+    "softmax_unit": "weights · columns sum to 1",
+    "weighted_unit": 'weights used for "{token}"',
+    "checked": "Checked: the softmax derived here equals the model's own attention pattern (largest difference {error:.1e}, allowed {tol:g}).",
 }
 
 VALUE_MAP = {
@@ -391,6 +408,10 @@ VALUE_MAP = {
     "together": "Together the two matrices form one 256 × 256 map, but its rank is at most",
     "each_head": "Each head can only write into a subspace of at most {hd} dimensions: a set of directions, not a block of coordinates.",
     "weighting": "Weighting by attention happens on the {hd}-number vectors in the middle, before W_O.",
+    "params": "Per head W_V and W_O hold {per_head} numbers; all {heads} heads together hold {total} = 2 · {d}², whatever the head count.",
+    "measured": "Measured on this model, block {block} head {head}: the rank of W_V · W_O is {rank}, at most {hd}. Singular values, largest first:",
+    "measured_none": "Real singular values appear when a trained checkpoint is available.",
+    "measured_other": "Pick {heads} heads to see this model's measured singular values; it has {heads} heads per block.",
 }
 
 LOSS = {
@@ -469,6 +490,13 @@ HEAD_LAB = {
     "a_lot": "a lot",
     "a_little": "a little",
     "not_at_all_lower": "not at all",
+    "mode_label": "Switching off means",
+    "mode_mean": "Its average (default)",
+    "mode_zero": "Zero (harsher)",
+    "mean_exact": "Here the average is the head's own running average over the pieces up to that point, so nothing from later pieces leaks in.",
+    "most_relied": "MOST RELIED ON",
+    "rank_unit": "error +{rise:.2f} bits/char",
+    "checkpoint": "Experiments on version {version} · checkpoint {checkpoint}. Switching heads off only affects answers on this page. Nothing retrains, and Chat is unchanged.",
 }
 
 INSIDE3D = {
@@ -559,6 +587,20 @@ INSIDE3D = {
     "play": "Play",
     "pause": "Pause",
     "checkpoint_shown": "Checkpoint shown",
+    "open_viewer": "Open the 3D viewer",
+    "close_viewer": "Close the 3D viewer",
+    "viewer_label": "3D VIEWER",
+    "viewer_off": "Not open. It runs in its own window; this page chooses what it shows.",
+    "viewer_on": "Open in its own window. Choosing a mode or zoom here changes the scene there.",
+    "viewer_missing": "The 3D viewer (studio_brain3d.py) is not installed here.",
+    "viewer_demo": "No saved version yet, so the viewer shows a demo model, not yours.",
+    "viewer_yours": "Showing version {n}'s design.",
+    "viewer_no_replay": "No training snapshots are loaded, so the pulses, the orange wave and the brightness are placeholders until a run has recorded some.",
+    "zoom_label": "ZOOM",
+    "mode_label": "MODE",
+    "head_zoom_hint": "Step through the head and scale its output with the menus in the viewer window.",
+    "build_note": "Swapping a module in the viewer does not change your saved design yet; make the change in the Network designer.",
+    "values_note": "Values in the viewer are placeholders until a run has recorded snapshots; the shape of the mask is exact.",
 }
 
 PRETRAINING = {
@@ -716,6 +758,17 @@ MAKEDATA = {
     "try_5": "Try 5 first",
     "review_drafts": "Review drafts ({count})",
     "your_data": "Your data",
+    "kicker": "EXAMPLE OF WHAT IT MAKES",
+    "how_many": "How many",
+    "all_rules": "All rules",
+    "bad_count": "Enter a whole number from 1 to 100000.",
+    "preview": "Preview, nothing saved:",
+    "rule_decides": "(rule decides)",
+    "added_problems": "Added {added} problems to Your data → Problems",
+    "dup_skipped": " ({dup} duplicates skipped).",
+    "checked": "{passed} of {checked} sample answers pass their own rule.",
+    "drafts_waiting": "{added} drafts waiting in Your data → {kind} with status Review. Nothing is used until you mark it Good.",
+    "draft_failed": "Could not make drafts: {why}",
 }
 
 YOURDATA = {
@@ -764,6 +817,22 @@ YOURDATA = {
     "from_chat": "From Chat",
     "ready": "Ready",
     "near_duplicates": "Near-duplicates ([N] found)",
+    "back_pretraining": "Back to Pretraining",
+    "back_post": "Back to Post-training",
+    "no_sets": "No sets yet",
+    "import": "Import files",
+    "shown": "Showing the first {shown} of {count:,}.",
+    "pick_row": "Select a row to read it in full.",
+    "mark_good": "Mark Good",
+    "discard": "Discard",
+    "dialog": "Your data",
+    "ask_text": "Document text",
+    "ask_prompt": "Prompt",
+    "ask_answer": "Good answer",
+    "ask_problem": "Problem prompt",
+    "ask_rule": "Rule ({rules})",
+    "unknown_rule": "Pick one of: {rules}.",
+    "already": "That is already in this set (or empty).",
 }
 
 NAV = {

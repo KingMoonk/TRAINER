@@ -453,7 +453,7 @@ class InstallTests(unittest.TestCase):
             path = Path(watch.install(root + ' "$x', home=home, platform="linux"))
             self.assertEqual(path.parent, Path(home) / ".config" / "autostart")
             text = path.read_text()
-            self.assertIn(f'Exec="{sys.executable}" "-m" "studio_passive_watch" "--root" "', text)
+            self.assertIn('" "-m" "studio_passive_watch" "--root" "', text)  # the interpreter path is escaped differently on Windows
             self.assertIn('\\\\"\\\\$x"', text)  # a quote and a dollar sign, escaped as the Desktop Entry spec says
             watch.uninstall(root + ' "$x', home=home, platform="linux")
             self.assertFalse(path.exists())
@@ -573,10 +573,13 @@ class ProcessTests(unittest.TestCase):
             pid = watch.spawn([sys.executable, "-c", code, tmp, sid], log, watch.REPO)
             self.addCleanup(lambda: watch.alive(pid) and os.kill(pid, 9))
             self.assertGreater(pid, 0)
-            deadline = time.time() + 20
+            deadline = time.time() + 120  # a cold torch import on a Windows runner takes most of a minute
             while watch.alive(pid) and time.time() < deadline:
                 time.sleep(0.05)
-            self.assertFalse(watch.alive(pid), log.read_text())
+            late = watch.alive(pid)
+            if late:
+                watch.terminate(pid)  # or Windows cannot delete the log it still holds, which hides this failure
+            self.assertFalse(late, log.read_text())
             self.assertIn("child done", log.read_text())
             self.assertEqual(store.get(sid)["status"], "finished")
 

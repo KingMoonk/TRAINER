@@ -4,6 +4,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 
+from studio_spec import default_spec
 from studio_ia.copy import FEEDBACK as T
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
@@ -23,6 +24,9 @@ def find(widget, text):
 class PostTrainingTest(unittest.TestCase):
     def setUp(self):
         self.fake = FakeServices()
+        self.fake.save_version(default_spec(), "first design")
+        self.fake._versions[0].best_checkpoint = "v1.npz"
+        self.fake.post_training = lambda version: {"rounds": {}, "gates": {}, "counts": {"conversations": 3, "problems": 3, "pairs": 5, "corrections": 1}}
         try:
             self.app = Studio(self.fake)
         except tk.TclError as error:

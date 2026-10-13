@@ -21,6 +21,9 @@ class BuilderTest(unittest.TestCase):
     def setUp(self):
         self.fake = FakeServices()
         self.fake.save_version(default_spec(), "first design")
+        self.fake.versions()[0].best_checkpoint = "/tmp/ckpt/best.npz"  # trained, so a catch-up can start from it
+        self.has_text = lambda kind: {"kind": kind, "count": 1, "sets": [{"id": "d1", "name": "books", "count": 1}]}
+        self.fake.data = self.has_text
         try:
             self.app = Studio(self.fake)
         except tk.TclError as error:
@@ -42,9 +45,11 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(self.page.tray_kicker, B.T["not_saved"])
         self.assertIn("Save as version 2", self.page.actions)
         self.assertEqual(len(self.fake.versions()), 1)  # draft stays on the page
+        self.assertEqual(self.fake.draft_spec()["dims"]["n_layer"], 4)  # but Quick test and Compare runs can see it
         self.assertEqual(sum("Different look-back heads" in t for t in self.page.expect_texts), 1)
         self.page.discard()
         self.assertEqual(self.page.tray_kicker, B.T["no_changes"])
+        self.assertIsNone(self.fake.draft_spec())
 
     def test_save_shows_warm_start_sentence(self):
         self.page.edit(L=4)
@@ -54,9 +59,53 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(self.fake.versions()[1].change, "more blocks (2 → 4)")
         self.assertEqual(self.page.tray_kicker, B.T["saved_text_needs_catchup"].format(new_version="version 2"))
         self.assertIn(NOTES["same"], self.page.tray_text)
+        self.assertIsNone(self.fake.draft_spec())
         self.page.queue_it(False)
-        self.assertEqual(len(self.fake.queue().up_next), 1)
+        job = self.fake.queue().up_next[0]
+        self.assertEqual((job.kind, job.params["mode"], job.params["version"], job.params["init_from"], job.params["datasets"]),
+                         ("pretrain", "catch_up", 2, "/tmp/ckpt/best.npz", ["d1"]))
         self.assertEqual(self.page.phase, "queued")
+
+    def test_no_text_means_no_job(self):
+        self.fake.data = lambda kind: {"kind": kind, "count": 0, "sets": []}
+        self.page.edit(L=4)
+        self.page.save()
+        self.page.queue_it(False)
+        self.assertEqual(self.fake.queue().up_next, [])
+        self.assertEqual(self.page.phase, "saved")
+        self.assertIn("no plain text", self.page.tray_text)
+
+    def test_untrained_parent_trains_from_scratch(self):
+        self.fake.versions()[0].best_checkpoint = None
+        self.page.refresh()
+        self.page.edit(L=4)
+        self.page.save()
+        self.assertIn("FROM SCRATCH", self.page.tray_kicker.upper())
+        self.page.queue_it(False)
+        self.assertEqual(self.fake.queue().up_next[0].params["mode"], "from_scratch")
+
+    def test_cost_panel_says_whether_the_weights_carry_over(self):
+        self.page.edit(L=4)
+        self.assertEqual(self.page.warm["kind"], "same")
+        self.assertIn(B.WARM["same"][0], texts(self.page))
+        self.page.edit(V=2)
+        self.assertFalse(self.page.warm["carries"])
+        self.page.discard()
+        self.assertIsNone(self.page.warm)
+
+    def test_chart_has_no_example_shape_and_no_invented_numbers(self):
+        self.assertNotIn("Example shape", texts(self.page))
+        self.assertEqual(self.page.plot_args["smooth"], [])
+        self.assertTrue(any(t.startswith("No error curve yet") for t in texts(self.page)))
+
+    def test_a_design_reopened_elsewhere_lands_in_the_picture(self):
+        spec = B.write_spec(default_spec(), dict(self.page.cur, L=6))
+        self.fake.stage_draft(spec)
+        self.page.refresh()
+        self.assertEqual(self.page.chip_texts, ["more blocks (2 → 6)"])
+        self.fake.stage_draft(None)  # Quick test: discard idea
+        self.page.refresh()
+        self.assertEqual(self.page.chip_texts, [])
 
     def test_word_list_change_needs_scratch(self):
         self.page.edit(V=2)

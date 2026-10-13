@@ -20,10 +20,16 @@ def fmt_p(p):
     return f"{p:.1e}" if p < .001 else f"{p:.2f}"
 
 
+def prompt_with_target():
+    """The board's example plus the piece to predict: the model sees everything before the last piece."""
+    return f"{prompt_text()} Jupiter"
+
+
 def loss_rows(p, target, pieces, k=5):
-    """The target and the next most likely pieces (k in all), then 'all others': (token, p, y, p - y) rows."""
+    """The k most likely pieces plus the target if it is not among them (target first), then 'all others': (token, p, y, p - y) rows."""
     p = np.asarray(p, dtype=np.float64)
-    order = [i for i in np.argsort(-p) if i != target][:k - 1]
+    top = [int(i) for i in np.argsort(-p)[:k]]
+    order = [i for i in top if i != target][:k - 1 if target in top else k]
     rows = [(pieces[i], float(p[i]), 1 if i == target else 0, float(p[i]) - (1 if i == target else 0)) for i in [target, *order]]
     rest = 1.0 - sum(r[1] for r in rows)
     return rows, max(0.0, rest), len(p) - len(rows)
@@ -45,7 +51,7 @@ class LossPage(Page):
     def refresh(self):
         for child in self.body.winfo_children():
             child.destroy()
-        data, error = ask(self.services, "inspect_loss", prompt_text(), trained=self.trained)
+        data, error = ask(self.services, "inspect_loss", prompt_with_target(), trained=self.trained)
         toggle = Segmented(self.body, [UNTRAINED, TRAINED], TRAINED if self.trained else UNTRAINED, command=self.pick, bg="bg")
         toggle.pack(anchor="w", pady=(0, GUTTER))
         if data is None:
@@ -58,7 +64,7 @@ class LossPage(Page):
         self.loss = -math.log(max(float(p[target]), 1e-300))
         card = Card(self.body)
         card.pack(fill="x")
-        tk_label(card, f"…{context[-24:]}", 16, "text2", "panel").pack(anchor="w")
+        tk_label(card, f"…{context[-24:]} ?", 16, "text2", "panel").pack(anchor="w")
         table = tk.Frame(card, bg=C["panel"])
         table.pack(fill="x", pady=8)
         for c, text in enumerate((LOSS["token"], LOSS["probability"], "", LOSS["target"], LOSS["gradient"])):
@@ -70,6 +76,8 @@ class LossPage(Page):
         self._row(table, len(rows) + 1, f"all {n_rest:,} others", rest, "0 each", "+p each", 0)
         tk_label(card, f"Softmax over all {V:,} tokens. The target is one-hot: 1 for “{token}”, 0 for everything else. "
                        "The gradient on each logit is simply p − target.", 13, "muted", "panel", wraplength=760).pack(anchor="w")
+        if data.get("grad_error") is not None:
+            tk_label(card, f"Checked against the engine's own backward pass: largest difference {data['grad_error']:.1e}.", 12, "dim", "panel").pack(anchor="w", pady=(4, 0))
         ce = Card(self.body)
         ce.pack(fill="x", pady=GUTTER)
         Kicker(ce, LOSS["cross_entropy"], bg="panel").pack(anchor="w")
@@ -77,7 +85,7 @@ class LossPage(Page):
         self.loss_label = tk_label(ce, f"{self.loss:.2f} {LOSS['nats']}", 28, "text" if self.trained else "amber", "panel", font=font(28, bold=True))
         self.loss_label.pack(anchor="w")
         note = ("Falls as the model puts more probability on the target token. Measured by the engine on the trained checkpoint." if self.trained else
-                f"Random weights spread probability almost evenly, about 1 / {V:,} per token, so the loss starts near ln {V:,} = {math.log(V):.2f}.")
+                f"Random weights spread probability almost evenly, about 1 / {V:,} per token, so the loss starts near ln {V:,} = {math.log(V):.2f} (measured here: {self.loss:.2f}).")
         tk_label(ce, note, 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
         bpc = Card(self.body)
         bpc.pack(fill="x")

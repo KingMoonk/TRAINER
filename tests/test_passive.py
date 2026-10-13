@@ -750,9 +750,11 @@ class TrainerKeepAwakeTests(unittest.TestCase):
             store = PassiveStore(tmp)
             sid = store.create(plan_with())
             held = passive.take_lock(store.directory(sid) / "trainer.lock")
-            self.addCleanup(held.close)
-            with patch("signal.signal"), patch.object(passive, "run_session") as run, self.assertRaises(SystemExit) as stopped:
-                passive.main(["run", sid, "--root", tmp])
+            try:
+                with patch("signal.signal"), patch.object(passive, "run_session") as run, self.assertRaises(SystemExit) as stopped:
+                    passive.main(["run", sid, "--root", tmp])
+            finally:
+                held.close()  # before the folder is removed: Windows will not delete a locked file
             run.assert_not_called()
             self.assertIn("Another trainer", str(stopped.exception.code))
 

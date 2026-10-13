@@ -8,7 +8,7 @@ import tkinter as tk
 from studio_ia.copy import CHAT as T
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, button
+from studio_ia.widgets import Card, Kicker, Toggle, button
 
 A_COLOR, B_COLOR = "violet", "blue"
 TONE = {"better": "violet", "baseline": "muted", "within the spread": "muted", "worse": "coral", "catching up": "coral"}
@@ -31,6 +31,48 @@ def score_rows(v):
             (T["size_speed"], T["val_size_speed"] if size is None or speed is None else f"{size}M · {speed} pieces/s")]
 
 
+def answering_version(numbers, best, picked, follows=True, current=None):
+    """Which version answers: the one the person picked; otherwise the best checkpoint's (when the plan says Chat follows
+    it), otherwise the one already answering; the newest as a last resort."""
+    if picked in numbers:
+        return picked
+    if follows and best in numbers:
+        return best
+    return current if current in numbers else (best if best in numbers else max(numbers, default=None))
+
+
+def verdict_view(a, b, result=None):
+    """(line, sub, comparable) for two versions. No verdict while either run is mid-schedule or the runs differ in length or
+    schedule; the comparison is training_saved's result for (older, newer)."""
+    older, newer = (a, b) if a.number < b.number else (b, a)
+    unfinished = [v for v in (a, b) if v.status in ("queued", "training")]
+    if unfinished:
+        return T["no_verdict_yet"].format(version=name(unfinished[0]).lower()), T["no_verdict_text"], False
+    result = result or {}
+    if result.get("comparable") and result.get("percent") is not None:
+        line = T["verdict_line"].replace("[N]", f"{100 - result['percent']:.0f}").format(newer=name(newer), older=name(older))
+        return line, ("Under 100% means the change saves training. Size and seed checks: not run yet (Compare runs) · "
+                      "same length and schedule · error per character on held-back text"), True
+    return "No verdict yet: " + result.get("reason", "the runs are not comparable."), T["no_verdict_text"], False
+
+
+def stream_reply(chat, version, messages, stop, put):
+    """Run one reply. chat(version, messages, on_text, stop) reports the reply so far (cumulative text) through on_text;
+    put(text) receives each cumulative text, then put(None) when the reply is over. Errors become the reply text."""
+    seen = []
+
+    def on_text(text):
+        seen.append(text)
+        put(text)
+    try:
+        final = chat(version, messages, on_text, stop)
+        if final and not seen:
+            put(final)
+    except Exception as error:  # show it in the pane instead of dying silently
+        put(f"[error: {error}]")
+    put(None)
+
+
 class ChatPage(Page):
     title, lead = T["h1"], T["lead"]
 
@@ -38,7 +80,7 @@ class ChatPage(Page):
         super().__init__(*a, **kw)
         self.use = self.b = None  # version numbers: left/answering, right (compare)
         self.compare = self.how = self.picked = False
-        self.messages, self.replies = [], {}
+        self.messages, self.replies, self.base = [], {}, {}
         self.pump_q, self.stop, self.pending = queue.Queue(), threading.Event(), 0
         self.verdict_line = ""
         self._build()
@@ -53,8 +95,9 @@ class ChatPage(Page):
 
     def refresh(self):
         vs = self._versions()
-        if self.use not in vs:
-            self.use, self.picked = self._best() or (max(vs) if vs else None), False
+        follows = (self.services.queue().plan or {}).get("chat_follows_best", True)
+        self.use = answering_version(vs, self._best(), self.use if self.picked else None, follows, self.use)
+        self.picked = self.picked and self.use != self._best() if follows else self.picked
         if self.b not in vs:
             self.b = (self.use - 1 if self.use and self.use > 1 else 2) if vs else None
         self.render()
@@ -126,6 +169,8 @@ class ChatPage(Page):
         self.correction = tk.Entry(self.teach_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(14))
         self.correction.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 8))
         button(self.teach_row, "Save", self.teach).pack(side="left")
+        self.whole = Toggle(self.teach_row, "It is a whole new answer (round 1)", False, bg="bg")
+        self.whole.pack(side="left", padx=8)
         self.status_label = tk_label(teach, "", 12, "muted")
         self.status_label.pack(anchor="w")
         self.verdict_card = Card(body)
@@ -190,18 +235,9 @@ class ChatPage(Page):
             return
         card.pack(fill="x", pady=(0, GUTTER), before=self.shelf)
         Kicker(card, T["verdict"], bg="panel").pack(anchor="w")
-        older, newer = (a, b) if a.number < b.number else (b, a)
-        unfinished = [v for v in (a, b) if v.status in ("queued", "training")]
-        color, sub = "amber", T["no_verdict_text"]
-        if unfinished:
-            line = T["no_verdict_yet"].format(version=name(unfinished[0]).lower())
-        else:
-            res = self.services.verdict(older.number, newer.number)
-            if res.get("comparable") and res.get("percent") is not None:
-                line = T["verdict_line"].replace("[N]", f"{100 - res['percent']:.0f}").format(newer=name(newer), older=name(older))
-                color, sub = "text", T["verdict_sub"]
-            else:
-                line = "No verdict yet: " + res.get("reason", "")
+        line, sub, ok = verdict_view(a, b, None if any(v.status in ("queued", "training") for v in (a, b))
+                                     else self.services.verdict(min(a.number, b.number), max(a.number, b.number)))
+        color = "text" if ok else "amber"
         self.verdict_line = line
         tk_label(card, line, 17, color, "panel", wraplength=780, font=font(17, bold=True)).pack(anchor="w", pady=4)
         tk_label(card, sub, 13, "muted", "panel", wraplength=780).pack(anchor="w")
@@ -263,42 +299,34 @@ class ChatPage(Page):
         msg = {"role": "user", "content": text}
         self.messages = [msg] if self.compare else self.messages + [msg]
         for i, num in enumerate([self.use, self.b] if self.compare else [self.use]):
-            self.replies[i] = "" if self.compare else self.replies.get(i, "") + f"You: {text}\n\n"
+            self.base[i] = "" if self.compare else self.replies.get(i, "") + f"You: {text}\n\n"
+            self.replies[i] = self.base[i]
             self._set_text(i, self.replies[i])
             self.pending += 1
             threading.Thread(target=self._work, args=(i, num, list(self.messages)), daemon=True).start()
         self.after(30, self._pump)
 
     def _work(self, i, num, messages):
-        streamed = []
-
-        def on_text(chunk):
-            streamed.append(chunk)
-            self.pump_q.put((i, chunk))
-        try:
-            final = self.services.chat(num, messages, on_text, self.stop)
-            if final and not streamed:
-                self.pump_q.put((i, final))
-        except Exception as error:  # show it in the pane instead of dying silently
-            self.pump_q.put((i, f"[error: {error}]"))
-        self.pump_q.put((i, None))
+        stream_reply(self.services.chat, num, messages, self.stop, lambda text: self.pump_q.put((i, text)))
 
     def _pump(self):
         while True:
             try:
-                i, chunk = self.pump_q.get_nowait()
+                i, text = self.pump_q.get_nowait()
             except queue.Empty:
                 break
-            if chunk is None:
+            if text is None:
                 self.pending -= 1
                 continue
-            self.replies[i] = self.replies.get(i, "") + chunk
+            self.replies[i] = self.base.get(i, "") + text
             self._set_text(i, self.replies[i])
         if self.pending > 0:
             self.after(30, self._pump)
 
     def better(self, i):
         chosen, other = (self.use, self.b) if i == 0 else (self.b, self.use)
+        if self.pending or not self.replies.get(0) or not self.replies.get(1) or self.replies[0] == self.replies[1]:
+            return self.status_label.configure(text="Wait for both replies, and they must differ, before picking one.")
         self.services.rate_pair(self.messages, {"version": chosen, "reply": self.replies.get(i, "")},
                                 {"version": other, "reply": self.replies.get(1 - i, "")})
         self.status_label.configure(text=f"Saved: Version {chosen} was better. Used in Post-training round 4.")
@@ -307,9 +335,15 @@ class ChatPage(Page):
         text = self.correction.get().strip()
         if not text or self.use is None:
             return
+        if not self.messages:
+            return self.status_label.configure(text="Send a message first; a correction belongs to a reply.")
+        whole = self.whole.value
         try:
-            self.services.teach_correction(self.use, self.messages, text)
+            if whole:
+                self.services.teach_correction(self.use, self.messages, text, whole_answer=True)
+            else:
+                self.services.teach_correction(self.use, self.messages, text)
         except NotImplementedError:
             return self.status_label.configure(text="Saving corrections is not available yet.")
-        self.status_label.configure(text="Saved for Post-training round 3.")
+        self.status_label.configure(text="Saved for Post-training round 1 as a whole new answer." if whole else "Saved for Post-training round 3.")
         self.correction.delete(0, "end")

@@ -49,10 +49,12 @@ class InsidePages(unittest.TestCase):
     def test_value_map_resplits_heads(self):
         page = self.app.show("value_map")
         self.app.update()
-        self.assertIn("head_dim = 256 ÷ 4 = 64", [t for t in texts(page.body)] + ["head_dim = 256 ÷ 4 = 64"] if False else texts(page.body))
+        self.assertIn("head_dim = 256 ÷ 4 = 64", texts(page.body))
+        self.assertTrue(any("rank of W_V · W_O is 4, at most 64" in t for t in texts(page.body)))  # fake singular values: 4 non-zero
         page.set_heads(8)
         self.app.update()
         self.assertTrue(any("÷ 8 = 32" in t for t in texts(page.body)))
+        self.assertTrue(any("Pick 4 heads" in t for t in texts(page.body)))  # measured values only for the model's real split
 
     def test_loss_step_zero_is_exact(self):
         page = self.app.show("loss")
@@ -72,6 +74,11 @@ class InsidePages(unittest.TestCase):
         self.wait(lambda: page.changed is not None)
         self.assertEqual(page.changed["off"], "[reply with 1 heads off]")
         self.assertTrue(any("→" in t and "bits/char" in t for t in texts(page.body)))
+        self.assertTrue(any("2.00 → 2.10 bits/char" in t for t in texts(page.body)))
+        page.set_mode("zero")                                           # a new switching rule clears the old ranking
+        self.assertFalse(page.ranked)
+        self.wait(lambda: page.changed is not None)
+        self.assertTrue(any("2.00 → 2.20 bits/char" in t for t in texts(page.body)))
 
 
 if __name__ == "__main__":

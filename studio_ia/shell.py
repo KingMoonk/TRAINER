@@ -43,19 +43,6 @@ ROUTES = {
 }
 
 
-def _data_page(cls):
-    """Adapt a data page (workspace-based constructor) to the shell's (parent, services, navigate) factory."""
-    def make(parent, services, navigate):
-        def go(route, kind=None, **_):
-            page = navigate(route)
-            if kind and hasattr(page, "show"):
-                page.show(kind)
-        page = cls(parent, services=services, on_navigate=go)
-        page.on_event = lambda kind, payload: None
-        return page
-    return make
-
-
 class Studio(tk.Tk):
     def __init__(self, services=None):
         super().__init__()
@@ -80,16 +67,17 @@ class Studio(tk.Tk):
         self.factories["compare"], self.factories["quicktest"] = ComparePage, QuickTestPage
         from studio_ia.pages.queue import QueuePage
         self.factories["queue"] = QueuePage
-        if self.services.workspace is not None:  # the data pages read the workspace directly; the fake façade has none
-            from studio_ia.pages.make_data import MakeDataPage
-            from studio_ia.pages.your_data import YourDataPage
-            self.factories["your_data"], self.factories["make_data"] = _data_page(YourDataPage), _data_page(MakeDataPage)
+        from studio_ia.pages.make_data import MakeDataPage
+        from studio_ia.pages.your_data import YourDataPage
+        self.factories["your_data"], self.factories["make_data"] = YourDataPage, MakeDataPage
         self.route = None
         self._area_rows = {}
         self._build_sidebar()
         self.main = ttk.Frame(self)
         self.main.pack(side="left", fill="both", expand=True)
         from studio_ia.pages import head_lab, head_zoom, loss, trace, value_map  # look-inside pages (S7)
+        from studio_ia.pages import inside3d  # look-inside 3D page (S11)
+        self.register("inside3d", inside3d.Inside3DPage)
         for route, cls in (("trace", trace.TracePage), ("head_zoom", head_zoom.HeadZoomPage), ("value_map", value_map.ValueMapPage),
                            ("loss", loss.LossPage), ("head_lab", head_lab.HeadLabPage)):
             self.register(route, cls)
@@ -206,20 +194,25 @@ class Studio(tk.Tk):
 
     def destroy(self):
         self.unsubscribe()
+        close = getattr(self.services, "close", None)
+        if close:
+            close()  # stops the queue runner; a job cut short goes back to the front of the queue
         super().destroy()
 
 
 def main():
-    services = None
-    make = getattr(services_module, "WorkspaceServices", None)  # provided once the real façade lands
-    if make is not None:
-        try:
-            from studio_core import Workspace
-            services = make(Workspace())  # the repo-root workspace, as studio_gui builds it
-        except Exception:
-            services = None
-    Studio(services).mainloop()
+    try:
+        from studio_core import ROOT, Workspace
+        Studio(services_module.WorkspaceServices(Workspace())).mainloop()  # the repo-root workspace
+        return 0
+    except Exception:
+        import traceback
+        from tkinter import messagebox
+        report = traceback.format_exc()
+        (ROOT / "studio-error.log").write_text(report, encoding="utf-8")
+        messagebox.showerror("Groundwork could not start", "See studio-error.log for details.\n\n" + report.splitlines()[-1])
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

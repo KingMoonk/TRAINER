@@ -28,6 +28,27 @@ STEP_LINE = "step [N] of [N] · about [N] min left"
 JUDGE = "Judge preferred it on [k] of [n] prompts"
 
 
+def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
+    """Why a round cannot be queued yet (plain words), or None. counts = post_training()["counts"]; teacher 0 = previous best."""
+    need = {0: ("conversations", 1, "Add conversations in Your data first."),
+            1: ("problems", 1, "Make problems a rule can check first."),
+            3: ("pairs", 2, "Rate at least 2 pairs in Chat first.")}
+    if not checkpoint:
+        return "Train this version in Pretraining first."
+    if round_index == 2:
+        if teacher == 0:
+            return None if has_earlier else "There is no earlier version to learn from yet."
+        return None if counts.get("corrections") else "Teach a correction in Chat first."
+    key, least, why = need[round_index]
+    return None if (counts.get(key) or 0) >= least else why
+
+
+def step_line(q):
+    """'step k of n · about m min left' from the running queue state; [N] where unknown."""
+    left = "[N]" if q.eta_s is None else str(max(1, round(q.eta_s / 60)))
+    return f"step {q.step if q.total else '[N]'} of {q.total or '[N]'} · about {left} min left"
+
+
 def count(value):
     return "[N]" if value is None else str(value)
 
@@ -63,6 +84,7 @@ class PostTrainingPage(Page):
             child.destroy()
         version = self._version()
         state = self._state(version)
+        self.version_no = version.number if version else "[N]"
         rounds, self.counts = state.get("rounds", {}), state.get("counts", {})
         self.gates = {**state.get("gates", {}), **self.live_gate}
         self.example = state.get("example", {})
@@ -89,7 +111,7 @@ class PostTrainingPage(Page):
             else:
                 setattr(self, {"group": "group", "heat": "heat", "moved": "moved"}[t], payload)
             self.refresh()
-        elif kind in ("queue", "versions"):
+        elif kind in ("queue", "versions", "job"):
             self.refresh()
 
     # stage line ---------------------------------------------------------------
@@ -134,7 +156,12 @@ class PostTrainingPage(Page):
         actions = tk.Frame(card, bg=C["panel"])
         actions.pack(fill="x", pady=(GUTTER, 0))
         label = {2: T["move_front"], 3: T["add_votes"]}.get(i, ADD)
-        button(actions, label, lambda: self._enqueue(version, i), primary=True).pack(side="left")
+        why = blocker(i, self.counts, self.teacher, bool(self._previous_best(version)), bool(version and version.best_checkpoint))
+        add = button(actions, label, lambda: self._enqueue(version, i), primary=True)
+        add.pack(side="left")
+        if why:
+            add.state(["disabled"])
+            tk_label(actions, why, 13, "amber", "panel").pack(side="left", padx=GUTTER)
         link = {0: (T["add_conversations"], "your_data"), 1: (T["make_problems"], "make_data"), 3: (T["rate_pairs"], "chat")}.get(i)
         if link:
             go = tk_label(actions, link[0] + " ›", 14, "violet", "panel", cursor="hand2", takefocus=1)
@@ -185,10 +212,14 @@ class PostTrainingPage(Page):
             push_text = "no push" if abs(push) < 1e-9 else (f"↑ {push:+.2f} · pushed up" if push > 0 else f"↓ {push:+.2f} · pushed down")
             for c, (value, col) in enumerate(((text, "text"), ("pass" if ok else "fail", color), (f"{score:.1f}", color), (push_text, color))):
                 tk_label(grid, value, 14, col, "panel", font=font(14, mono=c == 0)).grid(row=r, column=c, sticky="w", padx=(0, GUTTER), pady=2)
-        grey = tk.Frame(card, bg=C["panel"], highlightthickness=1, highlightbackground=C["border2"], padx=10, pady=6)
-        grey.pack(fill="x", pady=6)
-        for text in (T["copy_this"], T["passed_count"], T["nothing_learn"]):
-            tk_label(grey, text, 13, "dim", "panel").pack(side="left", padx=(0, GUTTER))
+        if not live or live.get("skipped"):
+            grey = tk.Frame(card, bg=C["panel"], highlightthickness=1, highlightbackground=C["border2"], padx=10, pady=6)
+            grey.pack(fill="x", pady=6)
+            n = len(answers)
+            first = f"{prompt}" if live else T["copy_this"]
+            passed = f"{sum(1 for _t, sc, _p in answers if sc >= 1)} of {n} passed" if live else T["passed_count"]
+            for text in (first, passed, T["nothing_learn"]):
+                tk_label(grey, text, 13, "dim", "panel").pack(side="left", padx=(0, GUTTER))
         tk_label(card, T["rules_check"], 13, "muted", "panel", wraplength=760).pack(anchor="w")
 
     def _r3(self, card):
@@ -274,7 +305,7 @@ class PostTrainingPage(Page):
             kicker = f"TRAINING · ROUND {i + 1}" if s == "running" else "WHEN THIS ROUND ENDS"
         Kicker(card, kicker, "violet", "panel").pack(anchor="w")
         if s == "running":
-            tk_label(card, STEP_LINE, 13, "muted", "panel").pack(anchor="w")
+            tk_label(card, step_line(self.services.queue()), 13, "muted", "panel").pack(anchor="w")
         tk_label(card, T["verdict_title"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 0))
         if gate:
             verdict = gate.get("verdict") or verdict_text
@@ -307,7 +338,7 @@ class PostTrainingPage(Page):
             result = T["result_live"] if gate["ok"] else T["result_kept"]
         else:
             result = T["chat_keeps"] if s == "running" else T["until_then"]
-        tk_label(card, result, 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(GUTTER, 0))
+        tk_label(card, result.replace("version 4", f"version {self.version_no}"), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(GUTTER, 0))
 
     # actions ----------------------------------------------------------------------
     def _previous_best(self, version):

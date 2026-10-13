@@ -50,6 +50,31 @@ class QuickTest(unittest.TestCase):
         self.assertTrue(q.run(spec(), spec(), 'stories', .05, False, stop=stop, config=CFG).get('stopped'))
 
 
+class Honest(unittest.TestCase):
+    def test_slice_never_falls_back_to_the_stories(self):
+        with self.assertRaises(ValueError):
+            q.tiny_dataset('slice', SimpleNamespace(examples=lambda p: [{'text': 'only one'}]))
+        rows = q.tiny_dataset('slice', SimpleNamespace(examples=lambda p: [{'text': f'doc {i}'} for i in range(5)]))
+        self.assertEqual([r['text'] for r in rows], [f'doc {i}' for i in range(5)])
+        self.assertEqual(len(q.tiny_dataset('stories')), len(q.STORIES))
+
+    def test_a_design_that_cannot_memorise_stops_the_test_and_is_kept_for_the_page(self):
+        import tempfile
+        from unittest import mock
+        events = []
+        with tempfile.TemporaryDirectory() as tmp, mock.patch('studio_eval.memorise_one_batch', return_value={'start': 5., 'end': 4.9, 'ok': False}):
+            services = SimpleNamespace(workspace=SimpleNamespace(root=tmp))
+            r = q.run(spec(), spec(), 'stories', .05, False, emit=events.append, config=CFG, services=services)
+            self.assertEqual((r['broken'], r['verdict']), ('memorises_one_batch', None))
+            self.assertEqual([c['ok'] for c in r['checks']], [None, None, False, None])
+            self.assertNotIn('current', r)  # no timed runs happened
+            saved = q.load_last(services)
+            self.assertEqual(saved['broken'], 'memorises_one_batch')
+            self.assertIsNone(q.load_last(services, since=saved['finished_at'] + 1))
+        self.assertEqual(events[-1]['type'], 'quicktest_done')
+        self.assertIsNone(q.load_last(SimpleNamespace()))
+
+
 class Handlers(unittest.TestCase):
     def run_job(self, job):
         with tempfile.TemporaryDirectory() as tmp:

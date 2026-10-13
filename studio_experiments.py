@@ -6,7 +6,6 @@ import copy
 import json
 import math
 import random
-import resource
 import sys
 import threading
 import types
@@ -227,6 +226,10 @@ def data_order(seed=DATA_SEED):
 
 
 def _peak_mb():
+    if sys.platform == "win32":  # no resource module; ponytail: current working set, not the peak
+        from studio_passive import process_memory
+        return process_memory() / 2 ** 20
+    import resource
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS, KiB on Linux
     return peak / 2 ** 20 if sys.platform == 'darwin' else peak / 1024
 
@@ -235,6 +238,36 @@ def best_lr(points):
     """[(lr, final bpc)] -> the lr with the lowest finite bpc (the base rate when none is finite)."""
     good = [(b, lr) for lr, b in points if math.isfinite(b)]
     return min(good)[1] if good else points[1][0]
+
+
+def spec_changes(base, variant, limit=6):
+    """Raw knob changes as 'path: before → after' strings (depth 3: the exact values behind the plain-words change)."""
+    def flat(value, path=''):
+        if isinstance(value, dict):
+            return {k: v for key, item in value.items() for k, v in flat(item, f'{path}.{key}' if path else key).items()}
+        return {path: value}
+    a, b = flat(validate_spec(base)), flat(validate_spec(variant))
+    out = [f'{k}: {a.get(k, "none")} → {b.get(k, "none")}' for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
+    return out[:limit] + ([f'… {len(out) - limit} more'] if len(out) > limit else [])
+
+
+def variant_outcome(row):
+    """What happened to a variant against the base: better | about the same | worse, or None when no verdict is possible.
+
+    A difference counts only when it is larger than the spread across seeds, so one seed (no spread) gives no verdict.
+    """
+    if not row or row.get('delta') is None or row.get('inside_spread') is None:
+        return None
+    return 'about the same' if row['inside_spread'] else 'better' if row['delta'] < 0 else 'worse'
+
+
+def load_results(run_dir, job_id):
+    """The saved results.json of a finished compare job, or None."""
+    path = Path(run_dir) / f'compare_{job_id}' / 'results.json'
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def verdict_inside(delta, spread):
@@ -282,7 +315,8 @@ def plan(experiment):
             steps = max(1, round(e.steps * base_flops / max(1, estimate(matched['spec'])['train_flops_per_token'])))
         rows.append({'variant': index, 'name': (e.names[index] if index < len(e.names) else 'Base' if not index else f'Variant {index}'),
                      'spec': matched['spec'], 'adjustments': matched['adjustments'], 'matched': matched['matched'],
-                     'reason': matched.get('reason', ''), 'steps': steps, 'parameters': estimate(matched['spec'])['total']})
+                     'reason': matched.get('reason', ''), 'steps': steps, 'parameters': estimate(matched['spec'])['total'],
+                     'relative_error': matched['relative_error']})
     sweeps = [{'variant': r['variant'], 'factor': f, 'steps': None if r['steps'] is None else max(5, r['steps'] // 5)}
               for r in rows[1:] for f in LR_FACTORS] if e.lr_retune else []
     runs = [{'variant': r['variant'], 'seed': s, 'steps': r['steps']} for r in rows for s in e.seeds]

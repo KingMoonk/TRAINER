@@ -71,7 +71,8 @@ def idle_seconds():
 
 
 def physical_memory():
-    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    from studio_passive import total_memory  # has the Windows path; os.sysconf is POSIX-only
+    return total_memory()
 
 
 def batch_cap(plan, sample_mb=SAMPLE_MB, ram=None):

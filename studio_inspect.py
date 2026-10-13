@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 
 import numpy as np
@@ -278,3 +279,150 @@ def rank_heads(source, ids, mode='mean'):
     result = ablate(source, ids, mode=mode)
     return [{'block': r['block'], 'head': r['head'], 'rise': r['delta'], 'loss': r['loss'], 'baseline': result['baseline']}
             for r in result['heads']]
+
+
+def bits_per_char(nats_per_piece, chars_per_piece):
+    """Nats per piece to bits per character: nats / (characters per piece * ln 2)."""
+    return nats_per_piece / (chars_per_piece * math.log(2))
+
+
+def heldout_batch(tokenizer, docs, length, rows=8):
+    """A fixed batch [N, L] of held-back text (documents joined with end-of-text, BOS first) and its characters per piece.
+
+    Characters the word list cannot encode become UNK pieces; they are counted, not hidden.
+    """
+    from studio_slots import BOS, EOS
+    stream, chars, pieces = [], 0, 0
+    for doc in docs:
+        ids = tokenizer.encode(doc)
+        stream += ids + [EOS]
+        chars += len(doc)
+        pieces += len(ids)
+    if pieces < 2:
+        raise ValueError('No held-back text to measure on yet.')
+    width = min(int(length), len(stream) + 1)
+    step = width - 1
+    batch = [[BOS] + stream[i:i + step] for i in range(0, len(stream) - step + 1, step)][:rows] or [[BOS] + stream[:step]]
+    return np.asarray(batch, dtype=np.int64), chars / pieces
+
+
+def prepared(source, n=4, seed=0):
+    """prepared_text for a checkpoint's own tokenizer, with the piece strings."""
+    model, tokenizer = probe_model(source)
+    if tokenizer is None:
+        raise ValueError('Prepared text needs a checkpoint with a tokenizer.')
+    ids = prepared_text(tokenizer, n=n, seed=seed)
+    return {'ids': ids, 'tokens': [_piece(tokenizer, t) for t in ids]}
+
+
+def _off_patches(captured, off, mode):
+    """Patches that replace each (block, head) output: zero, or the causal running mean over positions <= t (and the batch)."""
+    if mode not in ('zero', 'mean'):
+        raise ValueError('Ablation must be zero or mean.')
+    by_block = {}
+    for block, head in off:
+        by_block.setdefault(int(block), []).append(int(head))
+    patches = {}
+    for block, heads in by_block.items():
+        hook = f'block{block}.attn.head_out'
+        if hook not in captured or max(heads) >= captured[hook].shape[1]:
+            raise ValueError('Selected block/head has no attention output hook.')
+        with torch.no_grad():
+            out = captured[hook].detach()
+            running = out.cumsum(dim=2) / torch.arange(1, out.shape[2] + 1, device=out.device)[None, None, :, None]
+            reference = running.mean(dim=0, keepdim=True)                      # [1, H, T, h]
+
+        def patch(value, heads=heads, reference=reference):
+            changed = value.clone()
+            for head in heads:
+                changed[:, head] = 0 if mode == 'zero' else reference[:, head]
+            return changed
+        patches[hook] = patch
+    return patches
+
+
+def _ablated_logits(model, ids, off, mode):
+    if not off:
+        return model.forward(ids)
+    _, tape = model.forward(ids, hooks=True, tape=True)
+    return model.forward(ids, patches=_off_patches(tape.captured, off, mode))
+
+
+def ablate_set(source, text, off, mode='mean', targets=None):
+    """Loss (nats per piece) with every (block, head) in `off` switched off together: {'baseline', 'loss', 'delta'}."""
+    model, tokenizer = probe_model(source)
+    ids = probe_ids(model, text, tokenizer)
+    targets = _targets(ids, targets)
+    baseline = float(model.objective(model.forward(ids).detach(), targets))
+    loss = float(model.objective(_ablated_logits(model, ids, list(off), mode).detach(), targets))
+    return {'baseline': baseline, 'loss': loss, 'delta': loss - baseline, 'mode': mode}
+
+
+def greedy_reply(source, prompt, off=(), mode='mean', n=24):
+    """Greedy answer to one user message with the (block, head) pairs in `off` switched off for this reply only."""
+    from studio_slots import ASSISTANT, BOS, EOS, PAD, SYSTEM, UNK, USER
+    model, tokenizer = probe_model(source)
+    if tokenizer is None:
+        raise ValueError('Replies need a checkpoint with a tokenizer.')
+    tokens, out = [BOS, USER] + tokenizer.encode(prompt) + [EOS, ASSISTANT], []
+    for _ in range(int(n)):
+        ids = np.asarray([tokens[-model.dims.n_ctx:]], dtype=np.int64)
+        row = to_numpy(_ablated_logits(model, ids, list(off), mode))[0, -1].astype(np.float64)
+        row[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
+        token = int(row.argmax())
+        if token == EOS:
+            break
+        out.append(token)
+        tokens.append(token)
+    return tokenizer.decode(out)
+
+
+def value_map(source, block=0, head=0):
+    """W_V^h . W_O^h for one head of a standard softmax-attention block: d_model, head count, singular values (all d_model).
+
+    The product is d_model x d_model but has rank at most head_dim = d_model / heads, so at most head_dim singular values
+    are non-zero: the head writes into a subspace of that many directions.
+    """
+    model, _ = probe_model(source)
+    d = model.dims.d_model
+    _, tape = model.forward(np.zeros((1, 1), dtype=np.int64), hooks=True, tape=True)
+    blocks = {int(name.split('.')[0][5:]): int(value.shape[1]) for name, value in tape.captured.items() if name.endswith('attn.pattern')}
+    qkv, proj = model.p.get(f'block{block}.qkv.w'), model.p.get(f'block{block}.proj.w')
+    if block not in blocks or qkv is None or proj is None or tuple(qkv.shape) != (d, 3 * d):
+        raise ValueError('The value map needs a block with standard softmax attention.')
+    heads = blocks[block]
+    if not 0 <= head < heads:
+        raise ValueError('Selected head does not exist.')
+    hd = d // heads
+    w_v = to_numpy(qkv)[:, 2 * d + head * hd:2 * d + (head + 1) * hd].astype(np.float64)
+    w_o = to_numpy(proj)[head * hd:(head + 1) * hd].astype(np.float64)
+    return {'d_model': d, 'heads': heads, 'blocks': blocks, 'block': block, 'head': head,
+            'singular': np.linalg.svd(w_v @ w_o, compute_uv=False).tolist()}
+
+
+def loss_view(source, text, pos=-1, trained=True):
+    """The prediction of piece `pos` from the pieces before it: probabilities, target and the engine's own gradient.
+
+    trained=False uses a freshly initialised model with the same design. `grad_error` = max |engine dL/dlogit - (p - onehot)|.
+    """
+    model, tokenizer = probe_model(source)
+    if not trained:
+        model = CompiledModel(model.spec, model.dims.vocab, device='cpu')
+    ids = probe_ids(model, text, tokenizer)
+    if ids.shape[1] < 2:
+        raise ValueError('Give at least two pieces: some context and the piece to predict.')
+    pos = range(ids.shape[1])[pos]
+    if pos < 1:
+        raise ValueError('The piece to predict needs at least one piece before it.')
+    targets = np.full(ids.shape, -100, dtype=np.int64)
+    targets[:, pos - 1] = ids[:, pos]
+    logits, tape = model.forward(ids, hooks=True, tape=True)
+    loss, derivative = model.objective(logits, targets, gradient=True)
+    p = softmax(to_numpy(logits)[0, pos - 1].astype(np.float64), np)
+    target = int(ids[0, pos])
+    onehot = np.zeros_like(p)
+    onehot[target] = 1
+    engine = to_numpy(derivative)[0, pos - 1].astype(np.float64)
+    return {'tokens': [_piece(tokenizer, t) for t in ids[0]], 'pos': pos, 'probabilities': p, 'target': target,
+            'pieces': [_piece(tokenizer, i) for i in range(model.dims.vocab)], 'loss': float(loss),
+            'grad_error': float(np.abs(engine - (p - onehot)).max())}

@@ -137,7 +137,9 @@ class HeadZoomPage(Page):
                   command=lambda v: self.select(self.block, int(v.split()[1]) - 1)).pack(side="left")
         tk_label(self.body, HEAD_ZOOM["head_label"].format(block=self.block + 1, head=self.head + 1, tokens=T), 14, "muted").pack(anchor="w")
         self.banner = tk_label(self.body, "", 13, "amber", "amber_bg", wraplength=760, padx=GUTTER, pady=8)
-        if self.d["error"] > TOLERANCE:
+        if self.d["error"] <= TOLERANCE:
+            tk_label(self.body, HEAD_ZOOM["checked"].format(error=self.d["error"], tol=TOLERANCE), 12, "dim", wraplength=760).pack(anchor="w")
+        else:
             self.banner.configure(text=f"The numbers derived here differ from the model's own attention pattern by {self.d['error']:.2g} "
                                        f"(allowed {TOLERANCE:g}). A hook may be wrong, so do not trust this picture.")
             self.banner.pack(anchor="w", fill="x", pady=(6, 0))
@@ -149,6 +151,8 @@ class HeadZoomPage(Page):
             b = button(steps, f"{n}. {name}", lambda n=n: self.set_step(n), primary=n == self.step)
             b.pack(side="left", padx=(0, 6))
             self.step_buttons.append(b)
+        self.unit = tk_label(self.body, "", 14, "text2", font=font(14, mono=True))
+        self.unit.pack(anchor="w", pady=(0, 6))
         row = tk.Frame(self.body, bg=C["bg"])
         row.pack(fill="x")
         self.grid_view = ScoreGrid(row, self._pick)
@@ -212,6 +216,7 @@ class HeadZoomPage(Page):
         keys = ("raw", "scale", "mask", "softmax", "weighted")
         key = keys[step - 1]
         sqrt_d = math.sqrt(d["d_head"])
+        self.unit.configure(text=HEAD_ZOOM[key + "_unit"].format(sqrt_d=f"{sqrt_d:.3g}", token=show_tok(d["tokens"][-1])))
         Kicker(side, HEAD_ZOOM["step_label"].format(n=step), "violet", "panel").pack(anchor="w")
         tk_label(side, HEAD_ZOOM[{"raw": "raw_scores"}.get(key, key + "_step")], 18, "text", "panel", font=font(18, bold=True)).pack(anchor="w")
         tk_label(side, HEAD_ZOOM[key + "_formula"].format(d=d["d_head"], sqrt_d=f"{sqrt_d:.3g}"), 13, "text2", "panel", font=font(13, mono=True), wraplength=300).pack(anchor="w", pady=4)

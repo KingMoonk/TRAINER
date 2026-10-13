@@ -13,6 +13,17 @@ STATUS = {"learning": ("Learning", "training"), "flat": ("Flat", "unsaved"), "me
 CONTEXT = 256  # pieces per row, matches the Pretraining page
 
 
+def phase_at(phases, step):
+    """Schedule phase (warm-up | steady | cool-down) of `step` from run_curve's [(start, end, name)]; '' without a schedule."""
+    return next((name for _s, end, name in phases if step <= end), phases[-1][2]) if phases else ""
+
+
+def history_of(steps, heldout):
+    """Engine-style history rows ({"loss", "val_loss"}) from the curve's per-step and held-back points."""
+    held = dict(heldout)
+    return [{"loss": y, "val_loss": held.get(x)} for x, y in steps]
+
+
 def num(x):
     return "[N]" if x is None else f"{x:.3f}"
 
@@ -23,6 +34,7 @@ class TrainingRunPage(Page):
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
+        self._pending = False
         b = self.body
         self.change = tk_label(b, "", 14, "text2", wraplength=760)
         self.change.pack(anchor="w")
@@ -56,6 +68,7 @@ class TrainingRunPage(Page):
         tk_label(card, T["bits_per_char_note"], 12, "dim", "panel").pack(anchor="w", pady=(0, 6))
         self.plot = BpcPlot(card, 700, 280)
         self.plot.pack(fill="x")
+        tk_label(card, "Error usually drops most in the cool-down, where the learning rate falls to near zero.", 12, "dim", "panel").pack(anchor="w", pady=(4, 0))
         legend = tk_label(card, f"{T['training_text']} · {T['every_step']} (faint) · {T['held_back']} (dots)", 12, "muted", "panel")
         legend.pack(anchor="w", pady=(4, 0))
         self.switch = tk.Frame(b, bg=C["blue_bg"], highlightthickness=1, highlightbackground=C["blue"], padx=GUTTER, pady=12)
@@ -83,8 +96,15 @@ class TrainingRunPage(Page):
         self.refresh()
 
     def on_event(self, kind, payload):
-        if kind in ("queue", "train"):
-            self.refresh()
+        """Live events redraw at most every 1.5 s (the curve is re-read from the run's metrics file); showing the page again
+        refreshes from disk, so nothing is lost while it is hidden."""
+        if kind in ("queue", "train", "job") and not self._pending:
+            self._pending = True
+            self.after(1500, self._redraw)
+
+    def _redraw(self):
+        self._pending = False
+        self.refresh()
 
     # state ---------------------------------------------------------------
     def refresh(self):
@@ -113,15 +133,17 @@ class TrainingRunPage(Page):
             refs = {}
         best, band = refs.get("best_so_far_bpc"), refs.get("noise_band")
         rows = params.get("config", {}).get("batch_size", 16)
-        seen = q.step * rows * CONTEXT
+        seen = q.step * rows * params.get("config", {}).get("context", CONTEXT)
         per_pass = curve.get("pieces_per_pass") or params.get("pieces_per_pass")
         pass_no = f"{seen // per_pass + 1}" if per_pass else "[N]"
         left = f"about {max(1, round(q.eta_s / 60))} min" if q.eta_s is not None else "about [N] min"
         lr = "auto" if q.lr is None else f"auto ({q.lr:.2g})"
         self.progress.configure(text=f"{T['step']} {q.step if q.total else '[N]'} {T['of']} {q.total or '[N]'} · {T['pass']} {pass_no} "
-                                f"{T['over_text']} {seen:,} {T['pieces_seen']} · {T['schedule']} {q.phase or T['steady']} · "
-                                f"{T['lr_auto'].replace('auto', lr)} · {left} {T['left']}" if q.job else "Nothing is training.")
-        history = curve.get("history") or [{"loss": y, "val_loss": None} for _, y in steps]
+                                f"{T['over_text']} {seen:,} {T['pieces_seen']} · {T['schedule']} {q.phase or phase_at(curve.get('phases') or [], q.step) or '[N]'} · "
+                                f"{T['lr_auto'].replace('auto', lr)} · {left} {T['left']}"
+                                + (" · cooling down, then stopping" if q.stopping else "") + (f" · waiting: {q.blocked}" if q.blocked else "")
+                                if q.job else "Nothing is training.")
+        history = curve.get("history") or history_of(steps, held)
         status, state = STATUS[studio_eval.run_status(history)]
         self.chip.set(status, state)
         last_s = smooth[-1][1] if smooth else None

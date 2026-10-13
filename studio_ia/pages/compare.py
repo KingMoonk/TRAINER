@@ -8,11 +8,15 @@ from dataclasses import asdict
 import studio_experiments as ex
 from studio_ia.copy import COMPARE as T
 from studio_ia.pages.base import Page
+from studio_ia.pages.builder import text_sets
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import BpcPlot, Card, GuessChips, Kicker, Segmented, Toggle, button
 from studio_spec import default_spec, validate_spec
 from studio_versions import change_text
+
+LOOKS = ("Pick your guess first.", "Add a variant first.")
+NO_TEXT = "Your data has no plain text yet. Add some in Your data, then queue the runs."
 
 MODE_KEYS = (("params", "params_mode", "params_note", "x_axis_text"), ("compute", "compute_mode", "compute_note", "x_axis_compute"),
              ("tokens", "tokens_mode", "tokens_note", "x_axis_text"), ("wall-clock", "time_mode", "time_note", "x_axis_time"))
@@ -25,6 +29,32 @@ def million(n):
     return f"{n / 1e6:.2f}M"
 
 
+def final_cell(s):
+    """'mean · spread x' (or one seed) and, under it, speed and peak memory; [N] before results."""
+    if not s:
+        return T["error_spread"]
+    head = f"{s['mean']:.3f} · spread {s['spread']:.3f}" if len(s["bpc"]) > 1 else f"{s['mean']:.3f} · one seed"
+    return f"{head}\n{s['pieces_per_s']:,.0f} pieces/s · {s['peak_mb']:.0f} MB peak"
+
+
+def delta_cell(s):
+    """Difference from the base; it counts only when larger than the spread across seeds."""
+    if not s:
+        return "[N]"
+    if s["delta"] is None:
+        return "—"
+    note = {True: "inside the spread", False: "beyond the spread", None: "one seed: no spread"}[s["inside_spread"]]
+    return f"{s['delta']:+.3f} · {note}"
+
+
+def guess_line(guess, letter, row):
+    """What happened to the guessed variant next to the guess; no verdict without a spread to compare against."""
+    outcome = ex.variant_outcome(row)
+    if outcome is None:
+        return f"You guessed {guess.lower()}. No verdict on {letter}: " + ("it needs at least two seeds to have a spread." if row else "it has no result yet.")
+    return f"You guessed {guess.lower()}; {letter} came out {outcome}" + (" (inside the spread)." if outcome == "about the same" else " (beyond the spread).")
+
+
 class ComparePage(Page):
     title = T["h1"]
     lead = T["lead"]
@@ -34,6 +64,7 @@ class ComparePage(Page):
         super().__init__(*a, **kw)
         self.variants = []  # [{"name", "spec"}]
         self.mode, self.job_id, self.live, self.results, self.error = "params", None, {}, None, ""
+        self.done_guess = ""
         b = self.body
         setup = Card(b)
         setup.pack(fill="x", pady=(0, GUTTER))
@@ -95,6 +126,11 @@ class ComparePage(Page):
         except ValueError:
             return validate_spec(default_spec())
 
+    @property
+    def base_number(self):
+        v = self.services.current_version()
+        return v.number if v else None
+
     def experiment(self):
         names = ["Base"] + [v["name"] for v in self.variants]
         return ex.ExperimentSpec(self.base, [v["spec"] for v in self.variants], seeds=int(self.seeds.value), mode=self.mode,
@@ -106,13 +142,22 @@ class ComparePage(Page):
         self.variants.append({"name": name or change_text(self.base, spec) or f"Variant {len(self.variants) + 1}", "spec": spec})
         self.update_plan()
 
+    def remove_variant(self, index):
+        del self.variants[index]
+        self.update_plan()
+
     def add_from_designer(self):
-        draft = getattr(self.services, "draft_spec", None)
-        draft = draft() if callable(draft) else None
+        draft = self.services.draft_spec()
         if draft and change_text(self.base, draft) != "no change":
             self.add_variant(spec=draft)
         else:
+            self.status.configure(text="Stage a change in the designer first, then add it here.")
             self.navigate("builder")
+
+    def reopen(self, n):
+        """Any row reopens in the designer: its spec is staged there as the draft."""
+        self.services.stage_draft(self.variants[n - 1]["spec"] if n else None)
+        self.navigate("builder")
 
     def pick_mode(self, label):
         self.mode = next(m[0] for m in MODE_KEYS if T[m[1]] == label)
@@ -124,6 +169,7 @@ class ComparePage(Page):
         base, mode = plan["variants"][0], self.mode
         if mode == "params":
             text = (T["width_resolved"] if row["adjustments"] else T["none_needed"]).replace("[N]M", million(row["parameters"]))
+            text += f" · within {row['relative_error']:.1%}"
         elif mode == "compute":
             more = row["steps"] / base["steps"] - 1
             text = T["stops_at_base"].replace("[N]%", f"{more:.0%}") if more > .005 else T["same_compute"]
@@ -133,6 +179,18 @@ class ComparePage(Page):
             text = T["min_budget"].replace("[N]", f"{WALL_SECONDS / 60:g}")
         return text + ("" if lr_on else " · learning rate not retuned")
 
+    def refresh(self):
+        if self.job_id and self.results is None:  # the runs finished while another page was open
+            run_dir = getattr(self.services.workspace, "run_dir", None)
+            self.results = ex.load_results(run_dir, self.job_id) if run_dir else None
+            if self.results:
+                self.status.configure(text=self.finished_text())
+        self.update_plan()
+
+    def finished_text(self):
+        rows = {v["variant"]: v for v in (self.results or {}).get("variants", [])}
+        return guess_line(self.guess.value or self.done_guess, "B", rows.get(1)) if (self.guess.value or self.done_guess) else ""
+
     # drawing ----------------------------------------------------------------
     def update_plan(self):
         _key, _mode, note, axis = next(m for m in MODE_KEYS if m[0] == self.mode)
@@ -140,8 +198,7 @@ class ComparePage(Page):
         self.mode_note.configure(text=T[note])
         self.seeds_note.configure(text=T["seeds_note"].format(lr_note=T["lr_note_on" if lr_on else "lr_note_off"]))
         self.curves_title.configure(text=T["curves_title"].format(xAxis=T[axis]).upper())
-        letter = chr(ord("B") + len(self.variants) - 1) if self.variants else "B"
-        self.guess_label.configure(text=T["before_runs"].replace("for B:", f"for {letter}:"))
+        self.guess_label.configure(text=T["before_runs"])
         try:
             self.plan = ex.plan(self.experiment())
             self.error = ""
@@ -160,27 +217,34 @@ class ComparePage(Page):
             tk_label(self.table, head, 12, "muted", "panel").grid(row=0, column=col, sticky="w", padx=(0, GUTTER), pady=(0, 6))
         rows = self.plan["variants"] if self.plan else []
         stats = {v["variant"]: v for v in (self.results or {}).get("variants", [])}
+        number = self.base_number
         for i, row in enumerate(rows, 1):
             n, color = row["variant"], COLORS[row["variant"] % len(COLORS)]
-            name = T["base_title"].replace("version 4", "this version") if not n else row["name"]
-            diff = T["base_diff"] if not n else change_text(self.base, row["spec"])
+            name = T["base_title"].replace("version 4", f"version {number}" if number else "this design") if not n else row["name"]
+            diff = T["base_diff"] if not n else " · ".join(ex.spec_changes(self.base, self.variants[n - 1]["spec"])) or "no change"
             s = stats.get(n)
-            final = T["error_spread"] if not s else (f"{s['mean']:.3f} · spread {s['spread']:.3f}" if len(s["bpc"]) > 1 else f"{s['mean']:.3f} · one seed")
-            vs = "—" if not n else "[N]" if not s or s["delta"] is None else f"{s['delta']:+.3f}" + (" · inside the spread" if s["inside_spread"] else "")
-            cells = (chr(ord("A") + n), name, diff, self.label_for(row, self.plan, lr_on), final, vs)
+            vs = "—" if not n else delta_cell(s)
+            cells = (chr(ord("A") + n), name, diff, self.label_for(row, self.plan, lr_on), final_cell(s), vs)
             for col, text in enumerate(cells):
                 dim = col == 5 and s and s["inside_spread"]
                 lbl = tk_label(self.table, text, 14 if col < 2 else 13, color if col == 0 else "dim" if dim else "text" if col < 2 else "text2", "panel",
-                               wraplength=240 if col in (2, 3) else 0)
+                               wraplength=240 if col in (2, 3, 4) else 0, font=font(12, mono=True) if col == 2 else font(14 if col < 2 else 13))
                 lbl.grid(row=i, column=col, sticky="w", padx=(0, GUTTER), pady=4)
                 if col == 1:
-                    lbl.configure(cursor="hand2")
-                    lbl.bind("<Button-1>", lambda _e: self.navigate("builder"))
+                    lbl.configure(cursor="hand2", takefocus=1)
+                    for seq in ("<Button-1>", "<Return>", "<space>"):
+                        lbl.bind(seq, lambda _e, k=n: self.reopen(k))
+            if n:
+                gone = tk_label(self.table, "remove", 12, "muted", "panel", cursor="hand2", takefocus=1)
+                gone.grid(row=i, column=6, sticky="w")
+                for seq in ("<Button-1>", "<Return>", "<space>"):
+                    gone.bind(seq, lambda _e, k=n - 1: self.remove_variant(k))
 
     def draw_curves(self):
         for child in self.legend.winfo_children() + self.plots.winfo_children():
             child.destroy()
-        curves = {v["variant"]: v["curve"] for v in (self.results or {}).get("variants", [])} or {k: v for k, v in self.live.items()}
+        final = {v["variant"]: v for v in (self.results or {}).get("variants", [])}
+        curves = {n: v["curve"] for n, v in final.items()} or {n: pts for n, (_seed, pts) in self.live.items()}
         self.hint.pack_forget() if curves else self.hint.pack(anchor="w")
         refs = [(k, v) for k, v in ((self.results or {}).get("references") or {}).items()]
         names = {"uniform": "uniform guess", "unigram": "counting word frequencies"}
@@ -189,33 +253,51 @@ class ComparePage(Page):
             tk_label(self.legend, f"{chr(ord('A') + n)} · {name}", 13, COLORS[n % len(COLORS)], "panel").pack(side="left", padx=(0, GUTTER))
             plot = BpcPlot(self.plots, 640, 140, 14)
             plot.pack(anchor="w", pady=4)
-            plot.set(smooth=[tuple(p) for p in points], refs=[(names[k], v) for k, v in refs])
+            spread = final.get(n)
+            plot.set(smooth=[tuple(p) for p in points], refs=[(names[k], v) for k, v in refs],
+                     band=(spread["min"], spread["max"]) if spread and len(spread["bpc"]) > 1 else None)
 
     # queue ------------------------------------------------------------------
     def queue_it(self):
         if not self.guess.value:
-            self.status.configure(text="Pick your guess first.")
+            self.status.configure(text=LOOKS[0])
             return
         if self.plan is None or len(self.variants) < 1:
-            self.status.configure(text="Add a variant first." if self.plan is not None else self.error)
+            self.status.configure(text=LOOKS[1] if self.plan is not None else self.error)
+            return
+        sets = text_sets(self.services.data("text"))
+        if not sets:
+            self.status.configure(text=NO_TEXT)
             return
         exp = self.experiment()
         label = f"Compare runs: {self.plan['n_runs']} runs" + (f" + {self.plan['n_sweeps']} short sweeps" if self.plan["n_sweeps"] else "")
         self.job_id = uuid.uuid4().hex[:8]
-        self.live, self.results = {}, None
+        self.live, self.results, self.done_guess = {}, None, self.guess.value
         self.services.enqueue(Job(id=self.job_id, kind="compare", label=label, note=exp.question,
-                                  params={"experiment": asdict(exp), "dataset_kind": "text", "guess": self.guess.value}))
+                                  params={"experiment": asdict(exp), "dataset_kind": "text", "datasets": sets, "guess": self.guess.value}))
         self.status.configure(text=f"Queued: {label}.")
         self.draw_table(self.retune.value)
+        self.draw_curves()
 
     def on_event(self, kind, payload):
-        if kind != "train" or not isinstance(payload, dict) or payload.get("job") != self.job_id:
+        if not isinstance(payload, dict) or payload.get("job") != self.job_id:
             return
+        if kind == "job" and payload.get("status") in ("failed", "stopped"):
+            self.status.configure(text=f"The runs {payload['status']}" + (f": {payload['error']}" if payload.get("error") else "."))
+            return
+        if kind != "train":
+            return
+        letter = chr(ord("A") + payload.get("variant", 0))
         if payload.get("type") == "compare" and payload.get("phase") == "run":
-            self.live.setdefault(payload["variant"], []).append((payload["step"], payload["bpc"]))
-            self.live[payload["variant"]] = self.live[payload["variant"]][-400:]
+            seed, points = self.live.get(payload["variant"], (payload["seed"], []))
+            points = [] if seed != payload["seed"] else points
+            self.live[payload["variant"]] = (payload["seed"], (points + [(payload["step"], payload["bpc"])])[-400:])
+            self.status.configure(text=f"Running {letter}, seed {payload['seed']}: step {payload['step']} of {payload.get('total')}.")
             self.draw_curves()
+        elif payload.get("type") == "compare" and payload.get("phase") == "sweep":
+            self.status.configure(text=f"Short learning-rate sweep for {letter}: step {payload['step']} of {payload.get('total')}.")
         elif payload.get("type") == "compare_done":
             self.results = payload["results"]
+            self.status.configure(text=self.finished_text())
             self.draw_table(self.retune.value)
             self.draw_curves()

@@ -35,11 +35,16 @@ def classify(example):
     return "conversations"
 
 
+def is_draft(example):
+    """Generated and not yet marked Good: shown as Review and used for nothing. Imported text has no review step."""
+    return bool(example.get("synthetic")) and example.get("quality") == "Review"
+
+
 def pretraining_examples(workspace, dataset_ids):
     """Plain-text examples only; conversations and problems never enter pretraining."""
     for dataset_id in dataset_ids:
         for example in workspace.iter_examples(dataset_id):
-            if classify(example) == "text":
+            if classify(example) == "text" and not is_draft(example):
                 yield example
 
 
@@ -166,7 +171,7 @@ def _columns(kind, example, dataset_name):
 def _status(kind, example, duplicate):
     quality = example.get("quality")
     if kind == "text":
-        return "Held back" if held_back(example) else "Near-duplicate" if duplicate else "In use"
+        return "Review" if is_draft(example) else "Held back" if held_back(example) else "Near-duplicate" if duplicate else "In use"
     if kind == "conversations":
         if str(example.get("source", "")).lower() in {"chat", "correction"}:
             return "From Chat"

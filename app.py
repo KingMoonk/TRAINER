@@ -12,7 +12,7 @@ if len(sys.argv) > 2 and sys.argv[1] == "--run-module":
     raise SystemExit(0)
 
 try:
-    from studio_gui import main
+    from studio_ia.shell import main
 except ImportError as exc:
     raise SystemExit("Install the native studio dependencies with: python -m pip install -r requirements.txt\n" + str(exc)) from exc
 

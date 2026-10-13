@@ -44,7 +44,7 @@ class PretrainingTest(unittest.TestCase):
         self.assertEqual(job.params["datasets"], ["d1"])
 
     def test_word_list_change_forces_scratch(self):
-        self.fake._versions[1].spec["tokenizer"] = {"id": "byte", "config": {}}
+        self.fake._versions[1].spec["tokenizer"] = {"id": "bpe_gpt2", "config": {}}  # differs from version 4's byte word list
         page = self.app.show("pretraining")
         page.pick_mode("catch_up")
         page.add_to_queue()

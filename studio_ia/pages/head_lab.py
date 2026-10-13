@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from pathlib import Path
 
 import numpy as np
 
@@ -11,11 +12,25 @@ from studio_ia.copy import HEAD_LAB
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, current, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, button
+from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, button
 
 TESTS = (("previous", "previous_word", "previous_desc"), ("first", "parks_first", "parks_desc"), ("induction", "copying_pattern", "copying_desc"))
 THRESHOLD = .5  # a share of attention above this counts as "passes"; a description of where it looks, not a verdict
 GUESSES = (HEAD_LAB["lot"], HEAD_LAB["little"], HEAD_LAB["not_at_all"])
+MODES = {HEAD_LAB["mode_mean"]: "mean", HEAD_LAB["mode_zero"]: "zero"}
+
+
+def best_pattern(values, threshold=THRESHOLD):
+    """Name of the test a head scores highest on ('previous' | 'first' | 'induction') or None if none reaches the threshold.
+
+    A description of where the head looks, never of what it does."""
+    name = max(TESTS, key=lambda t: values[t[0]])[0]
+    return name if values[name] >= threshold else None
+
+
+def top_relied(rises, k=3):
+    """The k heads whose switch-off raises the error most: [((block, head), rise)] largest first."""
+    return sorted(rises.items(), key=lambda kv: -kv[1])[:k]
 
 
 class HeadLabPage(Page):
@@ -26,7 +41,7 @@ class HeadLabPage(Page):
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
         self.sel, self.off, self.rises, self.tested, self.ranked = None, set(), None, {}, False
-        self.guess, self.changed, self._token = None, None, 0
+        self.guess, self.changed, self._token, self.mode, self.notice = None, None, 0, "mean", None
 
     # data -------------------------------------------------------------------
     def refresh(self):
@@ -60,7 +75,8 @@ class HeadLabPage(Page):
             child.destroy()
         version = current(self.services)
         n = f"{version.number}" if version else "[N]"
-        tk_label(self.body, HEAD_LAB["experiments"].replace("version 4", f"version {n}"), 13, "muted", wraplength=760).pack(anchor="w")
+        ckpt = Path(version.best_checkpoint).name if version and version.best_checkpoint else "[N]"
+        tk_label(self.body, HEAD_LAB["checkpoint"].format(version=n, checkpoint=ckpt), 13, "muted", wraplength=760).pack(anchor="w")
         top = tk.Frame(self.body, bg=C["bg"])
         top.pack(fill="x", pady=(GUTTER, 4))
         Kicker(top, f"{self.n_heads} HEADS · CLICK ONE").pack(side="left")
@@ -71,6 +87,11 @@ class HeadLabPage(Page):
         self.rank_button.pack(side="left")
         if self.off:
             button(bar, HEAD_LAB["switch_all_on"], self.all_on).pack(side="left", padx=8)
+        tk_label(bar, HEAD_LAB["mode_label"], 13, "muted").pack(side="left", padx=(GUTTER, 6))
+        label = next(k for k, v in MODES.items() if v == self.mode)
+        Segmented(bar, list(MODES), label, command=lambda v: self.set_mode(MODES[v]), bg="bg").pack(side="left")
+        if self.notice:
+            tk_label(self.body, self.notice, 13, "amber", wraplength=760).pack(anchor="w")
         self.tiles = {}
         grid = tk.Frame(self.body, bg=C["bg"])
         grid.pack(fill="x")
@@ -79,6 +100,10 @@ class HeadLabPage(Page):
             for h in range(p.shape[1]):
                 self._tile(grid, row, b, h, p[0, h])
         tk_label(self.body, HEAD_LAB["grid_note_ranked"] if self.ranked else HEAD_LAB["grid_note_normal"], 13, "muted", wraplength=760).pack(anchor="w", pady=8)
+        if self.ranked and self.rises:
+            Kicker(self.body, HEAD_LAB["most_relied"]).pack(anchor="w")
+            for (b, h), rise in top_relied(self.rises):
+                tk_label(self.body, f"Block {b + 1} · head {h + 1}   " + HEAD_LAB["rank_unit"].format(rise=rise), 13, "text2", font=font(13, mono=True)).pack(anchor="w")
         self._selected()
         self._changed()
         how = HowItWorks(self.body, HEAD_LAB["how_switching"], bg="bg")
@@ -86,6 +111,7 @@ class HeadLabPage(Page):
         for head, text in ((HEAD_LAB["switching_note"], HEAD_LAB["replaces_output"]), (HEAD_LAB["ranking_note"], HEAD_LAB["switches_each"]),
                            (HEAD_LAB["tests_note"], HEAD_LAB["measure_attention"])):
             tk_label(how.body, f"{head} {text}", 13, "muted", "bg", wraplength=760).pack(anchor="w", pady=2)
+        tk_label(how.body, HEAD_LAB["mean_exact"], 13, "muted", "bg", wraplength=760).pack(anchor="w", pady=2)
         link = tk_label(how.body, HEAD_LAB["step_through"] + " ›", 13, "violet", "bg", cursor="hand2", takefocus=1)
         link.pack(anchor="w", pady=2)
         for seq in ("<Button-1>", "<Return>", "<space>"):
@@ -100,7 +126,7 @@ class HeadLabPage(Page):
         if key in self.off:
             return HEAD_LAB["head_off"], "amber"
         if self.ranked and self.rises and key in self.rises:
-            return f"error +{self.rises[key]:.2f} bits/char", "text2"
+            return HEAD_LAB["rank_unit"].format(rise=self.rises[key]), "text2"
         if key in self.tested:
             return self.tested[key], "text2"
         return "no pattern yet", "muted"
@@ -184,9 +210,9 @@ class HeadLabPage(Page):
             return
         tk_label(card, HEAD_LAB["example_prompt"], 14, "text2", "panel").pack(anchor="w", pady=4)
         c = self.changed or {}
-        for label, reply in ((HEAD_LAB["all_heads_on"], c.get("on")), (HEAD_LAB["with_heads_off"].format(count=n), c.get("off"))):
+        for label, reply in ((HEAD_LAB["all_heads_on"], c.get("on", "…")), (HEAD_LAB["with_heads_off"].format(count=n), c.get("off", "…"))):
             tk_label(card, label, 12, "muted", "panel").pack(anchor="w")
-            tk_label(card, reply if reply is not None else "…", 14, "text", "panel", wraplength=760).pack(anchor="w", pady=(0, 6))
+            tk_label(card, reply if reply is not None else "—", 14, "text", "panel", wraplength=760).pack(anchor="w", pady=(0, 6))
         bits = c.get("bits")
         text = HEAD_LAB["to_bits"] if not bits else f"{bits['before']:.2f} → {bits['after']:.2f} bits/char"
         tk_label(card, f"{HEAD_LAB['error_change']}: {text}", 14, "text", "panel", font=font(14, mono=True)).pack(anchor="w")
@@ -198,17 +224,19 @@ class HeadLabPage(Page):
         self.off ^= {self.sel}
         self._update()
 
+    def set_mode(self, mode):
+        self.mode, self.ranked, self.rises = mode, False, None
+        self._update()
+
     def all_on(self):
         self.off = set()
         self._update()
 
     def test(self):
         b, h = self.sel
-        s = self.stats[b]
-        name = max(TESTS, key=lambda t: s[t[0]][h])
-        passed = s[name[0]][h] >= THRESHOLD
+        name = best_pattern({t[0]: float(self.stats[b][t[0]][h]) for t in TESTS})
         self.tested[self.sel] = {"previous": "looks at the previous word", "first": "parks on the first word",
-                                 "induction": "copying pattern"}[name[0]] if passed else "no clear pattern"
+                                 "induction": "copying pattern"}.get(name, "no clear pattern")
         self._show_tests = self.sel
         self._draw()
 
@@ -220,15 +248,14 @@ class HeadLabPage(Page):
 
     def _compute(self):
         version, off = current(self.services), sorted(self.off)
-        messages = [{"role": "user", "content": prompt_text()}]
         out = {}
-        for key, ablate in (("on", None), ("off", off)):
+        for key, heads in (("on", ()), ("off", off)):
             try:
-                out[key] = self.services.chat(version, messages, None, None, ablate=ablate) if ablate else self.services.chat(version, messages, None, None)
+                out[key] = self.services.inspect_reply(version, prompt_text(), heads, self.mode)
             except (NotImplementedError, ValueError):
                 out[key] = None
         try:
-            out["bits"] = self.services.inspect_heads_off(version, off)
+            out["bits"] = self.services.inspect_heads_off(version, off, self.mode)
         except (NotImplementedError, ValueError):
             out["bits"] = None
         return out
@@ -243,10 +270,11 @@ class HeadLabPage(Page):
             self._draw()
         else:
             self.rank_button.configure(state="disabled")
-            self._work(lambda: ask(self.services, "inspect_rank_heads"), self._ranked)
+            self._work(lambda: ask(self.services, "inspect_rank_heads", mode=self.mode), self._ranked)
 
     def _ranked(self, result):
         rows, error = result
+        self.notice = error
         if rows is not None:
             self.rises = {(r["block"], r["head"]): float(r["rise"]) for r in rows}
             self.ranked = True
