@@ -301,7 +301,9 @@ class ComparePage(Page):
         if self.plan is None or len(self.variants) < 1:
             self.status.configure(text=LOOKS[1] if self.plan is not None else self.error)
             return
-        sets = text_sets(self.services.data("text"))
+        self.slow(lambda: text_sets(self.services.data("text")), self._queue)
+
+    def _queue(self, sets):
         if not sets:
             self.status.configure(text=NO_TEXT)
             return

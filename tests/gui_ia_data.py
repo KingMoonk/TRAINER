@@ -35,6 +35,11 @@ class DataPagesTest(unittest.TestCase):
         widget.event_generate("<Button-1>")
         self.app.update()
 
+    def invoke(self, button):
+        button.invoke()
+        while self.app._waiting:  # the work runs on the shell's worker; its result arrives through the event loop
+            self.app.update()
+
     def test_your_data_board_copy_and_tabs(self):
         page = self.app.show("your_data")
         self.app.update()
@@ -67,15 +72,15 @@ class DataPagesTest(unittest.TestCase):
         for want in (M["h1"], M["lead"], M["problems_rule"], M["rewrite_model"], M["prose_model"], M["kicker"], M["problems_example"],
                      M["problems_where"], M["how_many"]):
             self.assertIn(want, text)
-        page.try5.invoke()
+        self.invoke(page.try5)
         self.assertTrue(page.status.cget("text").startswith(M["preview"]))
         before = self.fake.data("problems").count
-        page.go.invoke()
+        self.invoke(page.go)
         self.assertTrue(page.status.cget("text").startswith("Added "))
         self.assertGreater(self.fake.data("problems").count, before)
         self.click(find(page, M["rewrite_model"]))
         self.assertIn(M["rewrite_example"], labels(page))
-        page.go.invoke()
+        self.invoke(page.go)
         self.assertIn("No local model", page.status.cget("text"))
 
     def test_edit_button_shows_for_a_selected_row_and_saves(self):

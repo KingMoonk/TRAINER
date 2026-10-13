@@ -79,6 +79,9 @@ class PostTrainingPage(Page):
         except NotImplementedError:
             return {}
 
+    def preload(self):
+        self._state(self._version())
+
     def refresh(self):
         for child in self.body.winfo_children():
             child.destroy()
@@ -110,9 +113,9 @@ class PostTrainingPage(Page):
                 self.live_gate[payload["round"]] = payload
             else:
                 setattr(self, {"group": "group", "heat": "heat", "moved": "moved"}[t], payload)
-            self.refresh()
+            self.reload()
         elif kind in ("queue", "versions", "job"):
-            self.refresh()
+            self.reload()
 
     # stage line ---------------------------------------------------------------
     def _stages(self, status, notes):

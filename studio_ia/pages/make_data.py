@@ -148,13 +148,21 @@ class MakeDataPage(Page):
             return
         if stores_directly(card):
             chosen = next((r for r in rules.RULES if rules.LABELS[r] == self.rule.get()), None)
-            report = self.services.generate_problems(chosen, n, store=not trial, rng=self.rng)
-            self.status.configure(text="\n".join(preview_lines(report)) if trial else problems_summary(report))
+
+            def work():
+                report = self.services.generate_problems(chosen, n, store=not trial, rng=self.rng)
+                return "\n".join(preview_lines(report)) if trial else problems_summary(report)
+            title = "Making problems"
         else:
-            try:
-                added = self.services.make_drafts(card["makes"], n)
-            except RuntimeError as error:
-                self.status.configure(text=T["draft_failed"].format(why=error))
-                return
-            self.status.configure(text=drafts_summary(card["makes"], added))
+            def work():
+                self.services.note(f"Asking the local model for {n:,} drafts")
+                try:
+                    return drafts_summary(card["makes"], self.services.make_drafts(card["makes"], n))
+                except RuntimeError as error:
+                    return T["draft_failed"].format(why=error)
+            title = "Writing drafts"
+        self.background(work, self._made, title)
+
+    def _made(self, text):
+        self.status.configure(text=text)
         self.refresh()

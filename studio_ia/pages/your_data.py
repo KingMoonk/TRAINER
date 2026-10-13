@@ -143,7 +143,7 @@ class YourDataPage(Page):
         """Open on one tab (links from other pages call this after navigating here)."""
         self.kind, self.only_dups, self.selected = kind, False, None
         self.query.set("")
-        self.refresh()
+        self.reload()
 
     def go_back(self):
         self.navigate(back_link(self.kind)[1])
@@ -156,6 +156,10 @@ class YourDataPage(Page):
     # data ---------------------------------------------------------------------------
     def _load(self, kind):
         self.summaries[kind] = self.services.data(kind, self.query.get().strip() if kind == self.kind else "")
+
+    def preload(self):
+        for k in KINDS:
+            self.services.data(k)
 
     def refresh(self):
         for k in KINDS:
@@ -217,7 +221,7 @@ class YourDataPage(Page):
         if self.selected:
             self.services.review_data(self.selected, keep)
             self.selected = None
-            self.refresh()
+            self.reload()
 
     # actions ------------------------------------------------------------------------
     def toggle_duplicates(self):
@@ -237,17 +241,21 @@ class YourDataPage(Page):
                 self.services.edit_data(self.selected, fields)
             except ValueError as error:
                 messagebox.showinfo(T["dialog"], T["edit_failed"].format(why=error), parent=self)
-            self.refresh()
+            self.reload()
 
     def add(self):
         ask = self._ask
         fields = collect_fields(self.kind, ask, lambda m: messagebox.showinfo(T["dialog"], m, parent=self))
         if fields is not None and not self.services.add_data(self.kind, fields):
             messagebox.showinfo(T["dialog"], T["already"], parent=self)
-        self.refresh()
+        self.reload()
 
     def import_files(self):
         paths = filedialog.askopenfilenames(parent=self)
         if paths:
-            messagebox.showinfo(T["dialog"], "\n".join(self.services.import_data(self.kind, paths)), parent=self)
-            self.refresh()
+            kind = self.kind
+
+            def imported(lines):
+                messagebox.showinfo(T["dialog"], "\n".join(lines), parent=self)
+                self.reload()
+            self.background(lambda: self.services.import_data(kind, paths), imported, "Importing your files")

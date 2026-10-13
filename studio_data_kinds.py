@@ -6,7 +6,7 @@ because studio_core.normalize drops unknown keys when an example is edited.
 import hashlib
 import re
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import studio_core
 from studio_rules import LABELS
@@ -179,37 +179,57 @@ def _status(kind, example, duplicate):
     return "Review" if quality == "Review" else "Ready"
 
 
-def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_ids=None):
-    """Counts, sets and up to `limit` sample rows of one kind. Near-duplicates are looked for in the first
-    `scan_limit` examples of the kind only (bounded cost)."""
-    out = DataSummary(kind, used_by=USED_BY[kind])
-    needle = query.casefold().strip()
-    pairs, dataset_names = [], {}
-    for dataset in workspace.state["datasets"]:
-        if dataset_ids is not None and dataset["id"] not in dataset_ids:
-            continue
-        dataset_names[dataset["id"]] = dataset["name"]
-        n = 0
+def scan(workspace, scan_limit=20000, dataset_ids=None, progress=None):
+    """One pass over the workspace for all three kinds: ({kind: DataSummary without rows}, {kind: the first
+    `scan_limit` (example, dataset name)}). progress(text, fraction) is told what is being read."""
+    out = {kind: DataSummary(kind, used_by=USED_BY[kind]) for kind in KINDS}
+    pairs = {kind: [] for kind in KINDS}
+    datasets = [d for d in list(workspace.state["datasets"]) if dataset_ids is None or d["id"] in dataset_ids]
+    total, seen = sum(d.get("recordCount") or 0 for d in datasets), 0
+    for dataset in datasets:
+        counts = dict.fromkeys(KINDS, 0)
         for example in workspace.iter_examples(dataset["id"]):
-            if classify(example) != kind:
-                continue
-            n += 1
-            out.characters += len(example.get("text") or "") + len(example.get("user", "")) + len(example.get("assistant", ""))
+            if progress and seen % 2000 == 0:
+                progress(f"Reading {dataset['name']}", min(1, seen / total) if total else None)
+            seen += 1
+            kind = classify(example)
+            counts[kind] += 1
+            summary = out[kind]
+            summary.characters += len(example.get("text") or "") + len(example.get("user", "")) + len(example.get("assistant", ""))
             if kind == "problems":
-                out.rules[rule_of(example)] = out.rules.get(rule_of(example), 0) + 1
-            if len(pairs) < scan_limit:
-                pairs.append((example, dataset["name"]))
-        if n:
-            out.sets.append({"id": dataset["id"], "name": dataset["name"], "count": n})
-            out.count += n
+                summary.rules[rule_of(example)] = summary.rules.get(rule_of(example), 0) + 1
+            if len(pairs[kind]) < scan_limit:
+                pairs[kind].append((example, dataset["name"]))
+        for kind, n in counts.items():
+            if n:
+                out[kind].sets.append({"id": dataset["id"], "name": dataset["name"], "count": n})
+                out[kind].count += n
+    return out, pairs
+
+
+def matching(rows, query="", limit=200):
+    """The first `limit` rows whose two columns contain `query` (limit None = all)."""
+    needle = query.casefold().strip()
+    return [r for r in rows if not needle or needle in f"{r['a']} {r['b']}".casefold()][:limit]
+
+
+def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_ids=None, scanned=None, progress=None):
+    """Counts, sets and up to `limit` sample rows of one kind. Near-duplicates are looked for in the first
+    `scan_limit` examples of the kind only (bounded cost). `scanned` reuses an earlier scan() instead of reading again."""
+    summaries, pairs = scanned or scan(workspace, scan_limit, dataset_ids, progress)
+    out, pairs = replace(summaries[kind]), pairs[kind]
     out.scanned = len(pairs)
-    dups = near_duplicates((e["id"], normalized_text(e)) for e, _ in pairs) if kind != "problems" else {}
+
+    def texts():
+        for i, (example, _) in enumerate(pairs):
+            if progress and i % 500 == 0:
+                progress(f"Looking for near-copies in your {kind}", i / len(pairs))
+            yield example["id"], normalized_text(example)
+    dups = near_duplicates(texts()) if kind != "problems" else {}
     out.near_duplicates = len(dups)
+    rows = []
     for example, name in pairs:
         a, b = _columns(kind, example, name)
-        if needle and needle not in f"{a} {b}".casefold():
-            continue
-        out.rows.append({"id": example["id"], "a": a, "b": b, "status": _status(kind, example, example["id"] in dups), "dataset": name})
-        if len(out.rows) >= limit:
-            break
+        rows.append({"id": example["id"], "a": a, "b": b, "status": _status(kind, example, example["id"] in dups), "dataset": name})
+    out.rows = matching(rows, query, limit)
     return out

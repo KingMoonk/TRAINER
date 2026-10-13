@@ -405,7 +405,9 @@ class BuilderPage(Page):
         self.render()
 
     def queue_it(self, from_scratch):
-        sets = text_sets(self.services.data("text"))
+        self.slow(lambda: text_sets(self.services.data("text")), lambda sets: self._queue(sets, from_scratch))
+
+    def _queue(self, sets, from_scratch):
         if not sets:
             self.note = "There is no plain text to train on yet. Add some in Your data, then queue it."
             return self.render()

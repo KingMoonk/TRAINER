@@ -175,12 +175,16 @@ class QuickTestPage(Page):
 
     # run --------------------------------------------------------------------
     def start(self):
+        own = self.data.value == T["slice_your_data"]
+        self.slow(lambda: not own or bool(text_sets(self.services.data("text"))), self._start)
+
+    def _start(self, has_text):
         current, draft, _name = self.specs()
         if draft is None:
             self.status.configure(text="Stage a change in the designer first.")
         elif not self.guess.value:
             self.status.configure(text="Pick your guess first.")
-        elif self.data.value == T["slice_your_data"] and not text_sets(self.services.data("text")):
+        elif not has_text:
             self.status.configure(text=NO_TEXT)
         elif not self.running:
             data = next(d[0] for d in DATASETS if T[d[1]] == self.data.value)
