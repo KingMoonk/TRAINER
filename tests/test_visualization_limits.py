@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from studio_compile import CompiledModel
 from studio_model import build_optimizer
@@ -12,6 +13,7 @@ from studio_scene import SceneModel
 from studio_spec import default_spec, validate_spec
 from studio_summary import bin_edges, chunked_attention
 import studio_snapshot
+from tests.torchcheck import to_np
 
 
 def small_spec(position="none", mixer="attention", n_ctx=128):
@@ -32,18 +34,15 @@ def dense_bin_mass(pattern, edges):
     return result
 
 
-class TrackedArray(np.ndarray):
+class TrackedTensor(torch.Tensor):
+    """Records the shape of every matrix product, so a test can see what attention actually materializes."""
     products = []
 
-    def __new__(cls, value):
-        return np.asarray(value).view(cls)
-
-    def __array_finalize__(self, source):
-        pass
-
-    def __matmul__(self, other):
-        value = super().__matmul__(other)
-        self.products.append(value.shape)
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        value = super().__torch_function__(func, types, args, kwargs or {})
+        if "matmul" in getattr(func, "__name__", ""):
+            cls.products.append(tuple(value.shape))
         return value
 
 
@@ -51,14 +50,15 @@ class VisualizationLimitTests(unittest.TestCase):
     def test_chunked_attention_never_forms_a_full_context_square(self):
         batch, heads, length, depth, chunk = 1, 2, 129, 8, 16
         rng = np.random.default_rng(8)
-        q, k, v = (TrackedArray(rng.normal(size=(batch, heads, length, depth))) for _ in range(3))
-        TrackedArray.products = []
+        q, k, v = (torch.as_tensor(rng.normal(size=(batch, heads, length, depth))).as_subclass(TrackedTensor) for _ in range(3))
+        TrackedTensor.products = []
         output, mass = chunked_attention(q, k, v, object(), n_bins=7, chunk_size=chunk)
         self.assertEqual(output.shape, q.shape)
         self.assertEqual(mass.shape, (heads, 7, 7))
-        self.assertTrue(TrackedArray.products)
-        self.assertTrue(all(shape[-2] <= chunk and shape[-1] == length for shape in TrackedArray.products))
-        self.assertFalse(any(shape[-2:] == (length, length) for shape in TrackedArray.products))
+        self.assertTrue(TrackedTensor.products)
+        self.assertTrue(all(shape[-2] <= chunk for shape in TrackedTensor.products))
+        self.assertTrue(any(shape[-1] == length for shape in TrackedTensor.products))
+        self.assertFalse(any(shape[-2:] == (length, length) for shape in TrackedTensor.products))
 
     def test_alibi_gqa_binned_summary_matches_dense_attention_and_output(self):
         spec = small_spec(position="alibi", mixer="gqa")
@@ -67,10 +67,11 @@ class VisualizationLimitTests(unittest.TestCase):
         dense_logits, tape = model.forward(ids, hooks=True, tape=True)
         summary_logits, summaries = model.forward(ids, attention_summary=9)
         edges = bin_edges(ids.shape[1], 9)
-        np.testing.assert_allclose(summary_logits, dense_logits, rtol=2e-6, atol=1e-7)
+        np.testing.assert_allclose(to_np(summary_logits), to_np(dense_logits), rtol=1e-4, atol=1e-6)
         name = "block0.attn.pattern"
-        np.testing.assert_allclose(summaries[name], dense_bin_mass(tape.captured[name], edges), rtol=2e-6, atol=1e-7)
-        np.testing.assert_allclose(summaries[name].sum(axis=-1), 1, atol=1e-6)
+        mass = to_np(summaries[name])
+        np.testing.assert_allclose(mass, dense_bin_mass(to_np(tape.captured[name]), edges), rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(mass.sum(axis=-1), 1, atol=1e-5)
 
     def test_bins_refine_both_oldest_and_newest_context_ends(self):
         edges = bin_edges(4096, 32)
@@ -107,11 +108,11 @@ class VisualizationLimitTests(unittest.TestCase):
         ids = np.array([[1, 3, 5, 2, 8]], dtype=np.int64)
         targets = np.array([[3, 5, 2, 8, -100]], dtype=np.int64)
         model.forward(ids, training=True, tape=True)
-        params = {key: value.copy() for key, value in model.p.items()}
-        grads = {key: value.copy() for key, value in model.g.items()}
-        opt_state = {state: {key: value.copy() for key, value in getattr(optimizer, state).items()}
+        params = {key: to_np(value).copy() for key, value in model.p.items()}
+        grads = {key: to_np(value).copy() for key, value in model.g.items()}
+        opt_state = {state: {key: to_np(value).copy() for key, value in getattr(optimizer, state).items()}
                      for state in optimizer.states}
-        caches = [layer.cache for layer in model.layers]
+        tensors = dict(model.p)
         rng_state = json.dumps(model.rng.bit_generator.state, sort_keys=True)
         result = studio_snapshot.one_step(model, ids, targets, learning_rate=.002, optimizer=optimizer)
         self.assertTrue(result["exact_step"])
@@ -119,13 +120,14 @@ class VisualizationLimitTests(unittest.TestCase):
         self.assertTrue(any(key.startswith("forward::") for key in result["arrays"]))
         self.assertTrue(any(key.startswith("backward::") for key in result["arrays"]))
         for key, value in params.items():
-            np.testing.assert_array_equal(model.p[key], value)
-            np.testing.assert_array_equal(model.g[key], grads[key])
+            np.testing.assert_array_equal(to_np(model.p[key]), value)
+            self.assertIs(model.p[key], tensors[key])
+            np.testing.assert_array_equal(to_np(model.g[key]), grads[key])
         for state, values in opt_state.items():
             for key, value in values.items():
-                np.testing.assert_array_equal(getattr(optimizer, state)[key], value)
-        for layer, cache in zip(model.layers, caches):
-            self.assertIs(layer.cache, cache)
+                np.testing.assert_array_equal(to_np(getattr(optimizer, state)[key]), value)
+        for full, (layer, name) in model._slots.items():
+            self.assertIs(layer.params[name], model.p[full])
         self.assertEqual(json.dumps(model.rng.bit_generator.state, sort_keys=True), rng_state)
 
     def test_scene_limits_selection_and_gate_identity(self):

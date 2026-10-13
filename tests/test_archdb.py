@@ -2,15 +2,18 @@
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
 import numpy as np
 
 from studio_arch import default_spec
+import studio_archdb
 from studio_archdb import ArchitectureStore
 
 
@@ -195,6 +198,43 @@ class ArchitectureDatabaseTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(sorted(numbers), list(range(2, 22)))
         self.assertEqual(self.store.get(arch)["head_revision"], 21)
+
+    def test_failed_insert_leaves_no_orphan_weight_file(self):
+        arch = self.store.create("Alpha", spec("a"))
+        conn = sqlite3.connect(self.store.path)
+        conn.execute("CREATE TRIGGER boom BEFORE INSERT ON weight_versions BEGIN SELECT RAISE(ABORT, 'boom'); END")
+        conn.close()
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.store.add_weights(arch, fake_weights(self.root / "src" / "one.npz", 1.0))
+        self.assertEqual(list((self.store.weights_dir / arch).iterdir()), [])
+
+    def test_weight_path_hash_is_cached(self):
+        arch = self.store.create("Alpha", spec("a"))
+        self.store.add_weights(arch, fake_weights(self.root / "src" / "one.npz", 1.0))
+        with mock.patch("studio_archdb._hash_file", wraps=studio_archdb._hash_file) as hashed:
+            self.store.weight_path(arch, 1)
+            self.store.weight_path(arch, 1)
+        self.assertEqual(hashed.call_count, 1)
+
+    def test_weightless_restore_clears_stale_weights(self):
+        arch = self.store.create("Alpha", spec("a"))
+        zip_path = self.store.backup("bare", include_weights=False)
+        self.store.add_weights(arch, fake_weights(self.root / "src" / "one.npz", 1.0))
+        self.store.restore(zip_path)
+        self.assertEqual(list(self.store.weights_dir.rglob("*.npz")), [])
+        self.assertEqual(self.store.add_weights(arch, fake_weights(self.root / "src" / "two.npz", 2.0)), 1)
+
+    def test_unconvertible_legacy_spec_rejected_on_v2(self):
+        arch = self.store.create("Alpha", default_spec("a"))
+        self.store.migrate_model_specs()
+        with self.assertRaisesRegex(ValueError, "cannot be converted"):
+            self.store.commit(arch, spec("no blocks"))
+
+    def test_oversized_backup_member_rejected(self):
+        self.store.create("Alpha", spec("a"))
+        zip_path = self.store.backup("big", include_weights=False)
+        with mock.patch("studio_archdb.MAX_MEMBER", 10), self.assertRaisesRegex(ValueError, "too large"):
+            self.store.restore(zip_path)
 
 
 if __name__ == "__main__":

@@ -22,9 +22,8 @@ class SGD(Optimizer):
         if self.decays(key) and self.cfg.weight_decay:
             grad = grad + self.cfg.weight_decay * parameter
         velocity = self.velocity[key]
-        velocity *= self.cfg.momentum
-        velocity += grad
-        parameter -= lr * velocity
+        velocity.mul_(self.cfg.momentum).add_(grad)
+        parameter.sub_(lr * velocity)
 
 
 @register

@@ -1,0 +1,87 @@
+"""Pretraining and Pretraining-run pages on FakeServices."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import unittest
+import tkinter as tk
+from tkinter import ttk
+
+from studio_spec import default_spec
+from studio_ia.services import FakeServices, Job, QueueState, Version
+from studio_ia.shell import Studio
+
+
+def texts(widget):
+    own = [str(widget.cget("text"))] if isinstance(widget, (tk.Label, ttk.Label, ttk.Button)) else []
+    return own + [t for child in widget.winfo_children() for t in texts(child)]
+
+
+class PretrainingTest(unittest.TestCase):
+    def setUp(self):
+        self.fake = FakeServices()
+        self.fake.data = lambda kind: {"kind": kind, "count": 3, "sets": [{"id": "d1", "name": "Short stories", "count": 3}]}
+        self.fake._versions = [Version(4, spec=default_spec(), best_checkpoint="v4.npz", status="trained"),
+                               Version(5, change="6 blocks (was 4)", parent=4, spec=default_spec(), status="saved")]
+        try:
+            self.app = Studio(self.fake)
+        except tk.TclError as error:
+            self.skipTest(f"no display: {error}")
+        self.addCleanup(self.app.destroy)
+
+    def test_pretraining_page(self):
+        page = self.app.show("pretraining")
+        self.app.update()
+        t = "\n".join(texts(page))
+        self.assertIn("Version 5 · from the Network designer", t)
+        self.assertIn("2.00 word pieces per parameter", t)  # 2,000,000 pieces / 1,000,000 params
+        self.assertIn("rule of thumb", t)
+        self.assertIn("about 10.0× more text", t)
+        self.assertGreater(len(page.grid.find_all()), 100)  # cells of the real first rows
+
+    def test_collection_buttons_call_the_services(self):
+        self.fake._collection = [{"id": "tinystories", "name": "TinyStories", "size": "64 MB", "records": "77,941 stories",
+                                  "state": "not downloaded", "completed": 0, "total": 0, "error": ""},
+                                 {"id": "wikitext2", "name": "WikiText-2", "size": "6 MB", "records": "15,488 paragraphs",
+                                  "state": "downloaded", "completed": 0, "total": 0, "error": ""}]
+        page = self.app.show("pretraining")
+        self.app.update()
+        t = "\n".join(texts(page))
+        self.assertIn("Download all", t)
+        self.assertIn("Add to my sources", t)
+        page.fetch(None, "download")
+        page.fetch("wikitext2", "import")
+        self.assertEqual(self.fake.calls, [("download_sources", None), ("import_source", "wikitext2")])
+        self.fake._collection[0]["error"] = "no network"
+        page.on_event("download_failed", {"id": "tinystories", "error": "no network"})
+        self.assertIn("Could not finish: no network.", "\n".join(texts(page)))
+
+    def test_add_to_queue_defaults_to_catch_up(self):
+        page = self.app.show("pretraining")
+        page.add_to_queue()
+        job = self.fake.queue().up_next[-1]
+        self.assertEqual((job.kind, job.params["mode"], job.params["init_from"]), ("pretrain", "catch_up", "v4.npz"))
+        self.assertEqual(job.params["datasets"], ["d1"])
+
+    def test_word_list_change_forces_scratch(self):
+        self.fake._versions[1].spec["tokenizer"] = {"id": "bpe_gpt2", "config": {}}  # differs from version 4's byte word list
+        page = self.app.show("pretraining")
+        page.pick_mode("catch_up")
+        page.add_to_queue()
+        self.assertEqual(self.fake.queue().up_next[-1].params["mode"], "from_scratch")
+
+    def test_run_page_status_and_pause(self):
+        job = Job("j", "pretrain", "Version 5 catch-up", params={"output_dir": "x", "config": {"batch_size": 16}})
+        self.fake.set_queue(QueueState(job=job, step=40, total=200, phase="steady", eta_s=600))
+        steps = [(i, 5 - i / 100) for i in range(40)]
+        hist = [{"loss": 3 - i / 20, "val_loss": 2 + i / 10} for i in range(6)]
+        self.fake.run_curve = lambda d: {"steps": steps, "smooth": steps, "heldout": [(30, 4.7)], "total": 200, "history": hist}
+        page = self.app.show("training_run")
+        self.app.update()
+        t = "\n".join(texts(page))
+        self.assertIn("Memorising", t)
+        self.assertIn("the first sample appears at the next checkpoint", t)
+        self.assertIn("Step 40 of 200", t)
+        page.pause_btn.invoke()
+        self.assertTrue(self.fake.queue().paused)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,4 +1,6 @@
 """Passive training engine: plan, pure decisions, the SQLite record and the whole loop driven with fakes."""
+import math
+import sys
 import tempfile
 import threading
 import time
@@ -85,7 +87,9 @@ class PlanTests(unittest.TestCase):
     def test_rejections(self):
         for bad in ({"stop": {"unit": "weeks"}}, {"stop": {"duration": 0}}, {"stop": {"duration": -1}}, {"stop": {"duration": "8"}},
                     {"worse": {"pivots": ["explode"]}}, {"worse": {"limit": 0}}, {"plateau": {"checks": 1}}, {"limits": {"memory_fraction": 2}},
-                    {"limits": {"keep_checkpoints": 0}}, {"stop": {"win_rate": 5}}, {"data": {"balance": "x"}}, {"mystery": 1}, {"stop": {"mystery": 1}}):
+                    {"limits": {"keep_checkpoints": 0}}, {"stop": {"win_rate": 5}}, {"data": {"balance": "x"}}, {"mystery": 1}, {"stop": {"mystery": 1}},
+                    {"limits": {"keep_awake": "yes"}}, {"teacher": {"polish": 1}}, {"plateau": {"min_improvement": 1}}, {"base_checkpoint": "/no/such/best.npz"},
+                    {"config": {"batch_size": 0}}, {"config": {"device": "abacus"}}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 merge_plan(bad)
 
@@ -108,6 +112,13 @@ class PlanTests(unittest.TestCase):
         self.assertIn("3 rounds", summary["stop"])
         self.assertIn("1.5", summary["stop"])
         self.assertIn("halve the learning rate", summary["worse"])
+        self.assertNotIn("never tried", summary["worse"])
+
+    def test_patience_that_hides_the_changes_is_called_out(self):
+        plan = merge_plan({"stop": {"patience_rounds": 2}, "worse": {"limit": 2}})
+        self.assertTrue(passive.patience_hides_pivots(plan))
+        self.assertIn("never tried", passive.plan_summary(plan)["worse"])
+        self.assertFalse(passive.patience_hides_pivots(merge_plan({"stop": {"patience_rounds": 2}, "worse": {"limit": 2, "pivots": []}})))
 
 
 class JournalTests(unittest.TestCase):
@@ -116,6 +127,13 @@ class JournalTests(unittest.TestCase):
             path = Path(tmp) / "journal.jsonl"
             path.write_bytes(b'{"a": 1}\nnot json\n{"b": 2}\n{"c": "caf\xc3')  # killed in the middle of a two-byte character
             self.assertEqual(passive._read_jsonl(path), [{"a": 1}, {"b": 2}])
+
+    def test_rewrites_leave_no_temporary_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for n in range(3):
+                passive._write_jsonl(Path(tmp) / "lessons.jsonl", [{"n": n}])
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], ["lessons.jsonl"])
+            self.assertEqual(passive._read_jsonl(Path(tmp) / "lessons.jsonl"), [{"n": 2}])
 
 
 class DecisionTests(unittest.TestCase):
@@ -198,10 +216,12 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.get(sid)["command"], "pause")
         with self.assertRaises(ValueError):
             self.store.command(sid, "explode")
-        self.store.beat(sid, 4242)
+        self.assertTrue(self.store.beat(sid, 4242))
         row = self.store.get(sid)
         self.assertEqual(row["trainer_pid"], 4242)
         self.assertGreater(row["heartbeat"], 0)
+        self.assertFalse(self.store.beat(sid, 4343))  # a second trainer never takes over the record
+        self.assertEqual(self.store.get(sid)["trainer_pid"], 4242)
         self.assertEqual(self.store.journal(sid), [])
         self.store.append(sid, {"type": "start"})
         self.store.append(sid, {"type": "stop", "reason": "user"})
@@ -212,6 +232,16 @@ class StoreTests(unittest.TestCase):
         self.store.set_lessons(sid, [{"id": "a", "status": "pending"}])
         self.assertEqual(self.store.lessons(sid)[0]["status"], "pending")
         self.assertEqual(self.store.directory(sid), Path(self.dir.name) / "runs" / sid)
+
+    def test_a_stop_is_never_overwritten_or_lost(self):
+        sid = self.store.create({})
+        self.store.command(sid, "pause")
+        self.store.command(sid, "stop")  # written after the trainer read "pause"
+        self.assertFalse(self.store.take_command(sid, "pause"))
+        self.assertFalse(self.store.command(sid, "resume"))
+        self.assertEqual(self.store.get(sid)["command"], "stop")
+        self.assertTrue(self.store.take_command(sid, "stop"))
+        self.assertEqual(self.store.get(sid)["command"], "")
 
     def test_trainer_command(self):
         command = passive.trainer_command("/r", "passive_1")
@@ -236,6 +266,7 @@ class LoopTests(unittest.TestCase):
         self.assertAlmostEqual(rig.calls[5]["config"]["learning_rate"], rig.calls[0]["config"]["learning_rate"] / 2)
         self.assertEqual(rig.calls[3]["init_from"], state["checkpoints"][2]["path"])  # 4 followed on from 3 before the step back
         self.assertEqual(rig.calls[0]["config"]["steps"], 50)
+        self.assertEqual(len({c["config"]["seed"] for c in rig.calls}), len(rig.calls))  # each round draws its batches in its own order
         self.assertIn("start", rig.types())
         self.assertGreater(row["heartbeat"], 0)
         held = (rig.root / "runs" / rig.id / "eval.jsonl").read_text().count("\n")
@@ -256,7 +287,8 @@ class LoopTests(unittest.TestCase):
     def test_stops_on_duration(self):
         rig = Rig(self, [3.0, 2.0, 1.0, 0.5], stop={"duration": 2, "unit": "hours"}, plateau={"checks": 9})
         rig.on_train = lambda r, n: r.time.__setitem__(0, r.time[0] + 3600)
-        state = rig.run()
+        with patch.object(passive, "MAX_TICK", math.inf):  # the fake clock jumps an hour at a time
+            state = rig.run()
         self.assertEqual((state["stop_reason"], rig.row()["status"]), ("duration", "finished"))
         self.assertLessEqual(len(state["checkpoints"]), 2)
         self.assertGreaterEqual(state["active_seconds"], 7200)
@@ -264,8 +296,19 @@ class LoopTests(unittest.TestCase):
     def test_duration_stops_inside_a_long_round(self):
         rig = Rig(self, [3.0], checks=[3.0] * 20, stop={"duration": 1, "unit": "hours"}, plateau={"checks": 99})
         rig.on_train = lambda r, n: r.time.__setitem__(0, r.time[0] + 4000)
-        rig.run()
+        with patch.object(passive, "MAX_TICK", math.inf):
+            rig.run()
         self.assertEqual(rig.emitted, 1)  # the first check already showed the time was up
+
+    def test_a_sleeping_computer_does_not_count_as_training(self):
+        rig = Rig(self, [])
+        t = [0.0]
+        trainer = passive._Trainer(rig.root, rig.id, None, None, None, None, None, lambda: t[0], threading.Event())
+        trainer.state = {"tick": 0.0, "active_seconds": 0.0}
+        for now in (1.0, 2.0, 8 * 3600.0, 8 * 3600.0 + 1):  # the third tick comes after a night asleep
+            t[0] = now
+            trainer.tick()
+        self.assertEqual(trainer.state["active_seconds"], 3.0)
 
     def test_stops_on_patience(self):
         rig = Rig(self, [3.0, 4.0, 5.0, 6.0], stop={"patience_rounds": 2}, worse={"limit": 9}, plateau={"checks": 9})
@@ -315,7 +358,7 @@ class LoopTests(unittest.TestCase):
 
     def test_a_diverging_round_steps_back_and_halves_the_learning_rate(self):
         rig = Rig(self, [5.0, 4.0, 3.0], stop={"target_error": 3.5}, plateau={"checks": 9}, fail_train_on=3)
-        rig.fail_with = ValueError("Non-finite loss. Reduce the learning rate.")
+        rig.fail_with = ValueError("Non-finite gradient. Lower the learning rate.")  # what the optimizer says
         state = rig.run()
         self.assertEqual((rig.row()["status"], state["stop_reason"], state["best"]), ("finished", "target", 3))
         self.assertEqual([c["n"] for c in state["checkpoints"]], [1, 2, 3])
@@ -338,6 +381,13 @@ class LoopTests(unittest.TestCase):
         state = rig.run()
         self.assertEqual((rig.row()["status"], len(state["checkpoints"])), ("finished", 1))
         self.assertAlmostEqual(rig.calls[1]["config"]["learning_rate"], rig.calls[0]["config"]["learning_rate"] / 2)
+
+    def test_a_non_finite_test_error_is_a_diverged_round_not_a_best(self):
+        rig = Rig(self, [math.nan, 5.0], stop={"target_error": 6}, plateau={"checks": 9})
+        state = rig.run()
+        self.assertEqual(([c["error"] for c in state["checkpoints"]], state["best"]), ([5.0], 1))
+        self.assertAlmostEqual(rig.calls[1]["config"]["learning_rate"], rig.calls[0]["config"]["learning_rate"] / 2)
+        self.assertFalse(rig.calls[0]["dir"].exists())
 
     def test_other_training_errors_still_fail_the_session(self):
         rig = Rig(self, [5.0], plateau={"checks": 9}, fail_train_on=1)
@@ -376,6 +426,26 @@ class LoopTests(unittest.TestCase):
             self.assertEqual(call["dir"].exists(), c["kept"])
         self.assertTrue(Path(state["checkpoints"][state["best"] - 1]["path"]).exists())
 
+    def test_stray_round_and_polish_folders_are_cleared_at_start(self):
+        rig = Rig(self, [2.0], stop={"target_error": 5}, plateau={"checks": 9})
+        for name in ("round007_abc", "rlhf_abc"):
+            (rig.store.directory(rig.id) / name).mkdir()
+        rig.run()
+        self.assertEqual(sorted(p.name for p in rig.store.directory(rig.id).iterdir() if p.is_dir()), [rig.calls[0]["dir"].name])
+
+    def test_pruning_a_polished_checkpoint_removes_the_one_it_replaced_too(self):
+        rig = Rig(self, [], limits={"keep_checkpoints": 1})
+        trainer = passive._Trainer(rig.root, rig.id, None, None, None, None, None, lambda: 0.0, threading.Event())
+        folders = [trainer.directory / name for name in ("round001_a", "rlhf_a", "round002_b")]
+        for folder in folders:
+            folder.mkdir()
+            (folder / "best.npz").write_bytes(b"x")
+        trainer.state = {"best": 2, "current": 2, "checkpoints": [
+            {"n": 1, "path": str(folders[1] / "best.npz"), "original_path": str(folders[0] / "best.npz"), "kept": True},
+            {"n": 2, "path": str(folders[2] / "best.npz"), "kept": True}]}
+        trainer.prune()
+        self.assertEqual([f.exists() for f in folders], [False, False, True])
+
     def test_win_rate_without_a_teacher_is_journalled_and_the_session_still_ends(self):
         rig = Rig(self, [3.0, 2.0, 1.0], stop={"win_rate": 0.6, "target_error": 1.5}, plateau={"checks": 9})
         state = rig.run()
@@ -402,7 +472,8 @@ class LoopTests(unittest.TestCase):
             rig.store.command(rig.id, "resume")
         thread = threading.Thread(target=resume_when_paused, daemon=True)
         thread.start()
-        state = rig.run()
+        with patch.object(passive, "PAUSED_POLL", 0.01):
+            state = rig.run()
         thread.join(5)
         self.assertEqual(seen["status"], "paused")
         self.assertEqual((rig.row()["status"], state["stop_reason"]), ("finished", "target"))
@@ -452,7 +523,34 @@ class LoopTests(unittest.TestCase):
                 entry = state["checkpoints"][0]
                 self.assertEqual(entry["teacher"]["polished"], expect)
                 self.assertEqual(entry["path"] == "polished.npz", expect)
+                self.assertEqual("original_path" in entry, expect)  # the replaced checkpoint is still tracked, so pruning removes it
                 self.assertEqual(entry["error"], polished_error if expect else 2.0)
+
+    def test_a_polish_that_wins_is_judged_again(self):
+        # round 1: 2.0, its polish (2.5) is thrown away; round 2: 3.0 is worse until its polish (1.5) makes it the best
+        rig = Rig(self, [2.0, 2.5, 3.0, 1.5], stop={"target_error": 1.6}, worse={"limit": 9}, plateau={"checks": 9},
+                  teacher=lambda n, c: {"checkpoint": "polished.npz", "lessons": []})
+        rig.set_teacher()
+        state = rig.run()
+        self.assertEqual((state["best"], state["checkpoints"][1]["error"], state["rounds_since_best"], state["worse_streak"]), (2, 1.5, 0, 0))
+
+    def test_a_new_best_is_recorded_before_the_teacher_runs(self):
+        def killed(n, c):
+            raise KeyboardInterrupt  # the process dies while the teacher works
+        rig = Rig(self, [2.0], plateau={"checks": 9}, teacher=killed)
+        rig.set_teacher()
+        with self.assertRaises(KeyboardInterrupt):
+            rig.run()
+        self.assertEqual((rig.row()["state"]["best"], rig.row()["state"]["current"]), (1, 1))
+
+    def test_teacher_prompts_move_on_each_round(self):
+        seen = []
+        rig = Rig(self, [3.0, 2.0], stop={"target_error": 2.5}, plateau={"checks": 9}, teacher=lambda n, c: {"checkpoint": c, "lessons": []})
+        rig.teacher_round = lambda directory, plan, settings, checkpoint, examples, stop, emit: seen.append(examples[0]) or {"checkpoint": checkpoint, "lessons": []}
+        rig.set_teacher()
+        rig.run()
+        self.assertEqual(len(seen), 2)
+        self.assertNotEqual(seen[0], seen[1])
 
     def test_drop_lessons_pivot_leaves_out_later_lessons(self):
         lesson = {"messages": [{"role": "user", "content": "q"}], "chosen": "a", "rejected": "b"}
@@ -483,6 +581,26 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(rig.types().count("start"), 1)
         self.assertEqual(rig.row()["error"], "")
 
+    def test_a_round_that_died_before_its_evaluation_is_kept_not_retrained(self):
+        rig = Rig(self, [2.0], stop={"target_error": 5}, plateau={"checks": 9})
+        rig.on_train = lambda r, n: (_ for _ in ()).throw(KeyboardInterrupt)  # killed right after the checkpoint was written
+        with self.assertRaises(KeyboardInterrupt):
+            rig.run()
+        rig.on_train = None
+        state = rig.run()
+        self.assertEqual((len(rig.calls), state["checkpoints"][0]["path"]), (1, str(rig.calls[0]["dir"] / "best.npz")))
+        self.assertEqual(rig.row()["status"], "finished")
+
+    def test_a_restart_after_a_kill_mid_round_halves_the_batch(self):
+        rig = Rig(self, [2.0], stop={"target_error": 5}, plateau={"checks": 9}, fail_train_on=1)
+        with self.assertRaises(RuntimeError):
+            rig.run()
+        self.assertNotIn("training_batch", rig.row()["state"])  # a plain crash ran its cleanup: not a memory kill
+        rig.store.update(rig.id, state={**rig.row()["state"], "training_batch": 4})  # what a SIGKILL (the OOM killer) leaves behind
+        rig.run()
+        self.assertEqual([c["config"]["batch_size"] for c in rig.calls], [4, 2])
+        self.assertIn("memory", rig.types())
+
     def test_finished_session_is_left_alone(self):
         rig = Rig(self, [1.0], stop={"target_error": 5})
         rig.run()
@@ -498,6 +616,34 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(rig.row()["status"], "running")
         self.assertEqual(rig.emitted, 1)
         self.assertEqual(rig.row()["state"]["checkpoints"], [])
+
+    def test_a_signal_ends_a_round_paused_inside_training(self):
+        rig = Rig(self, [], plateau={"checks": 9})
+        interrupt = threading.Event()
+
+        def paused(config, examples, output_dir, emit, stop, pause, init_from=None):
+            Path(output_dir).mkdir(parents=True)
+            (Path(output_dir) / "last.npz").write_bytes(b"x")
+            pause.set()  # train() sits in its own pause loop, which only a stop ends
+            interrupt.set()
+            self.assertTrue(stop.wait(5))
+        with patch.object(passive, "POLL", 0.01), patch.object(passive, "PAUSED_POLL", 0.01):
+            run_session(rig.root, rig.id, train=paused, evaluate=rig.evaluate, build=lambda root, data: list(EXAMPLES), clock=lambda: rig.time[0], interrupt=interrupt)
+        self.assertEqual(rig.row()["status"], "running")
+
+    def test_keep_awake_is_dropped_while_paused(self):
+        rig = Rig(self, [])
+        calls = []
+        trainer = passive._Trainer(rig.root, rig.id, None, None, None, None, None, lambda: 0.0, threading.Event(),
+                                   awake=(lambda pid: calls.append("keep") or "handle", lambda handle: calls.append(handle)))
+        trainer.stay_awake(True)
+        trainer.stay_awake(True)
+        trainer.pause.set()
+        trainer.stay_awake(True)
+        trainer.pause.clear()
+        trainer.stay_awake(True)
+        trainer.stay_awake(False)
+        self.assertEqual(calls, ["keep", "handle", "keep", "handle"])
 
     def test_keep_checkpoints_never_deletes_best_or_current(self):
         rig = Rig(self, [1.0, 5.0, 6.0, 7.0, 8.0], limits={"keep_checkpoints": 2}, stop={"patience_rounds": 4}, worse={"limit": 9}, plateau={"checks": 9})
@@ -525,13 +671,13 @@ class LoopTests(unittest.TestCase):
         naps = []
         with patch.object(passive.time, "sleep", lambda seconds: (naps.append(seconds), trainer.pause.clear())):
             trainer.wait_if_paused()
-        self.assertGreaterEqual(naps[0], 1.0)
+        self.assertGreaterEqual(naps[0], 2.0)
 
     def test_memory_over_limit_reruns_with_smaller_batch(self):
         rig = Rig(self, [2.0], stop={"target_error": 5}, limits={"memory_fraction": 0.5}, plateau={"checks": 9})
         calls = []
 
-        def memory():
+        def memory():  # current use, not the peak: it falls again once the big batch is gone
             calls.append(1)
             return 900 if len(calls) == 1 else 100
         with patch.object(passive, "process_memory", memory), patch.object(passive, "total_memory", lambda: 1000):
@@ -542,10 +688,22 @@ class LoopTests(unittest.TestCase):
         memory_events = [e for e in rig.store.journal(rig.id) if e["type"] == "memory"]
         self.assertEqual((len(memory_events), memory_events[0]["batch_size"]), (1, 2))
         self.assertEqual(state["memory"]["limit"], 500)
+        self.assertFalse(rig.calls[0]["dir"].exists())  # the aborted run's folder is not left behind
 
     def test_memory_probes_return_sane_numbers(self):
         self.assertGreater(passive.process_memory(), 1 << 20)
         self.assertGreater(passive.total_memory(), passive.process_memory())
+
+    def test_process_memory_falls_when_memory_is_freed(self):
+        if sys.platform == "win32":
+            self.skipTest("the working set is trimmed lazily")
+        import mmap
+        big, chunk = mmap.mmap(-1, 256 << 20), b"\x01" * (1 << 20)
+        for _ in range(256):
+            big.write(chunk)  # touch every page, without a 256 MB temporary the allocator would keep
+        peak = passive.process_memory()
+        big.close()
+        self.assertLess(passive.process_memory(), peak - (128 << 20))  # the peak (ru_maxrss on macOS) would never fall
 
     def test_a_failure_in_setup_is_recorded_with_its_reason(self):
         rig = Rig(self, [])
@@ -577,14 +735,28 @@ class SmokeTests(unittest.TestCase):
 
 class TrainerKeepAwakeTests(unittest.TestCase):
     def test_main_asks_to_stay_awake_only_when_the_plan_says_so(self):
+        import studio_passive_watch
         for awake in (True, False):
             with tempfile.TemporaryDirectory() as tmp:
                 store = PassiveStore(tmp)
                 sid = store.create(plan_with(limits={"keep_awake": awake}))
-                with patch("studio_passive_watch.keep_awake") as keep, patch("signal.signal"), patch.object(passive, "run_session") as run:
+                with patch("signal.signal"), patch.object(passive, "run_session") as run:
                     passive.main(["run", sid, "--root", tmp])
-                self.assertEqual(keep.called, awake)
                 run.assert_called_once()
+                self.assertEqual(run.call_args.kwargs["awake"], (studio_passive_watch.keep_awake, studio_passive_watch.release_awake) if awake else None)
+
+    def test_a_second_trainer_for_the_same_session_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PassiveStore(tmp)
+            sid = store.create(plan_with())
+            held = passive.take_lock(store.directory(sid) / "trainer.lock")
+            try:
+                with patch("signal.signal"), patch.object(passive, "run_session") as run, self.assertRaises(SystemExit) as stopped:
+                    passive.main(["run", sid, "--root", tmp])
+            finally:
+                held.close()  # before the folder is removed: Windows will not delete a locked file
+            run.assert_not_called()
+            self.assertIn("Another trainer", str(stopped.exception.code))
 
 
 if __name__ == "__main__":

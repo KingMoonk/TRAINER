@@ -26,6 +26,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from studio_core import atomic_json, messages_of, now, replace_file, uid
 from studio_model import (ASSISTANT, BOS, EOS, SYSTEM, USER, AdamW, LocalModel, ScratchTransformer, Tokenizer,
@@ -112,22 +113,21 @@ def evaluate_checkpoint(path, examples, device="auto", limit=200, stop=None):
     samples = samples_from(examples[:limit], tokenizer, cfg)
     if not samples:
         raise ValueError("These examples contain no assistant tokens to evaluate.")
-    xp = model.xp
     total_loss, errors, tokens, stopped = 0., 0, 0, False
     for start in range(0, len(samples), 16):
         if stop is not None and stop.is_set():
             stopped = True
             break
         x, y = batch_arrays(samples[start:start + 16])
-        logits = model.forward(x)
-        labels = xp.asarray(y)
-        valid = labels != -100
-        shifted = logits - logits.max(axis=-1, keepdims=True)
-        logsum = xp.log(xp.exp(shifted).sum(axis=-1))
-        picked = xp.take_along_axis(shifted, xp.where(valid, labels, 0)[..., None], axis=-1)[..., 0]
-        total_loss += float(((logsum - picked) * valid).sum())
-        errors += int(((logits.argmax(axis=-1) != labels) & valid).sum())
-        tokens += int(valid.sum())
+        with torch.no_grad():
+            logits = model.forward(x)
+            labels = torch.as_tensor(y, dtype=torch.long, device=logits.device)
+            valid = labels != -100
+            safe = torch.where(valid, labels, torch.zeros_like(labels))
+            picked = torch.log_softmax(logits, dim=-1).gather(-1, safe[..., None])[..., 0]
+            total_loss += float((-picked * valid).sum())
+            errors += int(((logits.argmax(dim=-1) != labels) & valid).sum())
+            tokens += int(valid.sum())
     loss = total_loss / max(1, tokens)
     unknown = sum(1 for e in examples[:limit] for m in messages_of(e) if m["role"] == "assistant"
                   for t in tokenizer.encode(m["content"]) if t == 6)
@@ -335,18 +335,21 @@ def _encode_pair(tokenizer, messages, response, context):
 
 
 def _sequence_logps(model, x, y, tape=False):
-    xp = model.xp
+    """Summed log-probability of the target tokens per sequence; with tape=True the result carries gradients."""
     out = model.forward(x, training=False, tape=tape)
     logits, cache = out if tape else (out, None)
-    labels = xp.asarray(y)
+    labels = torch.as_tensor(np.asarray(y), dtype=torch.long, device=logits.device)
     valid = labels != -100
-    shifted = logits - logits.max(axis=-1, keepdims=True)
-    exp = xp.exp(shifted)
-    denominator = exp.sum(axis=-1, keepdims=True)
-    safe = xp.where(valid, labels, 0)
-    token_logp = xp.take_along_axis(shifted, safe[..., None], axis=-1)[..., 0] - xp.log(denominator[..., 0])
-    logps = (token_logp * valid).sum(axis=1)
-    return logps, (exp / denominator, safe, valid, cache)
+    safe = torch.where(valid, labels, torch.zeros_like(labels))
+    token_logp = torch.log_softmax(logits, dim=-1).gather(-1, safe[..., None])[..., 0]
+    logps = (token_logp * valid).sum(dim=1)
+    return logps, (token_logp, safe, valid, cache)
+
+
+def token_logps(model, x, y, tape=False):
+    """Per-token log-probabilities [B, T] (zero where the target is -100) and the valid mask; gradients when tape=True."""
+    logps, (token_logp, _, valid, cache) = _sequence_logps(model, x, y, tape=tape)
+    return token_logp * valid, valid, cache
 
 
 def preference_terms(policy_logp, reference_logp, lengths, count, cfg):
@@ -384,21 +387,18 @@ def preference_terms(policy_logp, reference_logp, lengths, count, cfg):
 
 def preference_batch(policy, reference, rows, count, cfg, backward=False):
     """Score `rows` (count chosen then count rejected, encoded) and optionally accumulate gradients into `policy`."""
-    xp = policy.xp
     x, y = batch_arrays(rows)
-    policy_logp, (probabilities, safe, valid, cache) = _sequence_logps(policy, x, y, tape=backward)
-    reference_logp, _ = _sequence_logps(reference, x, y)
+    policy_logp, (_, _, valid, cache) = _sequence_logps(policy, x, y, tape=backward)
+    with torch.no_grad():
+        reference_logp, _ = _sequence_logps(reference, x, y)
     pl = policy.backend.to_cpu(policy_logp).astype(np.float64)
     rl = reference.backend.to_cpu(reference_logp).astype(np.float64)
-    lengths = policy.backend.to_cpu(valid.sum(axis=1)).astype(np.float64)
+    lengths = policy.backend.to_cpu(valid.sum(dim=1)).astype(np.float64)
     result, g = preference_terms(pl, rl, lengths, count, cfg)
     if backward:
-        # d(loss)/d(logits) = g · (one_hot(target) − softmax) on answer positions.
-        weights = xp.asarray(g.astype(np.float32))[:, None]
-        dlogits = -probabilities * (weights * valid)[..., None]
-        rows_index, cols_index = xp.nonzero(valid)
-        dlogits[rows_index, cols_index, safe[rows_index, cols_index]] += weights[rows_index, 0]
-        policy.backward(dlogits.astype(xp.float32), cache)
+        # d(loss)/d(policy_logp) per sequence is g; autograd carries it back through the log-softmax and the model.
+        weights = torch.as_tensor(g, dtype=policy_logp.dtype, device=policy_logp.device)
+        policy.backward_loss((policy_logp * weights).sum(), cache)
     return result
 
 

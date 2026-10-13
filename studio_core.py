@@ -61,6 +61,8 @@ def atomic_json(path, value):
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             stream.write(json.dumps(value, ensure_ascii=False, indent=2))
+            stream.flush()
+            os.fsync(stream.fileno())  # a renamed file must not come back empty after a power loss
         replace_file(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
@@ -227,6 +229,17 @@ class Workspace:
         with self.lock:
             atomic_json(self.path, self.state)
 
+    def apply(self, mutate, save=True):
+        """Run mutate(state) and the save under the lock; how worker threads change workspace state.
+
+        The lock (an RLock) covers only in-memory state changes and the JSON write. Do long I/O (SQLite
+        indexing, downloads, hashing) before calling this, never inside mutate."""
+        with self.lock:
+            result = mutate(self.state)
+            if save:
+                self.save()
+            return result
+
     def create_dataset(self, name, description="", storage="json", **metadata):
         if not name.strip():
             raise ValueError("Enter a dataset name.")
@@ -286,16 +299,20 @@ class Workspace:
             raise ValueError("Choose a dataset first.")
         if dataset.get("storage") == "sqlite":
             return
-        with self.lock, self._connect() as connection:
+        with self.lock:
             rows = self.examples(dataset_id)
+        with self._connect() as connection:  # the copy runs without the lock: a save on the UI thread never waits on it
             for row in rows:
                 connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", self._db_row(row))
             count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
             if count < len({fingerprint(row) for row in rows}):
                 raise ValueError("Some records could not be moved to disk storage; nothing was changed.")
-        self.state["examples"] = [row for row in self.state["examples"] if row.get("datasetId") != dataset_id]
-        dataset.update(storage="sqlite", recordCount=count)
-        self.save()
+        def swap(state):
+            if [fingerprint(row) for row in state["examples"] if row.get("datasetId") == dataset_id] != [fingerprint(row) for row in rows]:
+                raise ValueError("The dataset changed while it was being moved to disk storage; try again.")
+            state["examples"] = [row for row in state["examples"] if row.get("datasetId") != dataset_id]
+            dataset.update(storage="sqlite", recordCount=count)
+        self.apply(swap)
 
     def examples(self, dataset_id, limit=None, offset=0, query=""):
         dataset = self._dataset(dataset_id) or {}

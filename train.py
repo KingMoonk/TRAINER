@@ -19,17 +19,17 @@ def main():
     parser.add_argument("--output", type=Path, help="Run folder (default: runs/run_<id>)")
     parser.add_argument("--resume", type=Path, help="Groundwork last.npz or best.npz checkpoint")
     parser.add_argument("--steps", type=int, help="Total optimizer steps, including any resumed steps")
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), help="Compute device; auto prefers a supported CUDA GPU and falls back to CPU")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), help="Compute device; auto prefers a working GPU (CUDA or Apple Metal) and falls back to CPU")
     parser.add_argument("--list-devices", action="store_true", help="Show CPU and CUDA availability, then exit")
     args = parser.parse_args()
     if args.list_devices:
-        print("cpu: NumPy CPU (available)")
+        print("cpu: PyTorch CPU (available)")
         gpu = gpu_status()
         if gpu["available"]:
-            print(f"cuda: {gpu['name']} (available)")
+            print(f"{gpu['kind']}: {gpu['name']} (available)")
         else:
-            print(f"cuda: unavailable — {gpu.get('reason', 'No supported GPU detected')}")
-        print("auto: prefers CUDA when available; otherwise CPU")
+            print(f"gpu: unavailable — {gpu.get('reason', 'No supported GPU detected')}")
+        print("auto: prefers a working GPU; otherwise CPU")
         return
     cfg = dict(DEFAULT_CONFIG)
     if args.resume:

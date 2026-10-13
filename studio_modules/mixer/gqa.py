@@ -4,7 +4,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from studio_modules.ops import linear, linear_back, merge_heads, softmax, split_heads
+from studio_modules.mixer.attention import cached, causal_softmax_attention
+from studio_modules.ops import linear, merge_heads, split_heads
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Issue, Layer
 
@@ -17,6 +18,8 @@ class GQAConfig:
 
 
 class GQALayer(Layer):
+    cacheable = True
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         d = dims.d_model
@@ -34,53 +37,25 @@ class GQALayer(Layer):
                 self.add(name + ".b", (width,), "bias")
 
     def forward(self, x, ctx):
-        xp, h, groups = self.xp, self.heads, self.group
-        length = x.shape[1]
+        h, groups = self.heads, self.group
         position = ctx.position
         q = split_heads(linear(self, x, "gqa.q"), h)
         k = split_heads(linear(self, x, "gqa.k"), self.kv_heads)
         v = split_heads(linear(self, x, "gqa.v"), self.kv_heads)
-        q, k = position.rotate(q, k)
+        q, k = position.rotate(q, k, ctx.offset)
         q = ctx.emit("attn.q", q)
         k = ctx.emit("attn.k", k)
         v = ctx.emit("attn.v", v)
-        expanded_k = xp.repeat(k, groups, axis=1)
-        expanded_v = xp.repeat(v, groups, axis=1)
+        k, v = cached(ctx, k, v)
+        expanded_k = k.repeat_interleave(groups, dim=1)
+        expanded_v = v.repeat_interleave(groups, dim=1)
         if hasattr(ctx, "attention_summary"):
             from studio_summary import chunked_attention
-            output, mass = chunked_attention(q, expanded_k, expanded_v, position, ctx.attention_summary, xp=xp)
+            output, mass = chunked_attention(q, expanded_k, expanded_v, position, ctx.attention_summary)
             ctx.summaries[f"block{ctx.block}.attn.pattern"] = mass
-            self.cache = None
             return linear(self, merge_heads(output), "gqa.proj")
-        raw = ctx.emit("attn.scores", q @ expanded_k.swapaxes(-1, -2))
-        scores = raw / math.sqrt(self.depth) * self.score_scale
-        bias = position.score_bias(length, h)
-        if bias is not None:
-            scores = scores + bias
-        scores = xp.where(ctx.mask(length), -1e9, scores)
-        probabilities = ctx.emit("attn.pattern", softmax(scores, xp))
-        attention, mask = ctx.drop(probabilities)
-        context = merge_heads(ctx.emit("attn.head_out", attention @ expanded_v))
-        self.cache = (x, q, expanded_k, expanded_v, probabilities, attention, mask, context, position)
+        context = causal_softmax_attention(ctx, q, expanded_k, expanded_v, self.score_scale / math.sqrt(self.depth), position, h)
         return linear(self, context, "gqa.proj")
-
-    def backward(self, dy):
-        x, q, k, v, probabilities, attention, mask, context, position = self.cache
-        dcontext = split_heads(linear_back(self, dy, context, "gqa.proj"), self.heads)
-        dv = attention.swapaxes(-1, -2) @ dcontext
-        dattention = dcontext @ v.swapaxes(-1, -2)
-        if mask is not None:
-            dattention *= mask
-        dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(self.depth) * self.score_scale
-        dq = dscores @ k
-        dk = dscores.swapaxes(-1, -2) @ q
-        shape = (x.shape[0], self.kv_heads, self.group, x.shape[1], self.depth)
-        dk = dk.reshape(shape).sum(axis=2)
-        dv = dv.reshape(shape).sum(axis=2)
-        dq, dk = position.rotate_back(dq, dk)
-        return (linear_back(self, merge_heads(dq), x, "gqa.q")
-                + linear_back(self, merge_heads(dk), x, "gqa.k")
-                + linear_back(self, merge_heads(dv), x, "gqa.v"))
 
 
 @register
@@ -93,7 +68,7 @@ class GQA(ModuleSpec):
     config = GQAConfig
     provides = frozenset({"qk", "scores", "attention"})
     hooks = (("attn.q", "B H T h"), ("attn.k", "B G T h"), ("attn.v", "B G T h"),
-             ("attn.scores", "B H T T"), ("attn.pattern", "B H T T"), ("attn.head_out", "B H T h"))
+             ("attn.scores", "B H T T"), ("attn.logits", "B H T T"), ("attn.pattern", "B H T T"), ("attn.head_out", "B H T h"))
     glyph3d = {"kind": "beams", "hooks": ["attn.pattern"]}
     # A constant key bias shifts every softmax row equally, so its gradient is zero.
     zero_grad_params = frozenset({"gqa.k.b"})

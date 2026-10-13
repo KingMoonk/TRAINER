@@ -4,7 +4,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from studio_modules.ops import linear, linear_back, merge_heads, softmax, split_heads
+import torch
+
+from studio_modules.ops import linear, merge_heads, split_heads
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Issue, Layer
 
@@ -15,7 +17,34 @@ class AttentionConfig:
     bias: bool = field(default=True, metadata=dict(help="Bias terms on the QKV and output projections (GPT-2 has them; many later models drop them)."))
 
 
+def causal_softmax_attention(ctx, q, k, v, scale, position, heads):
+    """Scores → scale → bias → emit logits → mask → softmax → dropout → weighted values. Shared by attention and GQA."""
+    length, offset = q.shape[-2], ctx.offset
+    raw = ctx.emit("attn.scores", q @ k.transpose(-1, -2))
+    scores = raw * scale
+    bias = position.score_bias(length, heads) if not offset or not hasattr(position, "score_bias_rows") else position.score_bias_rows(offset, offset + length, k.shape[-2], heads)
+    if bias is not None:
+        scores = scores + bias
+    scores = ctx.emit("attn.logits", scores)
+    mask = ctx.mask(length) if not offset else torch.triu(torch.ones((length, k.shape[-2]), dtype=torch.bool, device=ctx.device), offset + 1)
+    scores = scores.masked_fill(mask, -1e9)
+    probabilities = ctx.emit("attn.pattern", torch.softmax(scores, dim=-1))
+    attention, _ = ctx.drop(probabilities)
+    return merge_heads(ctx.emit("attn.head_out", attention @ v))
+
+
+def cached(ctx, k, v):
+    """With a KV cache: append this pass's keys/values to the block's stored ones and return them all."""
+    if ctx.cache is not None:
+        if ctx.block in ctx.cache:
+            k, v = torch.cat((ctx.cache[ctx.block][0], k), dim=-2), torch.cat((ctx.cache[ctx.block][1], v), dim=-2)
+        ctx.cache[ctx.block] = (k, v)
+    return k, v
+
+
 class Attention(Layer):
+    cacheable = True
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         d = dims.d_model
@@ -28,45 +57,22 @@ class Attention(Layer):
             self.add("proj.b", (d,), "bias")
 
     def forward(self, x, ctx):
-        xp, h = self.xp, self.heads
-        length, depth = x.shape[1], x.shape[2] // h
+        h = self.heads
+        depth = x.shape[2] // h
         position = ctx.position
-        q, k, v = [split_heads(part, h) for part in xp.split(linear(self, x, "qkv"), 3, axis=-1)]
-        q, k = position.rotate(q, k)
+        q, k, v = [split_heads(part, h) for part in linear(self, x, "qkv").chunk(3, dim=-1)]
+        q, k = position.rotate(q, k, ctx.offset)
         q = ctx.emit("attn.q", q)
         k = ctx.emit("attn.k", k)
         v = ctx.emit("attn.v", v)
+        k, v = cached(ctx, k, v)
         if hasattr(ctx, "attention_summary"):
             from studio_summary import chunked_attention
-            output, mass = chunked_attention(q, k, v, position, ctx.attention_summary, xp=xp)
+            output, mass = chunked_attention(q, k, v, position, ctx.attention_summary)
             ctx.summaries[f"block{ctx.block}.attn.pattern"] = mass
-            self.cache = None
             return linear(self, merge_heads(output), "proj")
-        raw = ctx.emit("attn.scores", q @ k.swapaxes(-1, -2))
-        scores = raw / math.sqrt(depth) * self.score_scale
-        bias = position.score_bias(length, h)
-        if bias is not None:
-            scores = scores + bias
-        scores = xp.where(ctx.mask(length), -1e9, scores)
-        probabilities = ctx.emit("attn.pattern", softmax(scores, xp))
-        attention, mask = ctx.drop(probabilities)
-        context = merge_heads(ctx.emit("attn.head_out", attention @ v))
-        self.cache = (x, q, k, v, probabilities, attention, mask, context, position)
+        context = causal_softmax_attention(ctx, q, k, v, self.score_scale / math.sqrt(depth), position, h)
         return linear(self, context, "proj")
-
-    def backward(self, dy):
-        x, q, k, v, probabilities, attention, mask, context, position = self.cache
-        depth = x.shape[2] // self.heads
-        dcontext = split_heads(linear_back(self, dy, context, "proj"), self.heads)
-        dv = attention.swapaxes(-1, -2) @ dcontext
-        dattention = dcontext @ v.swapaxes(-1, -2)
-        if mask is not None:
-            dattention = dattention * mask
-        # softmax backward, one row (query) at a time; masked keys have probability 0 so they get no gradient
-        dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(depth) * self.score_scale
-        dq, dk = position.rotate_back(dscores @ k, dscores.swapaxes(-1, -2) @ q)
-        dqkv = self.xp.concatenate([merge_heads(value) for value in (dq, dk, dv)], axis=-1)
-        return linear_back(self, dqkv, x, "qkv")
 
 
 @register
@@ -80,7 +86,7 @@ class AttentionSpec(ModuleSpec):
     provides = frozenset({"qk", "scores", "attention"})
     glyph3d = {"kind": "beams", "hooks": ["attn.pattern"]}
     hooks = (("attn.q", "B H T h"), ("attn.k", "B H T h"), ("attn.v", "B H T h"), ("attn.scores", "B H T T"),
-             ("attn.pattern", "B H T T"), ("attn.head_out", "B H T h"))
+             ("attn.logits", "B H T T"), ("attn.pattern", "B H T T"), ("attn.head_out", "B H T h"))
 
     def symbols(self, cfg, dims):
         return {"H": cfg.heads, "h": dims.d_model // cfg.heads}

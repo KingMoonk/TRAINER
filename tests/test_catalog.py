@@ -132,6 +132,50 @@ class DownloadLifecycleTests(unittest.TestCase):
             self.assertEqual(repaired["records"], 1)
             self.assertEqual(fetch.call_count, calls)  # intact upstream file reused
 
+    def test_pinned_checksum_mismatch_is_rejected(self):
+        entry = next(e for e in CATALOG if e["id"] == "dolly15k")
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch), \
+                patch.dict(entry, {"sha256": "0" * 64}):
+            with self.assertRaisesRegex(ValueError, "pinned checksum"):
+                download_dataset("dolly15k", root=directory)
+            self.assertFalse((Path(directory) / "data" / "downloads" / "dolly15k" / "source.json").exists())
+
+    def test_failed_license_fetch_is_tolerated_and_recorded(self):
+        def fetch(url, path, stop=None, emit=None, maximum=None):
+            if "LICENSE" in url:
+                raise OSError("offline")
+            payload = (json.dumps({"question": "1+1?", "answer": "2"}) + "\n").encode()
+            Path(path).write_bytes(payload)
+            return {"url": url, "filename": Path(path).name, "bytes": len(payload), "sha256": file_sha256(path)}
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=fetch):
+            self.assertEqual(download_dataset("gsm8k", root=directory)["license_file"], "unavailable")
+
+    def test_corrupt_state_rebuilds_and_line_endings_are_normalised(self):
+        def fetch(url, path, stop=None, emit=None, maximum=None):
+            payload = (json.dumps({"instruction": "Say\r\nhi", "response": "Hi\rthere", "context": ""}) + "\n").encode()
+            Path(path).write_bytes(payload)
+            return {"url": url, "filename": Path(path).name, "bytes": len(payload), "sha256": file_sha256(path)}
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=fetch):
+            first = download_dataset("dolly15k", root=directory)
+            folder = Path(directory) / "data" / "downloads" / "dolly15k"
+            for name in ("manifest.json", "source.json"):
+                (folder / name).write_text("{", encoding="utf-8")
+            with self.assertLogs("studio_catalog", "WARNING"):
+                again = download_dataset("dolly15k", root=directory)
+            self.assertEqual(again["sha256"], first["sha256"])
+            row = json.loads(Path(again["path"]).read_text(encoding="utf-8"))
+            self.assertEqual((row["user"], row["assistant"]), ("Say\nhi", "Hi\nthere"))
+
+    def test_registration_checks_the_actual_row_count(self):
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch):
+            result = download_dataset("dolly15k", root=directory)
+            workspace = Workspace(directory)
+            dataset_id = register_download(workspace, result)
+            with workspace._connect() as connection:
+                connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
+            register_download(workspace, result)
+            self.assertEqual(workspace.count(dataset_id), 1)
+
     def test_cancelled_normalization_never_advertises_a_complete_dataset(self):
         with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch):
             stop = threading.Event()
@@ -256,8 +300,8 @@ class NewConverterTests(unittest.TestCase):
     def test_story_splitter_handles_chunk_boundaries_and_truncated_prefixes(self):
         text = "One story.<|endoftext|>\nTwo story.<|endoftext|>\nThree is cut o"
         for size in (1, 4, 7, 1000):
-            self.assertEqual(list(iter_stories(io.StringIO(text), complete=False, chunk_size=size)), ["One story.", "Two story."])
-            self.assertEqual(list(iter_stories(io.StringIO(text), complete=True, chunk_size=size))[-1], "Three is cut o")
+            # Text after the last marker may be a truncated story, so it is always dropped.
+            self.assertEqual(list(iter_stories(io.StringIO(text), chunk_size=size)), ["One story.", "Two story."])
 
     def test_truncated_json_prefix_yields_only_whole_records(self):
         full = json.dumps([{"a": "x" * 10}, {"a": "y" * 10}, {"a": "z" * 10}])

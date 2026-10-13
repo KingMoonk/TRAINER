@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from studio_modules.ops import activate, activate_derivative, linear, linear_back
+import torch.nn.functional as F
+
+from studio_modules.ops import causal_conv, linear
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -14,6 +16,8 @@ class ConvConfig:
 
 
 class CausalConv(Layer):
+    elementwise = frozenset({"conv.depth.w"})
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         self.kernel = cfg.kernel
@@ -23,28 +27,9 @@ class CausalConv(Layer):
         self.add("conv.proj.b", (dims.d_model,), "bias")
 
     def forward(self, x, ctx):
-        pre = self.xp.broadcast_to(self.params["conv.depth.b"], x.shape).copy()
-        for lag in range(self.kernel):
-            if lag >= x.shape[1]:
-                break
-            pre[:, lag:] += x[:, :x.shape[1] - lag] * self.params["conv.depth.w"][lag]
-        pre = ctx.emit("conv.pre", pre)
-        act, saved = activate(self.xp, pre, "silu")
-        act = ctx.emit("conv.act", act)
-        self.cache = (x, pre, saved, act)
+        pre = ctx.emit("conv.pre", causal_conv(x, self.params["conv.depth.w"], self.params["conv.depth.b"]))
+        act = ctx.emit("conv.act", F.silu(pre))
         return linear(self, act, "conv.proj")
-
-    def backward(self, dy):
-        x, pre, saved, act = self.cache
-        dpre = linear_back(self, dy, act, "conv.proj") * activate_derivative(pre, saved, "silu")
-        self.grads["conv.depth.b"] += dpre.sum(axis=(0, 1))
-        dx = self.xp.zeros_like(x)
-        for lag in range(self.kernel):
-            if lag >= x.shape[1]:
-                break
-            self.grads["conv.depth.w"][lag] += (x[:, :x.shape[1] - lag] * dpre[:, lag:]).sum(axis=(0, 1))
-            dx[:, :x.shape[1] - lag] += dpre[:, lag:] * self.params["conv.depth.w"][lag]
-        return dx
 
 
 @register

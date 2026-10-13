@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 import random
 import re
 import shutil
@@ -19,11 +20,15 @@ from pathlib import Path
 
 from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file, truthy
 
+_log = logging.getLogger(__name__)
+
 
 def _hf(repo, revision, filename):
     return f"https://huggingface.co/datasets/{repo}/resolve/{revision}/{filename}?download=true"
 
 
+# An entry may carry "sha256": the expected hash of the fetched source bytes (the range_bytes prefix when
+# bounded). When present, a mismatching download is rejected; without it the receipt is trust-on-first-use.
 CATALOG = [
     # --- stage "language": plain text for the first, next-character-prediction stage -------------
     {"id": "tinystories", "name": "TinyStories · simple stories", "domain": "Language foundation", "stage": "language", "default": True,
@@ -135,6 +140,7 @@ STARTER_IDS = ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1")
 def default_catalog_ids():
     """Ids downloaded by default (commercially usable, bounded), in catalogue/stage order."""
     return [entry["id"] for entry in CATALOG if entry.get("default")]
+FORMAT_VERSION = 2  # 2: line endings normalised to \n; older converted files are rebuilt from the cached source
 MAX_DOWNLOAD_BYTES = 1_000_000_000
 MAX_RECORD_CHARS = 16_000_000
 _DOWNLOAD_LOCK = threading.Lock()
@@ -206,6 +212,9 @@ def _fetch(url, path, stop=None, emit=None, maximum=MAX_DOWNLOAD_BYTES, range_by
         temporary.unlink(missing_ok=True)
 
 
+_JSON_SPACE = re.compile(r"[ \t\n\r]*")
+
+
 def iter_json_array(stream, chunk_size=65536, truncated=False):
     """Incrementally parse a top-level JSON array without a third-party parser.
 
@@ -213,55 +222,56 @@ def iter_json_array(stream, chunk_size=65536, truncated=False):
     the cut-off final record is dropped.
     """
     decoder = json.JSONDecoder()
-    buffer, eof = "", False
+    buffer, pos, eof = "", 0, False
 
-    def read_more():
-        nonlocal buffer, eof
-        chunk = stream.read(chunk_size)
+    def read_more(size=chunk_size):
+        nonlocal buffer, pos, eof
+        chunk = stream.read(size)
         if not chunk:
             eof = True
-        buffer += chunk
-        if len(buffer) > MAX_RECORD_CHARS:
-            raise ValueError("A source JSON record exceeds the 16 MB parser limit.")
+        buffer, pos = buffer[pos:] + chunk, 0  # drop consumed text; records are decoded from `pos`
 
     read_more()
     buffer = buffer.lstrip("\ufeff \r\n\t")
     if not buffer.startswith("["):
         raise ValueError("Expected a JSON array.")
-    buffer = buffer[1:]
+    pos = 1
     needs_item = False
     while True:
-        buffer = buffer.lstrip()
-        if not buffer and not eof:
+        pos = _JSON_SPACE.match(buffer, pos).end()
+        if pos == len(buffer) and not eof:
             read_more()
             continue
-        if buffer.startswith("]"):
+        if buffer.startswith("]", pos):
             if needs_item:
                 raise ValueError("Trailing comma in source JSON array.")
-            rest = buffer[1:] + stream.read()
+            rest = buffer[pos + 1:] + stream.read()
             if rest.strip():
                 raise ValueError("Unexpected content after JSON array.")
             return
         try:
-            value, end = decoder.raw_decode(buffer)
+            value, end = decoder.raw_decode(buffer, pos)
         except json.JSONDecodeError as exc:
             if eof:
                 if truncated:
                     return
                 raise ValueError("Incomplete or invalid source JSON array.") from exc
-            read_more()
+            if len(buffer) - pos > MAX_RECORD_CHARS:
+                raise ValueError("A source JSON record exceeds the 16 MB parser limit.") from exc
+            # Read at least as much again as is pending, so a large record is re-decoded O(log n) times.
+            read_more(max(chunk_size, len(buffer) - pos))
             continue
         yield value
-        buffer = buffer[end:].lstrip()
-        while not buffer and not eof:
+        pos = _JSON_SPACE.match(buffer, end).end()
+        while pos == len(buffer) and not eof:
             read_more()
-            buffer = buffer.lstrip()
-        if buffer.startswith(","):
-            buffer = buffer[1:]
+            pos = _JSON_SPACE.match(buffer, pos).end()
+        if buffer.startswith(",", pos):
+            pos += 1
             needs_item = True
-        elif buffer.startswith("]"):
+        elif buffer.startswith("]", pos):
             needs_item = False
-        elif truncated and not buffer:
+        elif truncated and pos == len(buffer):
             return
         else:
             raise ValueError("Expected a comma or closing bracket in source JSON array.")
@@ -270,10 +280,11 @@ def iter_json_array(stream, chunk_size=65536, truncated=False):
 STORY_DELIMITER = "<|endoftext|>"
 
 
-def iter_stories(stream, complete=True, delimiter=STORY_DELIMITER, chunk_size=1 << 20):
+def iter_stories(stream, delimiter=STORY_DELIMITER, chunk_size=1 << 20):
     """Split a plain-text corpus on its end-of-text marker without loading it whole.
 
-    A byte-bounded prefix (complete=False) drops the cut-off final story.
+    Text after the last marker is dropped: it is either a byte-bounded prefix's cut-off story or,
+    for a whole file fetched without Content-Length, possibly a truncated one.
     """
     buffer = ""
     while True:
@@ -287,8 +298,6 @@ def iter_stories(stream, complete=True, delimiter=STORY_DELIMITER, chunk_size=1 
                 yield story.strip()
         if len(buffer) > MAX_RECORD_CHARS:
             raise ValueError("A source text record exceeds the 16 MB parser limit.")
-    if complete and buffer.strip():
-        yield buffer.strip()
 
 
 def iter_parquet(path, batch_size=2048):
@@ -346,7 +355,7 @@ def source_records(path, entry):
         return
     if entry["format"] == "txt_stories":
         with path.open(encoding="utf-8-sig", newline="") as stream:
-            for story in iter_stories(stream, complete=not entry.get("range_bytes")):
+            for story in iter_stories(stream):
                 yield {"text": story}
         return
     if entry["format"] == "squad":
@@ -455,6 +464,17 @@ def convert_record(raw, entry):
         yield raw
 
 
+def _unix_newlines(value):
+    """CRLF and lone CR become LF in every string, so byte-level tokenizers never see \\r."""
+    if isinstance(value, str):
+        return value.replace("\r\n", "\n").replace("\r", "\n")
+    if isinstance(value, dict):
+        return {key: _unix_newlines(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unix_newlines(item) for item in value]
+    return value
+
+
 _LETTERS = "ABCDEFGHIJ"
 
 
@@ -493,6 +513,22 @@ def _entry(catalog_id):
     return entry
 
 
+def _read_state(path, default):
+    """Read a JSON state file. Missing or unreadable state returns `default`, so the caller rebuilds it."""
+    path = Path(path)
+    if not path.exists():
+        return default
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        _log.warning("Ignoring unreadable %s (%s); it will be rebuilt.", path, error)
+        return default
+    if not isinstance(value, type(default)):
+        _log.warning("Ignoring malformed %s; it will be rebuilt.", path)
+        return default
+    return value
+
+
 def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
     """Fetch a complete pinned corpus and return its verified normalized manifest."""
     entry = _entry(catalog_id)
@@ -507,8 +543,9 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
         raise RuntimeError("Another catalogue download is already running.")
     try:
         if manifest_path.exists() and normalized.exists():
-            cached = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if cached.get("status") == "complete" and cached.get("revision") == entry["revision"] and cached.get("sha256") == file_sha256(normalized, stop):
+            cached = _read_state(manifest_path, {})
+            if (cached.get("status") == "complete" and cached.get("format_version") == FORMAT_VERSION
+                    and cached.get("revision") == entry["revision"] and cached.get("sha256") == file_sha256(normalized, stop)):
                 if emit:
                     emit({"text": f"Verified cached {entry['name']} · {cached['records']:,} records", "completed": cached["records"], "total": cached["records"]})
                 return {**cached, "path": str(normalized), "manifest_path": str(manifest_path), "cached": True}
@@ -516,7 +553,7 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
         raw_path = folder / Path(entry["filename"]).name
         receipt_path = folder / "source.json"
         source_url = entry.get("url") or _hf(entry["repo"], entry["revision"], entry["filename"])
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {}
+        receipt = _read_state(receipt_path, {})
         range_bytes = entry.get("range_bytes")
         if not (raw_path.exists() and receipt.get("url") == source_url and receipt.get("range_bytes") == range_bytes
                 and receipt.get("sha256") == file_sha256(raw_path, stop)):
@@ -524,14 +561,24 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
             if range_bytes:
                 receipt["range_bytes"] = range_bytes
             atomic_json(receipt_path, receipt)
+        if entry.get("sha256") and receipt["sha256"] != entry["sha256"]:
+            raw_path.unlink(missing_ok=True)
+            receipt_path.unlink(missing_ok=True)
+            raise ValueError(f"{entry['name']} does not match its pinned checksum; the download was discarded.")
         card_url = entry.get("card_url") or _hf(entry["repo"], entry["revision"], "README.md")
         if not (folder / "SOURCE_README.md").exists():
             try:
                 _fetch(card_url, folder / "SOURCE_README.md", stop, emit, maximum=5_000_000)
             except (OSError, ValueError):  # the card is optional
                 pass
-        if entry.get("license_url") and not (folder / "SOURCE_LICENSE.txt").exists():
-            _fetch(entry["license_url"], folder / "SOURCE_LICENSE.txt", stop, emit, maximum=5_000_000)
+        license_file = None
+        if entry.get("license_url"):
+            license_file = "SOURCE_LICENSE.txt"
+            if not (folder / license_file).exists():
+                try:  # like the card, retried on the next download; the manifest records the gap
+                    _fetch(entry["license_url"], folder / license_file, stop, emit, maximum=5_000_000)
+                except (OSError, ValueError):
+                    license_file = "unavailable"
         records, invalid, duplicate = 0, 0, 0
         seen = set()
         temp = normalized.with_suffix(".jsonl.part")
@@ -543,6 +590,7 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
                     if limit and records >= limit:
                         break
                     for converted in convert_record(raw, entry):
+                        converted = _unix_newlines(converted)
                         row = normalize({**converted, "synthetic": converted.get("synthetic", entry["synthetic"]),
                                          "quality": "Review", "source": f"catalog:{catalog_id}", "license": entry["license"],
                                          "source_url": entry["source_url"], "split": entry["split"]}, source=f"catalog:{catalog_id}")
@@ -567,14 +615,19 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
                 raise ValueError("This download contained no usable training records.")
             _cancel(stop)
             replace_file(temp, normalized)
+        except (ValueError, EOFError):
+            # A source that ends mid-record (e.g. truncated without Content-Length) must not stay cached.
+            receipt_path.unlink(missing_ok=True)
+            raise
         finally:
             temp.unlink(missing_ok=True)
-        manifest = {"format_version": 1, "status": "complete", "catalog_id": catalog_id, "name": entry["name"],
+        manifest = {"format_version": FORMAT_VERSION, "status": "complete", "catalog_id": catalog_id, "name": entry["name"],
                     "description": entry["description"], "path": str(normalized), "records": records,
                     "bytes": normalized.stat().st_size, "sha256": file_sha256(normalized, stop),
                     "source_url": entry["source_url"], "license": entry["license"], "revision": entry["revision"],
                     "split": entry["split"], "stage": entry.get("stage", ""), "downloadedAt": now(), "invalid": invalid, "duplicates": duplicate,
-                    "source": receipt, "manifest_path": str(manifest_path), "synthetic": entry["synthetic"]}
+                    "source": receipt, "manifest_path": str(manifest_path), "synthetic": entry["synthetic"],
+                    "license_file": license_file}
         atomic_json(manifest_path, manifest)
         if emit:
             emit({"text": f"Ready · {records:,} {entry['name']} records", "completed": records, "total": records})
@@ -599,13 +652,19 @@ def list_downloads(root=ROOT):
 
 
 def register_download(workspace, result, stop=None, emit=None):
-    """Atomically index a verified download in SQLite; repeated registration is cheap."""
+    """Index a verified download in SQLite; repeated registration is cheap.
+
+    Rows are written in batched transactions under a staging dataset id without the workspace lock,
+    then swapped in with one short transaction; the lock is only taken to update workspace metadata.
+    """
     catalog_id = result["catalog_id"]
     _entry(catalog_id)
     dataset_id = f"catalog_{catalog_id}"
     existing = workspace._dataset(dataset_id)
     stale = existing is not None and existing.get("sourceSha256") != result.get("sha256")
-    if existing is not None and workspace.db_path.exists() and not stale:
+    with workspace._connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+    if existing is not None and not stale and count == result["records"]:
         return dataset_id
     _cancel(stop)
     path = Path(result["path"])
@@ -617,44 +676,60 @@ def register_download(workspace, result, stop=None, emit=None):
             shutil.copy2(workspace.path, backup)
         for old in sorted(workspace.path.parent.glob("workspace.before-catalog-*.json"))[:-3]:
             old.unlink(missing_ok=True)
-    count = 0
-    with workspace.lock, workspace._connect() as connection:
-        count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
-        if count != result["records"] or stale:
-            connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
-            count = 0
-            with path.open(encoding="utf-8") as stream:
-                for line in stream:
-                    _cancel(stop)
-                    row = normalize(json.loads(line), dataset_id, source=f"catalog:{catalog_id}")
-                    if row is None:
-                        raise ValueError("A normalized catalogue row became invalid.")
-                    connection.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)", workspace._db_row(row))
-                    count += 1
-                    if emit and count % 2000 == 0:
-                        emit({"text": f"Indexing {result['name']} · {count:,}/{result['records']:,}", "completed": count, "total": result["records"]})
-            if count != result["records"]:
-                raise ValueError("Catalogue record count does not match its manifest.")
+    if count != result["records"] or stale:
+        staging = dataset_id + ".importing"
+        insert = "INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)"
+        with workspace._connect() as connection:
+            try:
+                connection.execute("DELETE FROM records WHERE dataset_id=?", (staging,))
+                connection.commit()
+                count, batch = 0, []
+                with path.open(encoding="utf-8") as stream:
+                    for line in stream:
+                        _cancel(stop)
+                        row = normalize(json.loads(line), dataset_id, source=f"catalog:{catalog_id}")
+                        if row is None:
+                            raise ValueError("A normalized catalogue row became invalid.")
+                        db_row = workspace._db_row(row)
+                        batch.append((db_row[0], staging, *db_row[2:]))
+                        count += 1
+                        if len(batch) >= 5000:
+                            connection.executemany(insert, batch)
+                            connection.commit()
+                            batch.clear()
+                        if emit and count % 2000 == 0:
+                            emit({"text": f"Indexing {result['name']} · {count:,}/{result['records']:,}", "completed": count, "total": result["records"]})
+                connection.executemany(insert, batch)
+                if count != result["records"]:
+                    raise ValueError("Catalogue record count does not match its manifest.")
+                connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
+                connection.execute("UPDATE records SET dataset_id=? WHERE dataset_id=?", (dataset_id, staging))
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                connection.execute("DELETE FROM records WHERE dataset_id=?", (staging,))
+                connection.commit()
+                raise
     metadata = {"id": dataset_id, "name": result["name"], "description": result.get("description", ""),
                 "createdAt": now(), "storage": "sqlite", "recordCount": count, "catalogId": catalog_id,
                 "license": result["license"], "source_url": result["source_url"], "revision": result["revision"],
                 "manifestPath": result["manifest_path"], "split": result["split"], "sourceSha256": result["sha256"]}
-    workspace.state["datasets"] = [entry for entry in workspace.state["datasets"] if entry["id"] != dataset_id] + [metadata]
+    # ponytail: Workspace.apply does not exist yet; hold the lock just for the in-memory swap and save.
+    with workspace.lock:
+        workspace.state["datasets"] = [entry for entry in workspace.state["datasets"] if entry["id"] != dataset_id] + [metadata]
+        workspace.save()
     registry_path = workspace.root / "data" / "catalog_registry.json"
-    registered = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else []
-    registered = [row for row in registered if row.get("id") != dataset_id] + [metadata]
-    atomic_json(registry_path, registered)
+    registered = [row for row in _read_state(registry_path, []) if isinstance(row, dict) and row.get("id") != dataset_id]
+    atomic_json(registry_path, registered + [metadata])
     tombstones = workspace.root / "data" / "catalog_removed.json"
     if tombstones.exists():
-        removed = json.loads(tombstones.read_text(encoding="utf-8"))
-        atomic_json(tombstones, [key for key in removed if key != dataset_id])
-    workspace.save()
+        atomic_json(tombstones, [key for key in _read_state(tombstones, []) if key != dataset_id])
     return dataset_id
 
 
 def reconcile_downloads(workspace, stop=None, emit=None):
     """Recover downloaded datasets missing from workspace metadata after an old app saved."""
     tombstones = workspace.root / "data" / "catalog_removed.json"
-    removed = json.loads(tombstones.read_text(encoding="utf-8")) if tombstones.exists() else []
+    removed = _read_state(tombstones, [])
     return [register_download(workspace, result, stop=stop, emit=emit) for result in list_downloads(workspace.root)
             if f"catalog_{result['catalog_id']}" not in removed]

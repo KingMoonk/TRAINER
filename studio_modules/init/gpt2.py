@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-import numpy as np
+import torch
 
 from studio_registry import ModuleSpec, register
 
@@ -15,22 +15,27 @@ class GPT2InitConfig:
     scale_residual: bool = field(default=True, metadata=dict(help="Divide the std of layers that write into the residual stream by √(2 · layers), so a deep stack starts with a stream of the same size."))
 
 
+def fill_normal(parameter, rng, std):
+    """Draw from the CPU NumPy stream (portable across devices) into the tensor."""
+    parameter.copy_(torch.as_tensor(rng.normal(0, std, tuple(parameter.shape)), dtype=parameter.dtype))
+
+
 class GPT2Init:
     def __init__(self, cfg):
         self.cfg = cfg
 
+    @torch.no_grad()
     def apply(self, layer, rng, dims):
         """Fill the layer's weights by role, drawing from rng in the order the layer registered them."""
-        xp = layer.xp
         for name, role in layer.roles.items():
             parameter = layer.params[name]
             if role in ("weight", "embedding", "residual_out"):
                 std = self.cfg.std / math.sqrt(2 * dims.n_layer) if role == "residual_out" and self.cfg.scale_residual else self.cfg.std
-                parameter[...] = xp.asarray(rng.normal(0, std, parameter.shape).astype(np.dtype(layer.dtype)))
+                fill_normal(parameter, rng, std)
             elif role == "gain":
-                parameter.fill(1)
+                parameter.fill_(1)
             elif role == "bias":
-                parameter.fill(0)
+                parameter.fill_(0)
 
 
 @register

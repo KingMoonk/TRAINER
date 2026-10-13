@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 
 import numpy as np
+import torch
 
-from studio_inspect import detectors, probe_ids, probe_model
+from studio_core import replace_file
+from studio_inspect import detectors, probe_ids, probe_model, to_numpy
 
 SCHEMA = 1
 
@@ -18,17 +20,19 @@ def capture(model, ids, step, before=None, loss=None, trace=None):
     ids = probe_ids(probe, ids)
     ids = ids[:, :32]  # fixed, bounded probe; whole-model views use chunked summaries separately
     logits, tape = probe.forward(ids, hooks=True, tape=True)
-    arrays = {f'hook::{key}': value.copy() for key, value in tape.captured.items()}
-    arrays['ids'], arrays['logits'] = ids.copy(), logits.copy()
+    arrays = {f'hook::{key}': to_numpy(value).copy() for key, value in tape.captured.items()}
+    arrays['ids'], arrays['logits'] = ids.copy(), to_numpy(logits).copy()
     norms, ratios, markers, lens = {}, {}, [], {}
+    import torch
     from studio_modules.ops import softmax
     from studio_slots import Ctx
-    ctx = Ctx(embedding=probe.embedding, position=probe.position)
+    ctx = Ctx(embedding=probe.embedding, position=probe.position, device=probe.device)
     for block in range(probe.dims.n_layer):
         hidden = tape.captured[f'block{block}.resid.post']
-        if probe.final is not None:
-            hidden = probe.final.forward(hidden, ctx)
-        probabilities = softmax(probe.head.forward(hidden, ctx), np)
+        with torch.no_grad():
+            if probe.final is not None:
+                hidden = probe.final.forward(hidden, ctx)
+            probabilities = softmax(to_numpy(probe.head.forward(hidden, ctx)), np)
         top = np.argsort(probabilities, axis=-1)[..., -5:][..., ::-1]
         lens[str(block)] = {'ids': top[0].tolist(), 'probabilities': np.take_along_axis(probabilities, top, axis=-1)[0].tolist()}
     for key, gradient in model.g.items():
@@ -42,7 +46,7 @@ def capture(model, ids, step, before=None, loss=None, trace=None):
         arrays[f'weight::{key}'] = model.backend.to_cpu(model.p[key]).copy()
     for key, value in tape.captured.items():
         if key.endswith('attn.pattern'):
-            markers.extend(dict(marker, block=int(key.split('.')[0][5:])) for marker in detectors(value, ids=ids))
+            markers.extend(dict(marker, block=int(key.split('.')[0][5:])) for marker in detectors(to_numpy(value), ids=ids))
     if trace is not None:
         arrays.update({f'forward::{key}': model.backend.to_cpu(value).copy() for key, value in trace.forward_values.items()})
         arrays.update({f'backward::{key}': model.backend.to_cpu(value).copy() for key, value in trace.backward_values.items()})
@@ -58,10 +62,13 @@ def save(directory, snapshot, keep=None):
     temporary = path.with_suffix('.tmp')
     with temporary.open('wb') as handle:
         np.savez_compressed(handle, metadata=np.array(json.dumps(metadata)), **snapshot['arrays'])
-    temporary.replace(path)
+    replace_file(temporary, path)
     if keep:
         for old in sorted(folder.glob('step_*.npz'))[:-keep]:
-            old.unlink()
+            try:
+                old.unlink()
+            except PermissionError:
+                pass  # a viewer holds it open; the next save retries
     return path
 
 
@@ -74,13 +81,14 @@ def load(path):
     return metadata
 
 
-def one_step(source, ids, targets, learning_rate=.001, optimizer=None):
+def one_step(source, ids, targets, learning_rate=None, optimizer=None):
     """Run one real step on a private model and return its exact layer outputs/returned gradients.
 
-    A provided optimizer is cloned with all state. A checkpoint restores its saved optimizer/RNG.
-    Nothing advances the original training job.
+    A provided optimizer is cloned with all state. A checkpoint restores its saved optimizer/RNG, and the
+    learning rate defaults to what its schedule gives the next step. Nothing advances the original training job.
     """
     from studio_model import build_optimizer, load_checkpoint
+    from studio_spec import module_of as _module_of
     if isinstance(source, (str, Path)) and optimizer is not None:
         raise ValueError('A checkpoint restores its saved optimizer; do not also pass a live optimizer.')
     model, tokenizer = probe_model(source)
@@ -95,7 +103,7 @@ def one_step(source, ids, targets, learning_rate=.001, optimizer=None):
         own.steps = optimizer.steps
         for state in own.states:
             for key in model.p:
-                getattr(own, state)[key][...] = source.backend.to_cpu(getattr(optimizer, state)[key])
+                getattr(own, state)[key].copy_(torch.as_tensor(source.backend.to_cpu(getattr(optimizer, state)[key])))
     else:
         own, _ = build_optimizer(model)
     if isinstance(source, (str, Path)):
@@ -106,16 +114,22 @@ def one_step(source, ids, targets, learning_rate=.001, optimizer=None):
                 saved = checkpoint.get('optimizer_state', {}).get(state, {})
                 if key not in saved:
                     raise ValueError(f'Checkpoint is missing optimizer state {state} for {key}.')
-                getattr(own, state)[key][...] = saved[key]
+                getattr(own, state)[key].copy_(torch.as_tensor(np.asarray(saved[key]), dtype=model.p[key].dtype))
         model.rng.bit_generator.state = checkpoint['model_rng']
+        if learning_rate is None:
+            cfg = checkpoint['config']
+            schedule, schedule_cfg = _module_of('schedule', model.spec['train']['schedule'])
+            learning_rate = schedule.build(schedule_cfg, model.dims, None).rate(own.steps + 1, cfg['steps'], cfg['learning_rate'])
     elif hasattr(source, 'rng'):
         model.rng.bit_generator.state = copy.deepcopy(source.rng.bit_generator.state)
-    before = {key: value.copy() for key, value in model.p.items()}
+    if learning_rate is None:
+        learning_rate = .001
+    before = model.state_arrays()
     model.zero_grad()
     logits, tape = model.forward(ids, training=True, tape=True, hooks=True, trace=True)
-    loss, derivative = model.objective(logits, targets, gradient=True, xp=np)
+    loss, derivative = model.objective(logits, targets, gradient=True)
     model.backward(derivative, tape)
-    loss += float(tape.ctx.aux)
+    loss += float(torch.as_tensor(tape.ctx.aux))
     own.update(model, learning_rate)
     snapshot = capture(model, ids, own.steps, before, loss=loss, trace=tape)
     snapshot['exact_step'] = True

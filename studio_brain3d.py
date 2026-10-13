@@ -3,15 +3,17 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 from pathlib import Path
 
 import numpy as np
+import torch  # noqa: F401 - before panda3d: on Windows torch's DLLs fail to initialise (WinError 1114) once panda3d's are loaded
 from panda3d.core import (Filename, Geom, GeomNode, GeomTriangles, GeomVertexData, GeomVertexFormat,
                           GeomVertexWriter, LineSegs, TextNode, TransparencyAttrib, Vec3,
                           loadPrcFileData)
 
-from studio_scene import LEVELS, MODES, SceneModel
+from studio_scene import HEAD_STAGES, LEVELS, MODES, TILE_KINDS, SceneModel, clamp_index, next_stage, stats_line
 from studio_spec import block_at, default_spec, to_legacy_view, upgrade
 
 
@@ -93,8 +95,12 @@ class _SceneRenderer:
         self.geometry = self.render.attachNewNode('scene')
         self.cube = _cube()
         self.gate_nodes = {}
-        self.weight_kind, self.head_stage = 'pattern', 'pattern'
+        self.weight_kind, self.head_stage = 'weight', 'pattern'
+        self.cell = [0, 0]  # the edited weight, relative to the visible 16x16 tile
+        self.edit_pending = False
+        self.link_lost = False
         self.snapshot_paths, self.snapshot_index = [], -1
+        self.stats, self.info = {}, ''
         self.animation_elapsed = 0.
         self.hud = DirectLabel(text='', scale=.043, pos=(-.05, 0, .86), frameColor=(0, 0, 0, 0), text_fg=(.85, .92, 1, 1))
         self.level_menu = DirectOptionMenu(items=list(LEVELS), initialitem=1, scale=.04, pos=(-1.28, 0, .9), command=self.set_level)
@@ -106,8 +112,8 @@ class _SceneRenderer:
         DirectButton(text='Next', scale=.04, pos=(1.08, 0, -.8), command=lambda: self.scrub(1))
         DirectButton(text='Load replay', scale=.04, pos=(1.08, 0, .84), command=lambda: self.send({'type': 'load_replay'}))
         DirectButton(text='1 real step', scale=.04, pos=(1.08, 0, .7), command=lambda: self.send({'type': 'probe_step'}))
-        self.tile_menu = DirectOptionMenu(items=['weight', 'gradient', 'update'], scale=.04, pos=(-1.28, 0, .64), command=self.set_weight_kind)
-        self.step_menu = DirectOptionMenu(items=['scores', 'scale', 'mask', 'pattern', 'values'], initialitem=3,
+        self.tile_menu = DirectOptionMenu(items=list(TILE_KINDS), scale=.04, pos=(-1.28, 0, .64), command=self.set_weight_kind)
+        self.step_menu = DirectOptionMenu(items=list(HEAD_STAGES), initialitem=HEAD_STAGES.index('pattern'),
                                           scale=.04, pos=(-1.28, 0, .51), command=self.set_head_stage)
         import studio_registry as registry
         self.module_menu = DirectOptionMenu(items=[m.short for m in registry.for_slot('mixer')], scale=.04,
@@ -135,8 +141,13 @@ class _SceneRenderer:
         self.accept(']', self.pan_tiles, [16, 0])
         self.accept(',', self.pan_tiles, [0, -16])
         self.accept('.', self.pan_tiles, [0, 16])
+        self.accept('i', self.move_cell, [-1, 0])
+        self.accept('k', self.move_cell, [1, 0])
+        self.accept('j', self.move_cell, [0, -1])
+        self.accept('l', self.move_cell, [0, 1])
         self.accept('-', self.edit_weight, [-.01])
         self.accept('+', self.edit_weight, [.01])
+        self.accept('=', self.edit_weight, [.01])
         self.accept('window-event', self.window_event)
         self.set_spec(self.scene.spec, fit=True)
         self.taskMgr.add(self.tick, 'scene-events')
@@ -274,18 +285,43 @@ class _SceneRenderer:
         self.scene.choose(row=max(0, self.scene.selection.row + row), column=max(0, self.scene.selection.column + column))
         self.rebuild()
 
+    def move_cell(self, row, column):
+        tile = np.asarray(self.scene.frame('Weights').get('weight', []))
+        if tile.ndim != 2:
+            return
+        self.cell = [max(0, min(tile.shape[0] - 1, self.cell[0] + row)), max(0, min(tile.shape[1] - 1, self.cell[1] + column))]
+        self.rebuild()
+
     def edit_weight(self, delta):
-        self.send({'type': 'edit_weight', 'weight': self.scene.selection.weight,
-                   'row': self.scene.selection.row, 'column': self.scene.selection.column, 'delta': delta})
+        """Edit the highlighted cell; one edit is saved at a time, the next waits for the studio's answer."""
+        frame = self.scene.frame('Weights')
+        if not frame.get('weight_name') or 'origin' not in frame:
+            self.hud['text'] = 'Load a snapshot with weights, then pick a cell (i/j/k/l) before editing.'
+            return
+        if self.edit_pending:
+            self.hud['text'] = 'Still saving the previous weight edit...'
+            return
+        self.edit_pending = True
+        top, left = frame['origin']
+        self.send({'type': 'edit_weight', 'weight': frame['weight_name'],
+                   'row': top + self.cell[0], 'column': left + self.cell[1], 'delta': delta})
 
     def toggle_play(self):
         self.playing = not self.playing
 
     def scrub(self, delta):
+        self.scrub_to(self.snapshot_index + delta)
+
+    def scrub_to(self, index):
         if not self.snapshot_paths:
             return
-        self.snapshot_index = max(0, min(len(self.snapshot_paths) - 1, self.snapshot_index + delta))
+        self.snapshot_index = clamp_index(index, len(self.snapshot_paths))
         self.read_snapshot(self.snapshot_paths[self.snapshot_index])
+        self.send({'type': 'replay_state', 'index': self.snapshot_index, 'count': len(self.snapshot_paths)})
+
+    def show_hud(self):
+        line = stats_line(self.stats)
+        self.hud['text'] = self.info + (f' | training: {line}' if line else '')
 
     def read_snapshot(self, path):
         from studio_snapshot import load
@@ -293,9 +329,10 @@ class _SceneRenderer:
         self.animation_elapsed = 0.
         names = self.scene.frame('Weights')['available']
         if names:
+            chosen = self.scene.selection.weight if self.scene.selection.weight in names else names[0]
             self.matrix_menu['items'] = names
-            self.matrix_menu.set(0)
-            self.scene.choose(weight=names[0])
+            self.matrix_menu.set(names.index(chosen), fCommand=0)
+            self.scene.choose(weight=chosen)
         self.rebuild()
 
     def cube_at(self, parent, position, scale, color):
@@ -425,12 +462,14 @@ class _SceneRenderer:
             elif level in ('Head', 'Weights'):
                 matrix = np.asarray(frame.get(self.weight_kind if level == 'Weights' else self.head_stage, []))
                 if level == 'Head' and self.head_stage in ('scale', 'mask'):
-                    matrix = np.asarray(frame['scores'])
-                    if matrix.size:
-                        heads = self._selected_block()['mixer']['config'].get('heads', 1)
-                        matrix = matrix / math.sqrt(self.scene.spec['dims']['d_model'] / heads)
-                        if self.head_stage == 'mask':
-                            matrix = np.where(frame['mask'], 0, matrix)
+                    matrix = np.asarray(frame.get('logits') or [])  # what softmax sees: score scale and position bias included
+                    if not matrix.size:
+                        matrix = np.asarray(frame['scores'])
+                        if matrix.size:  # snapshots without attn.logits: plain q·k/√head_dim
+                            heads = self._selected_block()['mixer']['config'].get('heads', 1)
+                            matrix = matrix / math.sqrt(self.scene.spec['dims']['d_model'] / heads)
+                    if matrix.size and self.head_stage == 'mask':
+                        matrix = np.where(frame['mask'], 0, matrix)
                 if matrix.size:
                     maximum = max(float(np.max(np.abs(matrix))), 1e-12)
                     for row in range(matrix.shape[0]):
@@ -439,10 +478,17 @@ class _SceneRenderer:
                             x, y = (column - matrix.shape[1] / 2) * .4, -row * .4
                             masked = level == 'Head' and self.head_stage != 'values' and frame['mask'][row][column]
                             color = (.08, .09, .12, 1) if masked else (1, .6, .2, .9) if value > 0 else (.2, .6, 1, .9)
+                            if level == 'Weights' and [row, column] == self.cell:
+                                color = (1, 1, 1, 1)
                             height = .015 if masked else .03 + abs(value) / maximum * 1.5
                             self.cube_at(self.geometry, (x, y, height / 2), (.18, .18, height / 2), color)
                     if self.scene.show_numbers:
-                        self.label_at(self.geometry, f'{matrix.shape[0]}x{matrix.shape[1]} | range {matrix.min():.3g} to {matrix.max():.3g}', (0, 1, 1))
+                        if level == 'Head':
+                            axes = 'rows = queries, columns = keys'
+                        else:
+                            cell = (min(self.cell[0], matrix.shape[0] - 1), min(self.cell[1], matrix.shape[1] - 1))
+                            axes = f'cell {cell[0]},{cell[1]} = {float(matrix[cell]):.4g} (i/j/k/l move, +/- edit)'
+                        self.label_at(self.geometry, f'{matrix.shape[0]}x{matrix.shape[1]} | range {matrix.min():.3g} to {matrix.max():.3g} | {axes}', (0, 1, 1))
                 else:
                     self.label_at(self.geometry, 'Load a snapshot with the selected hooks or matrix.', (0, 0, 2))
             self.drawn_level = level
@@ -456,7 +502,60 @@ class _SceneRenderer:
             if lens:
                 token = min(self.scene.selection.token, len(lens['ids']) - 1)
                 info += f" | predicted id {lens['ids'][token][0]} ({lens['probabilities'][token][0]:.3f})"
-        self.hud['text'] = info
+        self.info = info
+        self.show_hud()
+
+    def handle_message(self, message):
+        kind = message.get('type')
+        if kind == 'quit':
+            self.close()
+        elif kind == 'spec':
+            self.set_spec(message['spec'], message.get('selected'))
+        elif kind in ('viz_snapshot', 'snapshot'):
+            try:
+                self.read_snapshot(message['path'])
+                # training keeps only the newest snapshots on disk; forget the pruned ones so scrubbing never opens a missing file
+                self.snapshot_paths = [p for p in self.snapshot_paths if p != message['path'] and os.path.exists(p)] + [message['path']]
+                self.snapshot_index = len(self.snapshot_paths) - 1
+                self.send({'type': 'replay_state', 'index': self.snapshot_index, 'count': len(self.snapshot_paths)})
+            except (OSError, ValueError, KeyError) as error:
+                self.hud['text'] = str(error)
+        elif kind == 'step':  # walk the head's forward pass: delta +1 / -1, or jump to a named stage
+            stage = next_stage(self.head_stage, message.get('delta', 0), message.get('stage'))
+            self.step_menu.set(HEAD_STAGES.index(stage))  # also runs set_head_stage
+        elif kind == 'scrub':
+            self.scrub_to(message['index'])
+        elif kind == 'show':  # weight tile kind at the Weights level
+            if message.get('what') in TILE_KINDS:
+                self.tile_menu.set(TILE_KINDS.index(message['what']))
+        elif kind == 'stats':
+            self.stats = message
+            self.show_hud()
+        elif kind == 'replay':
+            self.snapshot_paths = message.get('paths', [])
+            self.snapshot_index = -1
+            self.scrub(1)
+        elif kind == 'summary':
+            self.scene.paths = message.get('paths', self.scene.paths)
+            self.scene.summaries = message.get('attention', self.scene.summaries)
+            self.scene.stream_norms = message.get('stream_norms', self.scene.stream_norms)
+            self.scene.summary_edges = message.get('edges', self.scene.summary_edges)
+            self.rebuild()
+        elif kind == 'scene':
+            self.scene.level = message.get('level', self.scene.level)
+            self.scene.mode = message.get('mode', self.scene.mode)
+            if message.get('selected'):
+                self.scene.choose(**message['selected'])
+            self.rebuild()
+        elif kind == 'selection':
+            self.scene.choose(**message['selection'])
+            self.rebuild()
+        elif kind == 'error':
+            self.edit_pending = False
+            self.hud['text'] = message.get('message', 'Viewer operation failed.')
+        elif kind == 'weight_edit_done':
+            self.edit_pending = False
+            self.hud['text'] = message.get('message', '')
 
     def tick(self, task):
         from panda3d.core import ClockObject
@@ -481,42 +580,16 @@ class _SceneRenderer:
                 self.pulse.setScale(.1 + min(.4, magnitude))
             if self.scene.mode == 'Ride a token':
                 self.cam_t.setPos(token_x, -depth * 3, 1)
+        if self.link and not self.link.connected and not self.link_lost:
+            self.link_lost = True  # the studio is gone: say so, then leave instead of lingering as an orphan
+            self.hud['text'] = 'studio disconnected'
+            self.taskMgr.doMethodLater(1.5, lambda _task: self.userExit(), 'studio-disconnected')
         if self.link:
             for message in self.link.poll():
-                kind = message.get('type')
-                if kind == 'quit':
-                    self.close()
-                elif kind == 'spec':
-                    self.set_spec(message['spec'], message.get('selected'))
-                elif kind in ('viz_snapshot', 'snapshot'):
-                    try:
-                        self.read_snapshot(message['path'])
-                        if message['path'] not in self.snapshot_paths:
-                            self.snapshot_paths.append(message['path'])
-                        self.snapshot_index = len(self.snapshot_paths) - 1
-                    except (OSError, ValueError, KeyError) as error:
-                        self.hud['text'] = str(error)
-                elif kind == 'replay':
-                    self.snapshot_paths = message.get('paths', [])
-                    self.snapshot_index = -1
-                    self.scrub(1)
-                elif kind == 'summary':
-                    self.scene.paths = message.get('paths', self.scene.paths)
-                    self.scene.summaries = message.get('attention', self.scene.summaries)
-                    self.scene.stream_norms = message.get('stream_norms', self.scene.stream_norms)
-                    self.scene.summary_edges = message.get('edges', self.scene.summary_edges)
-                    self.rebuild()
-                elif kind == 'scene':
-                    self.scene.level = message.get('level', self.scene.level)
-                    self.scene.mode = message.get('mode', self.scene.mode)
-                    if message.get('selected'):
-                        self.scene.choose(**message['selected'])
-                    self.rebuild()
-                elif kind == 'selection':
-                    self.scene.choose(**message['selection'])
-                    self.rebuild()
-                elif kind == 'error':
-                    self.hud['text'] = message.get('message', 'Viewer operation failed.')
+                try:
+                    self.handle_message(message)
+                except Exception as error:  # one bad message must not take the viewer down
+                    self.hud['text'] = f"Ignored a {message.get('type') if isinstance(message, dict) else 'malformed'} message | {error}"
         if self.dragging and self.mouseWatcherNode.hasMouse():
             mouse = self.mouseWatcherNode.getMouse()
             if self.last_mouse:
@@ -544,18 +617,18 @@ class _SceneRenderer:
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int)
-    parser.add_argument('--authkey')
     parser.add_argument('--offscreen', action='store_true')
     parser.add_argument('--selftest', type=int)
     parser.add_argument('--screenshot')
-    args = parser.parse_args(argv)
+    args, _ = parser.parse_known_args(argv)
     loadPrcFileData('', 'audio-library-name null\nsync-video 0\nwin-size 1280 900')
     if args.offscreen or args.selftest:
         loadPrcFileData('', 'window-type offscreen\nframebuffer-hardware 0')
     link = None
-    if args.port and args.authkey:
-        from studio_vizbridge import ViewerLink
-        link = ViewerLink(args.port, args.authkey)
+    if args.port:
+        from studio_vizbridge import ViewerLink, parse_viewer_args
+        port, authkey = parse_viewer_args(argv)  # the key arrives on stdin, never on the command line
+        link = ViewerLink(port, authkey) if port and authkey else None
     app = BrainApp(link=link, demo=link is None)
     if args.selftest:
         app.set_spec(sample_spec(24), fit=True)

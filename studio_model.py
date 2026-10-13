@@ -1,6 +1,6 @@
-"""A language-model training engine with handwritten NumPy/CuPy gradients.
+"""A language-model training engine on PyTorch (CPU, CUDA or Apple MPS).
 
-The same transformer runs on CPU or CUDA without autograd or pretrained weights.
+The transformer, tokenizer, checkpoint format and sampler are this repository's own; autograd supplies the gradients.
 
 Data-pipeline config keys (stable API, also used by the curriculum trainer):
   tokenizer  "byte" | "character"   - byte is the default: 263 tokens, no unknown characters, so every
@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import array
 import bisect
+import gc
 import hashlib
 import json
 import math
 import os
 import random
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -32,8 +34,10 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
     os.environ.setdefault(_variable, "4")
 
 import numpy as np
+import torch
 
 from studio_arch import parameter_breakdown, validate_spec
+from studio_backend import DEVICES
 from studio_core import atomic_json, fingerprint, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
@@ -42,7 +46,7 @@ from studio_modules.ops import softmax as _softmax
 from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
 from studio_modules.tokenizer.byte import Tokenizer
 from studio_planning import merge_duplicate_lineage
-from studio_registry import for_slot
+from studio_registry import for_slot, get as get_module
 from studio_slots import ASSISTANT, BOS, EOS, OFFSET, PAD, SYSTEM, UNK, USER
 from studio_spec import config_from_spec, is_model_spec, model_spec, module_of, structure_key, validate_spec as validate_model_spec
 
@@ -52,6 +56,7 @@ DEFAULT_CONFIG = {
     "batch_size": 4, "accumulation": 1, "steps": 300, "learning_rate": 0.001,
     "weight_decay": 0.01, "warmup": 20, "eval_every": 25, "validation": 0.1,
     "seed": 42, "objective": "assistant", "windowing": "anchored", "device": "auto", "architecture": None,
+    "sample_every": 4, "sample_prompt": "The ",  # run page: a greedy sample of the prompt every N evaluation intervals (0 = off)
 }
 # Why these defaults: a character vocabulary over mixed datasets reaches thousands of symbols (hundreds of
 # thousands of embedding parameters, up to 8% unknown characters across datasets); bytes cost ~13% more
@@ -59,6 +64,7 @@ DEFAULT_CONFIG = {
 # anchored windows with the assistant objective train answers only with their prompt in view.
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
+EVAL_WINDOWS = 400  # evaluation reads at most this many windows, spread evenly over the set
 
 
 def validate_config(config):
@@ -87,11 +93,11 @@ def validate_config(config):
     model_spec_given = is_model_spec(spec)
     structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 1024), ("expansion", 1, 8)]
     for key, low, high in structural + [("batch_size", 1, 128), ("accumulation", 1, 64),
-                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647)]:
+                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647), ("sample_every", 0, 100000)]:
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
-    for key, low, high in [("dropout", 0, .5), ("validation", 0, .4), ("learning_rate", 1e-7, .1), ("weight_decay", 0, 1)]:
+    for key, low, high in [("dropout", 0, .5), ("validation", 0, .4), ("learning_rate", 1e-7, _learning_rate_limit(spec)), ("weight_decay", 0, 1)]:
         cfg[key] = float(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
@@ -101,9 +107,21 @@ def validate_config(config):
         raise ValueError("Invalid tokenizer or objective.")
     if cfg["windowing"] not in WINDOWINGS:
         raise ValueError("Windowing must be anchored or sequential.")
-    if cfg["device"] not in {"auto", "cpu", "cuda"}:
-        raise ValueError("Device must be auto, cpu, or cuda.")
+    if cfg["device"] not in DEVICES:
+        raise ValueError("Device must be auto, cpu, cuda, or mps.")
     return cfg
+
+
+def _learning_rate_limit(spec):
+    """The optimizer module's own upper bound for its peak rate (SGD allows up to 1, AdamW 0.1)."""
+    optimizer = spec["train"]["optimizer"]["id"] if is_model_spec(spec) else "adamw"
+    try:
+        module = get_module("optimizer", optimizer)
+    except ValueError:
+        return .1
+    import dataclasses
+    fields = {f.name: f for f in dataclasses.fields(module.config)} if module.config else {}
+    return fields["lr"].metadata.get("max", .1) if "lr" in fields else .1
 
 
 def effective_spec(cfg):
@@ -143,7 +161,25 @@ def build_optimizer(model):
     return optimizer.build(optimizer_cfg, model.dims, None).attach(model), schedule.build(schedule_cfg, model.dims, None)
 
 
+def vocabulary_guess(cfg, vocab=263):
+    """The vocabulary a config will have: fixed tokenizers know it, custom BPE is capped by its setting, characters are unknown."""
+    spec = cfg.get("architecture")
+    if is_model_spec(spec):
+        entry = spec.get("tokenizer", {})
+        try:
+            module = get_module("tokenizer", entry.get("id", "byte"))
+        except ValueError:
+            return vocab
+        fixed = module.vocab(module.parse(entry.get("config")))
+        if fixed:
+            return fixed
+        if module.short == "bpe_custom":
+            return int(entry.get("config", {}).get("vocab_size", 512))
+    return vocab
+
+
 def parameter_estimate(cfg, vocab=263):
+    vocab = vocabulary_guess(cfg, vocab)
     if is_model_spec(cfg.get("architecture")):
         return estimate(validate_model_spec(cfg["architecture"]), vocab)["total"]
     if cfg.get("architecture"):
@@ -326,7 +362,8 @@ def batch_arrays(samples):
     return x, y
 
 
-def load_checkpoint(path):
+def load_checkpoint(path, weights_only=False):
+    """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads."""
     with np.load(Path(path), allow_pickle=False) as archive:
         metadata = json.loads(str(archive["metadata"].item()))
         if metadata.get("architecture") != "groundwork_numpy_decoder" or metadata.get("format_version") != 1:
@@ -334,12 +371,28 @@ def load_checkpoint(path):
         metadata["model"] = {key.removeprefix("weight::"): archive[key].copy() for key in archive.files if key.startswith("weight::")}
         # optimizer state arrays are stored as adam_<state>::<parameter>, whatever the optimizer (the prefix is historical)
         metadata["optimizer_state"] = {}
-        for key in archive.files:
+        for key in () if weights_only else archive.files:
             if key.startswith("adam_"):
                 state, name = key[5:].split("::", 1)
                 metadata["optimizer_state"].setdefault(state, {})[name] = archive[key].copy()
         metadata["m"], metadata["v"] = metadata["optimizer_state"].get("m", {}), metadata["optimizer_state"].get("v", {})
+    if not metadata.get("history"):
+        metadata["history"] = read_metrics(Path(path).parent / "metrics.jsonl")
     return metadata
+
+
+def read_metrics(path):
+    """The rows of a run's metrics.jsonl (a partial last line from a crash is skipped)."""
+    rows = []
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    return rows
 
 
 def _tuples(value):
@@ -415,22 +468,58 @@ def partition_examples(examples, fraction, sampler, grouped=True):
     return training, validation, report
 
 
+def _piece(tokenizer, index):
+    """The text (or bytes) behind one vocabulary id, for matching rows across tokenizers; None for special tokens."""
+    if index < OFFSET:
+        return ("special", index)
+    if tokenizer.kind == "character":
+        return tokenizer.characters[index - OFFSET]
+    pieces = getattr(tokenizer, "pieces", None)
+    if pieces is not None:
+        return pieces[index - OFFSET]
+    decoder = getattr(tokenizer, "decoder", None)
+    if decoder is not None:
+        return decoder.get(index - OFFSET)
+    return tokenizer.decode([index])
+
+
+def remap_vocabulary(old, old_tokenizer, tokenizer, fresh):
+    """Rows (or columns) of vocabulary-shaped tensors re-indexed by piece when the tokenizer changed.
+
+    `fresh` maps the parameter name to the new model's freshly initialised tensor (NumPy), so pieces the old
+    tokenizer never had keep their fresh values. Returns the remapped dict (other tensors unchanged).
+    """
+    if old_tokenizer.serialize() == tokenizer.serialize():
+        return old
+    old_rows = {}
+    for i in range(old_tokenizer.vocab_size):
+        old_rows.setdefault(_piece(old_tokenizer, i), i)
+    mapping = [(i, old_rows.get(_piece(tokenizer, i))) for i in range(tokenizer.vocab_size)]
+    old_vocab = old_tokenizer.vocab_size
+    out = dict(old)
+    for name, value in old.items():
+        value = np.asarray(value)
+        if name not in fresh:
+            continue
+        target = np.array(fresh[name], copy=True)
+        if value.ndim >= 1 and value.shape[0] == old_vocab and target.shape[0] == tokenizer.vocab_size and value.shape[1:] == target.shape[1:]:
+            for new_index, old_index in mapping:
+                if old_index is not None:
+                    target[new_index] = value[old_index]
+            out[name] = target
+        elif value.ndim >= 1 and value.shape[-1] == old_vocab and target.shape[-1] == tokenizer.vocab_size and value.shape[:-1] == target.shape[:-1]:
+            for new_index, old_index in mapping:
+                if old_index is not None:
+                    target[..., new_index] = value[..., old_index]
+            out[name] = target
+    return out
+
+
 def _initialize_from(model, tokenizer, path):
     """Transplant weights from a checkpoint into the model's (possibly different) architecture."""
     data = load_checkpoint(path)
-    xp = model.xp
-    old = {key: xp.asarray(value) for key, value in data["model"].items()}
     old_tokenizer = Tokenizer.restore(data["tokenizer"])
-    if "token" in old and old_tokenizer.serialize() != tokenizer.serialize() and old_tokenizer.kind == tokenizer.kind == "character":
-        # Different alphabets: keep rows for shared characters and the special tokens, the rest stay fresh.
-        rows = model.p["token"].copy()
-        old_rows = {char: i + OFFSET for i, char in enumerate(old_tokenizer.characters)}
-        for i, char in enumerate(tokenizer.characters):
-            if char in old_rows and old["token"].shape[1] == rows.shape[1]:
-                rows[i + OFFSET] = old["token"][old_rows[char]]
-        if old["token"].shape[1] == rows.shape[1]:
-            rows[:OFFSET] = old["token"][:OFFSET]
-        old["token"] = rows
+    old = remap_vocabulary(data["model"], old_tokenizer, tokenizer, model.state_arrays())
     return transplant(old, model)
 
 
@@ -506,8 +595,15 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     if checkpoint:
         model.load_weights(checkpoint["model"])
         for state in optimizer.states:
-            for key in model.p:
-                getattr(optimizer, state)[key][...] = model.xp.asarray(checkpoint["optimizer_state"][state][key])
+            saved = checkpoint["optimizer_state"].get(state, {})
+            for key, target in getattr(optimizer, state).items():
+                value = saved.get(key)
+                if value is None or tuple(np.shape(value)) != tuple(target.shape) or not np.isfinite(value).all():
+                    raise ValueError(f"Checkpoint optimizer state {state} for {key} is missing or invalid.")
+                target.copy_(torch.as_tensor(np.asarray(value), dtype=target.dtype, device=target.device))
+        previous_best = Path(resume).parent / "best.npz"
+        if previous_best.is_file():
+            shutil.copy2(previous_best, directory / "best.npz")  # the best so far carries over until this run beats it
         step = checkpoint["step"]
         best = checkpoint["best"] if checkpoint["best"] is not None else float("inf")
         optimizer.steps = checkpoint["optimizer_steps"]
@@ -518,7 +614,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             raise ValueError("Total steps must exceed the checkpoint step.")
     record = {"name": cfg["name"], "createdAt": now(), "status": "training", "step": step, "steps": cfg["steps"],
               "parameters": model.parameter_count, "vocabulary": tokenizer.vocab_size,
-              "backend": "cupy" if model.backend.device == "cuda" else "numpy", "device": model.backend.device,
+              "backend": "torch", "device": model.backend.device,
               "device_name": model.backend.name,
               "train_examples": len(training), "validation_examples": len(validation), "resumed_from": str(resume) if resume else None,
               "initialized_from": str(init_from) if init_from else None,
@@ -544,7 +640,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     def save(filename):
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
                     "tokenizer": tokenizer.serialize(), "step": step, "best": best if math.isfinite(best) else None,
-                    "optimizer_steps": optimizer.steps, "history": history, "data_hash": digest,
+                    "optimizer_steps": optimizer.steps, "history": [], "data_hash": digest,  # history lives in metrics.jsonl
                     "sampler_state": sampler.getstate(), "model_rng": model.rng.bit_generator.state,
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
@@ -557,12 +653,14 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             np.savez_compressed(stream, **arrays)
         replace_file(temporary, path)
 
-    def evaluate(samples):
+    def evaluate(samples, limit=EVAL_WINDOWS):
+        """Plain cross-entropy over a fixed, evenly spread subset of the windows (all of them when few)."""
         total, count = 0., 0
-        for start in range(0, min(len(samples), cfg["batch_size"] * 20), cfg["batch_size"]):
+        chosen = np.linspace(0, len(samples) - 1, min(len(samples), limit), dtype=int) if len(samples) > limit else np.arange(len(samples))
+        for start in range(0, len(chosen), shape[0]):
             if stop.is_set():
                 return None  # a part-way result must never pick the best checkpoint
-            x, y = batch_arrays(samples[start:start + cfg["batch_size"]])
+            x, y = batch_arrays([samples[int(i)] for i in chosen[start:start + shape[0]]])
             targets = int((y != -100).sum())
             total += model.loss(x, y) * targets
             count += targets
@@ -585,12 +683,16 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     trained_tokens = 0
     budget_reason = None
     detector_state = set()
+    rate = cfg["learning_rate"]
+    first_step, planned = step, cfg["steps"]
+    last_report = 0.
+    shape = [cfg["batch_size"], cfg["accumulation"]]  # runtime batch/accumulation: cfg keeps the declared values (resume checks those); an OOM shrinks this
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
             if loss is not None:
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": 0., "lr": cfg["learning_rate"], "grad_norm": 0.})
-        while step < cfg["steps"] and not stop.is_set():
+        while step < planned and not stop.is_set():
             if token_budget is not None and trained_tokens >= token_budget:
                 budget_reason = "tokens"
                 break
@@ -603,17 +705,40 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 break
             tick = time.monotonic()
             next_step = step + 1
+            if step - first_step >= 2 and (wall_seconds is not None or token_budget is not None):
+                # A budget would cut the run off wherever it falls, usually in the steady phase. Instead re-plan the total from
+                # the measured pace (the run's elapsed time or tokens per step so far) so the schedule's cool-down ends exactly there.
+                left = [cfg["steps"] - step]
+                if wall_seconds is not None:
+                    left.append((wall_seconds - (tick - started)) * (step - first_step) / max(1e-9, tick - started))
+                if token_budget is not None:
+                    left.append((token_budget - trained_tokens) * (step - first_step) / max(1, trained_tokens))
+                planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
-            rate = schedule.rate(next_step, cfg["steps"], cfg["learning_rate"])
-            model.zero_grad()
-            loss, token_count = 0., 0
+            rate = schedule.rate(next_step, planned, cfg["learning_rate"])
             sample_telemetry = bool(telemetry_every) and (next_step == 1 or next_step % telemetry_every == 0)
-            model.keep_tape, model.last_tape = sample_telemetry, None
-            for _ in range(cfg["accumulation"]):
-                batch = [train_samples[sampler.randrange(len(train_samples))] for _ in range(cfg["batch_size"])]
-                x, y = batch_arrays(batch)
-                loss += model.loss_and_backward(x, y, 1 / cfg["accumulation"]) / cfg["accumulation"]
-                token_count += int((y != -100).sum())
+            while True:
+                model.zero_grad()
+                loss, token_count = 0., 0
+                model.keep_tape, model.last_tape = sample_telemetry, None
+                try:
+                    for _ in range(shape[1]):
+                        batch = [train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]
+                        x, y = batch_arrays(batch)
+                        loss += model.loss_and_backward(x, y, 1 / shape[1]) / shape[1]
+                        token_count += int((y != -100).sum())
+                    break
+                except RuntimeError as exc:  # torch.cuda.OutOfMemoryError is one; MPS raises a plain RuntimeError
+                    if shape[0] == 1 or not (isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()):
+                        raise
+                model.last_tape = None  # the tape and the failed step's activations die with the exception
+                gc.collect()
+                if model.device == "cuda":
+                    torch.cuda.empty_cache()
+                elif model.device == "mps":
+                    torch.mps.empty_cache()
+                shape[:] = [shape[0] // 2, shape[1] * 2]  # ponytail: an odd batch loses a sample per halving; pad instead if it matters
+                emit({"type": "info", "text": f"Out of memory at step {next_step}: batch size now {shape[0]}, accumulation {shape[1]}."})
             if not math.isfinite(loss):
                 raise ValueError("Non-finite loss. Reduce the learning rate.")
             payload = model.telemetry(model.last_tape) if sample_telemetry and model.last_tape is not None else None
@@ -624,7 +749,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             trained_tokens += token_count
             model.backend.synchronize()
             speed = token_count / max(.001, time.monotonic() - tick)
-            validation_loss = evaluate(val_samples) if step % cfg["eval_every"] == 0 or step == cfg["steps"] else None
+            validation_loss = evaluate(val_samples) if step % cfg["eval_every"] == 0 or step >= planned else None
             if snapshot_due:
                 from studio_snapshot import capture, save as save_snapshot
                 probe_ids, _ = batch_arrays(train_samples[:min(2, len(train_samples))])
@@ -635,18 +760,27 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 detector_state = active
                 path = save_snapshot(directory, snapshot, keep=snapshot_keep)
                 emit({"type": "viz_snapshot", "step": step, "path": str(path), "markers": snapshot["markers"]})
-            if token_budget is not None or wall_seconds is not None or step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
+            due = step == 1 or step % 5 == 0 or validation_loss is not None or step >= planned or time.monotonic() - last_report >= 1.
+            if due:
+                last_report = time.monotonic()
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
                         "trained_tokens": trained_tokens, "elapsed_seconds": time.monotonic() - started})
             if payload:
                 emit({"type": "telemetry", "step": step, "total": cfg["steps"], "loss": loss, "lr": rate, **payload})
-            if step % cfg["eval_every"] == 0 or step == cfg["steps"]:
+            if step % cfg["eval_every"] == 0 or step >= planned:
                 score = validation_loss if validation_loss is not None else evaluate(train_samples)  # no held-out windows: fixed training windows, not one random batch
                 if score is not None and score < best:
                     best = score
                     save("best.npz")
                 record["best_loss"] = best
                 save("last.npz")
+                if cfg["sample_every"] and (step >= planned or step // cfg["eval_every"] % cfg["sample_every"] == 0):
+                    text = complete(model, tokenizer, cfg["sample_prompt"])  # what the model writes now, from the weights in memory
+                    with (directory / "samples.jsonl").open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({"step": step, "text": text, "prompt": cfg["sample_prompt"]}) + "\n")
+                    emit({"type": "sample", "step": step, "text": text, "prompt": cfg["sample_prompt"]})
+        if step < cfg["steps"] and not (budget_reason or stop.is_set()):
+            budget_reason = "wall-clock" if wall_seconds is not None else "tokens"  # the re-planned cool-down finished
         if budget_reason and not stop.is_set():
             final_loss, final_validation = evaluate(train_samples), evaluate(val_samples)
             if final_loss is not None:
@@ -659,15 +793,42 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         atomic_json(directory / "run.json", record)
         emit({"type": "done", "run": record, "directory": str(directory)})
         return record
-    except Exception as exc:
-        record.update(status="failed", error=str(exc), step=step)
+    except BaseException as exc:
+        record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
         atomic_json(directory / "run.json", record)
         raise
 
 
+def last_logits(model, window, sliding, cache):
+    """Logits of the position after `window`. With a KV cache only the tokens it has not seen are run;
+    once the text outgrows the context (`sliding`) every position shifts, so the cache is dropped and the window re-prefilled."""
+    if cache is None:
+        return model.forward(np.array([window], dtype=np.int64))[0, -1]
+    if sliding:
+        cache.clear()
+        cache["n"] = 0
+    return model.forward(np.array([window[cache["n"]:]], dtype=np.int64), cache=cache)[0, -1]
+
+
+def complete(model, tokenizer, prompt, max_tokens=48):
+    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
+    tokens, result = [BOS] + tokenizer.encode(prompt), []
+    cache = {"n": 0} if model.can_cache else None
+    with torch.no_grad():
+        for _ in range(max_tokens):
+            logits = model.backend.to_cpu(last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)).astype(np.float64)
+            logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
+            token = int(logits.argmax())
+            if token == EOS:
+                break
+            result.append(token)
+            tokens.append(token)
+    return tokenizer.decode(result)
+
+
 class LocalModel:
     def __init__(self, path, seed=42, device="auto"):
-        data = load_checkpoint(path)
+        data = load_checkpoint(path, weights_only=True)
         self.config = validate_config(data["config"])
         self.config["device"] = device
         self.tokenizer = Tokenizer.restore(data["tokenizer"])
@@ -676,19 +837,37 @@ class LocalModel:
         self.rng = np.random.default_rng(seed)
         self.step = data["step"]
 
+    def complete(self, prompt, max_tokens=48):
+        return complete(self.model, self.tokenizer, prompt, max_tokens)
+
     def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
         tokens = [BOS]
         roles = {"user": USER, "assistant": ASSISTANT, "system": SYSTEM}
+        starts = []  # (position of each message's role token, role id) so a cut window starts with the right role
         for message in messages:
+            starts.append((len(tokens), roles.get(message["role"], USER)))
             tokens += [roles.get(message["role"], USER)] + self.tokenizer.encode(message["content"]) + [EOS]
+        starts.append((len(tokens), ASSISTANT))
         tokens += [ASSISTANT]
         result = []
+        context = self.config["context"]
+
+        def window():
+            if len(tokens) <= context:
+                return tokens
+            cut = tokens[-context:]
+            first = len(tokens) - context
+            owner = [role for position, role in starts if position <= first]
+            if owner and first not in {position for position, _ in starts}:
+                cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
+            return cut
+
+        cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
             # Transfer only the final vocabulary vector for seeded CPU sampling.
-            output = self.model.forward(np.array([tokens[-self.config["context"]:]], dtype=np.int64))
-            logits = self.model.backend.to_cpu(output[0, -1]).astype(np.float64)
+            logits = self.model.backend.to_cpu(last_logits(self.model, window(), len(tokens) > context, cache)).astype(np.float64)
             logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
             if temperature <= 0:
                 token = int(logits.argmax())

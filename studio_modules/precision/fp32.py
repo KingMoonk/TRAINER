@@ -1,7 +1,7 @@
 """float32 weights and activations."""
 from __future__ import annotations
 
-import numpy as np
+import torch
 
 from studio_registry import ModuleSpec, register
 
@@ -16,4 +16,4 @@ class FP32(ModuleSpec):
     backward = "No backward pass"
 
     def build(self, cfg, dims, rng):
-        return np.float32
+        return torch.float32

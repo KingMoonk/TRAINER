@@ -1,8 +1,8 @@
 """The module contract: typed slots, and the base classes every swappable module builds on.
 
 A model is a ModelSpec (studio_spec) whose slots each name one registered module (studio_registry).
-Model-side modules build a Layer with a hand-written forward and backward pass; training-side modules
-build an objective, an Optimizer, a schedule, an initializer or a dtype. Nothing here imports a module.
+Model-side modules build a Layer with a forward pass written in PyTorch; autograd supplies the backward pass.
+Training-side modules build an objective, an Optimizer, a schedule, an initializer or a dtype.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+import torch
 
 # id -> (label, tensor signature, group). Order is the order the Sandbox lists them in.
 SLOTS = {
@@ -50,12 +51,13 @@ class Dims:
     vocab: int
     dropout: float = 0.0
     layer: int = 0              # index of the block being built (0 outside the stack)
-    xp: object = np             # array namespace: numpy, or cupy on the GPU. Modules never import numpy for math.
-    dtype: object = np.float32
+    xp: object = torch          # array namespace: always torch. Modules never import numpy for math.
+    dtype: object = torch.float32
+    device: str = "cpu"
 
     @property
     def bytes(self):
-        return np.dtype(self.dtype).itemsize
+        return torch.empty(0, dtype=self.dtype).element_size()
 
 
 @dataclass
@@ -75,32 +77,49 @@ class Issue:
     block: int | None = None
 
 
+def as_tensor(value, like=None, dtype=None, device=None):
+    """A tensor of `value` with the dtype/device of `like` (or the given ones); tensors are passed through."""
+    if like is not None:
+        dtype, device = like.dtype, like.device
+    if isinstance(value, torch.Tensor):
+        return value.to(dtype=dtype, device=device) if (dtype is not None or device is not None) else value
+    return torch.as_tensor(np.asarray(value), dtype=dtype, device=device)
+
+
 class Ctx:
     """Per-forward-pass context handed to every Layer.forward."""
 
-    def __init__(self, xp=np, training=False, rng=None, dropout=0.0, hooks=None, patches=None, position=None, embedding=None):
-        self.xp, self.training, self.rng, self.dropout = xp, training, rng, dropout
+    def __init__(self, xp=torch, training=False, rng=None, dropout=0.0, hooks=None, patches=None, position=None,
+                 embedding=None, device="cpu", cache=None):
+        self.xp, self.training, self.rng, self.dropout, self.device = torch, training, rng, dropout, device
         self.capture = hooks        # None: record nothing · True: record every hook · a set of full hook names
         self.patches = patches or {}  # full hook name -> function(value) -> replacement value
         self.captured = {}
         self.block = None           # index of the block being run, or None outside the stack
         self.position = position if position is not None else NO_POSITION
         self.embedding = embedding
+        self.cache = cache          # KV cache for incremental decoding ({"n": tokens cached, block index: state}) or None
+        self.offset = cache["n"] if cache else 0  # absolute index of this pass's first token
         self.aux = 0.0              # auxiliary loss a module adds on top of the objective (MoE balance loss)
-        self.scale = 1.0            # set before backward: multiply auxiliary-loss gradients by this
+        self.scale = 1.0            # multiplier for the auxiliary loss in backward()
         self._mask = {}
+        self._gen = None
 
     def mask(self, length):
         """[T, T] bool, True where key position > query position (the future, which must stay hidden)."""
         if length not in self._mask:
-            self._mask[length] = self.xp.triu(self.xp.ones((length, length), dtype=bool), 1)
+            self._mask[length] = torch.triu(torch.ones((length, length), dtype=torch.bool, device=self.device), 1)
         return self._mask[length]
 
     def drop(self, x):
         """Inverted dropout while training: (x * mask, mask). Outside training: (x, None)."""
         if self.training and self.dropout:
-            # the random stream stays on the CPU so a run is reproducible across devices
-            mask = self.xp.asarray(self.rng.random(x.shape) >= self.dropout).astype(x.dtype) / (1 - self.dropout)
+            # Masks are drawn on the tensor's own device from a generator seeded by the model's NumPy stream, so a run
+            # is reproducible for a given seed and device, and resume (which restores that stream) stays deterministic.
+            if self._gen is None or self._gen.device != x.device:
+                self._gen = torch.Generator(x.device).manual_seed(int(self.rng.integers(2 ** 62)))
+            keep = torch.rand(x.shape, generator=self._gen, device=x.device) >= self.dropout
+            mask = keep.to(x.dtype) / (1 - self.dropout)
             return x * mask, mask
         return x, None
 
@@ -114,46 +133,43 @@ class Ctx:
             return value
         full = name if self.block is None else f"block{self.block}.{name}"
         if full in self.patches:
-            value = self.patches[full](value)
+            value = as_tensor(self.patches[full](value), like=value)
         if self.capture is True or (self.capture is not None and full in self.capture):
-            self.captured[full] = value
+            self.captured[full] = value.detach()
         return value
 
 
 class Layer:
-    """One built module: named weights plus a hand-written forward and backward pass.
+    """One built module: named weights plus a forward pass in PyTorch (autograd provides the backward pass).
 
     Rules the compiler relies on:
     - register every weight with add(); read it as self.params[name] each time (never rebind it)
-    - forward() stores everything backward() needs in self.cache and nothing else on self
-    - backward(dy) returns dx and ADDS (+=) its parameter gradients into self.grads
+    - forward() keeps no state on self; everything it needs comes from its arguments
     """
+    cacheable = False           # True: works with Ctx.cache (mixers) / Ctx.offset (positions); otherwise generation re-runs the whole window
+    elementwise = frozenset()   # names of 2-D weights that are filters, not linear maps (Muon leaves them to AdamW)
 
     def __init__(self, dims):
-        self.dims, self.xp, self.dtype = dims, dims.xp, dims.dtype
+        self.dims, self.xp, self.dtype, self.device = dims, torch, dims.dtype, dims.device
         self.params, self.grads, self.roles, self.lr_scale = {}, {}, {}, {}
-        self.cache = None
 
     def add(self, name, shape, role="weight", value=None):
         """Register a weight. Without `value` the model's initializer fills it by role."""
-        xp = self.xp
-        self.params[name] = xp.zeros(shape, dtype=self.dtype) if value is None else xp.asarray(value, dtype=self.dtype).reshape(shape)
-        self.grads[name] = xp.zeros(shape, dtype=self.dtype)
+        if value is None:
+            tensor = torch.zeros(shape, dtype=self.dtype, device=self.device)
+        else:
+            tensor = as_tensor(value, dtype=self.dtype, device=self.device).reshape(shape).clone()
+        self.params[name] = tensor
+        self.grads[name] = torch.zeros(shape, dtype=self.dtype, device=self.device)
         self.roles[name] = role if value is None else "custom"
 
     def forward(self, x, ctx):
         raise NotImplementedError
 
-    def backward(self, dy):
-        raise NotImplementedError
-
     # Position modules that act inside attention override these; attention-style mixers call them on ctx.position.
-    def rotate(self, q, k):
-        """q [B, H, T, h], k [B, Hk, T, h] -> the same shapes, position applied."""
+    def rotate(self, q, k, offset=0):
+        """q [B, H, T, h], k [B, Hk, T, h] -> the same shapes, position applied (the first token sits at index `offset`)."""
         return q, k
-
-    def rotate_back(self, dq, dk):
-        return dq, dk
 
     def score_bias(self, length, heads):
         """Additive bias for attention scores, [heads, T, T] indexed [head, query, key], or None."""
@@ -165,31 +181,35 @@ NO_POSITION = Layer(Dims(1, 1, 1, 1))
 
 class Optimizer:
     """Base for optimizer modules: subclasses name their per-parameter state and write apply()."""
-    states = ()  # e.g. ("m", "v"): one array per parameter each, saved in checkpoints
+    states = ()  # e.g. ("m", "v"): one tensor per parameter each, saved in checkpoints
 
     def __init__(self, cfg=None):
         self.cfg, self.steps = cfg, 0
 
     def attach(self, model):
-        self.xp, self.roles, self.lr_scale = model.xp, model.roles, model.lr_scale
+        self.xp, self.roles, self.lr_scale = torch, model.roles, model.lr_scale
+        self.owner = getattr(model, "owner", {})
+        self.elementwise = getattr(model, "elementwise", frozenset())
         for name in self.states:
-            setattr(self, name, {key: self.xp.zeros_like(value) for key, value in model.p.items()})
+            setattr(self, name, {key: torch.zeros_like(as_tensor(value)) for key, value in model.p.items()})
         return self
 
     def decays(self, key):
         return self.roles.get(key) in DECAY_ROLES
 
+    @torch.no_grad()
     def update(self, model, learning_rate, clip=1.0):
         """Clip the global gradient norm, then step every parameter in place. Returns the pre-clip norm."""
-        xp = self.xp
-        norm = math.sqrt(float(xp.stack([xp.sum(grad * grad, dtype=xp.float64) for grad in model.g.values()]).sum()))
+        grads = {key: as_tensor(value) for key, value in model.g.items()}
+        squared = torch.stack([(grad.float() * grad.float()).sum() for grad in grads.values()]).sum()
+        norm = math.sqrt(float(squared))
         if not math.isfinite(norm):
             raise ValueError("Non-finite gradient. Lower the learning rate.")
         multiplier = min(1., clip / (norm + 1e-12))
         self.steps += 1
         for key, parameter in model.p.items():
             rate = learning_rate * self.lr_scale[key] if key in self.lr_scale else learning_rate
-            self.apply(key, parameter, model.g[key] * multiplier, rate)
+            self.apply(key, parameter, grads[key] * multiplier, rate)
         return norm
 
     def apply(self, key, parameter, gradient, lr):
@@ -209,7 +229,7 @@ class ModuleSpec:
     requires = frozenset()   # position modules: capabilities every token mixer must provide
     hooks = ()         # (name, symbolic shape) pairs, e.g. ("attn.pattern", "B H T T")
     skip = False       # True for "none" modules: the compiler leaves the step out instead of building a layer
-    backward = "Hand-written in NumPy · passes the float64 gradient check"
+    backward = "PyTorch autograd · forward checked against finite differences in float64"
     glyph3d = None     # {"kind": "beams"|"ribbon"|"fan"|"tower", "hooks": [names]}; None = the slot's default glyph
 
     @property

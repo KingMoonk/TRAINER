@@ -1,3 +1,5 @@
+# Compatibility entry point; desktop studio and scratch trainer share a runtime.
+-r requirements-training.txt
 numpy>=2.5.3,<3
 pandas>=3.0.6,<4
 pyarrow>=26.0.0

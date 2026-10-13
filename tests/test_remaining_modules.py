@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import torch
 
 from studio_estimate import estimate
 from studio_modules.init.mup import MuPInit
@@ -15,6 +16,7 @@ from studio_modules.tokenizer.bpe_gpt2 import GPT2Config, bytes_to_unicode, load
 from studio_registry import get
 from studio_slots import Ctx, Dims, OFFSET
 from studio_spec import validate_spec
+from tests.torchcheck import fill, layer_backward, tensor, to_np
 
 
 class RemainingModules(unittest.TestCase):
@@ -29,65 +31,84 @@ class RemainingModules(unittest.TestCase):
     def test_moe_auxiliary_gradient_and_routing(self):
         module = get("channel", "moe")
         cfg = module.parse({"experts": 3, "top_k": 2, "d_ff": 4, "aux_weight": .2})
-        layer = module.build(cfg, Dims(4, 1, 4, 9, dtype=np.float64), None)
+        layer = module.build(cfg, Dims(4, 1, 4, 9, dtype=torch.float64), None)
         rng = np.random.default_rng(24)
         for parameter in layer.params.values():
-            parameter[...] = rng.normal(0, .15, parameter.shape)
+            fill(parameter, rng.normal(0, .15, tuple(parameter.shape)))
         x = rng.normal(0, .3, (1, 4, 4))
         dy = rng.normal(0, .2, x.shape)
+        router = layer.params["moe.router.w"]
 
-        def scalar():
+        def scalar(grad=False):
+            """sum(output * dy) + aux, and with grad=True its autograd gradient w.r.t. the router."""
             ctx = Ctx()
-            output = layer.forward(x, ctx)
-            return float(np.sum(output * dy) + ctx.aux)
+            if not grad:
+                with torch.no_grad():
+                    output = layer.forward(tensor(x), ctx)
+                    return float(np.sum(to_np(output) * dy) + float(ctx.aux))
+            leaf = router.detach().requires_grad_(True)
+            layer.params["moe.router.w"] = leaf
+            try:
+                with torch.enable_grad():
+                    output = layer.forward(tensor(x), ctx)
+                    total = (output * torch.as_tensor(dy)).sum() + ctx.aux
+                    (gradient,) = torch.autograd.grad(total, leaf)
+            finally:
+                layer.params["moe.router.w"] = router
+            return to_np(gradient)
 
         ctx = Ctx(hooks=True)
-        output = layer.forward(x, ctx)
-        self.assertEqual(output.shape, x.shape)
-        self.assertGreater(ctx.aux, 0)
-        chosen = ctx.captured["moe.router.top"]
+        with torch.no_grad():
+            output = layer.forward(tensor(x), ctx)
+        self.assertEqual(tuple(output.shape), x.shape)
+        self.assertGreater(float(ctx.aux), 0)
+        chosen = to_np(ctx.captured["moe.router.top"])
         self.assertEqual(chosen.shape, (1, 4, 2))
         self.assertTrue(np.all(chosen[..., 0] != chosen[..., 1]))
-        layer.backward(dy)
-        router = layer.params["moe.router.w"]
-        analytic = layer.grads["moe.router.w"].copy()
-        for index in np.ndindex(router.shape):
-            old = router[index]
-            router[index] = old + 1e-5
+        analytic = scalar(grad=True)
+        for index in np.ndindex(tuple(router.shape)):
+            old = float(router[index])
+            with torch.no_grad():
+                router[index] = old + 1e-5
             plus = scalar()
-            router[index] = old - 1e-5
+            with torch.no_grad():
+                router[index] = old - 1e-5
             minus = scalar()
-            router[index] = old
+            with torch.no_grad():
+                router[index] = old
             expected = (plus - minus) / 2e-5
             self.assertLess(abs(analytic[index] - expected), 1e-8 + 1e-6 * abs(expected))
 
     def test_muon_matrix_and_adamw_fallback_reference(self):
-        cfg = get("optimizer", "muon").parse({"momentum": 0, "ns_steps": 5, "weight_decay": .1,
+        cfg = get("optimizer", "muon").parse({"momentum": 0, "ns_steps": 5, "weight_decay": .1, "adam_lr": .02,
                                                 "adam_beta1": .8, "adam_beta2": .5})
 
+        def matrix():
+            return torch.tensor([[1., 2.], [3., 4.]], dtype=torch.float64)
+
         class Model:
-            xp = np
-            p = {"block0.w": np.array([[1., 2.], [3., 4.]]),
-                 "token": np.array([[1., 2.], [3., 4.]]), "head.w": np.array([[1., 2.], [3., 4.]]),
-                 "bias": np.array([1., 2.])}
-            g = {"block0.w": np.array([[.3, -.2], [.1, .4]]),
-                 "token": np.array([[.3, -.2], [.1, .4]]), "head.w": np.array([[.3, -.2], [.1, .4]]),
-                 "bias": np.array([.3, -.2])}
+            p = {"block0.w": matrix(), "token": matrix(), "head.w": matrix(),
+                 "bias": torch.tensor([1., 2.], dtype=torch.float64)}
+            g = {"block0.w": torch.tensor([[.3, -.2], [.1, .4]], dtype=torch.float64),
+                 "token": torch.tensor([[.3, -.2], [.1, .4]], dtype=torch.float64),
+                 "head.w": torch.tensor([[.3, -.2], [.1, .4]], dtype=torch.float64),
+                 "bias": torch.tensor([.3, -.2], dtype=torch.float64)}
             roles = {"block0.w": "weight", "token": "embedding", "head.w": "weight", "bias": "bias"}
             owner = {"block0.w": ("mixer", 0), "token": ("embedding", None),
                      "head.w": ("head", None), "bias": ("norm", None)}
             lr_scale = {}
 
         model = Model()
-        original = {name: value.copy() for name, value in model.p.items()}
+        original = {name: to_np(value).copy() for name, value in model.p.items()}
+        grads = {name: to_np(value).copy() for name, value in model.g.items()}
         optimizer = get("optimizer", "muon").build(cfg, None, None).attach(model)
         optimizer.update(model, .02, clip=10)
-        matrix_step = zeropower_newton_schulz(model.g["block0.w"], cfg.ns_steps, np)
-        np.testing.assert_allclose(model.p["block0.w"], original["block0.w"] * (1 - .02 * .1) - .02 * matrix_step)
+        matrix_step = to_np(zeropower_newton_schulz(torch.as_tensor(grads["block0.w"]), cfg.ns_steps))
+        np.testing.assert_allclose(to_np(model.p["block0.w"]), original["block0.w"] * (1 - .02 * .1) - .02 * matrix_step)
         for name in ("token", "head.w", "bias"):
             decay = 1 - .02 * .1 if name != "bias" else 1
-            expected = original[name] * decay - .02 * model.g[name] / (np.abs(model.g[name]) + cfg.adam_eps)
-            np.testing.assert_allclose(model.p[name], expected)
+            expected = original[name] * decay - .02 * grads[name] / (np.abs(grads[name]) + cfg.adam_eps)
+            np.testing.assert_allclose(to_np(model.p[name]), expected)
         self.assertTrue(all(set(getattr(optimizer, state)) == set(model.p) for state in optimizer.states))
 
     def test_mup_reference_width_and_roles(self):
@@ -99,14 +120,14 @@ class RemainingModules(unittest.TestCase):
         cfg = module.parse({"base_width": 4, "std": .02, "scale_residual": False})
         initializer = MuPInit(cfg)
         mlp = get("channel", "mlp_gelu")
-        layer = mlp.build(mlp.parse(), Dims(8, 1, 4, 9, dtype=np.float64), None)
+        layer = mlp.build(mlp.parse(), Dims(8, 1, 4, 9, dtype=torch.float64), None)
         initializer.apply(layer, Ones(), layer.dims)
-        self.assertAlmostEqual(layer.params["f1.w"][0, 0], .02 / math.sqrt(2))
+        self.assertAlmostEqual(float(layer.params["f1.w"][0, 0]), .02 / math.sqrt(2))
         self.assertAlmostEqual(layer.lr_scale["f1.w"], .5)
-        self.assertAlmostEqual(layer.params["f1.b"][0], 0)
+        self.assertAlmostEqual(float(layer.params["f1.b"][0]), 0)
         embedding = get("embedding", "learned").build(None, layer.dims, None)
         initializer.apply(embedding, Ones(), layer.dims)
-        self.assertAlmostEqual(embedding.params["token"][0, 0], .02)
+        self.assertAlmostEqual(float(embedding.params["token"][0, 0]), .02)
         self.assertEqual(embedding.lr_scale, {})
 
     def test_mup_complete_m1_identical_to_base(self):
@@ -119,10 +140,10 @@ class RemainingModules(unittest.TestCase):
         cfg = module.parse({"base_width": 8, "std": .02, "scale_residual": False})
         initializer = MuPInit(cfg)
         mlp = get("channel", "mlp_gelu")
-        layer = mlp.build(mlp.parse(), Dims(8, 1, 4, 9, dtype=np.float64), None)
+        layer = mlp.build(mlp.parse(), Dims(8, 1, 4, 9, dtype=torch.float64), None)
         initializer.apply(layer, Ones(), layer.dims)
         # At base width (m=1), hidden matrices should have std .02 and lr_scale 1.0
-        self.assertAlmostEqual(layer.params["f1.w"][0, 0], .02)  # not scaled
+        self.assertAlmostEqual(float(layer.params["f1.w"][0, 0]), .02)  # not scaled
         self.assertAlmostEqual(layer.lr_scale["f1.w"], 1.0)  # 1/m where m=1
 
     def test_mup_complete_adam_family_width_mult_4(self):
@@ -134,25 +155,25 @@ class RemainingModules(unittest.TestCase):
         module = get("init", "mup")
         cfg = module.parse({"base_width": 4, "std": .02, "scale_residual": False, "optimizer_family": "adam"})
         initializer = MuPInit(cfg)
-        dims = Dims(16, 1, 4, 9, dtype=np.float64)  # d_model=16, base_width=4, so m=4
+        dims = Dims(16, 1, 4, 9, dtype=torch.float64)  # d_model=16, base_width=4, so m=4
 
         # Test hidden matrix: should have std .02/sqrt(4) = .01
         mlp = get("channel", "mlp_gelu")
-        layer = mlp.build(mlp.parse(), Dims(16, 1, 4, 9, dtype=np.float64), None)
+        layer = mlp.build(mlp.parse(), Dims(16, 1, 4, 9, dtype=torch.float64), None)
         initializer.apply(layer, Ones(), dims)
-        self.assertAlmostEqual(layer.params["f1.w"][0, 0], .01, places=5)  # .02 / sqrt(4)
+        self.assertAlmostEqual(float(layer.params["f1.w"][0, 0]), .01, places=5)  # .02 / sqrt(4)
         self.assertAlmostEqual(layer.lr_scale["f1.w"], .25, places=5)  # 1/4
 
         # Test input-like (embedding): should have std .02, no lr_scale
         embedding = get("embedding", "learned").build(None, dims, None)
         initializer.apply(embedding, Ones(), dims)
-        self.assertAlmostEqual(embedding.params["token"][0, 0], .02)
+        self.assertAlmostEqual(float(embedding.params["token"][0, 0]), .02)
         self.assertEqual(embedding.lr_scale, {})
 
         # Test untied readout: should have std .02/4 = .005, lr_scale 1/4
         head = get("head", "untied").build(None, dims, None)
         initializer.apply(head, Ones(), dims)
-        self.assertAlmostEqual(head.params["output.w"][0, 0], .005, places=5)  # .02 / 4
+        self.assertAlmostEqual(float(head.params["output.w"][0, 0]), .005, places=5)  # .02 / 4
         self.assertAlmostEqual(head.lr_scale["output.w"], .25, places=5)  # 1/4
 
     def test_mup_complete_sgd_family_width_mult_4(self):
@@ -164,25 +185,25 @@ class RemainingModules(unittest.TestCase):
         module = get("init", "mup")
         cfg = module.parse({"base_width": 4, "std": .02, "scale_residual": False, "optimizer_family": "sgd"})
         initializer = MuPInit(cfg)
-        dims = Dims(16, 1, 4, 9, dtype=np.float64)  # d_model=16, base_width=4, so m=4
+        dims = Dims(16, 1, 4, 9, dtype=torch.float64)  # d_model=16, base_width=4, so m=4
 
         # Test hidden matrix: should have std .02/sqrt(4) = .01, no lr_scale (default 1)
         mlp = get("channel", "mlp_gelu")
-        layer = mlp.build(mlp.parse(), Dims(16, 1, 4, 9, dtype=np.float64), None)
+        layer = mlp.build(mlp.parse(), Dims(16, 1, 4, 9, dtype=torch.float64), None)
         initializer.apply(layer, Ones(), dims)
-        self.assertAlmostEqual(layer.params["f1.w"][0, 0], .01, places=5)  # .02 / sqrt(4)
+        self.assertAlmostEqual(float(layer.params["f1.w"][0, 0]), .01, places=5)  # .02 / sqrt(4)
         self.assertNotIn("f1.w", layer.lr_scale)  # no lr_scale for hidden matrices with SGD
 
         # Test input-like (embedding): should have std .02, lr_scale=m=4
         embedding = get("embedding", "learned").build(None, dims, None)
         initializer.apply(embedding, Ones(), dims)
-        self.assertAlmostEqual(embedding.params["token"][0, 0], .02)
+        self.assertAlmostEqual(float(embedding.params["token"][0, 0]), .02)
         self.assertAlmostEqual(embedding.lr_scale["token"], 4.0, places=5)  # m
 
         # Test untied readout: should have std .02/4 = .005, lr_scale 1/4 (same as Adam)
         head = get("head", "untied").build(None, dims, None)
         initializer.apply(head, Ones(), dims)
-        self.assertAlmostEqual(head.params["output.w"][0, 0], .005, places=5)  # .02 / 4
+        self.assertAlmostEqual(float(head.params["output.w"][0, 0]), .005, places=5)  # .02 / 4
         self.assertAlmostEqual(head.lr_scale["output.w"], .25, places=5)  # 1/4
 
     def test_mup_tied_readout_logit_scale(self):
@@ -194,7 +215,7 @@ class RemainingModules(unittest.TestCase):
         module = get("init", "mup")
         cfg = module.parse({"base_width": 4, "std": .02, "scale_residual": False})
         initializer = MuPInit(cfg)
-        dims = Dims(16, 1, 4, 9, dtype=np.float64)  # m=4
+        dims = Dims(16, 1, 4, 9, dtype=torch.float64)  # m=4
 
         head = get("head", "tied").build(None, dims, None)
         initializer.apply(head, Ones(), dims)
@@ -210,7 +231,7 @@ class RemainingModules(unittest.TestCase):
         module = get("init", "mup")
         cfg = module.parse({"base_width": 8, "std": .02, "scale_residual": False})
         initializer = MuPInit(cfg)
-        dims = Dims(16, 1, 4, 256, dtype=np.float64)  # d_model=16, base_width=8, so m=2
+        dims = Dims(16, 1, 4, 256, dtype=torch.float64)  # d_model=16, base_width=8, so m=2
 
         attn = get("mixer", "attention").build(get("mixer", "attention").parse({"heads": 4}), dims, None)
         initializer.apply(attn, Ones(), dims)
@@ -232,7 +253,7 @@ class RemainingModules(unittest.TestCase):
         module = get("init", "mup")
         cfg = module.parse({"base_width": 8, "std": .02, "scale_residual": False})
         initializer = MuPInit(cfg)
-        dims = Dims(16, 1, 4, 9, dtype=np.float64)  # m=2
+        dims = Dims(16, 1, 4, 9, dtype=torch.float64)  # m=2
 
         # Create embedding and tied head
         embedding = LearnedEmbedding(dims)
@@ -246,7 +267,8 @@ class RemainingModules(unittest.TestCase):
 
         # The tied head needs access to embedding
         ctx = Ctx(embedding=embedding)
-        logits = tied_head.forward(x, ctx)
+        with torch.no_grad():
+            logits = tied_head.forward(tensor(x), ctx)
 
         # Logits should be scaled by logit_scale (1/m = 0.5)
         expected_scale = 1.0 / 2.0
@@ -254,8 +276,8 @@ class RemainingModules(unittest.TestCase):
 
         # Backward pass
         dlogits = np.random.randn(*logits.shape)
-        dx = tied_head.backward(dlogits)
-        self.assertEqual(dx.shape, x.shape)
+        dx = layer_backward(tied_head, x, dlogits, ctx, embedding)
+        self.assertEqual(tuple(dx.shape), x.shape)
 
     def test_mup_numeric_gradient_check(self):
         """Numerical gradient check verifies forward/backward consistency with μP scaling."""
@@ -271,7 +293,7 @@ class RemainingModules(unittest.TestCase):
 
         # Create a small model with m != 1
         mlp_spec = get("channel", "mlp_gelu")
-        dims = Dims(12, 1, 4, 9, dtype=np.float64)  # m=3
+        dims = Dims(12, 1, 4, 9, dtype=torch.float64)  # m=3
         layer = mlp_spec.build(mlp_spec.parse({"d_ff": 12}), dims, None)
         rng = RNG()
         initializer.apply(layer, rng, dims)
@@ -280,32 +302,28 @@ class RemainingModules(unittest.TestCase):
         x = np.random.randn(2, 3, 12)
         epsilon = 1e-5
 
-        ctx = Ctx()
-        y = layer.forward(x, ctx)
-        dy = np.random.randn(*y.shape)
+        def forward(value):
+            with torch.no_grad():
+                return to_np(layer.forward(tensor(value), Ctx()))
+
+        dy = np.random.randn(*forward(x).shape)
 
         # Analytic gradient
-        layer.backward(dy)
-        analytic_grad_f1_w = layer.grads["f1.w"].copy()
+        layer_backward(layer, x, dy)
+        analytic_grad_f1_w = to_np(layer.grads["f1.w"]).copy()
 
         # Numerical gradient
-        layer.grads["f1.w"].fill(0)
-        f1_w_orig = layer.params["f1.w"].copy()
+        f1_w_orig = to_np(layer.params["f1.w"]).copy()
         numerical_grad = np.zeros_like(f1_w_orig)
         for i in range(min(3, f1_w_orig.shape[0])):
             for j in range(min(3, f1_w_orig.shape[1])):
-                layer.params["f1.w"][...] = f1_w_orig.copy()
-                layer.params["f1.w"][i, j] += epsilon
-                y_plus = layer.forward(x, Ctx())
-                f_plus = np.sum(y_plus * dy)
+                for sign in (1, -1):
+                    shifted = f1_w_orig.copy()
+                    shifted[i, j] += sign * epsilon
+                    fill(layer.params["f1.w"], shifted)
+                    numerical_grad[i, j] += sign * np.sum(forward(x) * dy) / (2 * epsilon)
 
-                layer.params["f1.w"][i, j] = f1_w_orig[i, j] - epsilon
-                y_minus = layer.forward(x, Ctx())
-                f_minus = np.sum(y_minus * dy)
-
-                numerical_grad[i, j] = (f_plus - f_minus) / (2 * epsilon)
-
-        layer.params["f1.w"][...] = f1_w_orig.copy()
+        fill(layer.params["f1.w"], f1_w_orig)
 
         # Check relative error (should be small)
         rel_error = np.abs(analytic_grad_f1_w[:3, :3] - numerical_grad[:3, :3]) / (np.abs(analytic_grad_f1_w[:3, :3]) + np.abs(numerical_grad[:3, :3]) + 1e-8)
@@ -319,10 +337,10 @@ class RemainingModules(unittest.TestCase):
 
         gpt2_module = get("init", "gpt2")
         cfg = gpt2_module.parse({"std": .02, "scale_residual": False})
-        initializer = gpt2_module.build(cfg, Dims(8, 1, 4, 9, dtype=np.float64), None)
+        initializer = gpt2_module.build(cfg, Dims(8, 1, 4, 9, dtype=torch.float64), None)
 
         mlp = get("channel", "mlp_gelu")
-        layer = mlp.build(mlp.parse(), Dims(8, 1, 4, 9, dtype=np.float64), None)
+        layer = mlp.build(mlp.parse(), Dims(8, 1, 4, 9, dtype=torch.float64), None)
         initializer.apply(layer, Ones(), layer.dims)
 
         # GPT2 should not set any lr_scale

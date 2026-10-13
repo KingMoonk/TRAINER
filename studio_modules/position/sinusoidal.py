@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
 
 class SinusoidalPosition(Layer):
+    cacheable = True
+
     def __init__(self, dims):
         super().__init__(dims)
         positions = np.arange(dims.n_ctx, dtype=np.float64)[:, None]
@@ -15,16 +18,13 @@ class SinusoidalPosition(Layer):
         frequencies = np.exp(-(np.floor(channels / 2) * (2.0 / dims.d_model)) * np.log(10000.0))
         angles = positions * frequencies
         encoding = np.where((channels.astype(np.int64) % 2) == 0, np.sin(angles), np.cos(angles))
-        self.encoding = self.xp.asarray(encoding, dtype=self.dtype)
+        self.encoding = torch.as_tensor(encoding, dtype=self.dtype, device=self.device)
 
     def forward(self, x, ctx):
-        length = x.shape[1]
+        length = ctx.offset + x.shape[1]
         if length > self.encoding.shape[0]:
             raise ValueError(f"Sequence length {length} exceeds positional capacity {self.encoding.shape[0]}.")
-        return x + self.encoding[:length]
-
-    def backward(self, dx):
-        return dx
+        return x + self.encoding[ctx.offset:length]
 
 
 @register

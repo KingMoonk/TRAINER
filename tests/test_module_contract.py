@@ -7,12 +7,14 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
 
 import studio_registry as registry
 from studio_slots import Ctx, Dims, LAYER_SLOTS, OFFSET, UNK, config_dict
+from tests.torchcheck import fill, layer_backward, tensor, to_np
 
 
-DIMS = Dims(4, 1, 3, 9, xp=np, dtype=np.float64)
+DIMS = Dims(4, 1, 3, 9, dtype=torch.float64)
 STEP = 1e-5
 
 
@@ -31,13 +33,11 @@ def fixture(module):
     layer = module.build(cfg, dims, np.random.default_rng(11))
     rng = np.random.default_rng(12)
     for name, value in layer.params.items():
-        value[...] = rng.normal(0, .2, value.shape)
-        if layer.roles[name] == "gain":
-            value[...] += 1
+        fill(value, rng.normal(0, .2, tuple(value.shape)) + (1 if layer.roles[name] == "gain" else 0))
     embedding = None
     if module.slot == "head" and "unembed" in module.requires:
         embedding = registry.get("embedding", "learned").build(None, dims, None)
-        embedding.params["token"][...] = rng.normal(0, .2, embedding.params["token"].shape)
+        fill(embedding.params["token"], rng.normal(0, .2, tuple(embedding.params["token"].shape)))
     x = np.array([[1, 2, 1]], dtype=np.int64) if module.slot == "embedding" else rng.normal(0, .4, (1, 3, 4))
     if module.slot == "head":
         dy = rng.normal(0, .3, (1, 3, dims.vocab))
@@ -47,11 +47,16 @@ def fixture(module):
 
 
 def context(embedding=None):
-    return Ctx(np, hooks=True, embedding=embedding)
+    return Ctx(hooks=True, embedding=embedding)
+
+
+def run(layer, x, ctx):
+    with torch.no_grad():
+        return to_np(layer.forward(tensor(x), ctx))
 
 
 def scalar(layer, x, dy, embedding=None):
-    return float(np.sum(layer.forward(x, context(embedding)) * dy))
+    return float(np.sum(run(layer, x, context(embedding)) * dy))
 
 
 def assert_gradient(test, actual, expected, label):
@@ -74,28 +79,28 @@ class LayerContracts(unittest.TestCase):
                     continue
                 cfg, layer, embedding, x, _ = fixture(module)
                 expected_count = module.estimate(cfg, DIMS).params
-                self.assertEqual(sum(p.size for p in layer.params.values()), expected_count)
+                self.assertEqual(sum(p.numel() for p in layer.params.values()), expected_count)
                 for length in (1, 3):
                     sample = x[:, :length]
                     ctx = context(embedding)
-                    out = layer.forward(sample, ctx)
+                    out = run(layer, sample, ctx)
                     width = DIMS.vocab if module.slot == "head" else DIMS.d_model
                     self.assertEqual(out.shape, (1, length, width))
-                    np.testing.assert_array_equal(out, layer.forward(sample, context(embedding)))
+                    np.testing.assert_array_equal(out, run(layer, sample, context(embedding)))
                     symbols = {"B": 1, "T": length, "d": DIMS.d_model, "V": DIMS.vocab,
                                **module.symbols(cfg, DIMS)}
                     self.assertEqual(set(ctx.captured), {name for name, _ in module.hooks})
                     for name, shape in module.hooks:
-                        self.assertEqual(ctx.captured[name].shape, tuple(symbols[s] for s in shape.split()), name)
+                        self.assertEqual(tuple(ctx.captured[name].shape), tuple(symbols[s] for s in shape.split()), name)
                 # A hook patch must feed the value used downstream and retain dtype.
                 if module.hooks:
-                    unpatched = layer.forward(x, context(embedding)).copy()
+                    unpatched = run(layer, x, context(embedding))
                     for name, _ in module.hooks:
-                        patched = Ctx(np, hooks=True, patches={name: lambda value: np.zeros_like(value)}, embedding=embedding)
-                        changed = layer.forward(x, patched)
-                        expected_dtype = np.int64 if name == "moe.router.top" else np.float64
-                        self.assertEqual(patched.captured[name].dtype, np.dtype(expected_dtype))
-                        self.assertFalse(np.any(patched.captured[name]))
+                        patched = Ctx(hooks=True, patches={name: lambda value: np.zeros(tuple(value.shape))}, embedding=embedding)
+                        changed = run(layer, x, patched)
+                        expected_dtype = torch.int64 if name == "moe.router.top" else torch.float64
+                        self.assertEqual(patched.captured[name].dtype, expected_dtype)
+                        self.assertFalse(bool(patched.captured[name].any()))
                         self.assertGreater(float(np.max(np.abs(changed - unpatched))), 1e-10,
                                            f"{module.id}: patching {name} did not affect the output")
 
@@ -105,17 +110,17 @@ class LayerContracts(unittest.TestCase):
                 continue
             with self.subTest(module=module.id):
                 _, layer, embedding, x, dy = fixture(module)
-                layer.forward(x, context(embedding))
-                dx = layer.backward(dy)
-                grads = {name: grad.copy() for name, grad in layer.grads.items()}
+                dx = layer_backward(layer, x, dy, context(embedding), embedding)
+                grads = {name: to_np(grad).copy() for name, grad in layer.grads.items()}
                 if embedding is not None:
-                    grads.update({"embedding." + name: grad.copy() for name, grad in embedding.grads.items()})
+                    grads.update({"embedding." + name: to_np(grad).copy() for name, grad in embedding.grads.items()})
                 for name, grad in grads.items():
                     if name in getattr(module, "zero_grad_params", ()):
                         continue  # e.g. a key bias cancels under softmax shift invariance
                     self.assertGreater(float(np.max(np.abs(grad))), 1e-12,
                                        f"{module.id} {name}: trainable parameter received no gradient")
                 if dx is not None:
+                    dx = to_np(dx)
                     for index in np.ndindex(x.shape):
                         original = x[index]
                         x[index] = original + STEP
@@ -128,21 +133,23 @@ class LayerContracts(unittest.TestCase):
                 if embedding is not None:
                     parameters.update({"embedding." + name: value for name, value in embedding.params.items()})
                 for name, parameter in parameters.items():
-                    for index in np.ndindex(parameter.shape):
-                        original = parameter[index]
-                        parameter[index] = original + STEP
+                    for index in np.ndindex(tuple(parameter.shape)):
+                        original = float(parameter[index])
+                        with torch.no_grad():
+                            parameter[index] = original + STEP
                         plus = scalar(layer, x, dy, embedding)
-                        parameter[index] = original - STEP
+                        with torch.no_grad():
+                            parameter[index] = original - STEP
                         minus = scalar(layer, x, dy, embedding)
-                        parameter[index] = original
+                        with torch.no_grad():
+                            parameter[index] = original
                         assert_gradient(self, grads[name][index], (plus - minus) / (2 * STEP), f"{module.id} {name}{index}")
-                layer.forward(x, context(embedding))
-                layer.backward(dy)
+                layer_backward(layer, x, dy, context(embedding), embedding)
                 for name, grad in layer.grads.items():
-                    np.testing.assert_allclose(grad, 2 * grads[name], atol=1e-12, err_msg=module.id + " " + name)
+                    np.testing.assert_allclose(to_np(grad), 2 * grads[name], atol=1e-12, err_msg=module.id + " " + name)
                 if embedding is not None:
                     for name, grad in embedding.grads.items():
-                        np.testing.assert_allclose(grad, 2 * grads["embedding." + name], atol=1e-12)
+                        np.testing.assert_allclose(to_np(grad), 2 * grads["embedding." + name], atol=1e-12)
 
     def test_causal_token_mixers(self):
         for module in registry.for_slot("mixer"):
@@ -150,10 +157,10 @@ class LayerContracts(unittest.TestCase):
                 continue
             with self.subTest(module=module.id):
                 _, layer, embedding, x, _ = fixture(module)
-                original = layer.forward(x, context(embedding)).copy()
+                original = run(layer, x, context(embedding))
                 changed = x.copy()
                 changed[:, -1] += 3
-                result = layer.forward(changed, context(embedding))
+                result = run(layer, changed, context(embedding))
                 np.testing.assert_allclose(result[:, :-1], original[:, :-1], atol=1e-12)
 
 
@@ -178,19 +185,20 @@ class NonLayerContracts(unittest.TestCase):
                 objective = module.build(module.parse(), DIMS, None)
                 logits = np.random.default_rng(3).normal(size=(1, 3, DIMS.vocab))
                 labels = np.array([[1, -100, 4]])
-                loss, gradient = objective(logits, labels, gradient=True, xp=np)
+                loss, gradient = objective(logits, labels, gradient=True)
+                gradient = to_np(gradient)
                 self.assertTrue(math.isfinite(loss))
                 np.testing.assert_array_equal(gradient[:, 1], 0)
                 for index in np.ndindex(logits.shape):
                     old = logits[index]
                     logits[index] = old + STEP
-                    plus = objective(logits, labels, xp=np)
+                    plus = float(objective(logits, labels))
                     logits[index] = old - STEP
-                    minus = objective(logits, labels, xp=np)
+                    minus = float(objective(logits, labels))
                     logits[index] = old
                     assert_gradient(self, gradient[index], (plus - minus) / (2 * STEP), str(index))
                 with self.assertRaises(ValueError):
-                    objective(logits, np.full_like(labels, -100), xp=np)
+                    objective(logits, np.full_like(labels, -100))
 
     def test_tokenizer_round_trip(self):
         for module in registry.for_slot("tokenizer"):
@@ -221,21 +229,21 @@ class NonLayerContracts(unittest.TestCase):
         for module in registry.for_slot("precision"):
             with self.subTest(module=module.id):
                 dtype = module.build(module.parse(), DIMS, None)
-                self.assertEqual(np.dtype(dtype).name, "float" + module.short[2:])
+                self.assertEqual(str(dtype), "torch.float" + module.short[2:])
         for module in registry.for_slot("init"):
             with self.subTest(module=module.id):
                 layer = registry.get("norm", "layernorm").build(registry.get("norm", "layernorm").parse(), DIMS, None)
                 module.build(module.parse(), DIMS, None).apply(layer, np.random.default_rng(4), DIMS)
-                np.testing.assert_array_equal(layer.params["g"], 1)
-                np.testing.assert_array_equal(layer.params["b"], 0)
+                np.testing.assert_array_equal(to_np(layer.params["g"]), 1)
+                np.testing.assert_array_equal(to_np(layer.params["b"]), 0)
                 embedding = registry.get("embedding", "learned")
                 left, right = (embedding.build(None, DIMS, None) for _ in range(2))
                 initializer = module.build(module.parse(), DIMS, None)
                 initializer.apply(left, np.random.default_rng(7), DIMS)
                 initializer.apply(right, np.random.default_rng(7), DIMS)
                 for name in left.params:
-                    np.testing.assert_array_equal(left.params[name], right.params[name])
-                    self.assertGreater(float(np.max(np.abs(left.params[name]))), 0)
+                    np.testing.assert_array_equal(to_np(left.params[name]), to_np(right.params[name]))
+                    self.assertGreater(float(np.max(np.abs(to_np(left.params[name])))), 0)
         for module in registry.for_slot("schedule"):
             with self.subTest(module=module.id):
                 schedule = module.build(module.parse(), DIMS, None)
@@ -250,9 +258,8 @@ class NonLayerContracts(unittest.TestCase):
         cfg = module.parse({"beta1": .8, "beta2": .5, "weight_decay": .1, "eps": 1e-8})
 
         class Model:
-            xp = np
-            p = {"weight": np.array([2.], dtype=np.float64), "bias": np.array([2.], dtype=np.float64)}
-            g = {"weight": np.array([.5]), "bias": np.array([.5])}
+            p = {"weight": torch.tensor([2.], dtype=torch.float64), "bias": torch.tensor([2.], dtype=torch.float64)}
+            g = {"weight": torch.tensor([.5], dtype=torch.float64), "bias": torch.tensor([.5], dtype=torch.float64)}
             roles = {"weight": "weight", "bias": "bias"}
             lr_scale = {}
 
@@ -262,10 +269,10 @@ class NonLayerContracts(unittest.TestCase):
             norm = optimizer.update(model, .1, clip=10)
             self.assertAlmostEqual(norm, math.sqrt(.5))
             self.assertEqual(optimizer.steps, step)
-            np.testing.assert_allclose(optimizer.m["weight"], [.5 * (1 - .8 ** step)])
-            np.testing.assert_allclose(optimizer.v["weight"], [.25 * (1 - .5 ** step)])
-        self.assertAlmostEqual(model.p["weight"][0], (2 * .99 - .1) * .99 - .1)
-        self.assertAlmostEqual(model.p["bias"][0], 1.8)
+            np.testing.assert_allclose(to_np(optimizer.m["weight"]), [.5 * (1 - .8 ** step)])
+            np.testing.assert_allclose(to_np(optimizer.v["weight"]), [.25 * (1 - .5 ** step)])
+        self.assertAlmostEqual(float(model.p["weight"][0]), (2 * .99 - .1) * .99 - .1)
+        self.assertAlmostEqual(float(model.p["bias"][0]), 1.8)
 
 
 if __name__ == "__main__":

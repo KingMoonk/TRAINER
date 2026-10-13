@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from studio_scene import SceneModel, Selection
+from studio_scene import HEAD_STAGES, SceneModel, Selection, clamp_index, next_stage, stats_line
 from studio_snapshot import one_step
 from studio_compile import CompiledModel
 from studio_spec import default_spec, validate_spec
@@ -42,8 +42,10 @@ class Scenes(unittest.TestCase):
         scene = SceneModel(spec)
         scene.load_snapshot(snapshot)
         head = scene.frame('Head')
-        np.testing.assert_array_equal(head['pattern'], snapshot['arrays']['hook::block0.attn.pattern'][0, 0].T)
-        self.assertTrue(head['mask'][2][0])
+        np.testing.assert_array_equal(head['pattern'], snapshot['arrays']['hook::block0.attn.pattern'][0, 0])  # rows = queries
+        np.testing.assert_array_equal(head['pattern'], scene.frame('Window')['patterns']['block0.attn.pattern'][0])
+        self.assertTrue(head['mask'][0][2])  # query 0 cannot see key 2
+        self.assertFalse(head['mask'][2][0])
         for key, value in scene.replay_values():
             np.testing.assert_array_equal(value, snapshot['arrays']['forward::' + key])
         first = scene.frame('Weights')
@@ -82,3 +84,18 @@ class Scenes(unittest.TestCase):
         # After the fix, frame edges should match the actual edges from the summary
         np.testing.assert_array_equal(frame_edges, actual_edges,
                                       err_msg="Frame edges should match the edges used to create the summary")
+
+    def test_viewer_step_scrub_and_stats_helpers(self):
+        self.assertEqual(next_stage('pattern', 1), 'values')
+        self.assertEqual(next_stage('values', 1), 'values')
+        self.assertEqual(next_stage('scores', -1), 'scores')
+        self.assertEqual(next_stage('values', -2), 'mask')
+        self.assertEqual(next_stage('values', 5, stage='scores'), 'scores')
+        self.assertEqual(next_stage('values', 0, stage='bogus'), 'values')
+        self.assertEqual(HEAD_STAGES[0], 'scores')
+        self.assertEqual([clamp_index(i, 3) for i in (-4, 1, 9)], [0, 1, 2])
+        self.assertEqual(clamp_index(0, 0), -1)
+        self.assertEqual(stats_line({'step': 5, 'total': 10, 'loss': 1.23456, 'lr': 3e-4, 'tokens_per_second': 12345.6}),
+                         'step 5/10 | loss 1.2346 | lr 3.00e-04 | 12,346 tok/s')
+        self.assertEqual(stats_line({'step': 5, 'loss': None, 'lr': None}), 'step 5')
+        self.assertEqual(stats_line({}), '')

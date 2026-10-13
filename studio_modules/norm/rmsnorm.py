@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import torch
+
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -20,17 +22,8 @@ class RMSNorm(Layer):
         self.add("g", (dims.d_model,), "gain")
 
     def forward(self, x, ctx):
-        inv = 1.0 / self.xp.sqrt((x * x).mean(axis=-1, keepdims=True) + self.eps)
-        normalized = x * inv
-        self.cache = (normalized, inv)
-        return normalized * self.params["g"]
-
-    def backward(self, dy):
-        normalized, inv = self.cache
-        axes = tuple(range(dy.ndim - 1))
-        self.grads["g"] += (dy * normalized).sum(axis=axes)
-        dx = dy * self.params["g"]
-        return inv * (dx - normalized * (dx * normalized).mean(axis=-1, keepdims=True))
+        inv = 1.0 / torch.sqrt((x * x).mean(dim=-1, keepdim=True) + self.eps)
+        return x * inv * self.params["g"]
 
 
 @register

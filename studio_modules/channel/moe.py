@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from studio_modules.ops import activate, activate_derivative, softmax
+import torch
+
+from studio_modules.ops import activate
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -34,73 +36,32 @@ class MoELayer(Layer):
             self.add(prefix + ".f2.b", (d,), "bias")
 
     def forward(self, x, ctx):
-        xp = self.xp
+        p = self.params
         batch, length, d = x.shape
         flat = x.reshape(-1, d)
-        logits = ctx.emit("moe.router.logits", x @ self.params["moe.router.w"])
-        probabilities = ctx.emit("moe.router.prob", softmax(logits, xp))
-        top = ctx.emit("moe.router.top", xp.argsort(-probabilities, axis=-1)[..., :self.top_k])
-        selected = xp.take_along_axis(probabilities, top, axis=-1)
-        weights = selected / xp.maximum(selected.sum(axis=-1, keepdims=True), 1e-12)
+        logits = ctx.emit("moe.router.logits", x @ p["moe.router.w"])
+        probabilities = ctx.emit("moe.router.prob", torch.softmax(logits, dim=-1))
+        top = ctx.emit("moe.router.top", torch.topk(probabilities, self.top_k, dim=-1).indices)
+        selected = torch.gather(probabilities, -1, top)
+        weights = selected / selected.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         chosen = top.reshape(-1, self.top_k)
         weights = weights.reshape(-1, self.top_k)
-        output = xp.zeros_like(flat)
-        saved = []
+        output = torch.zeros_like(flat)
         for expert in range(self.experts):
-            locations = xp.flatnonzero(xp.any(chosen == expert, axis=-1))
-            if not locations.size:
-                saved.append(None)
+            hit = chosen == expert
+            locations = hit.any(dim=-1).nonzero().squeeze(1)
+            if locations.numel() == 0:
                 continue
             prefix = f"moe.expert{expert}"
             inputs = flat[locations]
-            pre = inputs @ self.params[prefix + ".f1.w"] + self.params[prefix + ".f1.b"]
-            act, derivative = activate(xp, pre, "gelu")
-            values = act @ self.params[prefix + ".f2.w"] + self.params[prefix + ".f2.b"]
-            weight = xp.sum(xp.where(chosen[locations] == expert, weights[locations], 0), axis=-1)
-            output[locations] += weight[:, None] * values
-            saved.append((locations, inputs, pre, derivative, act, values, weight))
-        load = xp.stack([(chosen == expert).sum() for expert in range(self.experts)]).astype(x.dtype)
-        load /= chosen.shape[0] * self.top_k
+            act = activate(inputs @ p[prefix + ".f1.w"] + p[prefix + ".f1.b"], "gelu")
+            values = act @ p[prefix + ".f2.w"] + p[prefix + ".f2.b"]
+            weight = (weights[locations] * hit[locations]).sum(dim=-1)
+            output = output.index_add(0, locations, weight[:, None] * values)
+        load = torch.bincount(chosen.reshape(-1), minlength=self.experts).to(x.dtype) / (chosen.shape[0] * self.top_k)
         if self.aux_weight:
-            ctx.aux += float(self.aux_weight * self.experts * xp.sum(probabilities.mean(axis=(0, 1)) * load))
-        self.cache = (x, flat, probabilities.reshape(-1, self.experts), chosen, weights, load, saved, ctx)
+            ctx.aux = ctx.aux + self.aux_weight * self.experts * (probabilities.mean(dim=(0, 1)) * load).sum()
         return output.reshape(batch, length, d)
-
-    def backward(self, dy):
-        xp = self.xp
-        x, flat, probabilities, chosen, weights, load, saved, ctx = self.cache
-        dflat = xp.zeros_like(flat)
-        dweights = xp.zeros_like(weights)
-        upstream = dy.reshape(flat.shape)
-        for expert, item in enumerate(saved):
-            if item is None:
-                continue
-            locations, inputs, pre, derivative, act, values, weight = item
-            prefix = f"moe.expert{expert}"
-            dvalue = upstream[locations] * weight[:, None]
-            self.grads[prefix + ".f2.w"] += act.T @ dvalue
-            self.grads[prefix + ".f2.b"] += dvalue.sum(axis=0)
-            dact = dvalue @ self.params[prefix + ".f2.w"].T
-            dpre = dact * activate_derivative(pre, derivative, "gelu")
-            self.grads[prefix + ".f1.w"] += inputs.T @ dpre
-            self.grads[prefix + ".f1.b"] += dpre.sum(axis=0)
-            dflat[locations] += dpre @ self.params[prefix + ".f1.w"].T
-            dweight = xp.sum(upstream[locations] * values, axis=-1)
-            for route in range(self.top_k):
-                matching = chosen[locations, route] == expert
-                dweights[locations, route] += xp.where(matching, dweight, 0)
-        centered = dweights - xp.sum(dweights * weights, axis=-1, keepdims=True)
-        dselected = weights * centered
-        dlogits = xp.zeros_like(probabilities)
-        rows = xp.arange(chosen.shape[0])[:, None]
-        xp.add.at(dlogits, (xp.broadcast_to(rows, chosen.shape), chosen), dselected)
-        if self.aux_weight:
-            average_load = xp.sum(probabilities * load[None], axis=-1, keepdims=True)
-            dlogits += (ctx.scale * self.aux_weight * self.experts / chosen.shape[0]
-                        * probabilities * (load[None] - average_load))
-        self.grads["moe.router.w"] += flat.T @ dlogits
-        dflat += dlogits @ self.params["moe.router.w"].T
-        return dflat.reshape(x.shape)
 
 
 @register

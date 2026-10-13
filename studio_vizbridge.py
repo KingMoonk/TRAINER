@@ -13,12 +13,20 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from collections import deque
 from multiprocessing.connection import AuthenticationError, Client, Listener
 from pathlib import Path
 
-_COALESCE = ("telemetry", "spec", "viz_snapshot", "snapshot", "summary", "selection")
+_COALESCE = ("telemetry", "spec", "viz_snapshot", "snapshot", "summary", "selection", "stats")
 _POLL_S = 0.1
+_BRIDGES = weakref.WeakSet()  # one exit hook for every live bridge; a reloaded module's old bridges are not pinned
+
+
+@atexit.register
+def _stop_all():
+    for bridge in list(_BRIDGES):
+        bridge.stop()
 
 
 class _Session:
@@ -33,6 +41,7 @@ class _Session:
         self.closed = False
         self.disconnected = False
         self.connected = False
+        self.stopping = False
         self.conn = None
 
 
@@ -75,8 +84,9 @@ def _writer(conn, sess):
                     sess.ordered.clear()
                     sess.pending.clear()
                 return
-            except Exception:
-                continue  # unpicklable message: drop it, keep the link
+            except Exception as error:  # unpicklable message: drop it, keep the link, and tell the GUI
+                print(f"viewer link: dropped a {msg.get('type')!r} message: {error}", file=sys.stderr, flush=True)
+                sess.inbound.put({"type": "send_error", "message": f"Could not send a {msg.get('type')!r} message to the viewer: {error}"})
 
 
 def _accept(listener, sess):
@@ -96,6 +106,39 @@ def _accept(listener, sess):
         threading.Thread(target=_reader, args=(conn, sess), daemon=True).start()
         threading.Thread(target=_writer, args=(conn, sess), daemon=True).start()
         return
+
+
+def _finish(proc, sess, listener, port, authkey):
+    """Wait for a viewer that was asked to quit, terminate it if it lingers, then close the link."""
+    if sess.connected and not sess.disconnected:
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=1)
+    sess.closed = True
+    sess.event.set()
+    if listener is not None:
+        if not sess.connected:
+            # Unblock accept() (it cannot be interrupted by closing on Windows).
+            poke = threading.Thread(target=_poke, args=(port, authkey), daemon=True)
+            poke.start()
+            poke.join(1.0)
+        try:
+            listener.close()
+        except OSError:
+            pass
+    if sess.conn is not None:
+        try:
+            sess.conn.close()
+        except OSError:
+            pass
 
 
 def _poke(port, authkey):
@@ -119,67 +162,59 @@ class VizBridge:
         self._listener = None
         self._authkey = b""
         self._port = 0
-        self._atexit = False
+        self.log_path = None
+        _BRIDGES.add(self)
 
-    def start(self):
-        """Launch the viewer process. No-op if it is already running."""
+    def start(self, log_path=None):
+        """Launch the viewer process, its stderr going to log_path when given. No-op if it is already running."""
         if self.running:
             return
         if self._proc is not None:
-            self.stop()
-        self._sess = _Session()
+            self.stop(wait=False)
+        sess = _Session()
         self._authkey = os.urandom(16)
-        self._listener = Listener(("127.0.0.1", 0), authkey=self._authkey)
-        self._port = self._listener.address[1]
+        listener = Listener(("127.0.0.1", 0), authkey=self._authkey)
+        self._port = listener.address[1]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        cmd = [*(self.command or [self.python, str(self.script)]), "--port", str(self._port),
-               "--authkey", self._authkey.hex(), *self.extra_args]
-        self._proc = subprocess.Popen(cmd, cwd=None if self.command else str(self.script.parent), creationflags=flags)
-        threading.Thread(target=_accept, args=(self._listener, self._sess), daemon=True).start()
-        if not self._atexit:
-            atexit.register(self.stop)
-            self._atexit = True
+        # the key goes over stdin: a command line is readable by every user on the machine
+        cmd = [*(self.command or [self.python, str(self.script)]), "--port", str(self._port), *self.extra_args]
+        log = None
+        try:
+            if log_path is not None:
+                Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+                log = open(log_path, "wb")
+            proc = subprocess.Popen(cmd, cwd=None if self.command else str(self.script.parent), creationflags=flags,
+                                    stdin=subprocess.PIPE, stderr=log)
+        except BaseException:
+            listener.close()
+            raise
+        finally:
+            if log is not None:
+                log.close()  # the child holds its own handle
+        try:
+            proc.stdin.write(self._authkey.hex().encode() + b"\n")
+            proc.stdin.close()
+        except OSError:
+            pass  # the viewer already died; the caller sees it through exit_code
+        self._proc, self._sess, self._listener, self.log_path = proc, sess, listener, log_path
+        threading.Thread(target=_accept, args=(listener, sess), daemon=True).start()
 
-    def stop(self):
-        """Ask the viewer to quit, wait up to 2 s, then terminate. Idempotent."""
+    def stop(self, wait=True):
+        """Ask the viewer to quit, wait up to 2 s, then terminate. Idempotent.
+
+        wait=False returns at once and does the waiting on a background thread, so the GUI never stalls."""
         proc, sess = self._proc, self._sess
-        if proc is None or sess is None or sess.closed:
+        if proc is None or sess is None or sess.closed or sess.stopping:
             return
         if sess.connected and not sess.disconnected:
             self._put({"type": "quit"})
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=1)
-        self._shutdown(sess)
-
-    def _shutdown(self, sess):
-        sess.closed = True
-        sess.event.set()
-        listener = self._listener
-        if listener is not None:
-            if not sess.connected:
-                # Unblock accept() (it cannot be interrupted by closing on Windows).
-                poke = threading.Thread(target=_poke, args=(self._port, self._authkey), daemon=True)
-                poke.start()
-                poke.join(1.0)
-            try:
-                listener.close()
-            except OSError:
-                pass
-        self._listener = None
-        if sess.conn is not None:
-            try:
-                sess.conn.close()
-            except OSError:
-                pass
+        sess.stopping = True
+        listener, self._listener = self._listener, None
+        args = (proc, sess, listener, self._port, self._authkey)
+        if wait:
+            _finish(*args)
+        else:
+            threading.Thread(target=_finish, args=args, daemon=True, name="viewer-stop").start()
 
     def _put(self, msg):
         sess = self._sess
@@ -197,7 +232,7 @@ class VizBridge:
     def send(self, msg):
         """Queue a message for the viewer. Never blocks; no-op if not started or dead."""
         sess = self._sess
-        if not isinstance(msg, dict) or sess is None or sess.closed or sess.disconnected:
+        if not isinstance(msg, dict) or sess is None or sess.closed or sess.stopping or sess.disconnected:
             return
         if self._proc.poll() is not None:
             return
@@ -219,12 +254,22 @@ class VizBridge:
     def running(self):
         """True while the viewer process is alive and the link is up or still connecting."""
         sess = self._sess
-        return (self._proc is not None and sess is not None and not sess.closed
+        return (self._proc is not None and sess is not None and not sess.closed and not sess.stopping
                 and not sess.disconnected and self._proc.poll() is None)
+
+    @property
+    def connected(self):
+        """True once the viewer has connected back (it may have disconnected since)."""
+        return self._sess is not None and self._sess.connected
+
+    @property
+    def exit_code(self):
+        """The viewer's exit code, or None while it runs or before start."""
+        return None if self._proc is None else self._proc.poll()
 
 
 class ViewerLink:
-    """Viewer-side end of the link, built from the --port/--authkey arguments."""
+    """Viewer-side end of the link, built from parse_viewer_args()."""
 
     def __init__(self, port, authkey_hex, timeout=5.0):
         key = bytes.fromhex(authkey_hex)
@@ -284,12 +329,14 @@ class ViewerLink:
             pass
 
 
-def parse_viewer_args(argv=None):
-    """Return (port, authkey_hex) from the viewer command line, or (None, None) if absent."""
+def parse_viewer_args(argv=None, stdin=None):
+    """Return (port, authkey_hex): the port from the command line, the key from its first stdin line
+    (VizBridge writes it there; --authkey still works for manual runs). (None, None) without a port."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--authkey", default=None)
     args, _ = parser.parse_known_args(sys.argv[1:] if argv is None else list(argv))
-    if args.port is None or not args.authkey:
+    if args.port is None:
         return None, None
-    return args.port, args.authkey
+    key = args.authkey or (stdin or sys.stdin).readline().strip()
+    return (args.port, key) if key else (None, None)

@@ -4,15 +4,22 @@ import math
 import unittest
 
 import numpy as np
+import torch
 
 from studio_compile import CompiledModel
 from studio_estimate import estimate
 from studio_registry import get
 from studio_slots import Ctx, Dims
 from studio_spec import validate_spec
+from tests.torchcheck import fill, layer_backward, tensor, to_np
 
 
 MIXERS = ("linear", "conv", "gru", "lstm", "ssm")
+
+
+def run(layer, x, ctx=None):
+    with torch.no_grad():
+        return to_np(layer.forward(tensor(x), ctx or Ctx()))
 
 
 class SequenceModules(unittest.TestCase):
@@ -28,7 +35,7 @@ class SequenceModules(unittest.TestCase):
                                        "block": {"mixer": {"id": name}}})
                 model = CompiledModel(small, 23, device="cpu")
                 self.assertEqual(estimate(small, 23)["total"], model.parameter_count)
-                self.assertEqual(sum(value.size for key, value in model.p.items() if model.owner[key] == ("mixer", 0)),
+                self.assertEqual(sum(value.numel() for key, value in model.p.items() if model.owner[key] == ("mixer", 0)),
                                  module.estimate(module.parse(), Dims(16, 1, 32, 23)).params)
 
     def test_temporal_gradient_flows_back_and_never_forward(self):
@@ -38,39 +45,38 @@ class SequenceModules(unittest.TestCase):
                 module = get("mixer", name)
                 raw = {"state": 2, "expand": 1, "kernel": 2, "dt_rank": 2} if name == "ssm" else {}
                 cfg = module.parse(raw)
-                layer = module.build(cfg, Dims(4, 1, 4, 9, dtype=np.float64), rng)
+                layer = module.build(cfg, Dims(4, 1, 4, 9, dtype=torch.float64), rng)
                 for parameter in layer.params.values():
-                    parameter[...] = rng.normal(0, .25, parameter.shape)
+                    fill(parameter, rng.normal(0, .25, tuple(parameter.shape)))
                 x = rng.normal(0, .4, (1, 4, 4))
                 dy = np.zeros_like(x)
                 dy[:, -1] = rng.normal(0, .3, (1, 4))
-                layer.forward(x, Ctx())
-                dx = layer.backward(dy)
+                dx = to_np(layer_backward(layer, x, dy))
                 self.assertGreater(float(np.max(np.abs(dx[:, 0]))), 1e-12)
                 index = (0, 0, 0)
                 old = x[index]
                 x[index] = old + 1e-5
-                plus = float(np.sum(layer.forward(x, Ctx()) * dy))
+                plus = float(np.sum(run(layer, x) * dy))
                 x[index] = old - 1e-5
-                minus = float(np.sum(layer.forward(x, Ctx()) * dy))
+                minus = float(np.sum(run(layer, x) * dy))
                 x[index] = old
                 self.assertLess(abs(dx[index] - (plus - minus) / 2e-5), 1e-8)
-                original = layer.forward(x, Ctx()).copy()
+                original = run(layer, x).copy()
                 changed = x.copy()
                 changed[:, -1] += 2
-                np.testing.assert_allclose(layer.forward(changed, Ctx())[:, :-1], original[:, :-1], atol=1e-12)
+                np.testing.assert_allclose(run(layer, changed)[:, :-1], original[:, :-1], atol=1e-12)
 
     def test_linear_attention_matches_direct_prefix_formula(self):
         module = get("mixer", "linear")
         cfg = module.parse({"heads": 2})
-        layer = module.build(cfg, Dims(4, 1, 4, 9, dtype=np.float64), None)
+        layer = module.build(cfg, Dims(4, 1, 4, 9, dtype=torch.float64), None)
         rng = np.random.default_rng(5)
         for value in layer.params.values():
-            value[...] = rng.normal(0, .2, value.shape)
+            fill(value, rng.normal(0, .2, tuple(value.shape)))
         x = rng.normal(0, .3, (1, 4, 4))
         ctx = Ctx(hooks=True)
-        actual = layer.forward(x, ctx)
-        q, k, v = (ctx.captured[name] for name in ("linear.q", "linear.k", "linear.v"))
+        actual = run(layer, x, ctx)
+        q, k, v = (to_np(ctx.captured[name]) for name in ("linear.q", "linear.k", "linear.v"))
         expected = []
         for t in range(x.shape[1]):
             weights = q[:, :, t, None, :] * k[:, :, :t + 1]
@@ -79,24 +85,24 @@ class SequenceModules(unittest.TestCase):
             denominator = weights.sum(axis=-1, keepdims=True) + cfg.eps
             expected.append(numerator / denominator)
         stream = np.stack(expected, axis=2).transpose(0, 2, 1, 3).reshape(x.shape)
-        reference = stream @ layer.params["linear.proj.w"] + layer.params["linear.proj.b"]
+        reference = stream @ to_np(layer.params["linear.proj.w"]) + to_np(layer.params["linear.proj.b"])
         np.testing.assert_allclose(actual, reference, atol=1e-12)
 
     def test_ssm_selective_scan_matches_scalar_reference(self):
         module = get("mixer", "ssm")
         cfg = module.parse({"state": 1, "expand": 1, "kernel": 1, "dt_rank": 1})
-        layer = module.build(cfg, Dims(1, 1, 4, 9, dtype=np.float64), None)
+        layer = module.build(cfg, Dims(1, 1, 4, 9, dtype=torch.float64), None)
         for parameter in layer.params.values():
-            parameter.fill(0)
-        layer.params["ssm.in.w"][...] = [[1., 1.]]
-        layer.params["ssm.conv.w"][...] = 1
-        layer.params["ssm.x.w"][...] = [[.3, .4, .5]]
-        layer.params["ssm.dt.w"][...] = 1
-        layer.params["ssm.A_log"][...] = 0
-        layer.params["ssm.D"][...] = 1
-        layer.params["ssm.out.w"][...] = 1
+            parameter.zero_()
+        fill(layer.params["ssm.in.w"], [[1., 1.]])
+        fill(layer.params["ssm.conv.w"], 1)
+        fill(layer.params["ssm.x.w"], [[.3, .4, .5]])
+        fill(layer.params["ssm.dt.w"], 1)
+        fill(layer.params["ssm.A_log"], 0)
+        fill(layer.params["ssm.D"], 1)
+        fill(layer.params["ssm.out.w"], 1)
         values = [0.2, -0.1, 0.3]
-        actual = layer.forward(np.array(values, dtype=np.float64).reshape(1, 3, 1), Ctx()).reshape(-1)
+        actual = run(layer, np.array(values, dtype=np.float64).reshape(1, 3, 1)).reshape(-1)
         state = 0.
         expected = []
         for value in values:

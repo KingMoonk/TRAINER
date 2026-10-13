@@ -21,19 +21,19 @@ HIDDEN_FIELDS_NOTE = "Advanced mode shows every setting."
 
 
 def device_kind(requested, gpu_info):
-    """'cuda' when the run will use the GPU, otherwise 'cpu'."""
+    """The GPU kind ('cuda' or 'mps') when the run will use the GPU, otherwise 'cpu'."""
     if requested == "cpu":
         return "cpu"
     if gpu_info and gpu_info.get("available"):
-        return "cuda"
+        return gpu_info.get("kind") or "cuda"
     return "cpu"
 
 
 def step_seconds(cfg, params, kind, scale=1.0):
-    """Rough seconds for one optimizer step. Fitted to measurements of the NumPy CPU and CuPy CUDA backends."""
+    """Rough seconds for one optimizer step. Fitted to measurements of the CPU and CUDA backends; Apple GPUs use the CUDA curve."""
     batch, context, accumulation = int(cfg.get("batch_size", 4)), int(cfg.get("context", 256)), int(cfg.get("accumulation", 1))
     tokens = batch * context
-    if kind == "cuda":
+    if kind in ("cuda", "mps"):
         seconds = accumulation * (0.04 + 0.05 * int(cfg.get("layers", 2))) * max(0.25, tokens / 1024) ** 0.3
     else:
         tokens_per_second = 4.0e6 / max(float(params), 1000.0) ** 0.57

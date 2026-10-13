@@ -1,4 +1,4 @@
-# Optional NVIDIA CUDA 13 backend. The standard requirements remain CPU-only.
-# Requires a compatible NVIDIA driver and CUDA 13 toolkit.
+# NVIDIA CUDA: install the CUDA build of PyTorch from pytorch.org, matching your driver, for example
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+# then the standard requirements. Apple GPUs need nothing extra (the default wheel includes Metal support).
 -r requirements.txt
-cupy-cuda13x>=14.2,<15

@@ -44,7 +44,7 @@ GLOSSARY = {
     "objective": ("Train on (objective)", "'assistant' teaches the model only to write the answers. 'all' also teaches it to predict the questions. 'assistant' is better for chat."),
     "windowing": ("Windows", "How long texts are cut into model-sized pieces. 'anchored' keeps each answer together with as much of its question as fits. 'sequential' cuts plain chunks one after another."),
     "device": ("Device (CPU or GPU)", "Where the maths runs. A GPU (NVIDIA 'CUDA') is much faster for bigger models. 'auto' uses the GPU if one works, otherwise the CPU."),
-    "cuda": ("CUDA / GPU", "NVIDIA's technology for running maths on a graphics card. It needs a supported NVIDIA card and the CuPy package."),
+    "cuda": ("CUDA / GPU", "NVIDIA's technology for running maths on a graphics card. PyTorch uses it when a supported NVIDIA card and driver are present; Apple GPUs are used through Metal (MPS)."),
     "estimate_time": ("Training time estimate", "A rough guess from your model size, steps and device. It improves after your first run because the studio learns how fast your computer is."),
     "model_name": ("Model name", "Just a label so you can recognise this model in your list of runs."),
     # ---- training

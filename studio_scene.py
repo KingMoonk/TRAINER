@@ -12,6 +12,8 @@ from studio_summary import bin_edges
 
 LEVELS = ('Run', 'Model', 'Window', 'Head', 'Weights')
 MODES = ('Build', 'Train', 'Ride a token')
+HEAD_STAGES = ('scores', 'scale', 'mask', 'pattern', 'values')  # the forward pass of one head, in order
+TILE_KINDS = ('weight', 'gradient', 'update')
 LIMITS = {'Run': 2000, 'Model': 32, 'Window': 32, 'Head': 32, 'Weights': 16}
 
 
@@ -126,10 +128,12 @@ class SceneModel:
                     result['streams'][key[6:]] = np.linalg.norm(value[0, start:end], axis=-1).tolist()
             if level == 'Head':
                 block = self.selection.layer
-                for name in ('scores', 'pattern'):
+                # logits: pre-softmax scores as the engine applies them (score scale, position bias), when it exposes them
+                for name in ('scores', 'logits', 'pattern'):
                     value = arrays.get(f'hook::block{block}.attn.{name}')
-                    result[name] = value[0, min(self.selection.head, value.shape[1] - 1), start:end, start:end].T.tolist() if value is not None else []
-                result['mask'] = (np.arange(start, end)[:, None] > np.arange(start, end)[None, :]).tolist()
+                    result[name] = value[0, min(self.selection.head, value.shape[1] - 1), start:end, start:end].tolist() if value is not None else []
+                # rows = queries, columns = keys, the same orientation as the Window patterns; keys after the query are masked
+                result['mask'] = (np.arange(start, end)[None, :] > np.arange(start, end)[:, None]).tolist()
                 output = arrays.get(f'hook::block{block}.attn.head_out')
                 result['values'] = output[0, min(self.selection.head, output.shape[1] - 1), start:end, :32].tolist() if output is not None else []
         elif level == 'Weights':
@@ -142,6 +146,7 @@ class SceneModel:
                     row = min(self.selection.row, max(0, value.shape[0] - 16))
                     col = min(self.selection.column, max(0, value.shape[1] - 16))
                     result[kind] = value[row:row + 16, col:col + 16].tolist()
+                    result['shape'], result['origin'] = tuple(value.shape), (row, col)
                 else:
                     result[kind] = []
         return result
@@ -153,3 +158,29 @@ class SceneModel:
             return []
         prefix = direction + '::'
         return [(key[len(prefix):], value.copy()) for key, value in self.snapshot['arrays'].items() if key.startswith(prefix)]
+
+
+def next_stage(current, delta=0, stage=None):
+    """The head stage after stepping `delta` (clamped to the ends of the forward pass), or `stage` itself when it is a real one."""
+    if stage in HEAD_STAGES:
+        return stage
+    return HEAD_STAGES[max(0, min(len(HEAD_STAGES) - 1, HEAD_STAGES.index(current) + int(delta)))]
+
+
+def clamp_index(index, count):
+    """A snapshot index inside 0..count-1 (-1 when there are none)."""
+    return max(0, min(count - 1, int(index))) if count else -1
+
+
+def stats_line(stats):
+    """The one-line training readout from a 'stats' message: step, loss, learning rate, speed (missing values left out)."""
+    parts = []
+    if stats.get('step') is not None:
+        parts.append(f"step {stats['step']}" + (f"/{stats['total']}" if stats.get('total') else ''))
+    if stats.get('loss') is not None:
+        parts.append(f"loss {stats['loss']:.4f}")
+    if stats.get('lr') is not None:
+        parts.append(f"lr {stats['lr']:.2e}")
+    if stats.get('tokens_per_second'):
+        parts.append(f"{stats['tokens_per_second']:,.0f} tok/s")
+    return ' | '.join(parts)

@@ -2,11 +2,11 @@
 
 A native Python desktop studio for creating datasets and training your own language model from random weights.
 
-**NumPy and pandas provide the CPU version; optional CuPy enables NVIDIA GPU acceleration.** Python's built-in Tkinter supplies the interface. The transformer, backward pass, optimizer, tokenizer, checkpoint format and text sampler are implemented in this repository. Everything runs locally; CPU and GPU use the same handwritten learning code.
+**PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** Python's built-in Tkinter supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
 
 ## Quickstart
 
-Requires Python 3.9 or newer with Tkinter.
+Requires Python 3.12 or newer with Tkinter (the pinned NumPy 2.5 and pandas 3.0 need 3.12).
 
 macOS / Linux:
 
@@ -27,22 +27,6 @@ py -3 -m venv .venv
 
 On Windows you can instead double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
 
-## Development with hot reload
-
-Recommended while editing the code. From the repo root, with the venv active or using its interpreter:
-
-```bash
-.venv/bin/python dev.py
-```
-
-`dev.py` starts the studio and applies code changes inside the open window. Nothing is relaunched, so the app never takes focus from the editor you are working in.
-
-- An edit is applied about a second after the files stop changing, and only while the studio is in the background. While you are using the studio, the status bar says the code changed and the reload waits until you switch away. Cmd+R (Ctrl+R on Windows) reloads at once.
-- A reload never interrupts a running job or an open dialog; it waits for them.
-- If the new code has an error, the old code keeps running and the error is shown in the status bar and the terminal. Fix the file and it reloads again.
-- A reload rebuilds every page: the window, its position and the current page stay, but text typed into fields, scroll positions and the chat on screen are reset. Saved work is untouched.
-- Changes to `dev.py` itself need a restart of `dev.py`. It watches the whole project and skips `.venv/`, `tests/`, `data/`, `runs/`, `exports/`, `artifacts/`, and dot-folders. Ctrl+C stops it.
-
 
 ## Lint and git hooks
 
@@ -54,7 +38,7 @@ git config core.hooksPath .githooks
 ```
 
 - **pre-commit** lints the staged Python files with [ruff](https://docs.astral.sh/ruff/) and applies its safe fixes. The rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
-- **pre-push** runs `ruff check .` and the fast tests (about 3 seconds); a failure stops the push. The GUI, network and 3D viewer tests take about 40 seconds more and run in CI, or locally with `python -m unittest discover -s tests -p "gui_*.py"` (these open windows; they are named `gui_*.py` so a plain discover skips them).
+- **pre-push** runs `ruff check .` and the fast tests (about 3 seconds); a failure stops the push. The GUI, network and 3D viewer tests take about 40 seconds more and run in CI only. They open windows, so every `gui_*.py` skips itself unless `CI` is set (GitHub Actions does) or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`).
 
 ## Launch
 
@@ -72,13 +56,15 @@ Use the `.venv` interpreter in PyCharm. Python must include Tkinter (included wi
 
 ## GPU acceleration
 
-Choose **Model blueprint → Compute device**:
+The `device` setting of a design (and `train.py --device`) chooses where training runs:
 
-- `auto` (default): use the first CUDA GPU if the driver, CuPy, and CUDA kernel checks pass; otherwise use NumPy on CPU and show the reason.
-- `cuda`: require GPU execution. If it is unavailable, report the error instead of silently changing devices.
-- `cpu`: use NumPy without requiring CuPy or probing CUDA in the training engine.
+- `auto` (default): use a CUDA GPU, else an Apple GPU (Metal), when a small calculation check passes; otherwise the CPU, with the reason shown. Small models stay on the CPU because kernel launches cost more than the arithmetic.
+- `cuda` / `mps`: require that device. If it is unavailable, report the error instead of silently changing devices.
+- `cpu`: never probe a GPU.
 
-Chat has a separate **Inference device** selector. For chat, reload the checkpoint after changing this setting. The model status and training log show the actual device. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
+float64 precision is not available on Apple GPUs; such runs fall back to the CPU.
+
+Chat answers on the CPU. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
 
 For a machine with an NVIDIA driver and CUDA 13 toolkit already installed:
 
@@ -87,41 +73,39 @@ For a machine with an NVIDIA driver and CUDA 13 toolkit already installed:
 .\.venv\Scripts\python.exe train.py --list-devices
 ```
 
-If the machine has a compatible NVIDIA driver but no CUDA toolkit, install the runtime components in the virtual environment using CuPy's optional `ctk` extra:
+PyTorch's default wheel from PyPI already includes Apple Metal (MPS) support. For an NVIDIA GPU install the CUDA build of PyTorch that matches your driver (see requirements-gpu.txt), then restart the studio. The backend targets one GPU (device 0).
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install "cupy-cuda13x[ctk]>=14.2,<15"
-```
-
-See the [official CuPy installation guide](https://docs.cupy.dev/en/stable/install.html) for CUDA compatibility and CUDA 12 alternatives. Install only one CuPy distribution in an environment. Restart the studio after installing GPU support. This backend currently targets a single NVIDIA GPU (device 0).
-
-Weights, activations, attention, handwritten gradients, and Adam state stay on GPU during GPU training. Initialization and dropout random draws remain NumPy-based for compatibility with existing saved random states; batches and dropout masks transfer to the GPU. Checkpoints transfer numeric arrays back to NumPy for storage. Inference transfers the final vocabulary vector back for seeded token sampling. GPU reductions may differ slightly from CPU floating-point results. Small models or batches may run faster on CPU because kernel launch and transfer overhead can dominate. Initial CUDA kernel compilation can make the first step slower.
+Weights, activations and optimizer state stay on the GPU during GPU training. Initialization draws remain NumPy-based so saved random states stay portable. Dropout masks are drawn on the training device from a generator seeded by that saved NumPy state, so a run is reproducible per seed and per device, not across devices. Checkpoints store NumPy arrays (`.npz`), so a checkpoint trained on one device loads on any other. GPU reductions may differ slightly from CPU floating-point results. Small models or batches run faster on the CPU because kernel launch and transfer overhead dominate; `auto` keeps them there.
 
 ## Workflow
 
-1. **Dataset library:** create a dataset, choose one or multiple files with **Import files**, or write examples manually. JSONL, JSON, CSV, TSV, tagged TXT and plain text are supported. Pandas parses tables and computes dataset statistics. Edit prompt/response pairs, full conversations or raw text; mark examples reviewed; export JSONL or CSV. Exact content duplicates are skipped. Existing workspace datasets are retained.
-2. **Model blueprint:** use the guided setup to choose data, tokenizer, dimensions, training settings and objective. **Network → Design** edits a canonical ModelSpec; **Sandbox** swaps registry modules and their settings, while **Variants** compares named presets and estimates. Incompatible modules show why they are unavailable. These presets describe architectures and do not include pretrained weights.
-3. **Training console:** view actual training and validation loss, token throughput and optimizer steps. Pause, stop and save, inspect saved runs, resume checkpoints or export a complete run ZIP. Training runs on a worker thread so the UI stays responsive.
-4. **Playground:** load a `.npz` checkpoint and sample with temperature, top-k and response-length controls. Use **This reply is wrong** to send the conversation to Improve with feedback, where you pick a better reply or write the right one; an answer you write is also saved to the selected dataset.
+The window has four areas in the sidebar and a machine strip under them.
+
+1. **Network designer:** change the model picture and see what it costs. **Quick test** tries a design idea for a few minutes on a tiny dataset before you save it. **Compare runs** changes one thing, holds the rest equal and runs several seeds; a difference counts only when it is larger than the spread across seeds. **Look inside** opens Trace a position, Inside a head, Value map, Loss, Head lab and the 3D view.
+2. **Pretraining:** feed the model text; it learns by predicting the next character or token. **Your data** holds three kinds (text, conversations and checkable problems), because each trains a different stage. **Make extra data** generates more and keeps what passes review. A run's page shows step, schedule phase and error so far.
+3. **Post-training:** four rounds, always in the same order, on the same design; only the weights change.
+4. **Chat:** talk to any trained version, or compare two side by side. Chat moves to a newer version only when its held-back score beats the current one by more than the measured noise band.
+
+**This computer** (the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
 ## The learning engine
 
-`studio_model.py` retains the original decoder-only training path using NumPy or CuPy arrays:
+`studio_model.py` drives the decoder-only training path on PyTorch tensors; `studio_compile.py` assembles a ModelSpec from the registry's modules and runs it with autograd:
 
-- Learned token/position embeddings, pre-layer normalization, multi-head causal self-attention, residual paths, tanh-approximation GELU, dropout, final normalization and tied output embeddings.
-- Explicit gradients for every operation, stable cross-entropy, global gradient clipping, gradient accumulation, AdamW with bias correction, warmup and cosine learning-rate decay.
+- Learned token/position embeddings, pre-layer normalization, multi-head causal self-attention, residual paths, tanh-approximation GELU, dropout, final normalization and tied output embeddings, plus the alternative modules in `studio_modules/` (RoPE, ALiBi, RMSNorm, GQA, linear attention, SSM, GRU, LSTM, convolution, SwiGLU, mixture of experts, untied heads).
+- Gradients by autograd (every module's forward pass is checked against finite differences in float64), stable cross-entropy, global gradient clipping, gradient accumulation, AdamW with bias correction (also SGD, Lion and Muon), warmup with cosine or warmup-stable-decay schedules.
 - Character vocabularies fitted to the training split, or a fixed UTF-8 byte vocabulary with special conversation tokens. Character tokenizers use an unknown token for unseen characters; bytes cover all UTF-8 text.
 - Next-token prediction on raw text. Conversation targets can include every token or only assistant content and end-of-turn markers.
 
-This is a small-model experimentation studio. Training from scratch is suited to learning and narrow tasks; a generally capable chatbot needs far more data and compute. A falling training loss alone does not establish generalization. Short context windows can truncate conversational history. On GPU, batch size, context length and model width determine memory demand; reduce them if the device runs out of memory.
+This is a small-model experimentation studio. Training from scratch is suited to learning and narrow tasks; a generally capable chatbot needs far more data and compute. A falling training loss alone does not establish generalization. Short context windows can truncate conversational history. On GPU, batch size, context length and model width determine memory demand. If a training step runs out of memory, the run halves the batch, doubles gradient accumulation (same effective batch) and retries. Generation keeps a key/value cache for attention and grouped-query attention, so each new token costs one position until the text outgrows the context; other mixers recompute the window. Chat keeps at most three models loaded.
 
 ## Network engine and inspection services
 
-The modular network engine represents a design as a validated, JSON-serializable `ModelSpec`. Its slots describe the tokenizer, embedding, position method, block norm/token mixer/channel mixer, output head, objective, optimizer, learning-rate schedule, initializer and precision. The compiler builds the residual-block template from that spec; registry metadata supplies module configuration fields, compatibility requirements, hooks and parameter/compute estimates. New modules live one per file under `studio_modules/<slot>/` and register themselves. The Network page now includes **Design**, **Sandbox**, **Variants**, **Experiments**, **Trace a token**, **Inside a head**, **Value map**, **Loss**, **Head lab**, **3D** and **Versions** tabs. Sandbox controls come from registry metadata; incompatible choices show their reason, and inspection controls are disabled when the selected block lacks required hooks.
+The modular network engine represents a design as a validated, JSON-serializable `ModelSpec`. Its slots describe the tokenizer, embedding, position method, block norm/token mixer/channel mixer, output head, objective, optimizer, learning-rate schedule, initializer and precision. The compiler builds the residual-block template from that spec; registry metadata supplies module configuration fields, compatibility requirements, hooks and parameter/compute estimates. New modules live one per file under `studio_modules/<slot>/` and register themselves. Designer controls come from registry metadata; incompatible choices show their reason, and inspection controls are disabled when the selected block lacks required hooks.
 
-The inspection tabs read saved checkpoints and report measured values: token attention and intermediate predictions, a head's scores and probabilities, value/output projection summaries, selected-token loss and gradient, and head ablation statistics. **Versions** manages architecture revisions, checkpoint weights and backups. These views describe the selected checkpoint; they do not explain a head's behavior beyond the measured quantities shown.
+The Look inside pages read saved checkpoints and report measured values: token attention and intermediate predictions, a head's scores and probabilities, value/output projection summaries, selected-token loss and gradient, and head ablation statistics. These views describe the selected checkpoint; they do not explain a head's behavior beyond the measured quantities shown.
 
 `Experiments` runs paired seeds and can hold tokens, estimated parameters, estimated compute or wall-clock time equal. It records width adjustments, achieved budgets and run metrics. Network training saves a snapshot every 50 steps; only the newest 20 snapshots per run are kept by default (`snapshot_keep`). Each snapshot includes full model weights and gradients, plus full updates when available. The 3D viewer is a separate window with five levels: Run, Model, Window, Head and Weights. Its menus choose level and Build/Train/Ride a token mode. Mouse drag orbits the camera, the wheel zooms between levels, and WASD/Q/E pans. Model shows binned attention and stream norms; Window and Head display at most 32 tokens. Replay controls play, pause and scrub saved snapshots; **1 real step** runs one optimizer step on a private copy from a checkpoint. At Weights, select weight/gradient/update and a matrix; keyboard `+`/`-` changes a weight by a small amount and saves a new checkpoint version.
 
@@ -192,13 +176,13 @@ Entry points and engine services sit in the repository root; swappable model/tra
 | Layer | Modules | Role |
 |---|---|---|
 | Entry points | `app.py`, `train.py`, `start_studio.bat` | Launch the desktop GUI, run training from the command line, or set up and launch on Windows. |
-| GUI shell | `studio_gui.py` | `NativeStudio` (Tk window, page registry) and `Studio`, which mixes in every page. |
-| GUI pages (mixins) | `studio_flow.py`, `studio_curriculum_page.py`, `studio_align.py`, `studio_network.py`, `studio_net_*.py` | Guided workflow, sequential training card, post-training alignment, and the Design, Sandbox, Variants, Experiments, inspection, 3D and Versions views. |
-| GUI helpers | `studio_widgets.py`, `studio_ux.py`, `studio_circuit.py`, `studio_glossary.py` | Shared widgets and example editor, Beginner/Advanced mode and time estimates, PCB-style network canvas, plain-English glossary. |
+| GUI shell | `studio_ia/shell.py` | `Studio` (Tk window, sidebar, page router). |
+| GUI pages | `studio_ia/pages/` | One page per route; pages talk only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
+| GUI helpers | `studio_ia/widgets.py`, `studio_ia/theme.py`, `studio_ia/copy.py`, `studio_ux.py`, `studio_glossary.py` | Shared widgets, colours and fonts, every string on screen, time estimates, plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
-| Network editing | `studio_arch.py`, `studio_archdb.py`, `studio_network.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
+| Network editing | `studio_arch.py`, `studio_archdb.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
 | Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
 | Inspection and experiments | `studio_inspect.py`, `studio_summary.py`, `studio_experiments.py`, `studio_snapshot.py`, `studio_scene.py` | Probe, summary, experiment, snapshot/replay and renderer-independent scene services. |
 | 3D viewer | `studio_vizbridge.py`, `studio_brain3d.py` | `studio_brain3d.py` is a Panda3D viewer run as a separate process. `studio_vizbridge.py` connects it to the GUI over a loopback socket. |
@@ -206,8 +190,7 @@ Entry points and engine services sit in the repository root; swappable model/tra
 ### Dependency flow
 
 ```
-app.py ──► studio_gui ──► page mixins (flow, network, align, curriculum)
-                     └──► studio_widgets, studio_ux, studio_glossary
+app.py ──► studio_ia.shell ──► studio_ia.pages ──► studio_ia.services ──► engine modules, studio_queue
 train.py ─┐
           ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
           │        ▲

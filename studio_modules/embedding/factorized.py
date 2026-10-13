@@ -24,26 +24,10 @@ class FactorizedEmbedding(Layer):
         self.add("token.up", (rank, dims.d_model), "weight")
 
     def forward(self, ids, ctx):
-        self.cache = ids
         return self.params["token.low"][ids] @ self.params["token.up"]
 
-    def backward(self, dx):
-        ids = self.cache
-        low = self.params["token.low"][ids]
-        self.grads["token.up"] += low.reshape(-1, low.shape[-1]).T @ dx.reshape(-1, dx.shape[-1])
-        self.xp.add.at(self.grads["token.low"], ids.reshape(-1),
-                       (dx @ self.params["token.up"].T).reshape(-1, low.shape[-1]))
-        return None
-
     def unembed(self, hidden):
-        return (hidden @ self.params["token.up"].T) @ self.params["token.low"].T
-
-    def unembed_back(self, dlogits, hidden):
-        middle = hidden @ self.params["token.up"].T
-        self.grads["token.low"] += dlogits.reshape(-1, dlogits.shape[-1]).T @ middle.reshape(-1, middle.shape[-1])
-        dmiddle = dlogits @ self.params["token.low"]
-        self.grads["token.up"] += dmiddle.reshape(-1, dmiddle.shape[-1]).T @ hidden.reshape(-1, hidden.shape[-1])
-        return dmiddle @ self.params["token.up"]
+        return (hidden @ self.params["token.up"].t()) @ self.params["token.low"].t()
 
 
 @register

@@ -8,8 +8,18 @@ import math
 import numpy as np
 
 from studio_arch import parameter_names, spec_from_config
-from studio_backend import get_backend
 from studio_model import validate_config
+
+
+class _NumpyBackend:
+    """The frozen reference always runs on NumPy, whatever the live engine uses."""
+    xp, device, name, reason = np, "cpu", "NumPy / CPU", ""
+
+    def to_cpu(self, value):
+        return np.asarray(value)
+
+    def synchronize(self):
+        pass
 
 
 def effective_spec(cfg):
@@ -52,8 +62,7 @@ class ScratchTransformer:
     def __init__(self, config, vocabulary):
         self.config = validate_config(config)
         cfg = self.config
-        work = cfg["batch_size"] * cfg["context"] * cfg["width"] * max(1, cfg["layers"])
-        self.backend = get_backend(cfg["device"], work=work)
+        self.backend = _NumpyBackend()
         self.xp = xp = self.backend.xp
         # Keeping the stochastic stream on CPU makes old checkpoints and RNG state
         # portable between devices. Parameters and all learning operations live on xp.

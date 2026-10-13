@@ -1,6 +1,7 @@
 """GPT-2 byte-level BPE using OpenAI's published encoder and merge assets."""
 from __future__ import annotations
 
+import hashlib
 import json
 import unicodedata
 import urllib.error
@@ -8,9 +9,12 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from studio_core import replace_file
 from studio_registry import ModuleSpec, register
 from studio_slots import OFFSET
 
+# Published hashes of OpenAI's GPT-2 assets (fill in from a trusted download to pin them; empty = not checked).
+ASSET_SHA256 = {"encoder.json": "196139668be63f3b5d6574427317ae82f612a97c5d1cdaf36ed2256dbf636783", "vocab.bpe": "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5"}
 BASE_URL = "https://openaipublic.blob.core.windows.net/gpt-2/models/124M/"
 ASSETS = ("encoder.json", "vocab.bpe")
 CONTRACTIONS = ("'s", "'t", "'re", "'ve", "'m", "'ll", "'d")
@@ -97,9 +101,15 @@ class GPT2Tokenizer:
 
     def encode(self, text):
         output = []
+        cache = self.__dict__.setdefault("_cache", {})
         for piece in pretokenize(text):
-            mapped = "".join(self.byte_encoder[byte] for byte in piece.encode("utf-8"))
-            for symbol in merge_word(mapped, self.ranks):
+            symbols = cache.get(piece)
+            if symbols is None:
+                mapped = "".join(self.byte_encoder[byte] for byte in piece.encode("utf-8"))
+                symbols = merge_word(mapped, self.ranks)
+                if len(cache) < 200_000:
+                    cache[piece] = symbols
+            for symbol in symbols:
                 if symbol not in self.encoder:
                     raise ValueError("GPT-2 vocabulary asset is incomplete or inconsistent with its merges.")
                 output.append(self.encoder[symbol] + OFFSET)
@@ -127,7 +137,8 @@ class GPT2Config:
 def asset_paths(cfg):
     root = Path(cfg.asset_dir)
     if not root.is_absolute():
-        root = Path(__file__).resolve().parents[2] / root
+        from studio_core import ROOT  # the writable data folder, also inside a frozen build
+        root = ROOT / root
     return [root / name for name in ASSETS]
 
 
@@ -140,7 +151,12 @@ def load_assets(cfg):
         try:
             with urllib.request.urlopen(BASE_URL + path.name, timeout=30) as response:
                 data = response.read()
-            path.write_bytes(data)
+            digest = hashlib.sha256(data).hexdigest()
+            if ASSET_SHA256.get(path.name) and digest != ASSET_SHA256[path.name]:
+                raise OSError(f"{path.name} did not match its known checksum (got {digest[:12]}…).")
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_bytes(data)
+            replace_file(temporary, path)
         except (OSError, urllib.error.URLError) as error:
             raise ValueError(f"GPT-2 tokenizer asset {path.name} is unavailable; connect to the internet or place it in {path.parent}.") from error
     encoder = json.loads(paths[0].read_text(encoding="utf-8"))

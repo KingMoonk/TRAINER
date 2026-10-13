@@ -34,8 +34,13 @@ class Rig:
         self.living.add(5000 + len(self.spawned))
         return 5000 + len(self.spawned)
 
-    def check(self):
-        return watch.check(self.store, now=lambda: self.t, spawn=self.spawn, alive=lambda pid: pid in self.living, ours=lambda pid, *needles: pid not in self.strangers, kill=self.killed.append, on_battery=lambda: self.battery)
+    def kill(self, pid):
+        self.killed.append(pid)
+        self.living.discard(pid)
+
+    def check(self, **options):
+        return watch.check(self.store, now=lambda: self.t, spawn=self.spawn, alive=lambda pid: pid in self.living, ours=lambda pid, *needles: pid not in self.strangers,
+                           kill=options.pop("kill", self.kill), on_battery=lambda: self.battery, **options)
 
     def row(self):
         return self.store.get(self.id)
@@ -126,6 +131,40 @@ class CheckTests(unittest.TestCase):
         self.assertIn("The last problem: ValueError: needs two examples", rig.row()["error"])
         self.assertNotIn("See trainer.log", rig.row()["error"])
 
+    def test_gives_up_after_five_slow_restarts_without_a_new_checkpoint(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5)
+        watch._remember(rig.store, rig.id, {"spawned": NOW - 3600, "checkpoints": 0})  # as the first start left it
+        words = []
+        for i in range(6):  # one crash every 20 minutes: never 5 in 10 minutes
+            rig.t = NOW + i * 1200
+            rig.living.clear()
+            words.append(rig.check())
+        self.assertEqual(words, ["restarted"] * 5 + ["gave_up"])
+        self.assertIn("5 restarts in a row without a new checkpoint", rig.row()["error"])
+
+    def test_a_new_checkpoint_resets_the_count(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5)
+        for i in range(8):
+            rig.t = NOW + i * 1200
+            rig.living.clear()
+            rig.set(state={"checkpoints": [{"n": n} for n in range(i)]})  # each run saved one more
+            self.assertEqual(rig.check(), "restarted")
+
+    def test_a_restart_after_a_reboot_or_sleep_is_not_counted(self):
+        rig = Rig(self)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5, restarts=[NOW - 500, NOW - 400, NOW - 300, NOW - 200, NOW - 100])
+        self.assertEqual(rig.check(woke=True), "restarted")
+        self.assertEqual(len(rig.row()["restarts"]), 5)
+
+    def test_a_trainer_that_outlives_its_kill_is_not_joined_by_a_second(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 61)
+        self.assertEqual(rig.check(kill=rig.killed.append), "waiting")  # the kill has not landed yet
+        self.assertEqual((rig.killed, rig.spawned), ([7], []))
+
     def test_old_restarts_do_not_count(self):
         rig = Rig(self)
         rig.set(status="running", trainer_pid=7, heartbeat=NOW - 5, restarts=[NOW - 2000, NOW - 1500, NOW - 1000, NOW - 700, NOW - 601, NOW - 100])
@@ -188,6 +227,17 @@ class CheckTests(unittest.TestCase):
             rig.battery = battery
             self.assertEqual(rig.check(), "paused")
             self.assertEqual(rig.row()["command"], "")
+
+    def test_power_never_overwrites_a_stop(self):
+        rig = Rig(self)
+        rig.living.add(7)
+        rig.set(status="running", trainer_pid=7, heartbeat=NOW - 1)
+        rig.battery = True
+        rig.check()
+        rig.set(status="paused", command="stop")  # the user pressed Stop while it was paused on battery
+        rig.battery = False
+        rig.check()
+        self.assertEqual(rig.row()["command"], "stop")
 
     def test_a_user_resume_on_battery_is_not_fought(self):
         rig = Rig(self)
@@ -324,6 +374,20 @@ class WatchTests(unittest.TestCase):
         rig.living.clear()
         self.assertEqual(watch.start(rig.root, spawn=rig.spawn, install=installed.append, alive=lambda pid: pid in rig.living, ours=lambda *a: True), 5002)
 
+    def test_a_failing_record_does_not_end_the_watchdog(self):
+        rig = Rig(self)
+        rig.set(status="finished")
+        passes = []
+        real = PassiveStore.active
+
+        def active(store):
+            if not passes:
+                raise OSError("disk I/O error")
+            return real(store)
+        with patch.object(PassiveStore, "active", active), patch.object(watch, "uninstall"), patch("sys.stderr"):
+            watch.watch(rig.root, sleep=passes.append, me=1)
+        self.assertEqual(len(passes), 1)
+
     def test_start_without_a_session_says_so(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
             watch.start(tmp, spawn=lambda *a: 1, install=lambda r: None)
@@ -339,7 +403,7 @@ class InstallTests(unittest.TestCase):
             self.assertTrue(path.startswith(home))
             plist = plistlib.loads(Path(path).read_bytes())
             self.assertEqual(plist["ProgramArguments"], [sys.executable, "-m", "studio_passive_watch", "--root", str(Path(root).resolve())])
-            self.assertEqual((plist["WorkingDirectory"], plist["RunAtLoad"], plist["KeepAlive"]), (str(watch.REPO), True, False))
+            self.assertEqual((plist["WorkingDirectory"], plist["RunAtLoad"], plist["KeepAlive"]), (str(watch.REPO), True, {"SuccessfulExit": False}))
             self.assertTrue(plist["Label"].startswith("com.groundwork.passive.") and Path(path).name == plist["Label"] + ".plist")
             self.assertTrue(plist["StandardOutPath"].startswith(str(Path(root).resolve())))
             run.assert_not_called()
@@ -356,7 +420,8 @@ class InstallTests(unittest.TestCase):
             path = watch.install(root, home=home, run=run, platform="darwin")
             self.assertEqual(plistlib.loads(Path(path).read_bytes())["ProgramArguments"], expected)
             watch.install(root, run=run, platform="win32")
-            self.assertEqual(run.call_args[0][0][run.call_args[0][0].index("/TR") + 1], subprocess.list2cmdline(expected))
+            script = run.call_args[0][0][run.call_args[0][0].index("/TR") + 1].strip('"')
+            self.assertIn(subprocess.list2cmdline(expected), Path(script).read_text())
 
     def test_windows_creates_and_deletes_a_scheduled_task(self):
         run = MagicMock()
@@ -367,10 +432,12 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(args[args.index("/SC") + 1], "ONLOGON")
             self.assertIn("/F", args)
             task = args[args.index("/TR") + 1]
-            self.assertIn("studio_passive_watch.py", task)
-            self.assertIn(str(Path(root).resolve()), task)
+            self.assertTrue(task.endswith('.cmd"') and len(task) < 261)  # schtasks' limit; the long command line lives in the script
+            self.assertIn("studio_passive_watch.py", Path(task.strip('"')).read_text())
+            self.assertIn(str(Path(root).resolve()), Path(task.strip('"')).read_text())
             watch.uninstall(root, run=run, platform="win32")
             self.assertEqual(run.call_args[0][0], ["schtasks", "/Delete", "/TN", name, "/F"])
+            self.assertFalse(Path(task.strip('"')).exists())
 
     def test_failures_never_raise(self):
         with tempfile.TemporaryDirectory() as root:
@@ -381,10 +448,20 @@ class InstallTests(unittest.TestCase):
             blocker.write_text("x")
             self.assertIsNone(watch.install(root, home=blocker, platform="darwin"))
 
+    def test_linux_writes_an_autostart_entry_under_the_given_home(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as root:
+            path = Path(watch.install(root + ' "$x', home=home, platform="linux"))
+            self.assertEqual(path.parent, Path(home) / ".config" / "autostart")
+            text = path.read_text()
+            self.assertIn('" "-m" "studio_passive_watch" "--root" "', text)  # the interpreter path is escaped differently on Windows
+            self.assertIn('\\\\"\\\\$x"', text)  # a quote and a dollar sign, escaped as the Desktop Entry spec says
+            watch.uninstall(root + ' "$x', home=home, platform="linux")
+            self.assertFalse(path.exists())
+
     def test_other_platforms_do_nothing(self):
         run = MagicMock()
-        self.assertIsNone(watch.install("x", run=run, platform="linux"))
-        watch.uninstall("x", run=run, platform="linux")
+        self.assertIsNone(watch.install("x", run=run, platform="freebsd"))
+        watch.uninstall("x", run=run, platform="freebsd")
         run.assert_not_called()
 
 
@@ -399,7 +476,19 @@ class PowerTests(unittest.TestCase):
         self.assertFalse(watch.on_battery(platform="darwin", run=run(AC)))
         self.assertFalse(watch.on_battery(platform="darwin", run=run("")))
         self.assertFalse(watch.on_battery(platform="darwin", run=MagicMock(side_effect=FileNotFoundError)))
-        self.assertFalse(watch.on_battery(platform="linux", run=MagicMock(side_effect=AssertionError)))
+        self.assertFalse(watch.on_battery(platform="freebsd", run=MagicMock(side_effect=AssertionError)))
+
+    def test_on_battery_linux_reads_the_power_supplies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            supplies = Path(tmp)
+            self.assertFalse(watch.on_battery(platform="linux", supplies=supplies))  # a desktop: nothing listed
+            for name, values in (("AC", {"type": "Mains", "online": "1"}), ("BAT0", {"type": "Battery"})):
+                (supplies / name).mkdir()
+                for key, value in values.items():
+                    (supplies / name / key).write_text(value + "\n")
+            self.assertFalse(watch.on_battery(platform="linux", supplies=supplies))
+            (supplies / "AC" / "online").write_text("0\n")
+            self.assertTrue(watch.on_battery(platform="linux", supplies=supplies))
 
     def test_on_battery_windows_reads_the_line_status(self):
         import ctypes
@@ -424,9 +513,25 @@ class PowerTests(unittest.TestCase):
             self.assertTrue(watch.keep_awake(123, platform="win32"))
         call.assert_called_once_with(0x80000001)
 
+    def test_keep_awake_linux_uses_systemd_inhibit_and_release_undoes_it(self):
+        popen = MagicMock()
+        handle = watch.keep_awake(123, platform="linux", popen=popen)
+        self.assertEqual(popen.call_args[0][0][0], "systemd-inhibit")
+        self.assertIn("--pid=123", popen.call_args[0][0])
+        watch.release_awake(handle, platform="linux")
+        handle.terminate.assert_called_once()
+        self.assertIsNone(watch.keep_awake(123, platform="linux", popen=MagicMock(side_effect=FileNotFoundError)))
+
+    def test_release_awake_windows_clears_the_execution_state(self):
+        import ctypes
+        call = MagicMock()
+        with patch.object(ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(SetThreadExecutionState=call)), create=True):
+            watch.release_awake(True, platform="win32")
+        call.assert_called_once_with(0x80000000)
+
     def test_keep_awake_elsewhere_does_nothing(self):
         popen = MagicMock()
-        self.assertIsNone(watch.keep_awake(1, platform="linux", popen=popen))
+        self.assertIsNone(watch.keep_awake(1, platform="freebsd", popen=popen))
         popen.assert_not_called()
 
 
@@ -451,12 +556,13 @@ class ProcessTests(unittest.TestCase):
 
     def test_terminate_windows_uses_taskkill(self):
         run = MagicMock()
-        watch.terminate(77, run=run, platform="win32")
+        self.assertTrue(watch.terminate(77, run=run, platform="win32", is_alive=lambda pid: False))
         self.assertEqual(run.call_args[0][0], ["taskkill", "/PID", "77", "/T", "/F"])
 
     def test_real_detached_spawn_runs_logs_and_exits(self):
         from studio_passive import merge_plan as merge
-        with tempfile.TemporaryDirectory() as tmp:
+        # Windows CI: something still holds child.log after the child has exited and every assertion passed; not yet explained
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = PassiveStore(tmp)
             sid = store.create(merge({"stop": {"duration": 0.0001, "unit": "minutes", "patience_rounds": 0}, "teacher": {"polish": False, "lessons": False}, "plateau": {"checks": 2, "max_steps": 5}}))
             code = ("import sys, studio_passive as p\n"
@@ -468,12 +574,33 @@ class ProcessTests(unittest.TestCase):
             pid = watch.spawn([sys.executable, "-c", code, tmp, sid], log, watch.REPO)
             self.addCleanup(lambda: watch.alive(pid) and os.kill(pid, 9))
             self.assertGreater(pid, 0)
-            deadline = time.time() + 20
+            deadline = time.time() + 120  # a cold torch import on a Windows runner takes most of a minute
             while watch.alive(pid) and time.time() < deadline:
                 time.sleep(0.05)
-            self.assertFalse(watch.alive(pid), log.read_text())
+            late = watch.alive(pid)
+            if late:
+                watch.terminate(pid)  # or Windows cannot delete the log it still holds, which hides this failure
+            self.assertFalse(late, log.read_text())
             self.assertIn("child done", log.read_text())
             self.assertEqual(store.get(sid)["status"], "finished")
+
+    def test_spawn_reaps_finished_children_and_restarts_a_huge_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "trainer.log"
+            log.write_bytes(b"x" * (watch.LOG_LIMIT + 1))
+            first = watch.spawn([sys.executable, "-c", "print('hello')"], log, watch.REPO)
+            watch._children[first].wait(20)
+            self.assertEqual(log.read_text().strip(), "hello")
+            second = watch.spawn([sys.executable, "-c", "pass"], log, watch.REPO)
+            watch._children[second].wait(20)
+            self.assertNotIn(first, watch._children)
+
+    def test_windows_reads_a_command_line_once_per_process(self):
+        run = MagicMock(return_value=SimpleNamespace(stdout="python -m studio_passive_watch\n"))
+        with patch.object(sys, "platform", "win32"), patch.object(watch, "_created", lambda pid: 1234), patch.object(watch.subprocess, "run", run), \
+                patch.object(watch.subprocess, "CREATE_NO_WINDOW", 0, create=True), patch.dict(watch._lines, clear=True):
+            self.assertEqual([watch.command_line(9) for _ in range(3)], ["python -m studio_passive_watch"] * 3)
+        run.assert_called_once()
 
     def test_cli_exits_at_once_without_a_session(self):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as home:

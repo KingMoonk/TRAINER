@@ -1,4 +1,5 @@
 """Offscreen checks for the Panda3D network-brain viewer (demo selftest + link protocol)."""
+from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ SCRIPT = ROOT / "studio_brain3d.py"
 FAKE_LINK_SCRIPT = r"""
 import sys
 sys.path.insert(0, %r)
+import torch  # before panda3d: Windows DLL load order (see studio_brain3d)
 from panda3d.core import loadPrcFileData
 loadPrcFileData("", "window-type offscreen\nframebuffer-hardware 0\naudio-library-name null\nsync-video 0")
 import studio_brain3d as sb
@@ -48,6 +50,22 @@ assert "block" not in link.sent[0], f"module_swap message should not contain 'bl
 assert len(app.ids) == 4
 # invalid head values are skipped: width 64 has no divisor between 8 and 16 except 16
 assert sb.valid_heads(64, 8, 1) == 16 and sb.valid_heads(48, 4, 1) == 6 and sb.valid_heads(64, 16, 1) is None
+# page -> viewer: step the head's forward pass, jump the scrubber, show gradients, feed training stats
+app.set_level("Head")
+app.handle_message({"type": "step", "delta": 1})
+assert app.head_stage == "values", app.head_stage
+app.handle_message({"type": "step", "stage": "scores"})
+assert app.head_stage == "scores"
+app.handle_message({"type": "show", "what": "gradient"})
+assert app.weight_kind == "gradient"
+app.handle_message({"type": "stats", "step": 7, "total": 10, "loss": 1.5, "lr": 1e-3})
+assert "step 7/10" in app.hud["text"] and "loss 1.5000" in app.hud["text"], app.hud["text"]
+app.snapshot_paths = ["a", "b", "c"]
+reads = []
+app.read_snapshot = reads.append
+app.handle_message({"type": "scrub", "index": 9})
+assert reads == ["c"] and app.snapshot_index == 2 and link.sent[-1] == {"type": "replay_state", "index": 2, "count": 3}, link.sent[-1]
+app.set_level("Model")
 # block count change re-frames the column but keeps the orbit angle and pitch
 cam = (app.cam_h, app.cam_p)
 spec2 = sb.sample_spec(5)
@@ -60,6 +78,18 @@ cam = (app.cam_h, app.cam_p, app.cam_d, app.cam_t.getZ())
 link.inbox.append({"type": "spec", "spec": sb.sample_spec(5), "selected": None})
 app.taskMgr.step()
 assert (app.cam_h, app.cam_p, app.cam_d, app.cam_t.getZ()) == cam
+# a bad message is reported in the HUD instead of crashing the viewer
+link.inbox.append({"type": "selection", "selection": {"bogus": 1}})
+app.taskMgr.step()
+assert "Ignored a selection message" in app.hud["text"], app.hud["text"]
+# weight edits need a cell from a loaded snapshot, and are refused rather than sent blind
+app.edit_weight(.01)
+assert link.sent[-1]["type"] != "edit_weight" and not app.edit_pending
+# the studio going away is noticed
+link.connected = False
+app.taskMgr.step()
+assert app.hud["text"] == "studio disconnected", app.hud["text"]
+link.connected = True
 link.inbox.append({"type": "quit"})
 try:
     for _ in range(5):
@@ -70,6 +100,42 @@ assert link.sent[-1] == {"type": "closed"}, link.sent[-1]
 print("FAKELINK-OK")
 """
 
+
+# Weight edits target an explicit highlighted cell, one at a time; a new snapshot keeps the chosen matrix.
+EDIT_SCRIPT = r"""
+import sys, tempfile
+sys.path.insert(0, %r)
+import torch  # before panda3d: Windows DLL load order (see studio_brain3d)
+from panda3d.core import loadPrcFileData
+loadPrcFileData("", "window-type offscreen\nframebuffer-hardware 0\naudio-library-name null\nsync-video 0")
+import studio_brain3d as sb
+from studio_compile import CompiledModel
+from studio_snapshot import one_step, save
+from studio_spec import default_spec, validate_spec
+spec = default_spec(); spec["dims"].update(d_model=16, n_layer=2, n_ctx=32, dropout=0.); spec = validate_spec(spec)
+snap = one_step(CompiledModel(spec, 9, device="cpu"), [[1, 2, 3]], [[2, 3, 4]])
+d = tempfile.mkdtemp(); p1 = str(save(d + "/a", snap)); p2 = str(save(d + "/b", snap))
+class Link:
+    connected = True
+    def __init__(self): self.inbox, self.sent = [], []
+    def send(self, m): self.sent.append(m)
+    def poll(self):
+        out, self.inbox = self.inbox, []; return out
+link = Link(); app = sb.BrainApp(link=link, demo=False)
+link.inbox.append({"type": "snapshot", "path": p1}); app.taskMgr.step()
+names = app.scene.frame('Weights')['available']; pick = names[-1]
+app.select_matrix(pick); app.set_level('Weights')
+app.move_cell(1, 0); app.move_cell(0, 2)
+app.edit_weight(.01); app.edit_weight(.01)
+edits = [m for m in link.sent if m["type"] == "edit_weight"]
+assert len(edits) == 1 and edits[0]["weight"] == pick and (edits[0]["row"], edits[0]["column"]) == (1, 2), edits
+link.inbox.append({"type": "snapshot", "path": p2}); link.inbox.append({"type": "weight_edit_done", "ok": True, "message": "saved"}); app.taskMgr.step()
+assert app.scene.selection.weight == pick, app.scene.selection.weight
+assert not app.edit_pending
+app.set_level('Head'); app.set_head_stage('scale'); app.set_head_stage('mask')
+print("EDIT-OK")
+app.destroy()
+"""
 
 class Brain3DTests(unittest.TestCase):
     @classmethod
@@ -97,6 +163,12 @@ class Brain3DTests(unittest.TestCase):
                               timeout=180, cwd=str(ROOT))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("FAKELINK-OK", proc.stdout)
+
+    def test_weight_edits_use_the_selected_cell(self):
+        proc = subprocess.run([sys.executable, "-c", EDIT_SCRIPT % str(ROOT)], capture_output=True, text=True,
+                              timeout=180, cwd=str(ROOT))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("EDIT-OK", proc.stdout)
 
     def test_real_bridge_quit_sends_closed(self):
         try:

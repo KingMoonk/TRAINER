@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import torch
+
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -21,19 +23,9 @@ class LayerNorm(Layer):
         self.add("b", (dims.d_model,), "bias")
 
     def forward(self, x, ctx):
-        centered = x - x.mean(axis=-1, keepdims=True)
-        inv = 1. / self.xp.sqrt((centered * centered).mean(axis=-1, keepdims=True) + self.eps)
-        normalized = centered * inv
-        self.cache = (normalized, inv)
-        return normalized * self.params["g"] + self.params["b"]
-
-    def backward(self, dy):
-        normalized, inv = self.cache
-        axes = tuple(range(dy.ndim - 1))
-        self.grads["g"] += (dy * normalized).sum(axis=axes)
-        self.grads["b"] += dy.sum(axis=axes)
-        dx = dy * self.params["g"]
-        return inv * (dx - dx.mean(axis=-1, keepdims=True) - normalized * (dx * normalized).mean(axis=-1, keepdims=True))
+        centered = x - x.mean(dim=-1, keepdim=True)
+        inv = 1. / torch.sqrt((centered * centered).mean(dim=-1, keepdim=True) + self.eps)
+        return centered * inv * self.params["g"] + self.params["b"]
 
 
 @register
