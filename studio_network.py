@@ -1411,8 +1411,11 @@ class NetworkMixin:
         self.net_ensure()
         kind = message.get("type")
         if kind == "module_swap":
-            index, slot, entry = message.get("block"), message.get("slot"), message.get("entry")
-            if not isinstance(index, int) or slot not in ("norm", "mixer", "channel") or not isinstance(entry, dict):
+            block_id, slot, entry = message.get("block_id"), message.get("slot"), message.get("entry")
+            if not block_id or slot not in ("norm", "mixer", "channel") or not isinstance(entry, dict):
+                return False
+            index = self._find(self.net_spec, block_id)
+            if index is None:
                 return False
             applied = self.net_apply_model_edit(lambda draft: set_block(draft, index, slot, entry),
                                                 f"viewer swap block {index + 1} {slot}")

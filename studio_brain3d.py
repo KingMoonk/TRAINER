@@ -237,7 +237,7 @@ class _SceneRenderer:
         if value is None:
             return
         config = dict(block['mixer']['config'], heads=value)
-        self.send({'type': 'module_swap', 'block': self.scene.selection.layer, 'block_id': block['id'],
+        self.send({'type': 'module_swap', 'block_id': block['id'],
                    'slot': 'mixer', 'entry': {'id': block['mixer']['id'], 'config': config}})
         if self.demo:
             self.scene.swap(self.scene.selection.layer, 'mixer', {'id': block['mixer']['id'], 'config': config})
@@ -248,7 +248,7 @@ class _SceneRenderer:
         slot = 'channel' if part == 'mlp' else 'mixer'
         enabled = block[slot]['id'] == 'none'
         entry = ({'id': 'mlp_gelu'} if part == 'mlp' else {'id': 'attention', 'config': {'heads': 4}}) if enabled else {'id': 'none'}
-        self.send({'type': 'module_swap', 'block': self.scene.selection.layer, 'block_id': block['id'],
+        self.send({'type': 'module_swap', 'block_id': block['id'],
                    'slot': slot, 'entry': entry})
 
     def cmd_add(self):
@@ -261,7 +261,7 @@ class _SceneRenderer:
         if not hasattr(self, 'ids') or not self.ids:
             return
         bid = self.ids[self.scene.selection.layer]
-        self.send({'type': 'module_swap', 'block': self.scene.selection.layer, 'block_id': bid,
+        self.send({'type': 'module_swap', 'block_id': bid,
                    'slot': 'mixer', 'entry': {'id': module}})
         if self.demo:
             try:

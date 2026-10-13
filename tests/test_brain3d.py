@@ -44,6 +44,7 @@ kinds = [m["type"] for m in link.sent]
 assert kinds == ["module_swap", "module_swap", "add_block", "remove_block"], kinds
 assert link.sent[0]["slot"] == "mixer" and link.sent[0]["entry"]["config"]["heads"] == 16, link.sent[0]  # 8 -> 16 (width 64)
 assert link.sent[1]["slot"] == "channel" and link.sent[1]["entry"]["id"] == "none", link.sent[1]
+assert "block" not in link.sent[0], f"module_swap message should not contain 'block' key: {link.sent[0]}"
 assert len(app.ids) == 4
 # invalid head values are skipped: width 64 has no divisor between 8 and 16 except 16
 assert sb.valid_heads(64, 8, 1) == 16 and sb.valid_heads(48, 4, 1) == 6 and sb.valid_heads(64, 16, 1) is None
