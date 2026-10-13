@@ -41,6 +41,8 @@ class QueueState:
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False
+    blocked: str | None = None  # why the plan forbids training right now (hours / idle / battery)
+    stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
 

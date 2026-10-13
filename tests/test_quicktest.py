@@ -82,13 +82,15 @@ class Handlers(unittest.TestCase):
             runner = Runner(Path(tmp) / 'queue.json', HANDLERS, services, tick=.02)
             runner.set_plan(Plan(hours='any', idle_only=False, pause_on_battery=False))
             runner.start()
-            self.addCleanup(runner.shutdown)
             seen = []
             runner.subscribe(lambda kind, payload: seen.append((kind, payload)))
-            runner.enqueue(job)
-            end = __import__('time').time() + 90
-            while __import__('time').time() < end and job.status in ('waiting', 'running'):
-                __import__('time').sleep(.05)
+            try:
+                runner.enqueue(job)
+                end = __import__('time').time() + 90
+                while __import__('time').time() < end and job.status in ('waiting', 'running'):
+                    __import__('time').sleep(.05)
+            finally:
+                runner.shutdown()  # before the folder goes: Windows cannot remove files the runner still writes
             return job, seen
 
     def test_quicktest_handler_completes(self):

@@ -561,7 +561,8 @@ class ProcessTests(unittest.TestCase):
 
     def test_real_detached_spawn_runs_logs_and_exits(self):
         from studio_passive import merge_plan as merge
-        with tempfile.TemporaryDirectory() as tmp:
+        # Windows CI: something still holds child.log after the child has exited and every assertion passed; not yet explained
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = PassiveStore(tmp)
             sid = store.create(merge({"stop": {"duration": 0.0001, "unit": "minutes", "patience_rounds": 0}, "teacher": {"polish": False, "lessons": False}, "plateau": {"checks": 2, "max_steps": 5}}))
             code = ("import sys, studio_passive as p\n"

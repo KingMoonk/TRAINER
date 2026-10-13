@@ -31,6 +31,7 @@ class DataPagesTest(unittest.TestCase):
         self.addCleanup(self.app.destroy)
 
     def click(self, widget):
+        self.app.update()  # an unmapped widget drops generated events
         widget.event_generate("<Button-1>")
         self.app.update()
 
