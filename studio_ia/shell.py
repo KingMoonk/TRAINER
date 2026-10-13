@@ -1,6 +1,7 @@
 """Studio window: sidebar (four areas + machine strip) and the page router."""
 from __future__ import annotations
 
+import gc
 import queue
 import threading
 import tkinter as tk
@@ -241,6 +242,10 @@ class Studio(tk.Tk):
         self.load_title.configure(text=title or "Working")
         self.loader.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.loader.lift()
+        if not self._waiting:
+            # Tk objects may only be freed on the Tk thread, and the collector runs on whichever thread allocates:
+            # hold it while the worker is busy. ponytail: the queue's own training threads are not covered.
+            gc.disable()
         self.jobs.put((work, then))
         self._waiting += 1
         if self._waiting == 1:
@@ -257,6 +262,7 @@ class Studio(tk.Tk):
                 break
             self._waiting -= 1
             if not self._waiting:
+                gc.enable()
                 self.loader.place_forget()
             if error is None:
                 then(value)
@@ -273,6 +279,7 @@ class Studio(tk.Tk):
 
     def destroy(self):
         self.jobs.put((None, None))
+        gc.enable()
         self.unsubscribe()
         close = getattr(self.services, "close", None)
         if close:
