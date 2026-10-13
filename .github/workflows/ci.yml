@@ -36,6 +36,8 @@ jobs:
       - run: python -m compileall -q .
       # only test_gpu should skip here (no CUDA); -v lists every test so a skip is visible in the log
       - run: python -m unittest discover -s tests -v
+      # tests that open windows live in gui_*.py so a plain local discover never launches them
+      - run: python -m unittest discover -s tests -p "gui_*.py" -v
       # real training run on a committed sample (about 1 s of compute)
       - run: python -m unittest tests.e2e_train -v
         timeout-minutes: 5

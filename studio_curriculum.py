@@ -20,6 +20,7 @@ from pathlib import Path
 from studio_core import atomic_json, fingerprint, now, uid
 from studio_model import train, validate_config
 from studio_planning import build_training_set
+from studio_spec import is_model_spec
 
 STAGE_ORDER = ("language", "instructions", "code", "reasoning", "conversation", "knowledge")
 STAGE_TITLES = {"language": "Plain language", "instructions": "Short instructions", "code": "Code",
@@ -148,8 +149,12 @@ def _stage_config(state, stage, index):
         spec = json.loads(spec) if spec.strip() not in ("", "None", "null") else None
     if isinstance(spec, dict):
         spec = copy.deepcopy(spec)
-        spec["embedding"]["tokenizer"] = "byte"
-        spec["embedding"]["context"] = context
+        if is_model_spec(spec):
+            spec["tokenizer"] = {"id": "byte"}
+            spec["dims"]["n_ctx"] = context
+        else:
+            spec["embedding"]["tokenizer"] = "byte"
+            spec["embedding"]["context"] = context
     cfg["architecture"] = spec
     steps = int(stage["steps"])
     cfg.update(tokenizer="byte", context=context, steps=steps, learning_rate=float(stage["learning_rate"]),

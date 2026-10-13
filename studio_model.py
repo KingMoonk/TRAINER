@@ -33,10 +33,18 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
 
 import numpy as np
 
-from studio_arch import parameter_breakdown, parameter_names, spec_from_config, structure_key, transplant, validate_spec
+from studio_arch import parameter_breakdown, validate_spec
 from studio_core import atomic_json, fingerprint, messages_of, now, replace_file
-from studio_backend import get_backend
+from studio_compile import CompiledModel, transplant
+from studio_estimate import estimate
+from studio_modules.objective.ce import cross_entropy  # noqa: F401  (part of this module's API)
+from studio_modules.ops import softmax as _softmax
+from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
+from studio_modules.tokenizer.byte import Tokenizer
 from studio_planning import merge_duplicate_lineage
+from studio_registry import for_slot
+from studio_slots import ASSISTANT, BOS, EOS, OFFSET, PAD, SYSTEM, UNK, USER
+from studio_spec import config_from_spec, is_model_spec, model_spec, module_of, structure_key, validate_spec as validate_model_spec
 
 DEFAULT_CONFIG = {
     "name": "My first transformer", "tokenizer": "byte", "width": 64,
@@ -50,8 +58,6 @@ DEFAULT_CONFIG = {
 # tokens but remove both problems. Context 256 lets most question+answer pairs fit one window, and
 # anchored windows with the assistant objective train answers only with their prompt in view.
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
-PAD, BOS, EOS, USER, ASSISTANT, SYSTEM, UNK = range(7)
-OFFSET = 7
 WINDOWINGS = ("anchored", "sequential")
 
 
@@ -62,7 +68,14 @@ def validate_config(config):
         # Form-driven callers may hand back "", "None" or a JSON string instead of a dict.
         spec = None if spec.strip() in ("", "None", "null") else json.loads(spec)
         cfg["architecture"] = spec
-    if spec is not None:
+    if is_model_spec(spec):
+        # A ModelSpec is authoritative for structure and for its optimizer and schedule settings; the display
+        # fields are derived from it. Values passed alongside it (a curriculum stage's learning rate) still win.
+        derived = config_from_spec(spec)
+        spec = derived.pop("architecture")
+        cfg.update({key: value for key, value in derived.items()
+                    if key in DEFAULT_CONFIG and (key in ARCHITECTURE_KEYS[:6] or key not in config)}, architecture=spec)
+    elif spec is not None:
         # A per-block spec is authoritative for structure; layers/heads/expansion are derived for display.
         spec = validate_spec(spec)
         first, embedding = spec["blocks"][0], spec["embedding"]
@@ -71,6 +84,7 @@ def validate_config(config):
                    heads=first["attention"]["heads"], expansion=first["mlp"]["expansion"])
         if "dropout" not in config:
             cfg["dropout"] = embedding["dropout"]
+    model_spec_given = is_model_spec(spec)
     structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 1024), ("expansion", 1, 8)]
     for key, low, high in structural + [("batch_size", 1, 128), ("accumulation", 1, 64),
                                         ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647)]:
@@ -83,7 +97,7 @@ def validate_config(config):
             raise ValueError(f"{key} must be between {low} and {high}.")
     if spec is None and cfg["width"] % cfg["heads"]:
         raise ValueError("Embedding width must be divisible by the attention head count.")
-    if cfg["tokenizer"] not in {"byte", "character"} or cfg["objective"] not in {"all", "assistant"}:
+    if cfg["tokenizer"] not in ({m.short for m in for_slot("tokenizer")} if model_spec_given else {"byte", "character"}) or cfg["objective"] not in {"all", "assistant"}:
         raise ValueError("Invalid tokenizer or objective.")
     if cfg["windowing"] not in WINDOWINGS:
         raise ValueError("Windowing must be anchored or sequential.")
@@ -93,350 +107,45 @@ def validate_config(config):
 
 
 def effective_spec(cfg):
-    """The per-block spec a validated config describes (legacy uniform configs are converted)."""
-    return cfg.get("architecture") or spec_from_config(cfg)
+    """The ModelSpec a validated config trains (older configs and architectures are converted)."""
+    return model_spec(cfg)
 
-
-class Tokenizer:
-    def __init__(self, kind="byte", characters=None):
-        self.kind = kind
-        self.characters = list(characters or [])
-        self.lookup = {char: i + OFFSET for i, char in enumerate(self.characters)}
-        self.vocab_size = (256 if kind == "byte" else len(self.characters)) + OFFSET
-
-    @classmethod
-    def fit(cls, kind, examples):
-        if kind == "byte":
-            return cls("byte")
-        characters = set()
-        for example in examples:
-            texts = [example["text"]] if example.get("text") else [m["content"] for m in messages_of(example)]
-            for text in texts:
-                characters.update(text)
-            if len(characters) > 16384:
-                raise ValueError("Use the byte tokenizer for a vocabulary larger than 16,384 characters.")
-        return cls("character", sorted(characters))
-
-    def encode(self, text):
-        if self.kind == "byte":
-            return [int(b) + OFFSET for b in text.encode("utf-8")]
-        return [self.lookup.get(char, UNK) for char in text]
-
-    def decode(self, tokens):
-        if self.kind == "byte":
-            return bytes(int(t) - OFFSET for t in tokens if OFFSET <= t < self.vocab_size).decode("utf-8", errors="replace")
-        return "".join(self.characters[int(t) - OFFSET] for t in tokens if OFFSET <= t < self.vocab_size)
-
-    def serialize(self):
-        return {"kind": self.kind, "characters": self.characters}
-
-    @classmethod
-    def restore(cls, data):
-        if data.get("kind") not in {"byte", "character"}:
-            raise ValueError("Invalid tokenizer in checkpoint.")
-        return cls(data["kind"], data.get("characters", []))
 
 
 def softmax(x, xp=np):
-    shifted = x - xp.max(x, axis=-1, keepdims=True)
-    exp = xp.exp(shifted)
-    return exp / exp.sum(axis=-1, keepdims=True)
+    return _softmax(x, xp)
 
 
-def cross_entropy(logits, targets, gradient=False, xp=np):
-    flat = logits.reshape(-1, logits.shape[-1])
-    labels = xp.asarray(targets).reshape(-1)
-    valid = labels != -100
-    count = int(valid.sum())
-    if count == 0:
-        raise ValueError("This batch has no target tokens.")
-    shifted = flat - flat.max(axis=-1, keepdims=True)
-    exponential = xp.exp(shifted)
-    denominator = exponential.sum(axis=-1, keepdims=True)
-    rows = xp.flatnonzero(valid)
-    loss = float((xp.log(denominator[rows, 0]) - shifted[rows, labels[rows]]).mean())
-    if not gradient:
-        return loss
-    derivative = exponential / denominator
-    derivative[rows, labels[rows]] -= 1
-    derivative[~valid] = 0
-    derivative /= count
-    return loss, derivative.reshape(logits.shape)
+class ScratchTransformer(CompiledModel):
+    """The model a training config describes: its ModelSpec, compiled (see studio_compile).
 
-
-class ScratchTransformer:
-    """Pre-norm causal transformer with explicit forward and reverse passes.
-
-    Every block is described by the architecture spec: optional multi-head attention
-    and an optional MLP with 1-4 hidden layers. A legacy uniform config is the
-    special case of attention + one GELU layer in every block.
+    Older configs (layers/heads/expansion, or a per-block "groundwork-arch/1" architecture) are converted
+    to the equivalent ModelSpec and produce exactly the parameter names of their checkpoints.
     """
     def __init__(self, config, vocabulary):
         self.config = validate_config(config)
         cfg = self.config
-        work = cfg["batch_size"] * cfg["context"] * cfg["width"] * max(1, cfg["layers"])
-        self.backend = get_backend(cfg["device"], work=work)
-        self.xp = xp = self.backend.xp
-        # Keeping the stochastic stream on CPU makes old checkpoints and RNG state
-        # portable between devices. Parameters and all learning operations live on xp.
-        self.rng = np.random.default_rng(cfg["seed"])
-        self.p = {}
-        self.spec = effective_spec(cfg)
-        self.blocks = [{"attention": b["attention"]["enabled"], "heads": b["attention"]["heads"],
-                        "mlp": b["mlp"]["enabled"], "layers": b["mlp"]["layers"], "activation": b["mlp"]["activation"],
-                        "id": b["id"]} for b in self.spec["blocks"]]
-        self.keep_tape, self.last_tape = False, None
-        # parameter_names is ordered like the legacy constructor drew from the RNG: weights in order, biases zero.
-        for name, shape in parameter_names(self.spec, vocabulary).items():
-            if name.endswith(".w") or name in ("token", "position"):
-                self.p[name] = xp.asarray(self.rng.normal(0, .02, shape).astype(np.float32))
-            elif name.endswith(".g"):
-                self.p[name] = xp.ones(shape, dtype=xp.float32)
-            else:
-                self.p[name] = xp.zeros(shape, dtype=xp.float32)
-        self.g = {key: xp.zeros_like(value) for key, value in self.p.items()}
-
-    @property
-    def parameter_count(self):
-        return sum(value.size for value in self.p.values())
-
-    def zero_grad(self):
-        for grad in self.g.values():
-            grad.fill(0)
-
-    def linear(self, x, name):
-        output = x @ self.p[name + ".w"]
-        if name + ".b" in self.p:
-            output = output + self.p[name + ".b"]
-        return output
-
-    def linear_back(self, dy, x, name):
-        self.g[name + ".w"] += x.reshape(-1, x.shape[-1]).T @ dy.reshape(-1, dy.shape[-1])
-        if name + ".b" in self.g:
-            self.g[name + ".b"] += dy.sum(axis=tuple(range(dy.ndim - 1)))
-        return dy @ self.p[name + ".w"].T
-
-    def norm(self, x, name):
-        centered = x - x.mean(axis=-1, keepdims=True)
-        inv = 1. / self.xp.sqrt((centered * centered).mean(axis=-1, keepdims=True) + 1e-5)
-        normalized = centered * inv
-        return normalized * self.p[name + ".g"] + self.p[name + ".b"], (normalized, inv)
-
-    def norm_back(self, dy, cache, name):
-        normalized, inv = cache
-        axes = tuple(range(dy.ndim - 1))
-        self.g[name + ".g"] += (dy * normalized).sum(axis=axes)
-        self.g[name + ".b"] += dy.sum(axis=axes)
-        dx = dy * self.p[name + ".g"]
-        return inv * (dx - dx.mean(axis=-1, keepdims=True) - normalized * (dx * normalized).mean(axis=-1, keepdims=True))
-
-    def dropout(self, x, training):
-        probability = self.config["dropout"]
-        if training and probability:
-            # Same CPU random stream as before; only the boolean keep-mask crosses to the device (1 byte per value, not 4).
-            mask = self.xp.asarray(self.rng.random(x.shape) >= probability).astype(x.dtype) / (1 - probability)
-            return x * mask, mask
-        return x, None
-
-    @staticmethod
-    def drop_back(dy, mask):
-        return dy * mask if mask is not None else dy
-
-    def activate(self, pre, kind):
-        """Activation plus the value its derivative needs (tanh for GELU)."""
-        if kind == "relu":
-            return self.xp.maximum(pre, 0), None
-        tanh = self.xp.tanh(math.sqrt(2 / math.pi) * (pre + .044715 * pre ** 3))
-        return .5 * pre * (1 + tanh), tanh
-
-    @staticmethod
-    def activate_derivative(pre, tanh, kind):
-        if kind == "relu":
-            return (pre > 0).astype(pre.dtype)
-        return .5 * (1 + tanh) + .5 * pre * (1 - tanh * tanh) * math.sqrt(2 / math.pi) * (1 + 3 * .044715 * pre ** 2)
-
-    def forward(self, ids, training=False, tape=False):
-        xp = self.xp
-        ids = xp.asarray(ids, dtype=xp.int64)
-        batch, length = ids.shape
-        cfg = self.config
-        if length > cfg["context"]:
-            raise ValueError("Sequence exceeds the context length.")
-        x = self.p["token"][ids] + self.p["position"][:length]
-        x, embedding_mask = self.dropout(x, training)
-        block_cache = []
-        d = cfg["width"]
-        causal = xp.triu(xp.ones((length, length), dtype=bool), 1)
-        for i, block in enumerate(self.blocks):
-            name = f"block{i}"
-            entry = {}
-            residual = x
-            if block["attention"]:
-                h = block["heads"]
-                depth = d // h
-                normalized1, norm1_cache = self.norm(x, name + ".n1")
-                qkv = self.linear(normalized1, name + ".qkv")
-                q, k, v = [part.reshape(batch, length, h, depth).transpose(0, 2, 1, 3) for part in xp.split(qkv, 3, axis=-1)]
-                scores = (q @ k.swapaxes(-1, -2)) / math.sqrt(depth)
-                scores = xp.where(causal, -1e9, scores)
-                probabilities = softmax(scores, xp)
-                attention, attention_mask = self.dropout(probabilities, training)
-                context = (attention @ v).transpose(0, 2, 1, 3).reshape(batch, length, d)
-                residual = x + self.linear(context, name + ".proj")
-                entry["attention"] = (normalized1, norm1_cache, q, k, v, probabilities, attention, attention_mask, context)
-            if block["mlp"]:
-                kind = block["activation"]
-                normalized2, norm2_cache = self.norm(residual, name + ".n2")
-                pre = self.linear(normalized2, name + ".f1")
-                act, tanh = self.activate(pre, kind)
-                pres, tanhs, acts = [pre], [tanh], [act]
-                for j in range(1, block["layers"]):
-                    pre = self.linear(act, f"{name}.fh{j}")
-                    act, tanh = self.activate(pre, kind)
-                    pres.append(pre)
-                    tanhs.append(tanh)
-                    acts.append(act)
-                feedforward, ff_mask = self.dropout(self.linear(act, name + ".f2"), training)
-                x = residual + feedforward
-                entry["mlp"] = (normalized2, norm2_cache, pres, tanhs, acts, ff_mask)
-            else:
-                x = residual
-            if tape:
-                entry["out"] = x
-                block_cache.append(entry)
-        hidden, final_cache = self.norm(x, "final")
-        logits = hidden @ self.p["token"].T
-        if tape:
-            return logits, (ids, embedding_mask, block_cache, hidden, final_cache)
-        return logits
-
-    def loss(self, x, y):
-        return cross_entropy(self.forward(x), y, xp=self.xp)
-
-    def loss_and_backward(self, ids, targets, scale=1.0):
-        logits, cache = self.forward(ids, training=True, tape=True)
-        loss, dlogits = cross_entropy(logits, targets, gradient=True, xp=self.xp)
-        dlogits *= scale
-        self.backward(dlogits, cache)
-        if self.keep_tape:
-            self.last_tape = cache
-        return loss
-
-    def backward(self, dlogits, cache):
-        """Accumulate parameter gradients for any loss expressed as d(loss)/d(logits)."""
-        ids, embedding_mask, blocks, hidden, final_cache = cache
-        batch, length = ids.shape
-        d = self.config["width"]
-        self.g["token"] += dlogits.reshape(-1, dlogits.shape[-1]).T @ hidden.reshape(-1, d)
-        dx = self.norm_back(dlogits @ self.p["token"], final_cache, "final")
-        for i in reversed(range(len(self.blocks))):
-            name, block, entry = f"block{i}", self.blocks[i], blocks[i]
-            dresidual = dx
-            if block["mlp"]:
-                kind = block["activation"]
-                n2, nc2, pres, tanhs, acts, ff_mask = entry["mlp"]
-                dact = self.linear_back(self.drop_back(dx, ff_mask), acts[-1], name + ".f2")
-                for j in reversed(range(block["layers"])):
-                    dpre = dact * self.activate_derivative(pres[j], tanhs[j], kind)
-                    dact = self.linear_back(dpre, n2 if j == 0 else acts[j - 1], name + (".f1" if j == 0 else f".fh{j}"))
-                dresidual = dx + self.norm_back(dact, nc2, name + ".n2")
-            if block["attention"]:
-                h = block["heads"]
-                depth = d // h
-                n1, nc1, q, k, v, probabilities, attention, attention_mask, context = entry["attention"]
-                dcontext = self.linear_back(dresidual, context, name + ".proj").reshape(batch, length, h, depth).transpose(0, 2, 1, 3)
-                dv = attention.swapaxes(-1, -2) @ dcontext
-                dattention = self.drop_back(dcontext @ v.swapaxes(-1, -2), attention_mask)
-                dscores = probabilities * (dattention - (dattention * probabilities).sum(axis=-1, keepdims=True)) / math.sqrt(depth)
-                dq = dscores @ k
-                dk = dscores.swapaxes(-1, -2) @ q
-                dqkv = self.xp.concatenate([value.transpose(0, 2, 1, 3).reshape(batch, length, d) for value in (dq, dk, dv)], axis=-1)
-                dn1 = self.linear_back(dqkv, n1, name + ".qkv")
-                dx = dresidual + self.norm_back(dn1, nc1, name + ".n1")
-            else:
-                dx = dresidual
-        dx = self.drop_back(dx, embedding_mask)
-        self.xp.add.at(self.g["token"], ids.reshape(-1), dx.reshape(-1, d))
-        self.g["position"][:length] += dx.sum(axis=0)
-
-    def telemetry(self, tape, sample=2):
-        """Cheap per-component statistics from a forward tape plus current gradients (call before the update)."""
-        xp, to_cpu = self.xp, self.backend.to_cpu
-        names = list(self.g)
-        norms = to_cpu(xp.stack([xp.sum(self.g[n] * self.g[n], dtype=xp.float64) for n in names]))
-        squared = dict(zip(names, (float(v) for v in norms)))
-
-        def grad_norm(keys):
-            return math.sqrt(sum(squared[n] for n in keys))
-
-        def rms(array):
-            return float(xp.sqrt((array[:sample] ** 2).mean()))
-
-        ids, _, blocks, _, _ = tape
-        embedded = self.p["token"][ids[:sample]] + self.p["position"][:ids.shape[1]]
-        result = {"embedding": {"grad_norm": grad_norm(("token", "position")), "rms": rms(embedded)},
-                  "blocks": [], "output": {"grad_norm": grad_norm(("final.g", "final.b"))}}
-        attention_parts = ("n1", "qkv", "proj")
-        for i, (block, entry) in enumerate(zip(self.blocks, blocks)):
-            prefix = f"block{i}."
-            own = [n for n in squared if n.startswith(prefix)]
-            attention = mlp = None
-            if block["attention"]:
-                probabilities = entry["attention"][5][:sample]
-                entropy = -(probabilities * xp.log(probabilities + 1e-12)).sum(axis=-1).mean(axis=(0, 2))
-                attention = {"entropy": [float(v) for v in to_cpu(entropy)],
-                             "grad_norm": grad_norm([n for n in own if n.split(".")[1] in attention_parts])}
-            if block["mlp"]:
-                pres, acts = entry["mlp"][2], entry["mlp"][4]
-                activity = xp.abs(acts[-1][:sample, :, :48]).mean(axis=(0, 1))
-                peak = float(activity.max())
-                mlp = {"neurons": [float(v) / peak if peak > 0 else 0. for v in to_cpu(activity)],
-                       "active_fraction": float((pres[-1][:sample] > 0).mean()),
-                       "grad_norm": grad_norm([n for n in own if n.split(".")[1] not in attention_parts])}
-            result["blocks"].append({"id": block["id"], "index": i, "residual_rms": rms(entry["out"]),
-                                     "attention": attention, "mlp": mlp})
-        return result
-
-    def load_weights(self, weights):
-        if set(weights) != set(self.p):
-            raise ValueError("Checkpoint parameter names do not match the architecture.")
-        for key, value in weights.items():
-            value = self.xp.asarray(value)
-            if value.shape != self.p[key].shape or not bool(self.xp.isfinite(value).all()):
-                raise ValueError(f"Invalid checkpoint parameter: {key}")
-            self.p[key][...] = value
+        super().__init__(model_spec(cfg), vocabulary, seed=cfg["seed"], device=cfg["device"], batch_size=cfg["batch_size"])
 
 
-class AdamW:
+class AdamW(_AdamW):
+    """AdamW with the engine's default settings, attached to a model (the fine-tuning trainers use this directly)."""
     def __init__(self, model, weight_decay=.01):
-        self.xp = model.xp
-        self.m = {key: self.xp.zeros_like(value) for key, value in model.p.items()}
-        self.v = {key: self.xp.zeros_like(value) for key, value in model.p.items()}
-        self.steps = 0
-        self.weight_decay = weight_decay
+        super().__init__(AdamWConfig(weight_decay=weight_decay))
+        self.attach(model)
 
-    def update(self, model, learning_rate, clip=1.0):
-        norms = [self.xp.sum(grad * grad, dtype=self.xp.float64) for grad in model.g.values()]
-        norm = math.sqrt(float(self.xp.stack(norms).sum()))
-        if not math.isfinite(norm):
-            raise ValueError("Non-finite gradient. Lower the learning rate.")
-        multiplier = min(1., clip / (norm + 1e-12))
-        self.steps += 1
-        for key, parameter in model.p.items():
-            gradient = model.g[key] * multiplier
-            self.m[key] *= .9
-            self.m[key] += .1 * gradient
-            self.v[key] *= .999
-            self.v[key] += .001 * gradient * gradient
-            m = self.m[key] / (1 - .9 ** self.steps)
-            v = self.v[key] / (1 - .999 ** self.steps)
-            if not key.endswith((".g", ".b")):  # no decay on normalisation gains and biases
-                parameter *= 1 - learning_rate * self.weight_decay
-            parameter -= learning_rate * m / (self.xp.sqrt(v) + 1e-8)
-        return norm
+
+def build_optimizer(model):
+    """The optimizer and schedule the model's spec names, ready to step it."""
+    train = model.spec["train"]
+    optimizer, optimizer_cfg = module_of("optimizer", train["optimizer"])
+    schedule, schedule_cfg = module_of("schedule", train["schedule"])
+    return optimizer.build(optimizer_cfg, model.dims, None).attach(model), schedule.build(schedule_cfg, model.dims, None)
 
 
 def parameter_estimate(cfg, vocab=263):
+    if is_model_spec(cfg.get("architecture")):
+        return estimate(validate_model_spec(cfg["architecture"]), vocab)["total"]
     if cfg.get("architecture"):
         return parameter_breakdown(cfg["architecture"], vocab)["total"]
     d, f = cfg["width"], cfg["width"] * cfg["expansion"]
@@ -623,8 +332,13 @@ def load_checkpoint(path):
         if metadata.get("architecture") != "groundwork_numpy_decoder" or metadata.get("format_version") != 1:
             raise ValueError("Choose a Groundwork NumPy checkpoint (.npz).")
         metadata["model"] = {key.removeprefix("weight::"): archive[key].copy() for key in archive.files if key.startswith("weight::")}
-        metadata["m"] = {key.removeprefix("adam_m::"): archive[key].copy() for key in archive.files if key.startswith("adam_m::")}
-        metadata["v"] = {key.removeprefix("adam_v::"): archive[key].copy() for key in archive.files if key.startswith("adam_v::")}
+        # optimizer state arrays are stored as adam_<state>::<parameter>, whatever the optimizer (the prefix is historical)
+        metadata["optimizer_state"] = {}
+        for key in archive.files:
+            if key.startswith("adam_"):
+                state, name = key[5:].split("::", 1)
+                metadata["optimizer_state"].setdefault(state, {})[name] = archive[key].copy()
+        metadata["m"], metadata["v"] = metadata["optimizer_state"].get("m", {}), metadata["optimizer_state"].get("v", {})
     return metadata
 
 
@@ -704,7 +418,6 @@ def partition_examples(examples, fraction, sampler, grouped=True):
 def _initialize_from(model, tokenizer, path):
     """Transplant weights from a checkpoint into the model's (possibly different) architecture."""
     data = load_checkpoint(path)
-    previous = validate_config(data["config"])
     xp = model.xp
     old = {key: xp.asarray(value) for key, value in data["model"].items()}
     old_tokenizer = Tokenizer.restore(data["tokenizer"])
@@ -718,13 +431,18 @@ def _initialize_from(model, tokenizer, path):
         if old["token"].shape[1] == rows.shape[1]:
             rows[:OFFSET] = old["token"][:OFFSET]
         old["token"] = rows
-    return transplant(effective_spec(previous), old, model.spec, model.p)
+    return transplant(old, model)
 
 
-def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5):
+def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
+          snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None):
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
+    if token_budget is not None and token_budget < 1:
+        raise ValueError("Token budget must be positive.")
+    if wall_seconds is not None and wall_seconds <= 0:
+        raise ValueError("Wall-clock budget must be positive.")
     if resume and init_from:
         raise ValueError("Resume and initialize-from cannot be combined.")
     directory = Path(output_dir)
@@ -761,28 +479,35 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         if "windowing" not in checkpoint["config"]:
             # Checkpoints from before windowing existed were trained with independent sequential chunks.
             previous["windowing"] = cfg["windowing"] = "sequential"
-        keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + ("seed", "validation", "objective", "windowing", "batch_size", "accumulation")
+        keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + (
+            "seed", "validation", "objective", "windowing", "batch_size", "accumulation",
+            "learning_rate", "weight_decay", "warmup",
+        )
+        current_spec, previous_spec = effective_spec(cfg), effective_spec(previous)
+        recipe = ("objective", "optimizer", "schedule")
         if (any(cfg[k] != previous[k] for k in keys)
-                or structure_key(effective_spec(cfg)) != structure_key(effective_spec(previous))):
-            raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective and batch settings.")
+                or structure_key(current_spec) != structure_key(previous_spec)
+                or any(current_spec["train"][key] != previous_spec["train"][key] for key in recipe)):
+            raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective, optimizer, schedule and batch settings.")
         tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
     else:
-        tokenizer = Tokenizer.fit(cfg["tokenizer"], training)
+        module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
+        tokenizer = module.fit(module_cfg, training)
     train_samples = samples_from(training, tokenizer, cfg)
     val_samples = samples_from(validation, tokenizer, cfg)
     if not train_samples:
         raise ValueError("No trainable target tokens were found.")
     model = ScratchTransformer(cfg, tokenizer.vocab_size)
-    optimizer = AdamW(model, cfg["weight_decay"])
+    optimizer, schedule = build_optimizer(model)
     step, best, history = 0, float("inf"), []
     transplanted = None
     if init_from:
         transplanted = _initialize_from(model, tokenizer, init_from)
     if checkpoint:
         model.load_weights(checkpoint["model"])
-        for key in model.p:
-            optimizer.m[key][...] = model.xp.asarray(checkpoint["m"][key])
-            optimizer.v[key][...] = model.xp.asarray(checkpoint["v"][key])
+        for state in optimizer.states:
+            for key in model.p:
+                getattr(optimizer, state)[key][...] = model.xp.asarray(checkpoint["optimizer_state"][state][key])
         step = checkpoint["step"]
         best = checkpoint["best"] if checkpoint["best"] is not None else float("inf")
         optimizer.steps = checkpoint["optimizer_steps"]
@@ -799,6 +524,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
               "initialized_from": str(init_from) if init_from else None,
               "best_loss": best if math.isfinite(best) else None, "split": split}
     atomic_json(directory / "config.json", cfg)
+    atomic_json(directory / "spec.json", model.spec)
     atomic_json(directory / "tokenizer.json", tokenizer.serialize())
     (directory / "dataset.jsonl").write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in examples) + "\n", encoding="utf-8")
     metrics_file = directory / "metrics.jsonl"
@@ -823,8 +549,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
         arrays.update({"weight::" + key: model.backend.to_cpu(value) for key, value in model.p.items()})
-        arrays.update({"adam_m::" + key: model.backend.to_cpu(value) for key, value in optimizer.m.items()})
-        arrays.update({"adam_v::" + key: model.backend.to_cpu(value) for key, value in optimizer.v.items()})
+        for state in optimizer.states:
+            arrays.update({f"adam_{state}::{key}": model.backend.to_cpu(value) for key, value in getattr(optimizer, state).items()})
         path = directory / filename
         temporary = path.with_suffix(".tmp")
         with temporary.open("wb") as stream:
@@ -856,24 +582,29 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         emit({"type": "metric", **row, "total": cfg["steps"]})
 
     started = time.monotonic()
+    trained_tokens = 0
+    budget_reason = None
+    detector_state = set()
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
             if loss is not None:
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": 0., "lr": cfg["learning_rate"], "grad_norm": 0.})
         while step < cfg["steps"] and not stop.is_set():
+            if token_budget is not None and trained_tokens >= token_budget:
+                budget_reason = "tokens"
+                break
+            if wall_seconds is not None and time.monotonic() - started >= wall_seconds:
+                budget_reason = "wall-clock"
+                break
             while pause.is_set() and not stop.is_set():
                 time.sleep(.08)
             if stop.is_set():
                 break
             tick = time.monotonic()
             next_step = step + 1
-            warmup = min(cfg["warmup"], cfg["steps"] - 1)
-            if warmup and next_step <= warmup:
-                rate = cfg["learning_rate"] * next_step / warmup
-            else:
-                progress = (next_step - warmup) / max(1, cfg["steps"] - warmup)
-                rate = cfg["learning_rate"] * (.1 + .9 * .5 * (1 + math.cos(math.pi * progress)))
+            snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
+            rate = schedule.rate(next_step, cfg["steps"], cfg["learning_rate"])
             model.zero_grad()
             loss, token_count = 0., 0
             sample_telemetry = bool(telemetry_every) and (next_step == 1 or next_step % telemetry_every == 0)
@@ -887,13 +618,26 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 raise ValueError("Non-finite loss. Reduce the learning rate.")
             payload = model.telemetry(model.last_tape) if sample_telemetry and model.last_tape is not None else None
             model.keep_tape, model.last_tape = False, None
+            before = {key: model.backend.to_cpu(value).copy() for key, value in model.p.items()} if snapshot_due else None
             norm = optimizer.update(model, rate)
             step = next_step
+            trained_tokens += token_count
             model.backend.synchronize()
             speed = token_count / max(.001, time.monotonic() - tick)
             validation_loss = evaluate(val_samples) if step % cfg["eval_every"] == 0 or step == cfg["steps"] else None
-            if step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
-                report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm})
+            if snapshot_due:
+                from studio_snapshot import capture, save as save_snapshot
+                probe_ids, _ = batch_arrays(train_samples[:min(2, len(train_samples))])
+                snapshot = capture(model, probe_ids, step, before, loss=validation_loss)
+                active = {(marker['block'], marker['head'], marker['kind']) for marker in snapshot['markers']}
+                snapshot['markers'] = [marker for marker in snapshot['markers']
+                                       if (marker['block'], marker['head'], marker['kind']) not in detector_state]
+                detector_state = active
+                path = save_snapshot(directory, snapshot, keep=snapshot_keep)
+                emit({"type": "viz_snapshot", "step": step, "path": str(path), "markers": snapshot["markers"]})
+            if token_budget is not None or wall_seconds is not None or step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
+                report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
+                        "trained_tokens": trained_tokens, "elapsed_seconds": time.monotonic() - started})
             if payload:
                 emit({"type": "telemetry", "step": step, "total": cfg["steps"], "loss": loss, "lr": rate, **payload})
             if step % cfg["eval_every"] == 0 or step == cfg["steps"]:
@@ -903,8 +647,15 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     save("best.npz")
                 record["best_loss"] = best
                 save("last.npz")
+        if budget_reason and not stop.is_set():
+            final_loss, final_validation = evaluate(train_samples), evaluate(val_samples)
+            if final_loss is not None:
+                report({"step": step, "loss": final_loss, "val_loss": final_validation, "tokens_per_second": 0.,
+                        "lr": rate if step else cfg["learning_rate"], "grad_norm": 0., "trained_tokens": trained_tokens,
+                        "elapsed_seconds": time.monotonic() - started})
         save("last.npz")
-        record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started, "finishedAt": now()})
+        record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started,
+                       "trained_tokens": trained_tokens, "budget_reached": budget_reason, "finishedAt": now()})
         atomic_json(directory / "run.json", record)
         emit({"type": "done", "run": record, "directory": str(directory)})
         return record
