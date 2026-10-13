@@ -14,6 +14,7 @@ SCRIPT = ROOT / "studio_brain3d.py"
 FAKE_LINK_SCRIPT = r"""
 import sys
 sys.path.insert(0, %r)
+import torch  # before panda3d: Windows DLL load order (see studio_brain3d)
 from panda3d.core import loadPrcFileData
 loadPrcFileData("", "window-type offscreen\nframebuffer-hardware 0\naudio-library-name null\nsync-video 0")
 import studio_brain3d as sb
@@ -88,6 +89,7 @@ print("FAKELINK-OK")
 EDIT_SCRIPT = r"""
 import sys, tempfile
 sys.path.insert(0, %r)
+import torch  # before panda3d: Windows DLL load order (see studio_brain3d)
 from panda3d.core import loadPrcFileData
 loadPrcFileData("", "window-type offscreen\nframebuffer-hardware 0\naudio-library-name null\nsync-video 0")
 import studio_brain3d as sb
