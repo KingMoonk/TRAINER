@@ -39,7 +39,7 @@ class InsidePages(unittest.TestCase):
             button.invoke()
             self.app.update()
             grids.append([row[:] for row in page.grid_view.texts])
-        self.assertEqual(len({str(g) for g in grids}), 5)
+        self.assertEqual(len({str(g) for g in grids[:4]}), 4)  # step 5 reuses the step-4 weights and highlights a column
         self.assertEqual(grids[2][-1][0], "−∞")                       # step 3 masks the lower-left
         for j in range(len(grids[3])):                                  # step 4: each column is a distribution
             self.assertAlmostEqual(sum(float(grids[3][i][j]) for i in range(len(grids[3]))), 1, delta=.05)

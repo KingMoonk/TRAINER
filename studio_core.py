@@ -308,6 +308,8 @@ class Workspace:
             if count < len({fingerprint(row) for row in rows}):
                 raise ValueError("Some records could not be moved to disk storage; nothing was changed.")
         def swap(state):
+            if [fingerprint(row) for row in state["examples"] if row.get("datasetId") == dataset_id] != [fingerprint(row) for row in rows]:
+                raise ValueError("The dataset changed while it was being moved to disk storage; try again.")
             state["examples"] = [row for row in state["examples"] if row.get("datasetId") != dataset_id]
             dataset.update(storage="sqlite", recordCount=count)
         self.apply(swap)

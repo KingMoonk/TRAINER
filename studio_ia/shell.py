@@ -30,7 +30,7 @@ ROUTES = {
     "queue": Route(None, "This computer", "What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.", ()),
     "trace": Route("designer", "Trace a position", "Follow one position's stream through the model. Numbers appear when the engine has run your prompt.", (*LI, "Trace a position")),
     "head_zoom": Route("designer", "Inside a head", "One attention head, one step at a time, on a real prompt.", (*LI, "Inside a head")),
-    "value_map": Route("designer", "Value map", "How a head’s values are projected down and back up, and why the heads add up.", (*LI, "Value map")),
+    "value_map": Route("designer", "Value map", "How a head's values are projected down and back up, and why the heads add up.", (*LI, "Value map")),
     "loss": Route("designer", "Loss", "What one wrong or right prediction costs, and the gradient it sends back.", (*LI, "Loss")),
     "head_lab": Route("designer", "Head lab", "Where does each attention head look, and how much does the model rely on it? Switch heads off and watch the answer change.", (*LI, "Head lab")),
     "inside3d": Route("designer", "Inside the network", "Build the model from the inside and watch it train, from a window of positions down to single weights.", (*LI, "3D")),
@@ -41,6 +41,19 @@ ROUTES = {
     "post_training": Route("post", "Post-training", "Four rounds, always in this order. Same design throughout; only the weights shift.", ()),
     "chat": Route("chat", "Chat", "Talk to any trained version. Compare two to see what a change really did.", ()),
 }
+
+
+def _data_page(cls):
+    """Adapt a data page (workspace-based constructor) to the shell's (parent, services, navigate) factory."""
+    def make(parent, services, navigate):
+        def go(route, kind=None, **_):
+            page = navigate(route)
+            if kind and hasattr(page, "show"):
+                page.show(kind)
+        page = cls(parent, services=services, on_navigate=go)
+        page.on_event = lambda kind, payload: None
+        return page
+    return make
 
 
 class Studio(tk.Tk):
@@ -65,6 +78,12 @@ class Studio(tk.Tk):
         from studio_ia.pages.compare import ComparePage
         from studio_ia.pages.quicktest import QuickTestPage
         self.factories["compare"], self.factories["quicktest"] = ComparePage, QuickTestPage
+        from studio_ia.pages.queue import QueuePage
+        self.factories["queue"] = QueuePage
+        if self.services.workspace is not None:  # the data pages read the workspace directly; the fake façade has none
+            from studio_ia.pages.make_data import MakeDataPage
+            from studio_ia.pages.your_data import YourDataPage
+            self.factories["your_data"], self.factories["make_data"] = _data_page(YourDataPage), _data_page(MakeDataPage)
         self.route = None
         self._area_rows = {}
         self._build_sidebar()

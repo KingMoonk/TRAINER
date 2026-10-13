@@ -79,6 +79,8 @@ def run(current_spec, draft_spec, dataset='stories', minutes=1, shrink=False, em
         tmp = Path(tmp)
         runs, specs = {}, {}
         for label, spec in (('current', current_spec), ('draft', draft_spec)):
+            if stop.is_set():
+                return dict(result, stopped=True)
             specs[label], runs[label] = _train(label, spec, data, held, seconds, shrink, tmp / label, emit, stop, config)
             if runs[label] is None:
                 return dict(result, stopped=True)

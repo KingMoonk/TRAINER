@@ -285,9 +285,9 @@ class TrainCli(unittest.TestCase):
     def test_list_devices_reports_cpu_and_auto(self):
         result = self.run_cli("--list-devices")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("cpu: NumPy CPU (available)", result.stdout)
-        self.assertIn("auto: prefers CUDA", result.stdout)
-        self.assertRegex(result.stdout, r"cuda: ")
+        self.assertIn("cpu: PyTorch CPU (available)", result.stdout)
+        self.assertIn("auto: prefers a working GPU", result.stdout)
+        self.assertRegex(result.stdout, r"(cuda|mps|gpu): ")
 
     def test_bad_arguments_exit_with_usage_errors(self):
         result = self.run_cli()

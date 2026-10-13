@@ -56,6 +56,7 @@ class Handlers(unittest.TestCase):
             services = SimpleNamespace(workspace=SimpleNamespace(run_dir=tmp), examples=lambda p: [{'text': f'doc {i} ' + 'one two three ' * 8} for i in range(6)])
             runner = Runner(Path(tmp) / 'queue.json', HANDLERS, services, tick=.02)
             runner.set_plan(Plan(hours='any', idle_only=False, pause_on_battery=False))
+            runner.start()
             self.addCleanup(runner.shutdown)
             seen = []
             runner.subscribe(lambda kind, payload: seen.append((kind, payload)))

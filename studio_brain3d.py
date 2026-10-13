@@ -604,7 +604,7 @@ def main(argv=None):
     if args.port:
         from studio_vizbridge import ViewerLink, parse_viewer_args
         port, authkey = parse_viewer_args(argv)  # the key arrives on stdin, never on the command line
-        link = ViewerLink(port, authkey)
+        link = ViewerLink(port, authkey) if port and authkey else None
     app = BrainApp(link=link, demo=link is None)
     if args.selftest:
         app.set_spec(sample_spec(24), fit=True)

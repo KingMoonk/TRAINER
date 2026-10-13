@@ -59,7 +59,7 @@ TRAIN_FIELDS = [("steps", "Steps", "spin", (1, 1000000, 50), int), ("batch_size"
                 ("warmup", "Warmup steps", "spin", (0, 100000, 10), int), ("weight_decay", "Weight decay", "entry", None, float),
                 ("eval_every", "Evaluate every", "spin", (1, 100000, 5), int), ("validation", "Validation split", "entry", None, float),
                 ("seed", "Seed", "spin", (0, 2147483647, 1), int), ("objective", "Objective", "choice", ["all", "assistant"], str),
-                ("device", "Device", "choice", ["auto", "cpu", "cuda"], str)]
+                ("device", "Device", "choice", ["auto", "cpu", "cuda", "mps"], str)]
 SUB_KINDS = {"att": "attention", "mlp": "mlp"}
 
 
@@ -1541,8 +1541,14 @@ class NetworkMixin:
                 self.status_var.set("3D brain opened · edits and telemetry are mirrored live")
             code = viz.exit_code
             alive = code is None
-            if not alive and code != 0 and not self._net_viewer_seen:
-                self.net_viewer_failed(code, viz.log_path)
+            if not alive:
+                for message in viz.poll():  # whatever arrived just before the exit
+                    try:
+                        self.net_handle_viewer(message)
+                    except Exception as exc:
+                        self.status_var.set(f"Viewer message ignored · {exc}")
+                if code != 0:
+                    self.net_viewer_failed(code, viz.log_path)
         finally:
             if alive:
                 self._net_viewer_job = self.after(100, self.net_poll_viewer)
@@ -1552,5 +1558,5 @@ class NetworkMixin:
             tail = "\n".join(Path(log_path).read_text(encoding="utf-8", errors="replace").strip().splitlines()[-8:]) if log_path else ""
         except OSError:
             tail = ""
-        self.status_var.set(f"The 3D viewer stopped while starting (exit code {code})" + (f" · log: {log_path}" if log_path else ""))
-        messagebox.showerror("The 3D viewer could not start", (tail or f"Exit code {code}, no error output.") + (f"\n\nFull log: {log_path}" if log_path else ""), parent=self)
+        self.status_var.set(f"The 3D viewer stopped with exit code {code}" + (f" · log: {log_path}" if log_path else ""))
+        messagebox.showerror("The 3D viewer stopped", (tail or f"Exit code {code}, no error output.") + (f"\n\nFull log: {log_path}" if log_path else ""), parent=self)

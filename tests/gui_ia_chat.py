@@ -10,7 +10,7 @@ from studio_ia.shell import Studio
 
 
 def texts(widget):
-    own = [str(widget.cget("text"))] if isinstance(widget, (tk.Label, ttk.Label)) else []
+    own = [str(widget.cget("text"))] if isinstance(widget, (tk.Label, ttk.Label, ttk.Button)) else []
     return own + [t for child in widget.winfo_children() for t in texts(child)]
 
 

@@ -74,7 +74,9 @@ class Experiments(unittest.TestCase):
             self.assertTrue(list(events.queue)[-1]['cancelled'])
 
 
-class Planned(Experiments):
+class Planned(unittest.TestCase):
+    spec = Experiments.spec
+
     def variants(self, n):
         out = []
         for i in range(n):

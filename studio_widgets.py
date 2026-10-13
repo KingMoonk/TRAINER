@@ -191,9 +191,9 @@ class ExampleEditor(tk.Toplevel):
         ttk.Combobox(bottom, textvariable=self.review, values=("Review", "Good"), state="readonly", width=10).pack(side="left", padx=(0, 15))
         button(bottom, "Save example", self.save, True)
         button(bottom, "Cancel", self.destroy)
-        if parent.winfo_viewable():  # a transient of a hidden window is never mapped: waiting would hang
-            self.wait_visibility()  # a grab on a window that is not mapped yet fails on Linux
         try:
+            if parent.winfo_viewable():  # a transient of a hidden window is never mapped: waiting would hang
+                self.wait_visibility()  # a grab on a window that is not mapped yet fails on Linux
             self.grab_set()
         except tk.TclError:
             pass  # not viewable: the dialog still works, just not modally

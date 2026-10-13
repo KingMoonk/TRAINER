@@ -318,9 +318,12 @@ def train_one(spec, steps, seed, examples, held, directory, emit, stop, pause=No
     def progress(event):
         if event.get('type') == 'metric' and event.get('step') and event.get('loss') is not None:
             emit(dict(tag or {}, type='compare', step=event['step'], total=steps, bpc=event['loss'] / LN2))
-    with data_order():
-        record = train(_config(spec, steps, seed, extra), examples, directory, emit=progress, stop=stop, pause=pause,
-                       wall_seconds=wall_seconds)
+    try:
+        with data_order():
+            record = train(_config(spec, steps, seed, extra), examples, directory, emit=progress, stop=stop, pause=pause,
+                           wall_seconds=wall_seconds)
+    except InterruptedError:
+        return None
     if stop is not None and stop.is_set():
         return None
     bpc = bits_per_char(directory / 'last.npz', held)
