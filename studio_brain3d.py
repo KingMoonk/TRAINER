@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import torch  # noqa: F401 - before panda3d: on Windows torch's DLLs fail to initialise (WinError 1114) once panda3d's are loaded
 from panda3d.core import (Filename, Geom, GeomNode, GeomTriangles, GeomVertexData, GeomVertexFormat,
                           GeomVertexWriter, LineSegs, TextNode, TransparencyAttrib, Vec3,
                           loadPrcFileData)
