@@ -11,12 +11,7 @@ class LearnedPosition(Layer):
         self.add("position", (dims.n_ctx, dims.d_model), "embedding")
 
     def forward(self, x, ctx):
-        self.cache = x.shape[1]
         return x + self.params["position"][:x.shape[1]]
-
-    def backward(self, dx):
-        self.grads["position"][:self.cache] += dx.sum(axis=0)
-        return dx
 
 
 @register

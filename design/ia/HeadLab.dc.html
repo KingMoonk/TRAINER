@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Head lab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0e1014;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:#9f8cff;text-decoration:none}a:hover{color:#b9abff}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1250px; background: #0e1014; color: #e6e8ec; font-size: 15px; line-height: 1.45">
+<nav aria-label="Studio areas" style="flex: 1 1 220px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 4px">
+<div style="font-size: 20px; font-weight: 700; letter-spacing: 0.02em; padding: 0 12px 20px">GROUNDWORK</div>
+<a href="Builder.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 9px; border-left: 3px solid #9f8cff; background: #1b1f27; color: #e6e8ec"><span style="font-weight: 600; color: #9f8cff">Network designer</span><span style="font-size: 12px; color: #8f97a6">shape the model</span></a>
+<a href="Pretraining.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Pretraining</span><span style="font-size: 12px; color: #8f97a6">data in, it learns</span></a>
+<a href="Feedback.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Post-training</span><span style="font-size: 12px; color: #8f97a6">learns to answer</span></a>
+<a href="Chat.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Chat</span><span style="font-size: 12px; color: #8f97a6">use it</span></a>
+<div style="margin-top: auto; padding: 14px 12px 0; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">THIS COMPUTER</span>
+<span style="color: #c3c8d1">Training <b style="color: #e6e8ec">version 5</b> · catching up</span>
+<span role="progressbar" aria-label="Version 5 training" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100" style="display: block; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: 40%; background: #9f8cff"></span></span>
+<span style="color: #8f97a6">about [N] min left · then 3 queued</span>
+<span style="color: #8f97a6">Chat uses <b style="color: #e6e8ec">version 4</b> · best so far</span>
+<a href="Queue.dc.html" style="padding: 6px 0">Queue and schedule</a>
+</div>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 32px 40px; display: flex; flex-direction: column; gap: 20px">
+<header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between">
+<div>
+<h1 style="margin: 0; font-size: 32px">Head lab</h1>
+<div style="color: #8f97a6; margin-top: 6px">Where does each attention head look, and how much does the model rely on it? Switch heads off and watch the answer change.</div>
+</div>
+</header>
+<nav aria-label="Breadcrumb" style="display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border-bottom: 1px solid #2a2f3a"><a href="Builder.dc.html" style="padding: 12px 0">‹ Network designer</a><span style="color: #8f97a6">Look inside / Head lab</span></nav>
+<div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 12px 16px; border: 1px solid #6cb4ee; background: #121a22; font-size: 14px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #6cb4ee">LIVE</span>
+<span style="flex: 1 1 360px">Experiments on version 4 · checkpoint [N]. Switching heads off only affects answers on this page. Nothing retrains, and Chat is unchanged.</span>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch">
+<section aria-label="The heads" style="flex: 3 1 520px; min-width: 0; padding: 22px; background: #15181e; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center">
+<div style="flex: 1 1 240px"><div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">16 HEADS · CLICK ONE</div><div style="font-size: 13px; color: #8f97a6; margin-top: 2px">Each tile shows where that head looks on prepared text: a random sequence repeated twice, where the common patterns are easy to tell apart. Dark cells are the future, which it can’t see.</div></div>
+<button type="button" onClick="{{ rank }}" style="min-height: 44px; padding: 0 16px; font: inherit; font-weight: 600; cursor: pointer; background: #9f8cff; color: #0e1014; border: 0">{{ rankLabel }}</button>
+<sc-if value="{{ anyOff }}" hint-placeholder-val="{{ false }}"><button type="button" onClick="{{ allOn }}" style="min-height: 44px; padding: 0 14px; font: inherit; cursor: pointer; background: transparent; color: #e6e8ec; border: 1px solid #2a2f3a">Switch all back on</button></sc-if>
+</div>
+<sc-for list="{{ blocks }}" as="b" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="width: 60px; font-size: 13px; color: #8f97a6">{{ b.name }}</span>
+<sc-for list="{{ b.heads }}" as="h" hint-placeholder-count="4">
+<button type="button" onClick="{{ h.pick }}" aria-pressed="{{ h.on }}" aria-label="{{ h.aria }}" style="flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px; font: inherit; cursor: pointer; background: {{ h.bg }}; color: #e6e8ec; border: {{ h.bd }}; opacity: {{ h.op }}">
+<span aria-hidden="true" style="display: grid; grid-template-columns: repeat(8, 7px); gap: 1px"><sc-for list="{{ h.cells }}" as="c" hint-placeholder-count="64"><span style="width: 7px; height: 7px; background: {{ c }}"></span></sc-for></span>
+<span style="font-size: 12px">{{ h.label }}</span>
+<span style="font-size: 11px; color: {{ h.subColor }}">{{ h.sub }}</span>
+</button>
+</sc-for>
+</div>
+</sc-for>
+<div style="font-size: 12px; color: #8f97a6">{{ gridNote }}</div>
+</section>
+
+<section aria-label="Selected head" style="flex: 2 1 380px; min-width: 0; padding: 22px; background: #15181e; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><h2 style="margin: 0; font-size: 22px">{{ cur.name }}</h2><span style="font-size: 13px; color: #8f97a6">{{ cur.state }}</span></div>
+<div style="display: grid; grid-template-columns: 64px repeat(8, minmax(0, 1fr)); gap: 2px; font-size: 10px; color: #8f97a6">
+<span></span><sc-for list="{{ toks }}" as="t" hint-placeholder-count="8"><span style="text-align: center; overflow: hidden; white-space: nowrap">{{ t }}</span></sc-for>
+<sc-for list="{{ big }}" as="r" hint-placeholder-count="8"><span style="text-align: right; padding-right: 4px; white-space: nowrap; overflow: hidden">{{ r.tok }}</span><sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="8"><span style="height: 18px; background: {{ c }}"></span></sc-for></sc-for>
+</div>
+<span style="font-size: 12px; color: #8f97a6">Prepared text: four random pieces, then the same four again. Each row is a piece reading earlier pieces. Brighter cells will show where this head’s attention goes once the engine fills them in.</span>
+<div role="group" aria-label="Your guess" style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px"><span style="font-size: 13px; color: #8f97a6; padding-right: 6px">Before switching it off, guess how much the error rises:</span><sc-for list="{{ guess }}" as="g" hint-placeholder-count="3"><button type="button" onClick="{{ g.pick }}" aria-pressed="{{ g.on }}" style="min-height: 40px; padding: 0 12px; font: inherit; font-size: 13px; cursor: pointer; background: {{ g.bg }}; color: {{ g.fg }}; border: 1px solid #2a2f3a">{{ g.label }}</button></sc-for></div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<button type="button" onClick="{{ cur.toggle }}" style="flex: 1 1 140px; min-height: 44px; font: inherit; font-weight: 600; cursor: pointer; background: {{ cur.offBg }}; color: {{ cur.offFg }}; border: 1px solid #9f8cff">{{ cur.offLabel }}</button>
+<button type="button" onClick="{{ cur.test }}" style="flex: 1 1 140px; min-height: 44px; font: inherit; cursor: pointer; background: transparent; color: #9f8cff; border: 1px solid #9f8cff">Test its attention pattern</button>
+</div>
+<sc-if value="{{ cur.tested }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid #2a2f3a">
+<span style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">THREE PATTERN TESTS · ON PREPARED TEXT</span>
+<sc-for list="{{ tests }}" as="t" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 12px">
+<svg aria-hidden="true" viewBox="0 0 120 36" style="width: 120px; height: 36px; flex: 0 0 120px"><g fill="#8f97a6"><circle cx="10" cy="28" r="3"></circle><circle cx="30" cy="28" r="3"></circle><circle cx="50" cy="28" r="3"></circle><circle cx="70" cy="28" r="3"></circle><circle cx="90" cy="28" r="3"></circle><circle cx="110" cy="28" r="3"></circle></g><path d="{{ t.path }}" fill="none" stroke="#e58fb0" stroke-width="2"></path></svg>
+<span style="flex: 1; display: flex; flex-direction: column"><b>{{ t.name }}</b><span style="font-size: 13px; color: #8f97a6">{{ t.what }}</span></span>
+<span style="font-size: 12px; padding: 2px 8px; border: 1px solid #2a2f3a; color: #8f97a6">[passes / no]</span>
+</div>
+</sc-for>
+<span style="font-size: 12px; color: #8f97a6">These describe where the head looks, not what it does with what it sees. Switching it off shows how much the model relies on it, not why.</span>
+</div>
+</sc-if>
+</section>
+</div>
+
+<section aria-label="What changed" style="display: flex; flex-direction: column; gap: 12px; padding: 22px; background: #15181e; border: 1px solid #2a2f3a">
+<div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">{{ changed.kicker }}</div>
+<sc-if value="{{ anyOff }}" hint-placeholder-val="{{ false }}">
+<div style="font-family: Georgia, serif; color: #c3c8d1">The largest planet in our solar system is …</div>
+<div style="display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 10px 16px; align-items: baseline; font-size: 14px">
+<span style="color: #8f97a6">all heads on</span><span style="font-family: Georgia, serif">[its answer]</span>
+<span style="color: #e5b567">{{ changed.offLabel }}</span><span style="font-family: Georgia, serif">[its answer]<span aria-hidden="true" style="display: inline-block; width: 2px; height: 15px; margin-left: 2px; background: #e5b567; vertical-align: middle"></span></span>
+<span style="color: #8f97a6">error on held-back text</span><span style="font-family: ui-monospace, Menlo, monospace">[N] → [N] bits/char</span>
+<span style="color: #8f97a6">you guessed</span><span style="color: #e58fb0">{{ guessed }}</span>
+</div>
+<span style="font-size: 13px; color: #8f97a6">A big rise means the model relied on these heads. Little or no change means they weren’t doing much on this text, or other heads covered for them. Models can compensate, so no change doesn’t prove a head is useless.</span>
+</sc-if>
+<sc-if value="{{ noneOff }}" hint-placeholder-val="{{ true }}">
+<span style="color: #c3c8d1">Switch a head off to see how the answer and the error change without it. Switch several off to see whether they cover for each other.</span>
+</sc-if>
+<div><button type="button" onClick="{{ toggleHow }}" aria-expanded="{{ how }}" style="min-height: 40px; padding: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #9f8cff; border: 0">{{ howLabel }}</button></div>
+<sc-if value="{{ how }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: #c3c8d1">
+<span><b style="color: #e6e8ec">Switching off</b> replaces the head’s output with its average over held-back text, so the rest of the model still gets a normal-sized signal. Setting it to zero instead is harsher; the engine can do both.</span>
+<span><b style="color: #e6e8ec">Ranking by importance</b> switches each head off on its own and measures how much the error rises. Heads are ranked by that rise.</span>
+<span><b style="color: #e6e8ec">The three tests</b> measure attention on prepared text: share on the previous word, share on the first word (an idle-head sign), and, for induction, on random sequences repeated twice, share on the word after the earlier copy of the current word.</span>
+<a href="HeadZoom.dc.html" style="padding: 6px 0">Step through one head’s maths in Inside a head</a>
+</div>
+</sc-if>
+</section>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1250}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { sel: 5, off: {}, ranked: false, tested: {}, how: false, guess: -1 }; }
+  renderVals() {
+    const st = this.state, off = st.off;
+    const toks = ['zq', 'mor', 'tib', 'lun', 'zq', 'mor', 'tib', 'lun'];
+    const grid = (dim) => { const g = []; for (let q = 0; q < 8; q++) for (let k = 0; k < 8; k++) g.push(k > q ? '#0a0b0e' : (dim ? '#1b1f27' : '#2a2f3a')); return g; };
+    const name = (k) => 'Block ' + (Math.floor(k / 4) + 1) + ' · head ' + (k % 4 + 1);
+    const blocks = [0, 1, 2, 3].map((b) => ({ name: 'Block ' + (b + 1), heads: [0, 1, 2, 3].map((h) => {
+      const k = b * 4 + h, isOff = !!off[k], sel = st.sel === k;
+      return { label: 'Head ' + (h + 1), aria: name(k) + (isOff ? ', switched off' : ''), on: sel, cells: grid(isOff),
+        sub: isOff ? 'switched off' : st.ranked ? 'error +[N]' : (st.tested[k] ? '[pattern match]' : 'no pattern yet'),
+        subColor: isOff ? '#e5b567' : '#8f97a6', op: isOff ? '0.55' : '1',
+        bg: sel ? '#1b1f27' : 'transparent', bd: sel ? '2px solid #9f8cff' : (isOff ? '1px dashed #e5b567' : '1px solid #2a2f3a'),
+        pick: () => this.setState({ sel: k }) };
+    }) }));
+    const k = st.sel, isOff = !!off[k];
+    const nOff = Object.keys(off).filter((x) => off[x]).length;
+    const big = toks.map((t, q) => ({ tok: t, cells: toks.map((_, kk) => (kk > q ? '#0a0b0e' : '#2a2f3a')) }));
+    const tests = [
+      { name: 'Previous word', what: 'Looks at the word just before.', path: 'M30 25 Q20 10 10 25 M50 25 Q40 10 30 25 M70 25 Q60 10 50 25 M90 25 Q80 10 70 25 M110 25 Q100 10 90 25' },
+      { name: 'Parks on the first word', what: 'Most of its attention goes to the first piece. This often means the head is idle here (an attention sink), not that the first piece matters.', path: 'M30 25 Q20 12 10 25 M50 25 Q30 4 10 25 M70 25 Q40 0 10 25 M110 25 Q60 -6 10 25' },
+      { name: 'Copying a pattern (induction)', what: 'Sees “A B … A” and looks at B, the word after the earlier A.', path: 'M110 25 Q70 0 30 25' }
+    ];
+    return {
+      guess: ['A lot', 'A little', 'Not at all'].map((label, i) => ({ label, on: st.guess === i, bg: st.guess === i ? '#e58fb0' : '#1b1f27', fg: st.guess === i ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ guess: i }) })),
+      guessed: ['a lot', 'a little', 'not at all'][st.guess] || 'no guess',
+      blocks, toks, big, tests, anyOff: nOff > 0, noneOff: nOff === 0, how: st.how,
+      rank: () => this.setState({ ranked: !st.ranked }), rankLabel: st.ranked ? 'Hide importance' : 'Rank heads by importance',
+      allOn: () => this.setState({ off: {} }),
+      gridNote: st.ranked ? 'Each tile shows how much the error rises without that head. The engine fills these in by switching heads off one at a time.' : 'Click a tile to inspect a head. Use the buttons on the right to switch it off or test its attention pattern.',
+      cur: { name: name(k), state: isOff ? 'switched off' : 'on',
+        offLabel: isOff ? 'Switch it back on' : 'Switch it off', offBg: isOff ? '#9f8cff' : 'transparent', offFg: isOff ? '#0e1014' : '#9f8cff',
+        toggle: () => { const o = Object.assign({}, off); if (isOff) delete o[k]; else o[k] = true; this.setState({ off: o }); },
+        tested: !!st.tested[k], test: () => this.setState({ tested: Object.assign({}, st.tested, { [k]: true }) }) },
+      changed: { kicker: nOff ? 'WHAT CHANGED · ' + nOff + (nOff === 1 ? ' HEAD OFF' : ' HEADS OFF') : 'WHAT CHANGES', offLabel: nOff === 1 ? 'with 1 head off' : 'with ' + nOff + ' heads off' },
+      toggleHow: () => this.setState({ how: !st.how }), howLabel: st.how ? 'Hide how this works' : 'How this works'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -9,6 +9,7 @@ from studio_experiments import seed_stats
 from studio_inspect import backward, probe_model
 from studio_snapshot import capture, one_step
 from studio_spec import validate_spec
+from tests.torchcheck import to_np
 
 
 def model():
@@ -38,14 +39,14 @@ class ServiceReview(unittest.TestCase):
         source.zero_grad()
         source.loss_and_backward(ids, np.array([[2, 3, 4, -100]]))
         original_rng = copy.deepcopy(source.rng.bit_generator.state)
-        weights = {key: value.copy() for key, value in source.p.items()}
-        gradients = {key: value.copy() for key, value in source.g.items()}
+        weights = {key: to_np(value).copy() for key, value in source.p.items()}
+        gradients = {key: to_np(value).copy() for key, value in source.g.items()}
         snapshot = capture(source, ids, step=1)
         self.assertEqual(snapshot["step"], 1)
         self.assertEqual(source.rng.bit_generator.state, original_rng)
         for key in weights:
-            np.testing.assert_array_equal(source.p[key], weights[key])
-            np.testing.assert_array_equal(source.g[key], gradients[key])
+            np.testing.assert_array_equal(to_np(source.p[key]), weights[key])
+            np.testing.assert_array_equal(to_np(source.g[key]), gradients[key])
 
     def test_snapshot_probe_attention_is_bounded_to_32_tokens(self):
         spec = validate_spec({"dims": {"d_model": 16, "n_layer": 1, "n_ctx": 64, "dropout": 0}})
@@ -70,7 +71,7 @@ class ServiceReview(unittest.TestCase):
         optimizer.update(private, .001)
         self.assertAlmostEqual(replay["loss"], expected_loss)
         for key, value in private.p.items():
-            np.testing.assert_allclose(replay["arrays"][f"weight::{key}"], value, atol=1e-12)
+            np.testing.assert_allclose(replay["arrays"][f"weight::{key}"], to_np(value), rtol=1e-5, atol=1e-6)
 
     def test_one_step_rejects_optimizer_with_checkpoint_path(self):
         class Optimizer:

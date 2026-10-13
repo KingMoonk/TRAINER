@@ -128,16 +128,19 @@ def validate_spec(spec):
     if not isinstance(blocks_in, list) or not 1 <= len(blocks_in) <= 24:
         raise ValueError("A network needs between 1 and 24 blocks.")
     blocks, seen = [], set()
+    explicit = {raw.get("id") for raw in blocks_in if isinstance(raw, dict)}
     for i, raw in enumerate(blocks_in):
         if not isinstance(raw, dict):
             raise ValueError(f"Block {i + 1} must be an object.")
         label = str(raw.get("label") or f"Block {i + 1}")
         where = f"Block {i + 1}"
         block_id = raw.get("id")
-        if block_id is None:
-            block_id = _new_id()
-            while block_id in seen:
-                block_id = _new_id()
+        if block_id is None:  # derived from the index so spec hashes and transplant matching are deterministic
+            n = i
+            block_id = f"blk_{n:06x}"
+            while block_id in seen or block_id in explicit:
+                n += 1
+                block_id = f"blk_{n:06x}"
         elif not isinstance(block_id, str) or not BLOCK_ID.match(block_id):
             raise ValueError(f"{where} has an invalid id {block_id!r}.")
         if block_id in seen:
@@ -173,8 +176,8 @@ def validate_spec(spec):
             training[key] = _float(value, key.replace("_", " ").capitalize(), *_FLOAT_RANGES[key])
     if training_in.get("objective", "all") not in {"all", "assistant"}:
         raise ValueError("Objective must be all or assistant.")
-    if training_in.get("device", "auto") not in {"auto", "cpu", "cuda"}:
-        raise ValueError("Device must be auto, cpu, or cuda.")
+    if training_in.get("device", "auto") not in {"auto", "cpu", "cuda", "mps"}:
+        raise ValueError("Device must be auto, cpu, cuda, or mps.")
     training["objective"] = training_in.get("objective", "all")
     training["device"] = training_in.get("device", "auto")
     return {"format": FORMAT, "name": str(spec.get("name") or "My network"),

@@ -1,27 +1,22 @@
 """Run the studio with hot reload: code changes are applied inside the open window, with no relaunch."""
 import importlib
-import os
 import sys
 import tkinter as tk
 import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-SKIP = {"tests", "__pycache__", "runs", "data", "exports", "artifacts"}
 RELOAD_KEY = "<Command-r>" if sys.platform == "darwin" else "<Control-r>"
 
 
 def snapshot():
+    """The files a reload re-imports: top-level modules and the studio_modules package."""
     files = {}
-    for folder, dirs, names in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP]
-        for name in names:
-            if name.endswith(".py"):
-                path = Path(folder, name)
-                try:
-                    files[path] = path.stat().st_mtime_ns
-                except FileNotFoundError:
-                    pass
+    for path in [*ROOT.glob("*.py"), *(ROOT / "studio_modules").rglob("*.py")]:
+        try:
+            files[path] = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            pass
     return files
 
 
@@ -36,7 +31,8 @@ def install():
             return
         tk_init(self, *args, **kwargs)
         self._dev_binds = {seq: self.bind_class("all", seq) for seq in self.bind_class("all")}
-        self._dev_keep = set(vars(self)) | {"_dev_keep"}
+        self._dev_cmds = set(self._tclCommands or ())  # Tcl commands that belong to the bare window
+        self._dev_keep = set(vars(self)) | {"_dev_keep", "_dev_cmds"}
 
     def destroy(self):
         if not vars(self).get("_dev_soft"):
@@ -60,6 +56,11 @@ def rebuild(app, cls, *args):
         app.bind_class("all", seq, script)
     for seq in app.bind():
         app.unbind(seq)
+    for name in set(app._tclCommands or ()) - app._dev_cmds:  # callbacks the old app registered on the root
+        try:
+            app.deletecommand(name)
+        except tk.TclError:
+            pass
     for key in set(vars(app)) - app._dev_keep:
         del vars(app)[key]
     app.__class__ = cls
@@ -68,8 +69,10 @@ def rebuild(app, cls, *args):
 
 def project_modules():
     # decided by name, never by touching the module: a lazily loaded third party module (cupyx.scipy) imports itself on any attribute read
+    # the studio_modules package goes too, or its @register decorators never re-run against the fresh registry
     return {name: mod for name, mod in list(sys.modules.items())
-            if name not in ("__main__", "dev") and "." not in name and (ROOT / f"{name}.py").is_file()}
+            if name == "studio_modules" or name.startswith("studio_modules.")
+            or (name not in ("__main__", "dev") and "." not in name and (ROOT / f"{name}.py").is_file())}
 
 
 def reload(app):
@@ -92,7 +95,10 @@ def reload(app):
             del sys.modules[name]
         sys.modules.update(old_modules)
         if torn:  # the new code broke while building: put the old window back
-            rebuild(app, old_cls, store(folder))
+            try:
+                rebuild(app, old_cls, store(folder))
+            except Exception:
+                error += "\nRollback failed too:\n" + traceback.format_exc()
     app.geometry(geometry)
     if page in getattr(app, "pages", {}):
         app.show_page(page)
@@ -109,22 +115,26 @@ def watch(app):
     state = {"applied": snapshot(), "last": None, "force": False, "hinted": None}
 
     def arm():
-        app.bind_all(RELOAD_KEY, lambda _e: state.update(force=True), add="+")
+        app.bind_all(RELOAD_KEY, lambda _e: state.update(force=True))  # replace, never stack: a failed reload keeps the old binding
 
     def tick():
-        current = snapshot()
-        changed, settled = current != state["applied"], current == state["last"]
-        state["last"] = current
-        busy = app.job_kind or app.tk.call("grab", "current")  # never reload over a running job or an open dialog
-        focused = app.tk.call("focus", "-displayof", ".")
-        if not busy and (state["force"] or (changed and settled and not focused)):
-            state.update(applied=current, force=False)
-            reload(app)
-            arm()
-        elif changed and state["hinted"] != current:
-            state["hinted"] = current
-            app.status_var.set("Code changed · reloads when you switch away" + (" and the job ends" if app.job_kind else "") + f", or press {RELOAD_KEY[1:-1]}")
-        app.after(500, tick)
+        try:
+            current = snapshot()
+            changed, settled = current != state["applied"], current == state["last"]
+            state["last"] = current
+            busy = app.job_kind or app.tk.call("grab", "current")  # never reload over a running job or an open dialog
+            focused = app.tk.call("focus", "-displayof", ".")
+            if not busy and (state["force"] or (changed and settled and not focused)):
+                state.update(applied=current, force=False)
+                reload(app)
+                arm()
+            elif changed and state["hinted"] != current:
+                state["hinted"] = current
+                app.status_var.set("Code changed · reloads when you switch away" + (" and the job ends" if app.job_kind else "") + f", or press {RELOAD_KEY[1:-1]}")
+        except Exception:
+            traceback.print_exc()
+        finally:
+            app.after(500, tick)
 
     arm()
     app.after(500, tick)

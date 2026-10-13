@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Training</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0e1014;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:#9f8cff;text-decoration:none}a:hover{color:#b9abff}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1300px; background: #0e1014; color: #e6e8ec; font-size: 15px; line-height: 1.45">
+<nav aria-label="Studio areas" style="flex: 1 1 220px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 4px">
+<div style="font-size: 20px; font-weight: 700; letter-spacing: 0.02em; padding: 0 12px 20px">GROUNDWORK</div>
+<a href="Builder.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Network designer</span><span style="font-size: 12px; color: #8f97a6">shape the model</span></a>
+<a href="Pretraining.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 9px; border-left: 3px solid #9f8cff; background: #1b1f27; color: #e6e8ec"><span style="font-weight: 600; color: #9f8cff">Pretraining</span><span style="font-size: 12px; color: #8f97a6">data in, it learns</span></a>
+<a href="Feedback.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Post-training</span><span style="font-size: 12px; color: #8f97a6">learns to answer</span></a>
+<a href="Chat.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Chat</span><span style="font-size: 12px; color: #8f97a6">use it</span></a>
+<div style="margin-top: auto; padding: 14px 12px 0; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">THIS COMPUTER</span>
+<span style="color: #c3c8d1">Training <b style="color: #e6e8ec">version 5</b> · catching up</span>
+<span role="progressbar" aria-label="Version 5 training" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100" style="display: block; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: 40%; background: #9f8cff"></span></span>
+<span style="color: #8f97a6">about [N] min left · then 3 queued</span>
+<span style="color: #8f97a6">Chat uses <b style="color: #e6e8ec">version 4</b> · best so far</span>
+<a href="Queue.dc.html" style="padding: 6px 0">Queue and schedule</a>
+</div>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 48px 40px">
+<div style="max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+<header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+<div>
+<h1 style="margin: 0; font-size: 32px">Pretraining · version 5 catching up</h1>
+<div style="color: #8f97a6; margin-top: 6px">Version 5 = version 4 with 6 blocks (was 4) and wide thinking room (was normal). The new parts start at zero, so it began exactly at version 4’s error. · <a href="Builder.dc.html">see the change</a></div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<button type="button" style="min-height: 44px; border: 1px solid #2a2f3a; background: transparent; color: #e6e8ec; font: inherit; padding: 0 20px; cursor: pointer">Pause</button>
+<button type="button" style="min-height: 44px; border: 1px solid #2a2f3a; background: transparent; color: #e6e8ec; font: inherit; padding: 0 20px; cursor: pointer">Stop after a short cool-down</button>
+</div>
+</header>
+
+<section aria-label="Progress" style="display: flex; flex-direction: column; gap: 8px">
+<div role="progressbar" aria-label="Training progress" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100" style="height: 10px; background: #20242c"><div style="height: 10px; width: 40%; background: #9f8cff"></div></div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 28px; font-size: 14px; color: #c3c8d1">
+<span>Step <b style="color: #e6e8ec">[N]</b> of [N]</span>
+<span>Pass <b style="color: #e6e8ec">1</b> over your text · <b style="color: #e6e8ec">[N]</b> pieces seen</span>
+<span>Schedule: <b style="color: #e6e8ec">steady</b> · learning rate: auto</span>
+<span style="margin-left: auto">about <b style="color: #e6e8ec">[N] min</b> left</span>
+</div>
+</section>
+
+<section aria-label="Error" style="background: #1b1f27; border: 1px solid #2a2f3a; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; gap: 12px 40px; align-items: flex-end">
+<div><div style="font-size: 30px; font-weight: 700; color: #9f8cff">[N]</div><div style="color: #8f97a6; font-size: 14px">error on training text, smoothed</div></div>
+<div><div style="font-size: 30px; font-weight: 700; color: #6cb4ee">[N]</div><div style="color: #8f97a6; font-size: 14px">error on held-back text</div></div>
+<div><div style="font-size: 30px; font-weight: 700; color: #c3c8d1">[N]</div><div style="color: #8f97a6; font-size: 14px">version 4’s best, held-back</div></div>
+<div style="margin-left: auto; padding: 8px 14px; border: 1px solid #9f8cff; color: #9f8cff; font-weight: 600">Learning</div>
+</div>
+<div style="font-size: 13px; color: #8f97a6">All three in bits per character, so versions with different word lists compare fairly. Lower is better.</div>
+<div style="position: relative">
+<svg role="img" aria-label="Example shape. Error in bits per character for version 5 so far. It starts at version 4's level because the new parts start at zero, bumps slightly while the learning rate warms up again, then falls. Reference lines: uniform guess, counting word frequencies, version 4's best. Below: the learning-rate schedule with warm-up, steady and cool-down phases." viewBox="0 0 800 340" style="width: 100%; height: auto; display: block">
+<rect x="96.0" y="20" width="576.0" height="236" fill="#9f8cff" fill-opacity="0.03"></rect>
+<rect x="672.0" y="20" width="108.0" height="236" fill="#6cb4ee" fill-opacity="0.06"></rect>
+<line x1="60" y1="20" x2="60" y2="256" stroke="#2a2f3a"></line><line x1="60" y1="256" x2="780" y2="256" stroke="#2a2f3a"></line>
+<line x1="60" y1="32" x2="780" y2="32" stroke="#8f97a6" stroke-dasharray="4 5"></line><text x="776" y="27" text-anchor="end" font-size="12" fill="#8f97a6">uniform guess: every piece equally likely</text>
+<line x1="60" y1="70" x2="780" y2="70" stroke="#6cb4ee" stroke-dasharray="4 5"></line><text x="776" y="65" text-anchor="end" font-size="12" fill="#6cb4ee">counting word frequencies: no context at all</text>
+<path d="M 54 96 l 12 -6 M 54 104 l 12 -6" stroke="#8f97a6"></path><text x="70" y="104" font-size="11" fill="#5b6271">axis broken: the area below is zoomed in</text>
+<rect x="60" y="143" width="720" height="14" fill="#9f8cff" fill-opacity="0.10"></rect>
+<line x1="60" y1="150" x2="780" y2="150" stroke="#9f8cff" stroke-opacity="0.6" stroke-dasharray="4 5"></line><text x="776" y="139" text-anchor="end" font-size="12" fill="#9f8cff">version 4’s best · shaded: within measurement noise</text>
+<path d="M 60.0 148.5 L 64.0 151.6 L 68.0 147.1 L 72.0 144.7 L 76.0 139.6 L 80.0 141.3 L 84.0 147.4 L 88.0 146.2 L 92.0 151.7 L 96.0 150.5 L 100.0 152.7 L 104.0 152.6 L 108.0 144.6 L 112.0 156.2 L 116.0 154.8 L 120.0 155.0 L 124.0 145.3 L 128.0 145.2 L 132.0 149.2 L 136.0 151.3 L 140.0 154.9 L 144.0 153.5 L 148.0 156.2 L 152.0 151.1 L 156.0 155.5 L 160.0 156.0 L 164.0 151.4 L 168.0 162.3 L 172.0 157.2 L 176.0 160.2 L 180.0 152.1 L 184.0 151.7 L 188.0 153.6 L 192.0 154.8 L 196.0 158.3 L 200.0 156.7 L 204.0 153.7 L 208.0 151.5 L 212.0 153.6 L 216.0 161.5 L 220.0 152.5 L 224.0 157.4 L 228.0 158.3 L 232.0 149.8 L 236.0 156.8 L 240.0 162.6 L 244.0 147.7 L 248.0 155.5 L 252.0 156.5 L 256.0 153.4 L 260.0 159.4 L 264.0 157.0 L 268.0 150.8 L 272.0 161.2 L 276.0 160.6 L 280.0 161.9 L 284.0 164.2 L 288.0 159.5 L 292.0 158.5 L 296.0 152.2 L 300.0 160.9 L 304.0 155.4 L 308.0 156.2 L 312.0 152.7 L 316.0 154.1 L 320.0 156.1 L 324.0 164.4 L 328.0 149.5 L 332.0 152.2 L 336.0 159.9 L 340.0 165.4 L 344.0 161.6 L 348.0 150.5 L 352.0 147.8 L 356.0 160.8 L 360.0 155.9 L 364.0 154.3 L 368.0 163.8 L 372.0 164.4 L 376.0 160.2 L 380.0 160.7 L 384.0 161.6 L 388.0 166.9 L 392.0 162.6 L 396.0 162.2 L 400.0 162.4 L 404.0 152.9 L 408.0 165.8 L 412.0 164.4 L 416.0 162.5 L 420.0 151.3 L 424.0 157.4 L 428.0 164.1 L 432.0 152.2 L 436.0 159.6 L 440.0 165.0 L 444.0 154.6 L 448.0 167.8 L 452.0 163.1 L 456.0 160.0 L 460.0 162.2 L 464.0 163.7 L 468.0 161.3 L 472.0 166.0 L 476.0 157.9 L 480.0 159.1 L 484.0 165.7 L 488.0 161.1 L 492.0 157.1 L 496.0 165.4 L 500.0 167.7" fill="none" stroke="#9f8cff" stroke-opacity="0.28" stroke-width="1"></path>
+<path d="M 60.0 149.7 L 64.0 149.3 L 68.0 148.1 L 72.0 146.1 L 76.0 143.8 L 80.0 142.2 L 84.0 142.4 L 88.0 144.3 L 92.0 147.0 L 96.0 149.4 L 100.0 150.9 L 104.0 151.7 L 108.0 152.1 L 112.0 152.4 L 116.0 152.6 L 120.0 152.7 L 124.0 152.9 L 128.0 153.0 L 132.0 153.2 L 136.0 153.4 L 140.0 153.5 L 144.0 153.7 L 148.0 153.8 L 152.0 154.0 L 156.0 154.1 L 160.0 154.2 L 164.0 154.4 L 168.0 154.5 L 172.0 154.7 L 176.0 154.8 L 180.0 154.9 L 184.0 155.1 L 188.0 155.2 L 192.0 155.3 L 196.0 155.4 L 200.0 155.6 L 204.0 155.7 L 208.0 155.8 L 212.0 155.9 L 216.0 156.0 L 220.0 156.1 L 224.0 156.3 L 228.0 156.4 L 232.0 156.5 L 236.0 156.6 L 240.0 156.7 L 244.0 156.8 L 248.0 156.9 L 252.0 157.0 L 256.0 157.1 L 260.0 157.2 L 264.0 157.3 L 268.0 157.4 L 272.0 157.5 L 276.0 157.6 L 280.0 157.7 L 284.0 157.8 L 288.0 157.9 L 292.0 157.9 L 296.0 158.0 L 300.0 158.1 L 304.0 158.2 L 308.0 158.3 L 312.0 158.4 L 316.0 158.4 L 320.0 158.5 L 324.0 158.6 L 328.0 158.7 L 332.0 158.8 L 336.0 158.8 L 340.0 158.9 L 344.0 159.0 L 348.0 159.1 L 352.0 159.1 L 356.0 159.2 L 360.0 159.3 L 364.0 159.3 L 368.0 159.4 L 372.0 159.5 L 376.0 159.5 L 380.0 159.6 L 384.0 159.7 L 388.0 159.7 L 392.0 159.8 L 396.0 159.8 L 400.0 159.9 L 404.0 160.0 L 408.0 160.0 L 412.0 160.1 L 416.0 160.1 L 420.0 160.2 L 424.0 160.2 L 428.0 160.3 L 432.0 160.3 L 436.0 160.4 L 440.0 160.5 L 444.0 160.5 L 448.0 160.6 L 452.0 160.6 L 456.0 160.6 L 460.0 160.7 L 464.0 160.7 L 468.0 160.8 L 472.0 160.8 L 476.0 160.9 L 480.0 160.9 L 484.0 161.0 L 488.0 161.0 L 492.0 161.1 L 496.0 161.1 L 500.0 161.1" fill="none" stroke="#9f8cff" stroke-width="3"></path>
+<circle cx="60.0" cy="149.2" r="4" fill="#6cb4ee"></circle><circle cx="115.0" cy="145.6" r="4" fill="#6cb4ee"></circle><circle cx="170.0" cy="148.5" r="4" fill="#6cb4ee"></circle><circle cx="225.0" cy="150.1" r="4" fill="#6cb4ee"></circle><circle cx="280.0" cy="151.4" r="4" fill="#6cb4ee"></circle><circle cx="335.0" cy="154.2" r="4" fill="#6cb4ee"></circle><circle cx="390.0" cy="152.7" r="4" fill="#6cb4ee"></circle><circle cx="445.0" cy="155.8" r="4" fill="#6cb4ee"></circle><circle cx="500.0" cy="153.9" r="4" fill="#6cb4ee"></circle>
+<text x="92" y="128" font-size="11" fill="#e5b567">small bump as the</text><text x="92" y="141" font-size="11" fill="#e5b567">learning rate warms up</text>
+<line x1="500" y1="20" x2="500" y2="304" stroke="#e6e8ec" stroke-opacity="0.35" stroke-dasharray="2 4"></line>
+<circle cx="500" cy="161.1" r="6" fill="#0e1014" stroke="#9f8cff" stroke-width="3"></circle>
+<text x="510" y="179.1" font-size="12" fill="#e6e8ec">now</text>
+<rect x="500" y="20" width="280" height="236" fill="#0e1014" fill-opacity="0.45"></rect>
+<text x="586" y="214" text-anchor="middle" font-size="12" fill="#5b6271">steps still to run</text>
+<text x="726" y="236" text-anchor="middle" font-size="11" fill="#6cb4ee">error usually</text><text x="726" y="249" text-anchor="middle" font-size="11" fill="#6cb4ee">drops most here</text>
+<text x="18" y="140" font-size="12" fill="#8f97a6" transform="rotate(-90 18 140)" text-anchor="middle">error · bits per character</text>
+<line x1="60" y1="300" x2="780" y2="300" stroke="#2a2f3a"></line>
+<path d="M 60 300 L 96.0 268 L 672.0 268 L 780 300" fill="#9f8cff" fill-opacity="0.12" stroke="#9f8cff" stroke-width="1.5"></path>
+<text x="54" y="272" text-anchor="end" font-size="11" fill="#8f97a6">learning</text><text x="54" y="285" text-anchor="end" font-size="11" fill="#8f97a6">rate</text>
+<text x="78" y="318" text-anchor="middle" font-size="11" fill="#c3c8d1">warm-up</text>
+<text x="384" y="318" text-anchor="middle" font-size="11" fill="#c3c8d1">steady</text>
+<text x="726" y="318" text-anchor="middle" font-size="11" fill="#c3c8d1">cool-down</text>
+<text x="420" y="336" text-anchor="middle" font-size="12" fill="#8f97a6">training steps</text>
+</svg>
+<span style="position: absolute; left: 76px; top: 4px; padding: 2px 8px; font-size: 12px; color: #e5b567; border: 1px solid #6b5a2a; background: #211c12">Example shape, not real data</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 13px; color: #c3c8d1">
+<span><span style="display: inline-block; width: 18px; height: 3px; background: #9f8cff; vertical-align: middle"></span> training text, smoothed</span>
+<span><span style="display: inline-block; width: 18px; height: 1px; background: #9f8cff; opacity: 0.4; vertical-align: middle"></span> every step</span>
+<span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #6cb4ee; vertical-align: middle"></span> held-back text</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px 24px; padding: 14px 16px; background: #15181e; border-left: 3px solid #9f8cff; font-size: 14px">
+<span style="flex: 1 1 360px"><b>Chat still uses version 4.</b> Version 5’s held-back error is inside version 4’s noise band. Chat switches when it is below the band at a checkpoint, or when you pick version 5 yourself.</span>
+<a href="Chat.dc.html" style="padding: 4px 0; align-self: center">Compare them in Chat</a>
+</div>
+<details style="font-size: 13px; color: #8f97a6">
+<summary style="cursor: pointer; padding: 6px 0; color: #c3c8d1">How the status and schedule work</summary>
+<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 6px">
+<span>Status is one of three, decided from the run: <b style="color: #c3c8d1">Learning</b> (smoothed error fell by more than the step-to-step noise over the last window), <b style="color: #c3c8d1">Flat</b> (it didn’t), <b style="color: #c3c8d1">Memorising</b> (held-back error rising while training error falls). Repeated passes over the same text help less each time and make memorising likely after a few; the fix is more text, or stopping at the best checkpoint.</span>
+<span>Schedule: warm-up, then a long steady stretch, then a cool-down where the learning rate falls to near zero. Checkpoints taken mid-steady look worse than they are; “Stop after a short cool-down” and “Make a checkpoint now” (in Queue and schedule) cool down a copy first.</span>
+<span>Learning rate “auto”: version 4’s tuned rate, rescaled for the new width so it doesn’t need retuning (μP). Change it only in Advanced.</span>
+</div>
+</details>
+</section>
+
+<section aria-label="What it writes now" style="background: #15181e; border: 1px solid #2a2f3a; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px"><span style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">WHAT IT WRITES NOW · SAME PROMPT EVERY [N] STEPS</span><span style="font-size: 13px; color: #8f97a6">always picks the likeliest next piece, so only training changes the text</span></div>
+<div style="font-family: Georgia, serif; color: #c3c8d1">The largest planet in our solar system is …</div>
+<div style="display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 16px; font-size: 14px; align-items: baseline">
+<span style="color: #8f97a6">step 0</span><span style="font-family: Georgia, serif; color: #8f97a6">[identical to version 4: the new parts start at zero]</span>
+<span style="color: #8f97a6">step [N]</span><span style="font-family: Georgia, serif; color: #c3c8d1">[sample]</span>
+<span style="color: #8f97a6">step [N]</span><span style="font-family: Georgia, serif; color: #c3c8d1">[sample]</span>
+<span style="color: #9f8cff">now · step [N]</span><span style="font-family: Georgia, serif; color: #e6e8ec">[sample]<span aria-hidden="true" style="display: inline-block; width: 2px; height: 16px; margin-left: 2px; background: #9f8cff; vertical-align: middle"></span></span>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

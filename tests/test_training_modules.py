@@ -2,9 +2,11 @@
 import unittest
 
 import numpy as np
+import torch
 
 from studio_registry import get
 from studio_slots import Dims
+from tests.torchcheck import to_np
 
 
 def numeric_gradient(loss_fn, logits, targets, eps=1e-6):
@@ -13,13 +15,13 @@ def numeric_gradient(loss_fn, logits, targets, eps=1e-6):
         high, low = logits.copy(), logits.copy()
         high[idx] += eps
         low[idx] -= eps
-        result[idx] = (loss_fn(high, targets) - loss_fn(low, targets)) / (2 * eps)
+        result[idx] = (float(loss_fn(high, targets)) - float(loss_fn(low, targets))) / (2 * eps)
     return result
 
 
 class TrainingModuleTests(unittest.TestCase):
     def setUp(self):
-        self.dims = Dims(4, 1, 5, 3, dtype=np.float64)
+        self.dims = Dims(4, 1, 5, 3, dtype=torch.float64)
 
     def check_objective(self, short, config):
         spec = get("objective", short)
@@ -28,8 +30,9 @@ class TrainingModuleTests(unittest.TestCase):
         logits = np.array([[[.4, -.3, 1.1], [.2, .8, -.6]], [[-.2, .5, .1], [3., -2., .4]]])
         targets = np.array([[2, -100], [0, 1]])
         value, gradient = objective(logits, targets, gradient=True)
+        gradient = to_np(gradient)
         np.testing.assert_allclose(gradient, numeric_gradient(objective, logits, targets), rtol=2e-7, atol=2e-8)
-        self.assertEqual(value, objective(logits, targets))
+        self.assertEqual(value, float(objective(logits, targets)))
         np.testing.assert_array_equal(gradient[0, 1], np.zeros(3))
         with self.assertRaisesRegex(ValueError, "no target tokens"):
             objective(logits, np.full((2, 2), -100), gradient=True)
@@ -50,26 +53,25 @@ class TrainingModuleTests(unittest.TestCase):
         cfg = spec.parse({"beta1": .5, "beta2": .25, "weight_decay": .1})
         optimizer = spec.build(cfg, self.dims, None)
         class Model:
-            xp = np
             roles = {"w": "weight", "g": "gain"}
             lr_scale = {}
-            p = {"w": np.array([2., -1.]), "g": np.array([2.])}
-            grads = {"w": np.array([1., -2.]), "g": np.array([1.])}
+            p = {"w": torch.tensor([2., -1.], dtype=torch.float64), "g": torch.tensor([2.], dtype=torch.float64)}
+            grads = {"w": torch.tensor([1., -2.], dtype=torch.float64), "g": torch.tensor([1.], dtype=torch.float64)}
             g = grads
         model = Model()
         optimizer.attach(model)
         optimizer.update(model, .1, clip=100)
         # direction is .5*g; decayed w then sign step; gains receive no decay.
-        np.testing.assert_allclose(model.p["w"], [1.88, -.89])
-        np.testing.assert_allclose(model.p["g"], [1.9])
-        np.testing.assert_allclose(optimizer.m["w"], [.75, -1.5])
-        model.grads["w"][:] = [-2., 1.]
-        model.grads["g"][:] = [-1.]
+        np.testing.assert_allclose(to_np(model.p["w"]), [1.88, -.89])
+        np.testing.assert_allclose(to_np(model.p["g"]), [1.9])
+        np.testing.assert_allclose(to_np(optimizer.m["w"]), [.75, -1.5])
+        model.grads["w"].copy_(torch.tensor([-2., 1.]))
+        model.grads["g"].fill_(-1.)
         optimizer.update(model, .1, clip=100)
         # sign(.5*m + .5*g) = sign([-.625, -.25]); new m=.25*m+.75*g.
-        np.testing.assert_allclose(model.p["w"], [1.9612, -.7811])
-        np.testing.assert_allclose(model.p["g"], [2.0])
-        np.testing.assert_allclose(optimizer.m["w"], [-1.3125, .375])
+        np.testing.assert_allclose(to_np(model.p["w"]), [1.9612, -.7811])
+        np.testing.assert_allclose(to_np(model.p["g"]), [2.0])
+        np.testing.assert_allclose(to_np(optimizer.m["w"]), [-1.3125, .375])
 
     def test_wsd_warmup_stability_decay_and_edges(self):
         spec = get("schedule", "wsd")

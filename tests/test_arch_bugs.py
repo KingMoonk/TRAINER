@@ -19,6 +19,13 @@ class BlockIDValidation(unittest.TestCase):
         result = validate_spec(spec)
         self.assertEqual(result["blocks"][0]["id"], "blk_abc123")
 
+    def test_idless_blocks_hash_deterministically(self):
+        from studio_arch import spec_hash
+        spec = default_spec()
+        for block in spec["blocks"]:
+            del block["id"]
+        self.assertEqual(spec_hash(spec), spec_hash(spec))
+
 
 class IntValidation(unittest.TestCase):
     def test_int_rejects_inf(self):

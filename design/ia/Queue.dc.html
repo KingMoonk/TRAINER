@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>This computer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0e1014;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:#9f8cff;text-decoration:none}a:hover{color:#b9abff}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1150px; background: #0e1014; color: #e6e8ec; font-size: 15px; line-height: 1.45">
+<nav aria-label="Studio areas" style="flex: 1 1 220px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 4px">
+<div style="font-size: 20px; font-weight: 700; letter-spacing: 0.02em; padding: 0 12px 20px">GROUNDWORK</div>
+<a href="Builder.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Network designer</span><span style="font-size: 12px; color: #8f97a6">shape the model</span></a>
+<a href="Pretraining.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Pretraining</span><span style="font-size: 12px; color: #8f97a6">data in, it learns</span></a>
+<a href="Feedback.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Post-training</span><span style="font-size: 12px; color: #8f97a6">learns to answer</span></a>
+<a href="Chat.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Chat</span><span style="font-size: 12px; color: #8f97a6">use it</span></a>
+<div style="margin-top: auto; padding: 14px 12px 0; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">THIS COMPUTER</span>
+<span style="color: #c3c8d1">Training <b style="color: #e6e8ec">version 5</b> · catching up</span>
+<span role="progressbar" aria-label="Version 5 training" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100" style="display: block; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: 40%; background: #9f8cff"></span></span>
+<span style="color: #8f97a6">about [N] min left · then 3 queued</span>
+<span style="color: #8f97a6">Chat uses <b style="color: #e6e8ec">version 4</b> · best so far</span>
+<a href="Queue.dc.html" aria-current="page" style="padding: 6px 0; font-weight: 600">Queue and schedule</a>
+</div>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 18px">
+<header>
+<h1 style="margin: 0; font-size: 32px">This computer</h1>
+<div style="color: #8f97a6; margin-top: 6px">What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.</div>
+</header>
+
+<section aria-label="Now" style="display: flex; flex-direction: column; gap: 12px; padding: 22px; background: #15181e; border: 1px solid #2a2f3a">
+<div style="display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center"><span style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">NOW</span><b style="font-size: 18px">Version 5 · catching up from version 4</b><span style="margin-left: auto; font-size: 13px; color: #8f97a6">{{ now.state }}</span></div>
+<div role="progressbar" aria-label="Current job" style="height: 10px; background: #20242c"><div style="height: 10px; width: 40%; background: #9f8cff"></div></div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 14px; color: #c3c8d1"><span>step [N] of [N]</span><span>schedule: <b style="color: #e6e8ec">steady phase</b></span><span>learning rate: auto ([N])</span><span style="margin-left: auto">about [N] min left</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<button type="button" onClick="{{ now.toggle }}" style="min-height: 44px; padding: 0 16px; font: inherit; cursor: pointer; background: transparent; color: #e6e8ec; border: 1px solid #2a2f3a">{{ now.btn }}</button>
+<button type="button" style="min-height: 44px; padding: 0 16px; font: inherit; cursor: pointer; background: transparent; color: #e6e8ec; border: 1px solid #2a2f3a">Make a checkpoint now</button>
+</div>
+<span style="font-size: 12px; color: #8f97a6">“Make a checkpoint now” branches off a short cool-down and keeps the main run going. Pausing keeps everything; the run resumes exactly where it stopped.</span>
+</section>
+
+<section aria-label="Queue" style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #15181e; border: 1px solid #2a2f3a">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">UP NEXT · IN ORDER</span><span style="font-size: 13px; color: #8f97a6">all done in about [N] h at the current plan</span></div>
+<sc-for list="{{ queue }}" as="j" hint-placeholder-count="3">
+<div style="display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 0; border-top: 1px solid #20242c">
+<span style="width: 24px; color: #8f97a6">{{ j.n }}</span>
+<span style="flex: 1 1 280px; display: flex; flex-direction: column"><b>{{ j.name }}</b><span style="font-size: 13px; color: #8f97a6">{{ j.note }}</span></span>
+<span style="font-size: 13px; color: #c3c8d1">{{ j.time }}</span>
+<button type="button" onClick="{{ j.up }}" disabled="{{ j.first }}" style="min-height: 40px; padding: 0 12px; font: inherit; font-size: 13px; cursor: pointer; background: transparent; color: #e6e8ec; border: 1px solid #2a2f3a">Move up</button>
+<button type="button" onClick="{{ j.remove }}" style="min-height: 40px; padding: 0 12px; font: inherit; font-size: 13px; cursor: pointer; background: transparent; color: #8f97a6; border: 1px solid #2a2f3a">Remove</button>
+</div>
+</sc-for>
+<sc-if value="{{ empty }}" hint-placeholder-val="{{ false }}"><span style="color: #8f97a6">Nothing waiting. When the current job ends, the computer keeps improving the current version in its steady phase, within the plan below.</span></sc-if>
+</section>
+
+<section aria-label="Plan" style="display: flex; flex-direction: column; gap: 14px; padding: 22px; background: #15181e; border: 1px solid #2a2f3a">
+<div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">WHEN IT MAY TRAIN</div>
+<div style="display: flex; flex-wrap: wrap; gap: 16px 28px">
+<div style="display: flex; flex-direction: column; gap: 6px"><b>Hours</b><div role="group" aria-label="Hours" style="display: flex; gap: 4px"><sc-for list="{{ hours }}" as="o" hint-placeholder-count="3"><button type="button" onClick="{{ o.pick }}" aria-pressed="{{ o.on }}" style="min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px; cursor: pointer; background: {{ o.bg }}; color: {{ o.fg }}; border: 1px solid #2a2f3a">{{ o.label }}</button></sc-for></div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><b>Memory it may use</b><div role="group" aria-label="Memory" style="display: flex; gap: 4px"><sc-for list="{{ mem }}" as="o" hint-placeholder-count="3"><button type="button" onClick="{{ o.pick }}" aria-pressed="{{ o.on }}" style="min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px; cursor: pointer; background: {{ o.bg }}; color: {{ o.fg }}; border: 1px solid #2a2f3a">{{ o.label }}</button></sc-for></div></div>
+</div>
+<sc-for list="{{ toggles }}" as="t" hint-placeholder-count="4"><button type="button" onClick="{{ t.flip }}" aria-pressed="{{ t.on }}" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0; font: inherit; text-align: left; cursor: pointer; background: transparent; color: #e6e8ec; border: 0"><span aria-hidden="true" style="width: 36px; height: 20px; flex: 0 0 36px; border-radius: 10px; background: {{ t.track }}; position: relative"><span style="position: absolute; top: 2px; left: {{ t.knob }}; width: 16px; height: 16px; border-radius: 50%; background: #e6e8ec"></span></span><span style="display: flex; flex-direction: column"><b>{{ t.name }}</b><span style="font-size: 13px; color: #8f97a6">{{ t.note }}</span></span></button></sc-for>
+<span style="font-size: 12px; color: #8f97a6">Answering in Chat never stops training. It shares the computer, so training slows while it answers.</span>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1150}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { paused: false, jobs: [0, 1, 2], hours: 1, mem: 1, t: { battery: true, awake: false, best: true, idle: true } }; }
+  renderVals() {
+    const st = this.state;
+    const J = [
+      { name: 'Post-training · round 3 · learn from a teacher', note: 'teacher: version 4’s previous best checkpoint · added by you', time: 'about [N] min' },
+      { name: 'Compare runs · 4 variants × 3 seeds', note: '12 runs, same length and schedule; learning rate retuned per variant', time: 'about [N] h' },
+      { name: 'Restore how it answers', note: 'added automatically after tonight’s new text. New text can erode how it answers; a short lesson from the previous version restores it without losing the new text.', time: 'about [N] min' }
+    ];
+    const queue = st.jobs.map((id, i) => Object.assign({ n: i + 1, first: i === 0,
+      up: () => { if (i === 0) return; const a = st.jobs.slice(); [a[i - 1], a[i]] = [a[i], a[i - 1]]; this.setState({ jobs: a }); },
+      remove: () => this.setState({ jobs: st.jobs.filter((x) => x !== id) }) }, J[id]));
+    const seg = (on) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    const pick = (key, labels) => labels.map((l, i) => Object.assign({ label: l, on: st[key] === i, pick: () => this.setState({ [key]: i }) }, seg(st[key] === i)));
+    const T = [['idle', 'Only when I’m not using the computer', 'Pauses within a few seconds of keyboard or mouse use.'], ['battery', 'Pause on battery', 'Resumes when plugged in.'], ['awake', 'Keep the computer awake while training', 'Otherwise it pauses when the computer sleeps.'], ['best', 'Chat follows the best checkpoint', 'Chat uses the checkpoint with the lowest error on held-back text, not simply the newest.']];
+    const toggles = T.map(([k, name, note]) => ({ name, note, on: !!st.t[k], track: st.t[k] ? '#9f8cff' : '#2a2f3a', knob: st.t[k] ? '18px' : '2px', flip: () => this.setState({ t: Object.assign({}, st.t, { [k]: !st.t[k] }) }) }));
+    return {
+      queue, empty: st.jobs.length === 0, toggles,
+      hours: pick('hours', ['Any time', 'Nights only', 'Set hours']), mem: pick('mem', ['Half', 'Most', 'All']),
+      now: { state: st.paused ? 'paused' : 'running', btn: st.paused ? 'Resume' : 'Pause', toggle: () => this.setState({ paused: !st.paused }) }
+    };
+  }
+}
+</script>
+</body>
+</html>

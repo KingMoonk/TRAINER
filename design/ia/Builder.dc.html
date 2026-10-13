@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Build your model</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0e1014;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:#9f8cff;text-decoration:none}a:hover{color:#b9abff}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1180px; background: #0e1014; color: #e6e8ec; font-size: 15px; line-height: 1.45">
+<nav aria-label="Studio areas" style="flex: 1 1 220px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 4px">
+<div style="font-size: 20px; font-weight: 700; letter-spacing: 0.02em; padding: 0 12px 20px">GROUNDWORK</div>
+<a href="Builder.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 9px; border-left: 3px solid #9f8cff; background: #1b1f27; color: #e6e8ec"><span style="font-weight: 600; color: #9f8cff">Network designer</span><span style="font-size: 12px; color: #8f97a6">shape the model</span></a>
+<a href="Pretraining.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Pretraining</span><span style="font-size: 12px; color: #8f97a6">data in, it learns</span></a>
+<a href="Feedback.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Post-training</span><span style="font-size: 12px; color: #8f97a6">learns to answer</span></a>
+<a href="Chat.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Chat</span><span style="font-size: 12px; color: #8f97a6">use it</span></a>
+<div style="margin-top: auto; padding: 14px 12px 0; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">THIS COMPUTER</span>
+<span style="color: #c3c8d1">Training <b style="color: #e6e8ec">{{ machine.now }}</b> · {{ machine.what }}</span>
+<span role="progressbar" aria-label="Current training job" aria-valuenow="{{ machine.pct }}" aria-valuemin="0" aria-valuemax="100" style="display: block; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: {{ machine.w }}; background: #9f8cff"></span></span>
+<span style="color: #8f97a6">{{ machine.next }}</span>
+<span style="color: #8f97a6">Chat uses <b style="color: #e6e8ec">version 4</b> · best so far</span>
+<a href="Queue.dc.html" style="padding: 6px 0">Queue and schedule</a>
+</div>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 32px 40px; display: flex; flex-direction: column; gap: 20px">
+<header style="display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between">
+<div>
+<h1 style="margin: 0; font-size: 32px">Build your model</h1>
+<div style="color: #8f97a6; margin-top: 6px">Change the picture. See what it costs and what it does.</div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid #2a2f3a; background: #15181e; font-size: 14px">
+<span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: {{ run.dot }}"></span>
+<span>{{ run.pill }}</span>
+<span role="progressbar" aria-label="{{ run.pill }}" style="width: 80px; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: {{ run.w }}; background: {{ run.dot }}"></span></span>
+</div>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch">
+<section aria-label="Your model" style="flex: 3 1 640px; min-width: 0; padding: 24px; background: #15181e; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 10px">
+
+<div style="display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center">
+<div style="flex: 1 1 320px; display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: #1b1f27; border: 1px solid #2a2f3a">
+<span style="display: flex; flex-direction: column"><b>Next word</b><span style="font-size: 13px; color: #8f97a6">scores every piece in the word list, picks one</span></span>
+<span aria-hidden="true" style="margin-left: auto; display: flex; align-items: flex-end; gap: 4px; height: 32px"><span style="width: 10px; height: 30px; border: 1px solid #9f8cff"></span><span style="width: 10px; height: 16px; border: 1px solid #9f8cff"></span><span style="width: 10px; height: 9px; border: 1px solid #9f8cff"></span><span style="width: 10px; height: 5px; border: 1px solid #9f8cff"></span></span>
+</div>
+</div>
+<div aria-hidden="true" style="padding-left: 40px; color: #9f8cff">↑</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch">
+<div style="flex: 1 1 320px; display: flex; flex-direction: column-reverse; gap: 6px">
+<sc-for list="{{ slabs }}" as="s" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 6px 12px; background: {{ s.bg }}; border: {{ s.bd }}; opacity: {{ s.op }}">
+<span style="width: 64px; font-size: 13px; color: #8f97a6">{{ s.label }}</span>
+<span aria-hidden="true" style="display: flex; gap: 3px; width: 84px"><sc-for list="{{ s.eyes }}" as="e" hint-placeholder-count="4"><span style="width: 7px; height: 7px; border-radius: 50%; background: #e58fb0"></span></sc-for></span>
+<span aria-hidden="true" style="height: 10px; width: {{ s.thinkW }}; background: #6cb4ee"></span>
+<span style="margin-left: auto; font-size: 12px; color: {{ s.tagColor }}">{{ s.tag }}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="flex: 1 1 260px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span><b>Blocks</b> <span style="color: #8f97a6; font-size: 13px">rounds of processing per word</span></span>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" onClick="{{ blocks.less }}" aria-label="Fewer blocks" style="width: 44px; height: 44px; font: inherit; font-size: 20px; cursor: pointer; background: #1b1f27; color: #e6e8ec; border: 1px solid #2a2f3a">−</button>
+<span style="min-width: 48px; text-align: center; font-size: 22px; font-weight: 600; color: {{ blocks.color }}">{{ blocks.n }}</span>
+<button type="button" onClick="{{ blocks.more }}" aria-label="More blocks" style="width: 44px; height: 44px; font: inherit; font-size: 20px; cursor: pointer; background: #1b1f27; color: #e6e8ec; border: 1px solid #2a2f3a">+</button>
+<span style="font-size: 13px; color: #8f97a6">{{ blocks.was }}</span>
+</div>
+</div>
+<sc-for list="{{ controls }}" as="c" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span><b style="color: {{ c.color }}">{{ c.name }}</b> <span style="color: #8f97a6; font-size: 13px">{{ c.hint }}</span></span>
+<div role="group" aria-label="{{ c.name }}" style="display: flex; gap: 4px">
+<sc-for list="{{ c.opts }}" as="o" hint-placeholder-count="3"><button type="button" onClick="{{ o.pick }}" aria-pressed="{{ o.on }}" style="flex: 1; min-height: 44px; padding: 0 10px; font: inherit; font-size: 14px; cursor: pointer; background: {{ o.bg }}; color: {{ o.fg }}; border: {{ o.bd }}">{{ o.label }}</button></sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div aria-hidden="true" style="padding-left: 40px; color: #9f8cff">↑</div>
+<div style="display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: #1b1f27; border: 1px solid #2a2f3a">
+<div style="display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center">
+<span><b>Your text, cut into pieces</b> <span style="color: #8f97a6; font-size: 13px">{{ words.count }}</span></span>
+<div role="group" aria-label="Word list" style="display: flex; gap: 4px; margin-left: auto">
+<sc-for list="{{ words.opts }}" as="o" hint-placeholder-count="3"><button type="button" onClick="{{ o.pick }}" aria-pressed="{{ o.on }}" style="min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px; cursor: pointer; background: {{ o.bg }}; color: {{ o.fg }}; border: {{ o.bd }}">{{ o.label }}</button></sc-for>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 3px">
+<sc-for list="{{ words.chips }}" as="w" hint-placeholder-count="8"><span style="padding: 3px 7px; font-family: Georgia, serif; font-size: 15px; background: #0e1014; border: 1px solid #9fd08a">{{ w }}</span></sc-for>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 12px; color: #8f97a6; padding-top: 4px">
+<span><span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #e58fb0"></span> look-back heads: each looks for something different in earlier words (attention)</span>
+<span><span style="display: inline-block; width: 18px; height: 8px; background: #6cb4ee; vertical-align: middle"></span> thinking room: works on each word by itself (MLP)</span>
+</div>
+</section>
+
+<aside aria-label="What your changes do" style="flex: 1 1 320px; max-width: 420px; display: flex; flex-direction: column; gap: 16px">
+<section style="padding: 20px; background: #1b1f27; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 14px">
+<div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">WHAT YOUR CHANGES COST</div>
+<sc-for list="{{ costs }}" as="k" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 5px">
+<div style="display: flex; justify-content: space-between; gap: 8px"><span>{{ k.name }}</span><b style="color: {{ k.color }}">{{ k.say }}</b></div>
+<div style="display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 4px 8px; align-items: center; font-size: 12px; color: #8f97a6">
+<span>now</span><span style="height: 8px; background: #20242c"><span style="display: block; height: 8px; width: {{ k.a }}; background: #9f8cff"></span></span>
+<span>new</span><span style="height: 8px; background: #20242c"><span style="display: block; height: 8px; width: {{ k.b }}; background: {{ k.barB }}"></span></span>
+</div>
+</div>
+</sc-for>
+<span style="font-size: 12px; color: #8f97a6">Training memory: <b style="color: #e6e8ec">[fits / doesn’t fit]</b> on this computer at 16 rows per step. The bars compare weights, gradients and optimizer state (16 bytes per parameter at 32-bit); the engine adds activations, which grow with rows per step.</span>
+</section>
+<section style="padding: 20px; background: #1b1f27; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 10px; font-size: 14px">
+<div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">WHAT TO EXPECT</div>
+<sc-for list="{{ expect }}" as="x" hint-placeholder-count="1"><span style="color: #c3c8d1">{{ x }}</span></sc-for>
+</section>
+</aside>
+</div>
+
+<section aria-label="Your changes" style="display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; padding: 16px 20px; background: {{ tray.bg }}; border: 1px solid {{ tray.line }}">
+<span style="font-size: 12px; letter-spacing: 0.08em; color: {{ tray.line }}">{{ tray.kicker }}</span>
+<sc-for list="{{ tray.chips }}" as="c" hint-placeholder-count="1"><span style="padding: 4px 10px; border: 1px dashed #e5b567; font-size: 14px">{{ c }}</span></sc-for>
+<span style="flex: 1 1 300px; font-size: 14px; color: #c3c8d1">{{ tray.text }}</span>
+<sc-if value="{{ tray.hasQuick }}" hint-placeholder-val="{{ true }}"><a href="Sandbox.dc.html" style="padding: 12px 4px; color: #e6e8ec; text-decoration: underline">Quick test first</a></sc-if>
+<sc-if value="{{ tray.hasB }}" hint-placeholder-val="{{ true }}"><button type="button" onClick="{{ tray.b }}" style="min-height: 44px; padding: 0 16px; font: inherit; cursor: pointer; background: transparent; color: #e6e8ec; border: 1px solid #2a2f3a">{{ tray.bLabel }}</button></sc-if>
+<sc-if value="{{ tray.hasA }}" hint-placeholder-val="{{ true }}"><button type="button" onClick="{{ tray.a }}" style="min-height: 44px; padding: 0 18px; font: inherit; font-weight: 600; cursor: pointer; background: {{ tray.line }}; color: #0e1014; border: 0">{{ tray.aLabel }}</button></sc-if>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch">
+<section aria-label="While training" style="flex: 1 1 420px; min-width: 0; padding: 20px; background: #15181e; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">WHILE TRAINING · ERROR IN BITS PER CHARACTER</div>
+<div style="position: relative">
+<svg role="img" aria-label="Error falling over training time for the current version; the new version's line appears when it trains." viewBox="0 0 600 180" style="width: 100%; height: auto; display: block">
+<line x1="30" y1="10" x2="30" y2="160" stroke="#2a2f3a"></line><line x1="30" y1="160" x2="590" y2="160" stroke="#2a2f3a"></line>
+<line x1="30" y1="22" x2="590" y2="22" stroke="#8f97a6" stroke-dasharray="3 5"></line><text x="586" y="17" text-anchor="end" font-size="11" fill="#8f97a6">uniform guess</text>
+<line x1="30" y1="96" x2="590" y2="96" stroke="#6cb4ee" stroke-dasharray="3 5"></line><text x="586" y="91" text-anchor="end" font-size="11" fill="#6cb4ee">counting word frequencies</text>
+<line x1="30" y1="140" x2="590" y2="140" stroke="#9f8cff" stroke-opacity="0.5" stroke-dasharray="3 5"></line><text x="40" y="154" font-size="11" fill="#9f8cff">best so far</text>
+<path d="M30 22 C 90 90, 160 120, 260 132 S 420 140, 470 142" fill="none" stroke="#9f8cff" stroke-width="3"></path>
+<path d="{{ see.path }}" fill="none" stroke="#e5b567" stroke-width="3" stroke-dasharray="7 4"></path>
+<circle cx="470" cy="142" r="5" fill="#0e1014" stroke="#9f8cff" stroke-width="3"></circle>
+<text x="310" y="176" text-anchor="middle" font-size="12" fill="#8f97a6">training time</text>
+</svg>
+<span style="position: absolute; right: 8px; top: 6px; padding: 2px 8px; font-size: 12px; color: #e5b567; border: 1px solid #6b5a2a; background: #211c12">Example shape</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px"><span style="color: #9f8cff">— version 4</span><span style="color: {{ see.v5color }}">{{ see.trainV5 }}</span></div>
+</section>
+<section aria-label="When answering" style="flex: 1 1 420px; min-width: 0; padding: 20px; background: #15181e; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">WHEN ANSWERING · SAME QUESTION, BOTH VERSIONS</div>
+<div style="font-family: Georgia, serif; color: #c3c8d1">The largest planet in our solar system is …</div>
+<div style="display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px 12px; align-items: baseline; font-size: 14px">
+<span style="color: #9f8cff">version 4</span><span style="font-family: Georgia, serif">[its answer appears here, word by word]<span aria-hidden="true" style="display: inline-block; width: 2px; height: 15px; margin-left: 2px; background: #9f8cff; vertical-align: middle"></span></span>
+<span style="color: {{ see.v5color }}">version 5</span><span style="color: #8f97a6">{{ see.answerV5 }}</span>
+</div>
+<div style="font-size: 12px; color: #8f97a6">Answering never stops training. It shares the computer, so training slows while it answers. Each version answers with its best checkpoint.</div>
+</section>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 4px 24px; align-items: center; padding-top: 16px; border-top: 1px solid #2a2f3a; font-size: 14px">
+<span style="font-size: 12px; letter-spacing: 0.08em; color: #8f97a6">LOOK INSIDE</span>
+<a href="Trace.dc.html" style="padding: 12px 0">Trace a position</a><a href="HeadZoom.dc.html" style="padding: 12px 0">Inside a head</a><a href="ValueMap.dc.html" style="padding: 12px 0">Value map</a><a href="LossView.dc.html" style="padding: 12px 0">Loss</a><a href="HeadLab.dc.html" style="padding: 12px 0">Head lab</a><a href="Inside3D.dc.html" style="padding: 12px 0">3D</a>
+<span style="margin-left: auto; display: flex; gap: 24px"><a href="Experiments.dc.html" style="padding: 12px 0; color: #8f97a6">Compare runs</a><a href="Sandbox.dc.html" style="padding: 12px 0; color: #8f97a6">Quick test</a></span>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { cur: { L: 4, H: 4, W: 1, V: 2 }, draft: { L: 6, H: 4, W: 2, V: 2 }, phase: 'edit', ver: 4 }; }
+  renderVals() {
+    const st = this.state, cur = st.cur, dr = st.draft;
+    const FF = [512, 1024, 2048], VS = [256, 8192, 50257];
+    const cfg = (s) => ({ V: VS[s.V], d: 256, T: 256, L: s.L, H: s.H, ff: FF[s.W] });
+    const P = (c) => c.V * c.d + c.T * c.d + c.L * (4 * c.d * c.d + 4 * c.d + 2 * c.d * c.ff + c.ff + c.d + 4 * c.d) + 2 * c.d;
+    const C = (c) => 6 * (c.L * (4 * c.d * c.d + 2 * c.d * c.ff) + c.V * c.d) + 6 * c.L * c.T * c.d;
+    const TM = (c) => 16 * P(c);
+    const MEM = (c) => 4 * P(c) + 2 * c.L * c.d * 4 * c.T;
+    const a = cfg(cur), b = cfg(dr);
+    const editing = st.phase === 'edit';
+    const set = (patch) => { if (editing) this.setState({ draft: Object.assign({}, dr, patch) }); };
+    const words = ['Letters', 'Small word list', 'Large word list'], widths = ['Narrow', 'Normal', 'Wide'];
+    const changes = [];
+    if (dr.L !== cur.L) changes.push((dr.L > cur.L ? 'more' : 'fewer') + ' blocks (' + cur.L + ' → ' + dr.L + ')');
+    if (dr.H !== cur.H) changes.push('look-back heads ' + cur.H + ' → ' + dr.H);
+    if (dr.W !== cur.W) changes.push(widths[dr.W].toLowerCase() + ' thinking room');
+    if (dr.V !== cur.V) changes.push(words[dr.V].toLowerCase());
+    const n = st.ver, nv = 'version ' + (n + 1);
+    // tower
+    const maxL = Math.max(cur.L, dr.L), slabs = [];
+    for (let i = 0; i < maxL; i++) {
+      const added = i >= cur.L, removed = i >= dr.L;
+      slabs.push({ label: 'Block ' + (i + 1), eyes: Array.from({ length: removed ? cur.H : dr.H }, (_, k) => k), thinkW: [36, 72, 144][removed ? cur.W : dr.W] + 'px',
+        bg: added ? '#211c12' : '#1b1f27', bd: added ? '1px dashed #e5b567' : '1px solid #2a2f3a', op: removed ? '0.35' : '1',
+        tag: added ? 'new' : removed ? 'removed' : (dr.H !== cur.H || dr.W !== cur.W ? 'changed' : ''), tagColor: '#e5b567' });
+    }
+    const seg = (on, wasCur) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec', bd: wasCur && !on ? '1px dashed #9f8cff' : '1px solid #2a2f3a' });
+    const controls = [
+      { name: 'Look-back heads', hint: 'how many things each block looks for at once', color: '#e58fb0', opts: [1, 4, 8].map((h) => Object.assign({ label: String(h), on: dr.H === h, pick: () => set({ H: h }) }, seg(dr.H === h, cur.H === h))) },
+      { name: 'Thinking room', hint: 'space to work on each word', color: '#6cb4ee', opts: widths.map((w, i) => Object.assign({ label: w, on: dr.W === i, pick: () => set({ W: i }) }, seg(dr.W === i, cur.W === i))) }
+    ];
+    const blocks = { n: dr.L, color: dr.L !== cur.L ? '#e5b567' : '#e6e8ec', was: dr.L !== cur.L ? 'was ' + cur.L : '', less: () => set({ L: Math.max(1, dr.L - 1) }), more: () => set({ L: Math.min(12, dr.L + 1) }) };
+    const prompt = 'The largest planet in our solar system is';
+    const chips = dr.V === 0 ? prompt.split('').map((c) => (c === ' ' ? '␣' : c)) : dr.V === 2 ? ['The', ' largest', ' planet', ' in', ' our', ' solar', ' system', ' is'] : ['pieces depend on your data'];
+    const wordsV = { count: dr.V === 0 ? '41 pieces, one per character' : dr.V === 2 ? '8 pieces' : 'built from your data when you save', chips,
+      opts: words.map((w, i) => Object.assign({ label: w, on: dr.V === i, pick: () => set({ V: i }) }, seg(dr.V === i, cur.V === i))) };
+    const say = (x, y, more, less) => { const r = y / x; return Math.abs(r - 1) < 0.05 ? 'about the same' : r > 1 ? 'about ' + r.toFixed(1) + '× ' + more : 'about ' + (1 / r).toFixed(1) + '× ' + less; };
+    const bar = (x, y) => { const m = Math.max(x, y); return [Math.round(x / m * 100) + '%', Math.round(y / m * 100) + '%']; };
+    const costs = [['Size', P(a), P(b), 'bigger', 'smaller'], ['Time per training step', C(a), C(b), 'slower', 'faster'], ['Memory while training', TM(a), TM(b), 'more', 'less']].map(([name, x, y, mo, le]) => {
+      const [wa, wb] = bar(x, y), s = say(x, y, mo, le);
+      return { name, say: s, a: wa, b: wb, color: s === 'about the same' ? '#8f97a6' : '#e5b567', barB: s === 'about the same' ? '#9f8cff' : '#e5b567' };
+    });
+    const expect = [];
+    if (dr.L > cur.L) expect.push('More blocks: each word gets more rounds of processing, and every training step takes longer. With little data it may memorize rather than learn; watch the test line.');
+    if (dr.L < cur.L) expect.push('Fewer blocks: smaller and faster. It may not get its error as low.');
+    if (dr.L !== cur.L) expect.push('Last time blocks changed (2 → 4, version 2 → 3), error moved by [N] bits per character.');
+    if (dr.H !== cur.H) expect.push('Different look-back heads: same size, same speed. Each block splits its looking into ' + (dr.H > cur.H ? 'more, narrower' : 'fewer, wider') + ' views. Whether that helps at this size is something to test, not assume.');
+    if (dr.W > cur.W) expect.push('More thinking room: more to learn in every block, so bigger and slower.');
+    if (dr.W < cur.W) expect.push('Less thinking room: smaller and faster, with less capacity in every block.');
+    if (dr.V === 0 && cur.V !== 0) expect.push('Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.');
+    if (dr.V === 1 && cur.V !== 1) expect.push('Small word list: built from your own data. A much smaller table; text splits into somewhat more pieces.');
+    if (dr.V === 2 && cur.V !== 2) expect.push('Large word list: GPT-2’s list. A big table, short sequences.');
+    if (!expect.length) expect.push('Change something in the picture to see what to expect.');
+    // states
+    const ph = st.phase;
+    const wordChanged = dr.V !== cur.V;
+    const startNote = wordChanged ? 'The word list changed, so the old word table doesn’t fit: ' + nv + ' has to start from scratch.'
+      : dr.H !== cur.H ? nv[0].toUpperCase() + nv.slice(1) + ' reuses version ' + n + '’s weights split into a different number of heads, so its error jumps at first and then recovers.'
+      : (dr.L < cur.L || dr.W < cur.W) ? 'Removed parts are dropped from version ' + n + '’s weights; error rises a little, then recovers.'
+      : 'New parts start at zero, so ' + nv + ' begins exactly where version ' + n + ' is and catches up from there.';
+    const tray = ph === 'edit' ? (changes.length ? {
+        kicker: 'NOT SAVED · ONLY THIS PAGE SEES THESE', chips: changes, text: 'Nothing else in the app sees these yet. Saving makes ' + nv + '.', bg: '#211c12', line: '#e5b567',
+        hasQuick: true, hasA: true, aLabel: 'Save as ' + nv, a: () => this.setState({ phase: 'saved' }), hasB: true, bLabel: 'Discard', b: () => this.setState({ draft: Object.assign({}, cur) }) }
+      : { kicker: 'NO CHANGES', chips: [], text: 'Version ' + n + ' is the current design. Chat answers with the best checkpoint on held-back text.', bg: '#15181e', line: '#2a2f3a', hasA: false, hasB: false })
+      : ph === 'saved' ? { kicker: nv.toUpperCase() + (wordChanged ? ' SAVED · NEEDS TRAINING FROM SCRATCH' : ' SAVED · NEEDS CATCH-UP TRAINING'), chips: [], text: startNote + ' Chat keeps version ' + n + ' until ' + nv + ' beats it on held-back text, or you choose it.', bg: '#26171a', line: '#ef8a7a',
+        hasA: true, aLabel: wordChanged ? 'Add training to the queue' : 'Add catch-up to the queue', a: () => this.setState({ phase: 'queued' }), hasB: !wordChanged, bLabel: 'Start from scratch instead', b: () => this.setState({ phase: 'queued' }) }
+      : ph === 'queued' ? { kicker: 'QUEUED ON THIS COMPUTER', chips: [], text: nv[0].toUpperCase() + nv.slice(1) + ' waits behind the current job. The sidebar and “Queue and schedule” show where it is.', bg: '#15181e', line: '#6cb4ee', hasA: true, aLabel: 'Move it to the front', a: () => this.setState({ phase: 'training' }), hasB: false }
+      : { kicker: nv.toUpperCase() + (wordChanged ? ' IS TRAINING' : ' IS CATCHING UP'), chips: [], text: 'Version ' + n + '’s run is paused and can resume. Chat switches to ' + nv + ' only when it beats version ' + n + ' on held-back text, or when you pick it.', bg: '#1a1730', line: '#9f8cff', hasA: true, aLabel: 'Start new changes', a: () => this.setState({ phase: 'edit', ver: n + 1, cur: Object.assign({}, dr), draft: Object.assign({}, dr) }), hasB: false };
+    const run = ph === 'training' ? { pill: nv[0].toUpperCase() + nv.slice(1) + (wordChanged ? ' is training' : ' is catching up'), dot: '#9f8cff', w: '4%' } : { pill: 'Version ' + n + ' is training', dot: '#9f8cff', w: '62%' };
+    const see = ph === 'training' ? { v5color: '#e5b567', trainV5: '- - ' + nv + ': ' + (wordChanged ? 'starts from scratch' : 'starts from version ' + n + '’s level'), answerV5: 'answers from its best checkpoint so far', path: wordChanged ? 'M30 22 C 90 80, 150 112, 240 128' : 'M470 142 C 500 140, 540 146, 590 149' }
+      : { v5color: '#5b6271', trainV5: nv + ': appears once it trains', answerV5: ph === 'edit' ? 'save your changes and train them to compare' : 'has no trained weights yet', path: '' };
+    const machine = ph === 'training' ? { now: nv, what: wordChanged ? 'from scratch' : 'catching up', pct: 4, w: '4%', next: 'about [N] min left · version ' + n + ' paused' }
+      : ph === 'queued' ? { now: 'version ' + n, what: 'steady phase', pct: 62, w: '62%', next: 'about [N] min left · then ' + nv }
+      : { now: 'version ' + n, what: 'steady phase', pct: 62, w: '62%', next: 'about [N] min left · nothing queued' };
+    return { slabs, controls, blocks, words: wordsV, costs, expect, tray, run, see, machine };
+  }
+}
+</script>
+</body>
+</html>

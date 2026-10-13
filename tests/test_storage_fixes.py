@@ -177,13 +177,13 @@ EXAMPLES = [{"user": f"say {w}", "assistant": w} for w in ("yes", "no", "cat", "
 class ModelFixes(unittest.TestCase):
     def test_weight_decay_skips_gains_and_biases(self):
         model = studio_model.ScratchTransformer({**TINY, "weight_decay": .5}, 16)
-        before = {k: v.copy() for k, v in model.p.items()}
+        before = {k: v.detach().clone() for k, v in model.p.items()}
         studio_model.AdamW(model, .5).update(model, .1)  # gradients are all zero: only decay can move a parameter
         for key, value in model.p.items():
             if key.endswith((".g", ".b")):
-                self.assertTrue((value == before[key]).all(), key)
+                self.assertTrue(bool((value == before[key]).all()), key)
             elif key.endswith(".w") or key in ("token", "position"):
-                self.assertTrue((value != before[key]).any(), key)
+                self.assertTrue(bool((value != before[key]).any()), key)
 
     def test_best_checkpoint_without_validation_uses_fixed_windows_not_one_batch(self):
         with tempfile.TemporaryDirectory() as directory:

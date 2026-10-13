@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import math
 
+import torch
+
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -23,18 +25,14 @@ class ALiBiPosition(Layer):
     def forward(self, x, ctx):
         return x
 
-    def backward(self, dx):
-        return dx
-
     def score_bias(self, length, heads):
         return self.score_bias_rows(0, length, length, heads)
 
     def score_bias_rows(self, start, end, length, heads):
-        xp = self.xp
-        queries = xp.arange(start, end, dtype=self.dtype)
-        keys = xp.arange(length, dtype=self.dtype)
+        queries = torch.arange(start, end, dtype=self.dtype, device=self.device)
+        keys = torch.arange(length, dtype=self.dtype, device=self.device)
         distance = queries[:, None] - keys[None, :]
-        rate = xp.asarray(slopes(heads), dtype=self.dtype)[:, None, None]
+        rate = torch.as_tensor(slopes(heads), dtype=self.dtype, device=self.device)[:, None, None]
         return -rate * distance[None, :, :]
 
 

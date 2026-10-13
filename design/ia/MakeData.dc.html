@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Make extra data</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0e1014;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:#9f8cff;text-decoration:none}a:hover{color:#b9abff}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 900px; background: #0e1014; color: #e6e8ec; font-size: 15px; line-height: 1.45">
+<nav aria-label="Studio areas" style="flex: 1 1 220px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 4px">
+<div style="font-size: 20px; font-weight: 700; letter-spacing: 0.02em; padding: 0 12px 20px">GROUNDWORK</div>
+<a href="Builder.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Network designer</span><span style="font-size: 12px; color: #8f97a6">shape the model</span></a>
+<a href="Pretraining.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 9px; border-left: 3px solid #9f8cff; background: #1b1f27; color: #e6e8ec"><span style="font-weight: 600; color: #9f8cff">Pretraining</span><span style="font-size: 12px; color: #8f97a6">data in, it learns</span></a>
+<a href="Feedback.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Post-training</span><span style="font-size: 12px; color: #8f97a6">learns to answer</span></a>
+<a href="Chat.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Chat</span><span style="font-size: 12px; color: #8f97a6">use it</span></a>
+<div style="margin-top: auto; padding: 14px 12px 0; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">THIS COMPUTER</span>
+<span style="color: #c3c8d1">Training <b style="color: #e6e8ec">version 5</b> · catching up</span>
+<span role="progressbar" aria-label="Version 5 training" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100" style="display: block; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: 40%; background: #9f8cff"></span></span>
+<span style="color: #8f97a6">about [N] min left · then 3 queued</span>
+<span style="color: #8f97a6">Chat uses <b style="color: #e6e8ec">version 4</b> · best so far</span>
+<a href="Queue.dc.html" style="padding: 6px 0">Queue and schedule</a>
+</div>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 56px 40px">
+<div style="max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+<header>
+<h1 style="margin: 0; font-size: 32px">Make extra data</h1>
+<div style="color: #8f97a6; margin-top: 6px">Optional. Generate more, then keep what passes review.</div>
+</header>
+<div role="radiogroup" aria-label="What to make" style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{ kinds }}" as="k" hint-placeholder-count="3"><button type="button" role="radio" onClick="{{ k.pick }}" aria-checked="{{ k.on }}" style="display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; min-height: 64px; padding: 14px 16px; font: inherit; text-align: left; cursor: pointer; background: {{ k.bg }}; color: #e6e8ec; border: {{ k.bd }}">
+<span style="flex: 1 1 320px; display: flex; flex-direction: column; gap: 2px"><b>{{ k.name }}</b><span style="font-size: 13px; color: #8f97a6">{{ k.note }}</span></span>
+<span style="display: flex; flex-direction: column; align-items: flex-end; font-size: 12px"><span style="color: #c3c8d1">makes: {{ k.makes }}</span><span style="color: {{ k.safeColor }}">{{ k.safe }}</span></span>
+</button></sc-for>
+</div>
+<div style="padding: 14px 16px; background: #15181e; border-left: 3px solid #9f8cff; font-size: 14px; display: flex; flex-direction: column; gap: 4px"><span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">EXAMPLE OF WHAT IT MAKES</span><span style="font-family: ui-monospace, Menlo, monospace">{{ sel.example }}</span><span style="font-size: 13px; color: #8f97a6">{{ sel.where }}</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="n" style="color: #8f97a6">How many</label>
+<input id="n" type="number" value="500" style="width: 140px; box-sizing: border-box; min-height: 44px; padding: 0 14px; background: #15181e; border: 1px solid #2a2f3a; color: #e6e8ec; font: inherit">
+</div>
+<button type="button" style="min-height: 44px; border: 0; background: #9f8cff; color: #0e1014; font: inherit; font-weight: 600; padding: 0 24px; cursor: pointer">{{ sel.go }}</button>
+<button type="button" style="min-height: 44px; border: 1px solid #2a2f3a; background: transparent; color: #e6e8ec; font: inherit; padding: 0 20px; cursor: pointer">Try 5 first</button>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px 28px"><a href="#" style="padding: 8px 0">Review drafts (0)</a><a href="YourData.dc.html" style="padding: 8px 0">Your data</a></div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { k: 0 }; }
+  renderVals() {
+    const k = this.state.k;
+    const K = [
+      { name: 'Problems a rule can check', note: 'Sort, reverse, count, copy, small addition, length limits, ending cleanly.', makes: 'problems', safe: 'safe: the rule decides what is right', safeColor: '#6cb4ee',
+        example: 'Reverse: groundwork  →  rule: reverse', where: 'Goes to Your data → Problems. Used by Post-training round 2.', go: 'Generate problems' },
+      { name: 'Rewrite with your local model', note: 'Rephrases prompts and answers you already have, so round 1 sees more variety. Uses your local model (Ollama).', makes: 'conversations', safe: 'for review only: it can introduce mistakes', safeColor: '#e5b567',
+        example: '[your prompt, reworded]  →  [the same answer, reworded]', where: 'Goes to Your data → Conversations as drafts. Nothing is used until you mark it Good.', go: 'Make drafts' },
+      { name: 'Generate prose with your local model', note: 'Short passages in a style or topic you pick.', makes: 'text', safe: 'for review only: it can introduce mistakes', safeColor: '#e5b567',
+        example: '[a paragraph about tides, in plain English]', where: 'Goes to Your data → Text as drafts. Kept small next to real text.', go: 'Make drafts' }
+    ];
+    const kinds = K.map((x, i) => ({ name: x.name, note: x.note, makes: x.makes, safe: x.safe, safeColor: x.safeColor, on: i === k,
+      bg: i === k ? '#1b1f27' : 'transparent', bd: i === k ? '1px solid #9f8cff' : '1px solid #2a2f3a', pick: () => this.setState({ k: i }) }));
+    return { kinds, sel: K[k] };
+  }
+}
+</script>
+</body>
+</html>

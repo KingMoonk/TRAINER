@@ -1,7 +1,7 @@
-"""float64 weights and activations."""
+"""float64 weights and activations (CPU and CUDA only; Apple's MPS has no float64)."""
 from __future__ import annotations
 
-import numpy as np
+import torch
 
 from studio_registry import ModuleSpec, register
 
@@ -11,9 +11,9 @@ class FP64(ModuleSpec):
     id = "precision/fp64"
     slot = "precision"
     name = "float64"
-    blurb = "Slower, but exact enough for finite-difference gradient checks."
+    blurb = "Double precision. Twice the memory, used for gradient checks; not available on Apple GPUs."
     ref = "—"
     backward = "No backward pass"
 
     def build(self, cfg, dims, rng):
-        return np.float64
+        return torch.float64

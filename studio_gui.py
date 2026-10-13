@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import json
 import os
 import queue
@@ -32,6 +33,11 @@ class NativeStudio(tk.Tk):
              ("chat", "04", "Playground", "Talk to your trained checkpoint.")]
 
     def __init__(self, workspace=None):
+        if sys.platform == "win32":  # crisp text on scaled displays: must happen before the first window exists
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except (AttributeError, OSError):
+                pass
         super().__init__()
         self.title("Groundwork · AI Studio")
         self.geometry("1420x960")
@@ -52,10 +58,14 @@ class NativeStudio(tk.Tk):
         self.dataset_var = tk.StringVar()
         self.dataset_map = {}
         self.dataset_boxes = []
+        self._search_job = None
+        self._vocab_cache = {}
         self.status_var = tk.StringVar(value="Ready · local workspace")
         self.inference_device = tk.StringVar(value="auto")
         self.gpu_info = None
         self.compute_status = tk.StringVar(value="Checking CUDA support in the background…")
+        self.handlers = {}
+        self.register_handlers()
         self._style()
         self._layout()
         self._build_datasets()
@@ -246,7 +256,7 @@ class NativeStudio(tk.Tk):
         self.search = tk.StringVar()
         label(tools, "Search").pack(side="left", padx=(0, 8))
         ttk.Entry(tools, textvariable=self.search, width=40).pack(side="left", padx=(0, 12))
-        self.search.trace_add("write", lambda *_: self.refresh_examples())
+        self.search.trace_add("write", lambda *_: self.search_changed())
         button(tools, "Edit", self.edit_example)
         Tooltip(button(tools, "Mark as Good", self.mark_reviewed), help_text("review_good"))
         button(tools, "Remove", self.remove_examples)
@@ -287,6 +297,16 @@ class NativeStudio(tk.Tk):
     def dataset_line(self):
         a = self.audit_vars
         return f"{a['records'].get()} examples \u00b7 {a['review'].get()} not yet checked"
+
+    def search_changed(self):
+        """Refresh the table once typing pauses, not on every keystroke."""
+        if self._search_job is not None:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(220, self._search_now)
+
+    def _search_now(self):
+        self._search_job = None
+        self.refresh_examples()
 
     def refresh_examples(self):
         if not hasattr(self, "examples_tree"):
@@ -512,7 +532,11 @@ class NativeStudio(tk.Tk):
         try:
             cfg = self.read_config()
             examples = self.workspace.examples(self.selected_dataset())
-            vocab = Tokenizer.fit(cfg["tokenizer"], examples).vocab_size if examples else 263
+            # the fitted vocabulary only changes when the dataset does: key it by a cheap dataset version
+            version = (self.selected_dataset(), cfg["tokenizer"], len(examples), max((e.get("updatedAt", "") for e in examples), default=""))
+            if version not in self._vocab_cache:
+                self._vocab_cache = {version: Tokenizer.fit(cfg["tokenizer"], examples).vocab_size if examples else 263}
+            vocab = self._vocab_cache[version]
             self._set_data_summary(len(examples))
             count = parameter_estimate(cfg, vocab)
             self._set_time_estimate(cfg, count)
@@ -812,10 +836,11 @@ class NativeStudio(tk.Tk):
         self.transcript.tag_configure("speaker", foreground=ACCENT, font=(FONT, 10, "bold"))
         self.chat_input = text_box(page, 3)
         self.chat_input.pack(fill="x", pady=(12, 0))
-        self.chat_input.bind("<Control-Return>", lambda _: self.send_chat())
+        mod = "Command" if sys.platform == "darwin" else "Control"
+        self.chat_input.bind(f"<{mod}-Return>", lambda _: self.send_chat() or "break")
         controls = ttk.Frame(page)
         controls.pack(fill="x", pady=(8, 0))
-        button(controls, "Send  Ctrl+Enter", self.send_chat, True)
+        button(controls, "Send  " + ("⌘" if mod == "Command" else "Ctrl") + "+Enter", self.send_chat, True)
         button(controls, "Stop", self.stop_job)
         Tooltip(button(controls, "This reply is wrong", self.teach_correction), help_text("correction"))
         self.temperature = tk.StringVar(value="0.8")
@@ -890,18 +915,28 @@ class NativeStudio(tk.Tk):
         set_text(self.transcript, "")
 
     def render_chat(self, partial=None):
-        self.transcript.configure(state="normal")
-        self.transcript.delete("1.0", "end")
-        for message in self.chat_messages:
-            if message["role"] == "system":
-                continue
-            self.transcript.insert("end", ("YOU" if message["role"] == "user" else "MODEL") + "\n", "speaker")
-            self.transcript.insert("end", message["content"] + "\n\n")
-        if partial is not None:
-            self.transcript.insert("end", "MODEL\n", "speaker")
-            self.transcript.insert("end", partial or "Thinking…")
-        self.transcript.see("end")
-        self.transcript.configure(state="disabled")
+        """Redraw the transcript; while a reply streams in, only its trailing text is replaced per token."""
+        text = self.transcript
+        text.configure(state="normal")
+        if partial is not None and "chat_partial" in text.mark_names():
+            text.delete("chat_partial", "end")
+            text.insert("end", partial or "Thinking…")
+        else:
+            text.delete("1.0", "end")
+            if "chat_partial" in text.mark_names():
+                text.mark_unset("chat_partial")
+            for message in self.chat_messages:
+                if message["role"] == "system":
+                    continue
+                text.insert("end", ("YOU" if message["role"] == "user" else "MODEL") + "\n", "speaker")
+                text.insert("end", message["content"] + "\n\n")
+            if partial is not None:
+                text.insert("end", "MODEL\n", "speaker")
+                text.mark_set("chat_partial", "end-1c")
+                text.mark_gravity("chat_partial", "left")
+                text.insert("end", partial or "Thinking…")
+        text.see("end")
+        text.configure(state="disabled")
 
     def send_chat(self):
         if self.busy():
@@ -960,49 +995,66 @@ class NativeStudio(tk.Tk):
         self.worker.start()
         return True
 
-    def poll(self):
-        for _ in range(100):
-            try:
-                kind, value = self.events.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                self.handle_event(kind, value)
-            except Exception as exc:
-                try:
-                    self.log(traceback.format_exc())
-                    self.status_var.set(f"Something went wrong: {exc}")
-                except Exception:
-                    pass
-        if self.closing and (self.worker is None or not self.worker.is_alive()):
-            self.workspace.save()
-            self.destroy()
-            return
-        self.after(60, self.poll)
+    def register_handlers(self):
+        """Claim event kinds for poll, the one consumer of self.events. Mixins extend this, calling super()."""
+        self.handlers.update(training=self.training_event, gpu_status=self.update_gpu_status, status=self.status_var.set,
+                             chat_text=self.render_chat, result=self.job_result, error=self.job_error)
 
-    def handle_event(self, kind, value):
-        if kind == "training":
-            self.training_event(value)
-        elif kind == "gpu_status":
-            self.update_gpu_status(value)
-        elif kind == "status":
-            self.status_var.set(value)
-        elif kind == "chat_text":
-            self.render_chat(value)
-        elif kind == "result":
-            previous = self.job_kind
-            self.job_kind = None
-            self.pause.clear()
-            self.pause_button.configure(text="Pause")
-            self.status_var.set(f"{previous.capitalize()} · {'stopped' if self.stop.is_set() else 'complete'}")
-            self.result_callback(value)
-        elif kind == "error":
-            self.job_kind = None
-            self.log(value[1])
-            self.refresh_runs()
-            self.status_var.set(f"Task failed · {value[0]}")
-            if not self.closing:
-                messagebox.showerror("Task failed", value[0], parent=self)
+    def report_error(self, exc):
+        try:
+            self.log(traceback.format_exc())
+            self.status_var.set(f"Something went wrong: {exc}")
+        except Exception:
+            pass
+
+    def poll(self):
+        """Dispatch queued events in order; a failing handler is reported and never stops the loop."""
+        finished = False
+        try:
+            for _ in range(200):
+                try:
+                    kind, value = self.events.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    handler = self.handlers.get(kind)
+                    if handler is None:
+                        raise LookupError(f"no handler for {kind!r} events")
+                    handler(value)
+                except Exception as exc:
+                    self.report_error(exc)
+            if self.closing and (self.worker is None or not self.worker.is_alive()):
+                self.workspace.save()
+                self.destroy()
+                finished = True
+        except Exception as exc:
+            self.report_error(exc)
+        finally:
+            if not finished:
+                self.after(60, self.poll)
+
+    def job_ended(self):
+        """A job's result or error arrived. Mixins extend this to reset their own progress displays."""
+        self.job_kind = None
+        self.pause.clear()
+        self.pause_button.configure(text="Pause")
+
+    def job_result(self, value):
+        previous = self.job_kind
+        self.job_ended()
+        self.status_var.set(f"{previous.capitalize()} · {'stopped' if self.stop.is_set() else 'complete'}")
+        self.result_callback(value)
+
+    def job_error(self, value):
+        failed = self.job_kind
+        self.job_ended()
+        if failed == "chat":  # drop the "Thinking…" placeholder; the question stays in the transcript
+            self.render_chat()
+        self.log(value[1])
+        self.refresh_runs()
+        self.status_var.set(f"Task failed · {value[0]}")
+        if not self.closing:
+            messagebox.showerror("Task failed", value[0], parent=self)
 
     def toggle_pause(self):
         if self.job_kind != "training":

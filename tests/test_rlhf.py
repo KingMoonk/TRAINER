@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import torch
 
 import studio_rlhf
+from tests.torchcheck import to_np
 from studio_model import train
 from studio_rlhf import (DEFAULT_RUBRIC, OllamaTeacher, PreferenceStore, TeacherError, _encode_pair, _sequence_logps,
                          auto_rlhf, compare_checkpoints, dpo_train, evaluate_checkpoint, load_settings, preference_batch,
@@ -79,28 +81,27 @@ class RLHFChecks(unittest.TestCase):
             rows = [_encode_pair(tokenizer, [{"role": "user", "content": "say yes"}], "yes", 32),
                     _encode_pair(tokenizer, [{"role": "user", "content": "say yes"}], "no", 32)]
             x, y = batch_arrays(rows)
-            weights = np.array([.7, -.4])  # arbitrary d(loss)/d(logp) per sequence
+            weights = torch.tensor([.7, -.4])  # arbitrary d(loss)/d(logp) per sequence
 
             def objective():
                 logps, _ = _sequence_logps(model, x, y)
                 return float((weights * logps).sum())
 
-            logps, (probabilities, safe, valid, cache) = _sequence_logps(model, x, y, tape=True)
+            logps, (_, _, _, cache) = _sequence_logps(model, x, y, tape=True)
             model.zero_grad()
-            w = weights[:, None].astype(np.float32)
-            dlogits = -probabilities * (w * valid)[..., None]
-            r, c = np.nonzero(valid)
-            dlogits[r, c, safe[r, c]] += w[r, 0]
-            # backward accumulates d(-objective); compare sign-flipped
-            model.backward(-dlogits.astype(np.float32), cache)
+            # backward_loss accumulates d(-objective); compare sign-flipped
+            model.backward_loss(-(weights * logps).sum(), cache)
             for key in ("block0.f1.w", "token", "final.g"):
-                index = tuple(np.unravel_index(np.argmax(np.abs(model.g[key])), model.g[key].shape))
+                index = tuple(np.unravel_index(np.argmax(np.abs(to_np(model.g[key]))), model.g[key].shape))
                 original = float(model.p[key][index])
-                model.p[key][index] = original + 1e-2
+                with torch.no_grad():
+                    model.p[key][index] = original + 1e-2
                 plus = objective()
-                model.p[key][index] = original - 1e-2
+                with torch.no_grad():
+                    model.p[key][index] = original - 1e-2
                 minus = objective()
-                model.p[key][index] = original
+                with torch.no_grad():
+                    model.p[key][index] = original
                 numeric = -(plus - minus) / 2e-2
                 self.assertAlmostEqual(float(model.g[key][index]), numeric, delta=max(2e-3, abs(numeric) * .05), msg=key)
 
@@ -148,7 +149,8 @@ class RLHFChecks(unittest.TestCase):
             policy.load_weights(data["model"])
             reference.load_weights(data["model"])
             noise = np.random.default_rng(1).normal(0, .05, policy.p["token"].shape).astype(np.float32)
-            policy.p["token"] += noise  # policy != reference so the gradient is not degenerate
+            with torch.no_grad():
+                policy.p["token"].add_(torch.as_tensor(noise))  # policy != reference so the gradient is not degenerate
             messages = [{"role": "user", "content": "say yes"}]
             rows = [_encode_pair(tokenizer, messages, "yes", 32), _encode_pair(tokenizer, messages, "yes yes", 32),
                     _encode_pair(tokenizer, messages, "no", 32), _encode_pair(tokenizer, messages, "no no no", 32)]
@@ -157,13 +159,16 @@ class RLHFChecks(unittest.TestCase):
                 policy.zero_grad()
                 preference_batch(policy, reference, rows, 2, config, backward=True)
                 for key in ("block0.f1.w", "token", "final.g"):
-                    index = tuple(np.unravel_index(np.argmax(np.abs(policy.g[key])), policy.g[key].shape))
+                    index = tuple(np.unravel_index(np.argmax(np.abs(to_np(policy.g[key]))), policy.g[key].shape))
                     original = float(policy.p[key][index])
-                    policy.p[key][index] = original + 1e-2
+                    with torch.no_grad():
+                        policy.p[key][index] = original + 1e-2
                     plus = preference_batch(policy, reference, rows, 2, config)["loss"]
-                    policy.p[key][index] = original - 1e-2
+                    with torch.no_grad():
+                        policy.p[key][index] = original - 1e-2
                     minus = preference_batch(policy, reference, rows, 2, config)["loss"]
-                    policy.p[key][index] = original
+                    with torch.no_grad():
+                        policy.p[key][index] = original
                     numeric = (plus - minus) / 2e-2
                     self.assertAlmostEqual(float(policy.g[key][index]), numeric, delta=max(3e-3, abs(numeric) * .06), msg=f"{loss_type} {normalize} {key}")
 

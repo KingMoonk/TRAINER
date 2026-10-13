@@ -72,6 +72,26 @@ class WheelDeltaTests(unittest.TestCase):
         self.assertLess(studio_widgets._ZOOM_BASE, 1.15)
 
 
+class X11WheelTests(unittest.TestCase):
+    def test_buttons_4_and_5_are_wheel_notches(self):
+        self.assertEqual(studio_widgets.wheel_delta(Mock(num=4, delta=0)), 120)
+        self.assertEqual(studio_widgets.wheel_delta(Mock(num=5, delta=0)), -120)
+        self.assertEqual(studio_widgets.wheel_delta(Mock(num="??", delta=-3)), -3)
+
+
+class CircuitModulesTests(unittest.TestCase):
+    def test_lenient_keeps_the_real_mixer_and_every_head(self):
+        spec = {"blocks": [{"id": "a", "attention": {"enabled": False, "heads": 1}, "mixer_id": "ssm", "mixer_name": "Selective state space"},
+                           {"id": "b", "attention": {"enabled": True, "heads": 64}}],
+                "head_id": "untied", "head_name": "Untied projection", "final_name": "RMSNorm"}
+        s = studio_circuit.lenient(spec)
+        self.assertEqual((s["blocks"][0]["mixer_id"], s["blocks"][0]["mixer_name"]), ("ssm", "Selective state space"))
+        self.assertEqual(s["blocks"][1]["heads"], 64)  # drawn as 16 pads plus "16 of 64"
+        self.assertEqual(s["blocks"][1]["mixer_id"], "attention")  # legacy blocks stay attention
+        self.assertFalse(s["tied"])
+        self.assertEqual(s["final_name"], "RMSNorm")
+
+
 class CircuitDescribeTests(unittest.TestCase):
     """Test the describe() method handles all pad types correctly."""
 

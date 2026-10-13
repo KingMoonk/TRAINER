@@ -7,9 +7,12 @@ from tkinter import ttk
 
 import numpy as np
 
-from studio_net_common import NetworkView
+from studio_net_common import NetworkView, to_numpy
 from studio_scene import LEVELS, MODES, SceneModel
 from studio_widgets import label
+
+
+SUMMARY_PROMPT = "The model reads this prompt."
 
 
 class SceneView(NetworkView):
@@ -46,15 +49,19 @@ class SceneView(NetworkView):
             self.scene.update_spec(self.spec)
         self.changed()
         try:
-            checkpoint = str(self.checkpoint())
+            row = self.checkpoint_row()
+            checkpoint = str(self.checkpoint(row))
         except ValueError:
-            checkpoint = None
+            row = checkpoint = None
         if checkpoint and checkpoint != self._data_key:
             self._data_key = checkpoint
             weights = self.host.arch_store.weights(self.host.arch_id)
-            run_dirs = [row["run_dir"] for row in weights if row.get("run_dir")]
-            replay = self.host.net_replay_paths()
-            self.work(lambda: self._load_data(checkpoint, run_dirs, replay), self._data_loaded)
+            run_dirs = [item["run_dir"] for item in weights if item.get("run_dir")]
+            # token snapshots only from the picked checkpoint's own run, never from another version's
+            replay = [path for path in self.host.net_replay_paths()
+                      if row.get("run_dir") and Path(path).parent.parent == Path(row["run_dir"])]
+            header = f"{self.provenance(row)} · prompt {SUMMARY_PROMPT!r}"
+            self.work(lambda: (header, self._load_data(checkpoint, run_dirs, replay)), self._data_loaded)
         elif not checkpoint:
             self.scene.snapshot = None
             self.scene.paths, self.scene.summaries, self.scene.stream_norms = [], {}, {}
@@ -67,17 +74,19 @@ class SceneView(NetworkView):
         from studio_snapshot import load
         from studio_summary import binned_attention, run_paths
         path = Path(checkpoint)
-        summary = binned_attention(path, "The model reads this prompt.", n_bins=16)
+        summary = binned_attention(path, SUMMARY_PROMPT, n_bins=16)
         paths = run_paths(list(dict.fromkeys(map(str, run_dirs))))
         snapshots = sorted(map(Path, replay), key=lambda item: item.stat().st_mtime)
         snapshot = load(snapshots[-1]) if snapshots else None
-        return {"attention": summary["attention"], "stream_norms": summary["stream_norms"],
-                "edges": summary["edges"].tolist(), "paths": paths, "snapshot": snapshot}
+        return {"attention": {key: to_numpy(value) for key, value in summary["attention"].items()},
+                "stream_norms": {key: to_numpy(value) for key, value in summary["stream_norms"].items()},
+                "edges": to_numpy(summary["edges"]).tolist(), "paths": paths, "snapshot": snapshot}
 
     def _data_loaded(self, ok, result):
         if not ok:
             self.message.set(f"Checkpoint scene data unavailable: {result}")
             return
+        header, result = result
         self.scene.summaries = result["attention"]
         self.scene.stream_norms = result["stream_norms"]
         self.scene.summary_edges = result["edges"]
@@ -85,7 +94,7 @@ class SceneView(NetworkView):
         if result["snapshot"]:
             self.scene.load_snapshot(result["snapshot"])
         self.changed()
-        self.message.set("Scene data loaded from the selected checkpoint; arrays and replay windows are bounded.")
+        self.message.set(header + ("" if result["snapshot"] else " · no token snapshot recorded in this run"))
 
     def changed(self):
         if self.scene:
@@ -134,42 +143,63 @@ class SceneView(NetworkView):
                     c.create_text(x, top - 10, text=gate["id"][:10], fill=muted, angle=90)
                 c.create_text(36, height - 14, anchor="w", text="blocks · brighter block is selected", fill=muted)
             mats = frame.get("attention", {})
-            if mats:
-                key = sorted(mats)[min(frame["selection"]["layer"], len(mats) - 1)]
-                data = np.asarray(mats[key])
-                self._heatmap(data[0] if data.ndim == 3 else data, width - 210, 62, 170, 130)
-                c.create_text(width - 205, 48, anchor="nw", text="attention · selected layer", fill=muted)
+            layer, head = frame["selection"]["layer"], frame["selection"]["head"]
+            data = mats.get(f"block{layer}.attn.pattern")
+            if data is not None:
+                data = np.asarray(data)
+                self._heatmap(data[min(head, data.shape[0] - 1)] if data.ndim == 3 else data, width - 210, 62, 170, 130,
+                              probabilities=True, axes=("query bins", "key bins"))
+                c.create_text(width - 205, 48, anchor="nw", text=f"attention · block {layer + 1} · head {head + 1}", fill=muted)
+            elif mats:
+                c.create_text(width - 205, 48, anchor="nw", text=f"no attention summary for block {layer + 1}", fill=muted)
         elif frame["level"] in ("Window", "Head"):
             key = f"block{frame['selection']['layer']}.attn.pattern"
             matrix = frame.get("pattern", []) if frame["level"] == "Head" else frame.get("patterns", {}).get(key, [])
             arr = np.asarray(matrix)
             if arr.ndim == 3: arr = arr[min(frame["selection"]["head"], arr.shape[0] - 1)]
             if arr.ndim == 2 and arr.size:
-                self._heatmap(arr, 52, 50, min(width - 90, 520), min(height - 90, 250))
-                c.create_text(52, height - 20, anchor="w", text=f"token window {frame.get('start', 0)}–{frame.get('end', 0)} · head {frame['selection']['head'] + 1}", fill=muted)
+                box = min(height - 110, 230)
+                self._heatmap(arr, 52, 50, min(width - 90, 520), box, probabilities=True)
+                c.create_text(52, 50 + box + 22, anchor="nw", text=f"token window {frame.get('start', 0)}–{frame.get('end', 0)} · head {frame['selection']['head'] + 1}", fill=muted)
             else:
                 c.create_text(width / 2, height / 2, text="No recorded token snapshot; attention summary is available at Model level", fill=muted)
         else:
             data = frame.get(self.weight_kind.get(), [])
             arr = np.asarray(data)
             if arr.ndim == 2 and arr.size:
-                self._heatmap(arr, 52, 50, min(width - 90, 520), min(height - 90, 250))
-                c.create_text(52, height - 20, anchor="w", text=f"{self.weight_kind.get()} · {frame.get('weight_name') or 'no weight snapshot'} · 16×16 maximum", fill=muted)
+                box = min(height - 110, 230)
+                self._heatmap(arr, 52, 50, min(width - 90, 520), box, axes=("rows", "columns"))
+                (rows, cols), (top, left) = frame.get("shape", arr.shape), frame.get("origin", (0, 0))
+                c.create_text(52, 50 + box + 22, anchor="nw", fill=muted,
+                              text=f"{self.weight_kind.get()} · {frame.get('weight_name')} · rows {top}–{top + arr.shape[0] - 1} of {rows}, "
+                                   f"columns {left}–{left + arr.shape[1] - 1} of {cols}")
             else:
                 c.create_text(width / 2, height / 2, text="No recorded weight snapshot", fill=muted)
 
-    def _heatmap(self, values, x, y, w, h):
-        arr = np.asarray(values, dtype=float)
-        if arr.ndim != 2 or not arr.size:
+    def _heatmap(self, values, x, y, w, h, probabilities=False, axes=("queries", "keys")):
+        """Probabilities use a fixed 0–1 scale; signed data a diverging one (blue negative, orange positive)."""
+        full = np.asarray(values, dtype=float)
+        if full.ndim != 2 or not full.size:
             return
-        arr = arr[:32, :32]
-        maxv = max(float(np.max(np.abs(arr))), 1e-9)
+        arr = full[:32, :32]
+        low, high = float(full.min()), float(full.max())
+        scale = max(abs(low), abs(high), 1e-9)
         cellw, cellh = w / arr.shape[1], h / arr.shape[0]
         for r in range(arr.shape[0]):
             for col in range(arr.shape[1]):
-                value = min(1.0, abs(float(arr[r, col])) / maxv)
-                shade = int(24 + value * 190)
-                color = f"#{14:02x}{shade:02x}{min(80 + shade // 2, 255):02x}"
+                value = float(arr[r, col])
+                if probabilities:
+                    t = min(1.0, max(0.0, value))
+                    rgb = (12 + t * 86, 22 + t * 192, 38 + t * 143)
+                else:
+                    t = max(-1.0, min(1.0, value / scale))
+                    tip = (255, 153, 51) if t > 0 else (51, 153, 255)
+                    rgb = tuple(26 + abs(t) * (channel - 26) for channel in tip)
+                color = "#%02x%02x%02x" % tuple(int(channel) for channel in rgb)
                 self.canvas.create_rectangle(x + col * cellw, y + r * cellh,
                                              x + (col + 1) * cellw, y + (r + 1) * cellh,
                                              fill=color, outline="#0c1626", width=.5)
+        shown = "" if arr.shape == full.shape else f" · showing the first {arr.shape[0]}×{arr.shape[1]} of {full.shape[0]}×{full.shape[1]}"
+        colours = "colour 0 to 1" if probabilities else f"colour ±{scale:.3g}, blue negative, orange positive"
+        self.canvas.create_text(x, y + h + 4, anchor="nw", width=max(w, 160), fill="#93a4ba",
+                                text=f"rows = {axes[0]}, columns = {axes[1]} · range {low:.3g} to {high:.3g} · {colours}{shown}")

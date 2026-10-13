@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import copy
 import json
-import queue
 import re
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -21,11 +21,13 @@ from studio_core import module_command, uid
 from studio_model import Tokenizer, load_checkpoint, validate_config
 from studio_vizbridge import VizBridge
 from studio_estimate import estimate as estimate_model
-from studio_spec import (config_from_spec as model_config_from_spec, from_legacy, to_legacy_view,
+from studio_registry import get as module_for
+from studio_spec import (block_at, config_from_spec as model_config_from_spec, from_legacy, to_legacy_view,
                          set_block, validate_spec as validate_model_spec)
 from studio_summary import binned_attention, run_paths
 from studio_snapshot import one_step, save as save_snapshot
 from studio_validate import errors as model_errors
+from studio_net_common import to_numpy
 from studio_net_design import DesignView
 from studio_net_sandbox import SandboxView
 from studio_net_variants import VariantsView
@@ -83,7 +85,6 @@ class NetworkMixin:
         self.net_modern = False
         self.net_model_selected = "mixer"
         self.net_model_undo, self.net_model_redo = [], []
-        self.net_view_events = queue.Queue()
         self.net_error = ""
         self.net_undo_stack, self.net_redo_stack = [], []
         self.net_selected = None
@@ -96,9 +97,13 @@ class NetworkMixin:
         self.net_ins = []
         self._pal = None
         self.viz = None
+        self._net_viewer_job, self._net_viewer_seen = None, False
+        self._net_weight_edit_busy = False
         self._build_network()
-        for sequence, action in (("<Control-z>", self.net_undo), ("<Control-y>", self.net_redo), ("<Control-Shift-Z>", self.net_redo),
-                                 ("<Delete>", self.net_delete_selected), ("<BackSpace>", self.net_delete_selected)):
+        mod = "Command" if sys.platform == "darwin" else "Control"
+        keys = [(f"<{mod}-{key}>", action) for key, action in (("z", self.net_undo), ("Z", self.net_undo), ("y", self.net_redo),
+                                                               ("Y", self.net_redo), ("Shift-Z", self.net_redo), ("Shift-z", self.net_redo))]
+        for sequence, action in keys + [("<Delete>", self.net_delete_selected), ("<BackSpace>", self.net_delete_selected)]:
             self.bind_all(sequence, lambda event, a=action: self._net_key(event, a), add="+")
 
     def _net_style(self):
@@ -254,6 +259,7 @@ class NetworkMixin:
     def show_page(self, name):
         super().show_page(name)
         if name == "network":
+            self.net_canvas.start_animation()
             self.net_on_show()
 
     def net_on_show(self):
@@ -291,6 +297,21 @@ class NetworkMixin:
         action()
         return "break"
 
+    def register_handlers(self):
+        super().register_handlers()
+        self.handlers["net_view"] = self.net_view_done
+
+    def net_view_done(self, value):
+        """A Network view's background result: (view, callback, (ok, result)); dropped if the view is gone."""
+        view, callback, outcome = value
+        if view.winfo_exists():
+            callback(*outcome)
+
+    def job_error(self, value):
+        self._net_run, self._net_live_pending = None, False  # a failed run must not restart itself later
+        self.net_live_button.configure(state="disabled")
+        super().job_error(value)
+
     def close(self):
         self.net_flush()
         super().close()
@@ -305,12 +326,18 @@ class NetworkMixin:
         try:
             if self.net_spec is not None:
                 self.net_commit_job = None
-                self.net_commit_now()
-        except Exception:
-            pass
+                pending = bool(self.net_notes)
+                if self.net_commit_now() is None and pending:
+                    raise RuntimeError(self.net_error or self.status_var.get())
+        except Exception as exc:  # the last design edits were not saved: say so before the window goes
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            try:
+                messagebox.showerror("Design not saved", f"Your latest design edits could not be saved:\n{exc}", parent=self)
+            except tk.TclError:
+                pass
         if self.viz is not None:
             try:
-                self.viz.stop()
+                self.viz.stop(wait=False)  # quitting and reaping the viewer happens off the UI thread
             except Exception:
                 pass
         try:  # leave no timers behind: a later Tk root in this thread would run them against deleted commands
@@ -353,6 +380,7 @@ class NetworkMixin:
             self.net_modern = True
         self.net_model_undo, self.net_model_redo = [], []
         self.net_undo_stack, self.net_redo_stack = [], []
+        self.net_notes = []  # notes belong to the architecture they were written for
         self.net_selected, self.net_init_version = None, None
         self.net_tele = None
         self.net_canvas.clear_telemetry()
@@ -771,11 +799,26 @@ class NetworkMixin:
         self.net_refresh_backups()
         self.net_refresh_picker()
 
+    def _net_display_spec(self):
+        """The legacy view the circuit draws, plus each slot's real module (to_legacy_view keeps only attention/MLP)."""
+        view = copy.deepcopy(self.net_spec)
+        spec = self.net_model_spec
+        try:
+            for index, block in enumerate(view["blocks"]):
+                entry = block_at(spec, index)
+                for slot in ("norm", "mixer", "channel"):
+                    block[f"{slot}_id"], block[f"{slot}_name"] = entry[slot]["id"], module_for(slot, entry[slot]["id"]).name
+            view["head_id"], view["head_name"] = spec["head"]["id"], module_for("head", spec["head"]["id"]).name
+            view["final_name"] = module_for("norm", spec["block"]["norm"]["id"]).name
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass  # an invalid draft: the circuit falls back to the plain attention/MLP drawing
+        return view
+
     def net_refresh_view(self):
         if self.net_modern and self.net_model_spec is not None:
             self.net_refresh_model_views()
             self.net_error = self.net_model_error
-            self.net_canvas.set_spec(self.net_spec, self.net_error, (), None, bool(self.net_error))
+            self.net_canvas.set_spec(self._net_display_spec(), self.net_error, (), None, bool(self.net_error))
             total = self.net_model_estimate["total"] if self.net_model_estimate else None
             self.net_summary.set(f"{total:,} parameters · {self.net_model_spec['dims']['n_layer']} blocks · "
                                  f"{self.net_model_spec['dims']['d_model']} wide" if total is not None else self.net_error)
@@ -1155,11 +1198,12 @@ class NetworkMixin:
         self.status_var.set(f"Backup created · {path}")
         return path
 
-    def net_restore_backup(self, path=None):
+    def net_restore_backup(self, path=None, tree=None):
+        """Restore path, else the backup selected in tree (default: the inspector's list), else ask for a file."""
         if self.job_kind:
             self.status_var.set("Stop the running task before restoring a backup.")
             return None
-        path = path or self._picked(self.backup_tree)
+        path = path or self._picked(tree or self.backup_tree)
         if not path:
             path = filedialog.askopenfilename(parent=self, title="Restore backup", initialdir=str(self.arch_store.backup_dir), filetypes=[("Architecture backup", "*.zip")])
         if not path:
@@ -1296,13 +1340,13 @@ class NetworkMixin:
         def worker():
             try:
                 summary = binned_attention(source, "The model reads this prompt.", n_bins=16)
-                result = {"type": "summary", "attention": {key: value.tolist() for key, value in summary["attention"].items()},
-                          "stream_norms": {key: value.tolist() for key, value in summary["stream_norms"].items()},
-                          "edges": summary["edges"].tolist(), "paths": run_paths(run_dirs)}
+                result = {"type": "summary", "attention": {key: to_numpy(value).tolist() for key, value in summary["attention"].items()},
+                          "stream_norms": {key: to_numpy(value).tolist() for key, value in summary["stream_norms"].items()},
+                          "edges": to_numpy(summary["edges"]).tolist(), "paths": run_paths(run_dirs)}
                 outcome = True, result
             except Exception as error:
                 outcome = False, str(error)
-            self.net_view_events.put((self, self._net_summary_done, outcome))
+            self.events.put(("net_view", (self, self._net_summary_done, outcome)))
         threading.Thread(target=worker, daemon=True, name="network-summary").start()
 
     def _net_summary_done(self, ok, result):
@@ -1333,13 +1377,17 @@ class NetworkMixin:
                 outcome = True, str(path)
             except Exception as error:
                 outcome = False, str(error)
-            self.net_view_events.put((self, self._net_probe_done, outcome))
+            self.events.put(("net_view", (self, self._net_probe_done, outcome)))
         threading.Thread(target=worker, daemon=True, name="network-exact-step").start()
 
     def _net_probe_done(self, ok, result):
         self.net_send({"type": "snapshot", "path": result} if ok else {"type": "error", "message": result})
 
     def net_edit_viewer_weight(self, message):
+        """Save one viewer weight edit as a new version. One edit at a time, so each builds on the previous one."""
+        if self._net_weight_edit_busy:
+            self.net_send({"type": "error", "message": "The previous weight edit is still being saved."})
+            return
         if self.arch_id is None or not self.arch_store.weights(self.arch_id):
             self.net_send({"type": "error", "message": "Train or register a checkpoint first."})
             return
@@ -1366,17 +1414,19 @@ class NetworkMixin:
                 outcome = True, version
             except Exception as error:
                 outcome = False, str(error)
-            self.net_view_events.put((self, self._net_weight_done, outcome))
+            self.events.put(("net_view", (self, self._net_weight_done, outcome)))
+        self._net_weight_edit_busy = True
         threading.Thread(target=worker, daemon=True, name="network-weight-edit").start()
 
     def _net_weight_done(self, ok, result):
+        self._net_weight_edit_busy = False
+        self.net_send({"type": "weight_edit_done", "ok": ok, "message": f"Edited weight saved as v{result}." if ok else str(result)})
         if ok:
             self.net_refresh_weights()
             self.net_views["Versions"].refresh()
             self.status_var.set(f"Edited weight saved as v{result}.")
             self.net_send_summary()
-        else:
-            self.net_send({"type": "error", "message": result})
+            self.net_exact_probe_step()  # a fresh snapshot of the edited version, so the viewer's Weights tile shows the change
 
     def net_open_viewer(self):
         script = Path(__file__).with_name("studio_brain3d.py")
@@ -1391,11 +1441,16 @@ class NetworkMixin:
             return False
         if self.viz is None:
             self.viz = VizBridge(script, command=module_command("studio_brain3d") if frozen else None)
+        starting = not self.viz.running
         try:
-            self.viz.start()
+            self.viz.start(log_path=self.workspace.root / "logs" / "viewer.log")
         except OSError as exc:
             messagebox.showerror("Cannot open the 3D viewer", str(exc), parent=self)
             return False
+        if starting:
+            self._net_viewer_seen = False
+        if self._net_viewer_job is None:
+            self._net_viewer_job = self.after(100, self.net_poll_viewer)
         self.net_send_spec()
         paths = self.net_replay_paths()
         if paths:
@@ -1403,7 +1458,8 @@ class NetworkMixin:
             self.net_send_summary()
         if self.net_tele:
             self.viz.send(self.net_tele)
-        self.status_var.set("3D brain opened · edits and telemetry are mirrored live")
+        if starting:
+            self.status_var.set("Starting the 3D brain…")
         return True
 
     def net_handle_viewer(self, message):
@@ -1445,6 +1501,9 @@ class NetworkMixin:
         if kind == "closed":
             self.status_var.set("3D viewer closed")
             return True
+        if kind == "send_error":
+            self.status_var.set(message.get("message", "A message could not be sent to the 3D viewer."))
+            return True
         applied = False
         if kind == "edit":
             allowed = {"attention.heads", "mlp.expansion", "mlp.layers", "attention.enabled", "mlp.enabled"}
@@ -1466,21 +1525,32 @@ class NetworkMixin:
         return applied
 
     def net_poll_viewer(self):
-        if self.viz is None:
-            return
-        for message in self.viz.poll():
-            try:
-                self.net_handle_viewer(message)
-            except Exception as exc:  # a bad viewer message must never stop the GUI poll loop
-                self.status_var.set(f"Viewer message ignored · {exc}")
+        """Every 100 ms while a viewer process lives: apply its messages and report how its startup went."""
+        self._net_viewer_job = None
+        viz, alive = self.viz, False
+        try:
+            if viz is None:
+                return
+            for message in viz.poll():
+                try:
+                    self.net_handle_viewer(message)
+                except Exception as exc:  # a bad viewer message must never stop this loop
+                    self.status_var.set(f"Viewer message ignored · {exc}")
+            if viz.connected and not self._net_viewer_seen:
+                self._net_viewer_seen = True
+                self.status_var.set("3D brain opened · edits and telemetry are mirrored live")
+            code = viz.exit_code
+            alive = code is None
+            if not alive and code != 0 and not self._net_viewer_seen:
+                self.net_viewer_failed(code, viz.log_path)
+        finally:
+            if alive:
+                self._net_viewer_job = self.after(100, self.net_poll_viewer)
 
-    def poll(self):
-        self.net_poll_viewer()
-        for _ in range(30):
-            try:
-                view, callback, outcome = self.net_view_events.get_nowait()
-            except queue.Empty:
-                break
-            if view.winfo_exists():
-                callback(*outcome)
-        super().poll()
+    def net_viewer_failed(self, code, log_path):
+        try:
+            tail = "\n".join(Path(log_path).read_text(encoding="utf-8", errors="replace").strip().splitlines()[-8:]) if log_path else ""
+        except OSError:
+            tail = ""
+        self.status_var.set(f"The 3D viewer stopped while starting (exit code {code})" + (f" · log: {log_path}" if log_path else ""))
+        messagebox.showerror("The 3D viewer could not start", (tail or f"Exit code {code}, no error output.") + (f"\n\nFull log: {log_path}" if log_path else ""), parent=self)

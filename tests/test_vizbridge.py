@@ -1,4 +1,5 @@
 """Checks for the GUI-to-viewer process bridge (studio_vizbridge)."""
+import io
 import shutil
 import socket
 import sys
@@ -6,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -148,6 +150,38 @@ class VizBridgeTests(unittest.TestCase):
     def test_parse_viewer_args(self):
         self.assertEqual(parse_viewer_args(["--port", "5555", "--authkey", "abcd", "--extra", "x"]), (5555, "abcd"))
         self.assertEqual(parse_viewer_args([]), (None, None))
+        self.assertEqual(parse_viewer_args(["--port", "5555"], stdin=io.StringIO("beef\n")), (5555, "beef"))
+
+    def test_authkey_stays_off_the_command_line(self):
+        bridge = self._bridge()
+        bridge.start()
+        self.assertNotIn(bridge._authkey.hex(), " ".join(bridge._proc.args))
+        bridge.send({"type": "select", "block_id": "x"})
+        self.assertTrue(any(m.get("type") == "echo" for m in _wait_for(bridge, lambda r: r)))
+
+    def test_stop_without_waiting_returns_at_once(self):
+        bridge = self._bridge(self.hang)
+        bridge.start()
+        proc, start = bridge._proc, time.monotonic()
+        bridge.stop(wait=False)
+        self.assertLess(time.monotonic() - start, 0.5)
+        self.assertFalse(bridge.running)
+        proc.wait(timeout=5)  # terminated by the background thread
+
+    def test_failed_launch_closes_the_listener(self):
+        bridge = VizBridge(self.echo, command=[str(self.dir / "missing-executable")])
+        with patch("studio_vizbridge.Listener") as listener:
+            listener.return_value.address = ("127.0.0.1", 1)
+            with self.assertRaises(OSError):
+                bridge.start()
+        listener.return_value.close.assert_called_once()
+
+    def test_unpicklable_message_is_reported(self):
+        bridge = self._bridge()
+        bridge.start()
+        bridge.send({"type": "select", "block_id": lambda: None})
+        got = _wait_for(bridge, lambda r: any(m.get("type") == "send_error" for m in r))
+        self.assertTrue(any(m.get("type") == "send_error" for m in got))
 
 
 if __name__ == "__main__":

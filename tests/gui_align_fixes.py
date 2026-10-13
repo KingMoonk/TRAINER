@@ -4,8 +4,11 @@ import tempfile
 import time
 import unittest
 import tkinter as tk
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from studio_align import HELDOUT_PATH, heldout_prompts, last_val_loss, prompt_key, training_prompts
 from studio_core import Workspace
 from studio_gui import Studio
 
@@ -82,3 +85,45 @@ class AlignFixes(unittest.TestCase):
         self.assertEqual(app.align_checkpoint.get(), "/base.npz")
         captured[0]({"status": "completed", "checkpoint": "/done/last.npz", "directory": "/done"})
         self.assertEqual(app.align_checkpoint.get(), "/done/last.npz")
+
+    def test_hotkey_ignores_string_widgets(self):
+        self.app.align_hotkey(SimpleNamespace(widget="popdown", char="1"))  # must not raise
+
+    def test_stopped_generation_is_not_votable(self):
+        app, captured = self.app, []
+        model = SimpleNamespace(generate=lambda *a: "partial")
+        app.align_prompts = [{"messages": MESSAGES, "reference": None}]
+        with patch.object(app, "checkpoint_path", return_value="/x.npz"), patch.object(app, "ensure_align_model", return_value=model), \
+                patch.object(app, "start_job", side_effect=lambda k, f, cb: captured.append((f, cb))):
+            app.next_comparison(None)
+            work, done = captured[0]
+            app.stop.set()
+            try:
+                done(work())
+            finally:
+                app.stop.clear()
+        self.assertIsNone(app.comparison)
+
+
+class AlignHelpers(unittest.TestCase):
+    def test_last_val_loss_skips_a_partial_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "metrics.jsonl"
+            path.write_text('{"val_loss": 1.5}\n{"val_loss": 2.0}\n{"val_lo', encoding="utf-8")
+            self.assertEqual(last_val_loss(path), 2.0)
+
+    def test_heldout_prompts_are_fixed_and_excluded_from_training_prompts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(directory)
+            dataset = workspace.create_dataset("Q")
+            workspace.add(dataset, [{"user": f"question {i}", "assistant": f"answer {i}"} for i in range(50)])
+            held = heldout_prompts(workspace, dataset)
+            self.assertTrue((Path(directory) / HELDOUT_PATH).is_file())
+            self.assertEqual(heldout_prompts(workspace, dataset), held)  # sampled once
+            keys = {prompt_key(p["messages"]) for p in held}
+            self.assertEqual(len(keys), 10)
+            self.assertFalse(keys & {prompt_key(p["messages"]) for p in training_prompts(workspace, dataset)})
+
+
+if __name__ == "__main__":
+    unittest.main()

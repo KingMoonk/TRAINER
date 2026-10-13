@@ -42,8 +42,10 @@ class Scenes(unittest.TestCase):
         scene = SceneModel(spec)
         scene.load_snapshot(snapshot)
         head = scene.frame('Head')
-        np.testing.assert_array_equal(head['pattern'], snapshot['arrays']['hook::block0.attn.pattern'][0, 0].T)
-        self.assertTrue(head['mask'][2][0])
+        np.testing.assert_array_equal(head['pattern'], snapshot['arrays']['hook::block0.attn.pattern'][0, 0])  # rows = queries
+        np.testing.assert_array_equal(head['pattern'], scene.frame('Window')['patterns']['block0.attn.pattern'][0])
+        self.assertTrue(head['mask'][0][2])  # query 0 cannot see key 2
+        self.assertFalse(head['mask'][2][0])
         for key, value in scene.replay_values():
             np.testing.assert_array_equal(value, snapshot['arrays']['forward::' + key])
         first = scene.frame('Weights')

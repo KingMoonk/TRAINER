@@ -60,6 +60,18 @@ cam = (app.cam_h, app.cam_p, app.cam_d, app.cam_t.getZ())
 link.inbox.append({"type": "spec", "spec": sb.sample_spec(5), "selected": None})
 app.taskMgr.step()
 assert (app.cam_h, app.cam_p, app.cam_d, app.cam_t.getZ()) == cam
+# a bad message is reported in the HUD instead of crashing the viewer
+link.inbox.append({"type": "selection", "selection": {"bogus": 1}})
+app.taskMgr.step()
+assert "Ignored a selection message" in app.hud["text"], app.hud["text"]
+# weight edits need a cell from a loaded snapshot, and are refused rather than sent blind
+app.edit_weight(.01)
+assert link.sent[-1]["type"] != "edit_weight" and not app.edit_pending
+# the studio going away is noticed
+link.connected = False
+app.taskMgr.step()
+assert app.hud["text"] == "studio disconnected", app.hud["text"]
+link.connected = True
 link.inbox.append({"type": "quit"})
 try:
     for _ in range(5):
@@ -70,6 +82,41 @@ assert link.sent[-1] == {"type": "closed"}, link.sent[-1]
 print("FAKELINK-OK")
 """
 
+
+# Weight edits target an explicit highlighted cell, one at a time; a new snapshot keeps the chosen matrix.
+EDIT_SCRIPT = r"""
+import sys, tempfile
+sys.path.insert(0, %r)
+from panda3d.core import loadPrcFileData
+loadPrcFileData("", "window-type offscreen\nframebuffer-hardware 0\naudio-library-name null\nsync-video 0")
+import studio_brain3d as sb
+from studio_compile import CompiledModel
+from studio_snapshot import one_step, save
+from studio_spec import default_spec, validate_spec
+spec = default_spec(); spec["dims"].update(d_model=16, n_layer=2, n_ctx=32, dropout=0.); spec = validate_spec(spec)
+snap = one_step(CompiledModel(spec, 9, device="cpu"), [[1, 2, 3]], [[2, 3, 4]])
+d = tempfile.mkdtemp(); p1 = str(save(d + "/a", snap)); p2 = str(save(d + "/b", snap))
+class Link:
+    connected = True
+    def __init__(self): self.inbox, self.sent = [], []
+    def send(self, m): self.sent.append(m)
+    def poll(self):
+        out, self.inbox = self.inbox, []; return out
+link = Link(); app = sb.BrainApp(link=link, demo=False)
+link.inbox.append({"type": "snapshot", "path": p1}); app.taskMgr.step()
+names = app.scene.frame('Weights')['available']; pick = names[-1]
+app.select_matrix(pick); app.set_level('Weights')
+app.move_cell(1, 0); app.move_cell(0, 2)
+app.edit_weight(.01); app.edit_weight(.01)
+edits = [m for m in link.sent if m["type"] == "edit_weight"]
+assert len(edits) == 1 and edits[0]["weight"] == pick and (edits[0]["row"], edits[0]["column"]) == (1, 2), edits
+link.inbox.append({"type": "snapshot", "path": p2}); link.inbox.append({"type": "weight_edit_done", "ok": True, "message": "saved"}); app.taskMgr.step()
+assert app.scene.selection.weight == pick, app.scene.selection.weight
+assert not app.edit_pending
+app.set_level('Head'); app.set_head_stage('scale'); app.set_head_stage('mask')
+print("EDIT-OK")
+app.destroy()
+"""
 
 class Brain3DTests(unittest.TestCase):
     @classmethod
@@ -97,6 +144,12 @@ class Brain3DTests(unittest.TestCase):
                               timeout=180, cwd=str(ROOT))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("FAKELINK-OK", proc.stdout)
+
+    def test_weight_edits_use_the_selected_cell(self):
+        proc = subprocess.run([sys.executable, "-c", EDIT_SCRIPT % str(ROOT)], capture_output=True, text=True,
+                              timeout=180, cwd=str(ROOT))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("EDIT-OK", proc.stdout)
 
     def test_real_bridge_quit_sends_closed(self):
         try:

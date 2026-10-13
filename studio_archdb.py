@@ -26,6 +26,7 @@ BACKUP_FORMAT = "groundwork-arch-backup/1"
 EXPORT_FORMAT = "groundwork-arch-export/1"
 MODEL_EXPORT_FORMAT = "groundwork-model-spec-export/1"
 CHUNK = 1 << 20
+MAX_MEMBER = 4 << 30  # per backup member; a larger declared size is refused before extraction
 MEMBER = re.compile(r"^(architectures\.sqlite|weights/[A-Za-z0-9_-]+/v\d{4}\.npz)\Z")
 SUMMARY = """SELECT a.id, a.name, a.created_at, a.updated_at, a.head_revision,
     (SELECT COUNT(*) FROM revisions r WHERE r.architecture_id = a.id),
@@ -97,12 +98,18 @@ def _write_member(archive, arcname, source):
 
 
 class ArchitectureStore:
+    """`lock` serialises this instance only. Other instances or processes on the same root are
+    coordinated by SQLite, except restore(), which must not run while they have the database open."""
+
     def __init__(self, root):
         self.root = Path(root)
         self.path = self.root / "data" / "architectures.sqlite"
         self.weights_dir = self.root / "data" / "weights"
         self.backup_dir = self.root / "data" / "backups"
         self.lock = threading.RLock()
+        self._ready = False  # schema/WAL set up; reset by restore()
+        self._migrated = False  # migrate_model_specs ran; reset by restore()
+        self._verified = {}  # absolute weight path -> (mtime_ns, size, sha256)
 
     @contextmanager
     def _connect(self):
@@ -110,8 +117,10 @@ class ArchitectureStore:
         connection = sqlite3.connect(self.path, timeout=30)
         try:
             connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.executescript(SCHEMA)
+            if not self._ready:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.executescript(SCHEMA)
+                self._ready = True
             with connection:
                 yield connection
         finally:
@@ -155,12 +164,12 @@ class ArchitectureStore:
         if version == "2":
             try:
                 normalized = upgrade(spec)
-            except ValueError:
+            except ValueError as error:
                 if is_model_spec(spec):
                     raise
-            else:
-                legacy = json.dumps(spec, ensure_ascii=False) if not is_model_spec(spec) else None
-                spec = normalized
+                raise ValueError(f"This legacy architecture cannot be converted to the current format: {error}") from error
+            legacy = json.dumps(spec, ensure_ascii=False) if not is_model_spec(spec) else None
+            spec = normalized
         digest = spec_hash(spec)
         if head:
             (head_digest,) = conn.execute("SELECT spec_hash FROM revisions WHERE architecture_id=? AND number=?", (architecture_id, head)).fetchone()
@@ -256,16 +265,19 @@ class ArchitectureStore:
                              (json.dumps(normalized, ensure_ascii=False), spec_hash(normalized), source, revision_id))
                 migrated += 1
             conn.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+        self._migrated = True
         return {"migrated": migrated, "skipped": skipped}
 
     def create_model_spec(self, name, spec, note="created"):
         spec = validate_model_spec(spec)
-        self.migrate_model_specs()
+        if not self._migrated:
+            self.migrate_model_specs()
         return self.create(name, spec, note)
 
     def commit_model_spec(self, architecture_id, spec, note=""):
         spec = validate_model_spec(spec)
-        self.migrate_model_specs()
+        if not self._migrated:
+            self.migrate_model_specs()
         return self.commit(architecture_id, spec, note)
 
     def rename(self, architecture_id, name):
@@ -315,24 +327,26 @@ class ArchitectureStore:
         if not source_path.is_file():
             raise ValueError(f"Weights file not found: {npz_path}")
         with self.lock, self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            head = self._require(conn, architecture_id)
-            revision = head if revision is None else int(revision)
-            if conn.execute("SELECT 1 FROM revisions WHERE architecture_id=? AND number=?", (architecture_id, revision)).fetchone() is None:
-                raise ValueError(f"Unknown revision {revision} for architecture {architecture_id}")
-            if parent is not None and conn.execute("SELECT 1 FROM weight_versions WHERE architecture_id=? AND version=?", (architecture_id, parent)).fetchone() is None:
-                raise ValueError(f"Unknown parent weight version {parent}")
-            version = conn.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM weight_versions WHERE architecture_id=?", (architecture_id,)).fetchone()[0]
-            folder = self.weights_dir / architecture_id
-            folder.mkdir(parents=True, exist_ok=True)
-            destination = folder / f"v{version:04d}.npz"
-            temporary = folder / f".{destination.name}.{uid('tmp')}"
-            relative = f"{self.weights_dir.relative_to(self.root).as_posix()}/{architecture_id}/{destination.name}"
-            placed = False
-            try:
-                digest, size = _copy_hashed(source_path, temporary)
+            self._require(conn, architecture_id)
+        folder = self.weights_dir / architecture_id
+        folder.mkdir(parents=True, exist_ok=True)
+        temporary = folder / f".incoming.{uid('tmp')}"
+        destination = None
+        try:
+            # Copy and hash (possibly ~1 GB) before taking the lock or the write transaction.
+            digest, size = _copy_hashed(source_path, temporary)
+            with self.lock, self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                head = self._require(conn, architecture_id)
+                revision = head if revision is None else int(revision)
+                if conn.execute("SELECT 1 FROM revisions WHERE architecture_id=? AND number=?", (architecture_id, revision)).fetchone() is None:
+                    raise ValueError(f"Unknown revision {revision} for architecture {architecture_id}")
+                if parent is not None and conn.execute("SELECT 1 FROM weight_versions WHERE architecture_id=? AND version=?", (architecture_id, parent)).fetchone() is None:
+                    raise ValueError(f"Unknown parent weight version {parent}")
+                version = conn.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM weight_versions WHERE architecture_id=?", (architecture_id,)).fetchone()[0]
+                destination = folder / f"v{version:04d}.npz"
+                relative = f"{self.weights_dir.relative_to(self.root).as_posix()}/{architecture_id}/{destination.name}"
                 replace_file(temporary, destination)
-                placed = True
                 conn.execute(
                     """INSERT INTO weight_versions(architecture_id, version, revision, path, sha256, bytes, step, loss, source,
                        run_dir, note, parent, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -340,11 +354,12 @@ class ArchitectureStore:
                      None if step is None else int(step), None if loss is None else float(loss),
                      source, run_dir, note or "", parent, now()),
                 )
-            except BaseException:
-                temporary.unlink(missing_ok=True)
-                if placed:
-                    destination.unlink(missing_ok=True)
-                raise
+            # The COMMIT runs when the block above exits, so a failed commit is cleaned up below too.
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            if destination is not None:
+                destination.unlink(missing_ok=True)
+            raise
         return version
 
     def weights(self, architecture_id):
@@ -363,9 +378,19 @@ class ArchitectureStore:
             row = conn.execute("SELECT path, sha256 FROM weight_versions WHERE architecture_id=? AND version=?", (architecture_id, version)).fetchone()
             if row is None:
                 raise ValueError(f"Unknown weight version {version} for architecture {architecture_id}")
-            absolute = self.root.joinpath(*row[0].split("/"))
-            if not absolute.is_file() or _hash_file(absolute) != row[1]:
-                raise ValueError(f"Weight version {version} of {architecture_id} is corrupted or missing.")
+        absolute = self.root.joinpath(*row[0].split("/"))
+        try:
+            stat = absolute.stat()
+        except OSError:
+            stat = None
+        if stat is not None:
+            key = (stat.st_mtime_ns, stat.st_size)
+            cached = self._verified.get(str(absolute))
+            if cached is None or cached[:2] != key:
+                cached = (*key, _hash_file(absolute))
+                self._verified[str(absolute)] = cached
+        if stat is None or cached[2] != row[1]:
+            raise ValueError(f"Weight version {version} of {architecture_id} is corrupted or missing.")
         return str(absolute)
 
     def _backup_name(self, label):
@@ -441,9 +466,11 @@ class ArchitectureStore:
         names = archive.namelist()
         if len(names) != len(set(names)):
             raise ValueError("Backup archive has duplicate members.")
-        for name in names:
-            if name != "manifest.json" and not MEMBER.match(name):
-                raise ValueError(f"Unsafe or unexpected member in backup: {name!r}")
+        for info in archive.infolist():
+            if info.filename != "manifest.json" and not MEMBER.match(info.filename):
+                raise ValueError(f"Unsafe or unexpected member in backup: {info.filename!r}")
+            if info.file_size > MAX_MEMBER:
+                raise ValueError(f"Backup member {info.filename} is too large ({info.file_size} bytes).")
         try:
             manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         except (KeyError, ValueError) as error:
@@ -480,18 +507,28 @@ class ArchitectureStore:
         finally:
             connection.close()
 
-    def _swap(self, staging, include_weights):
+    def _swap(self, staging, include_weights=True):  # noqa: ARG002 - the folder always follows the backup now
+        if self.path.exists():
+            # Fold the WAL into the main file and leave WAL mode so SQLite removes -wal/-shm itself;
+            # this fails with "database is locked" if another connection still has it open.
+            connection = sqlite3.connect(self.path, timeout=30)
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                connection.execute("PRAGMA journal_mode=DELETE")
+            finally:
+                connection.close()
+        # The weights folder always follows the backup: a weights-less backup leaves it empty, so stale
+        # files cannot masquerade as (or be overwritten by) the restored database's versions.
         old = None
-        if include_weights and self.weights_dir.exists():
+        if self.weights_dir.exists():
             old = self.path.parent / f"weights-old-{uid('tmp')}"
             replace_file(self.weights_dir, old)
         try:
-            if include_weights:
-                incoming = staging / "weights"
-                if incoming.exists():
-                    replace_file(incoming, self.weights_dir)
-                else:
-                    self.weights_dir.mkdir(parents=True, exist_ok=True)
+            incoming = staging / "weights"
+            if incoming.exists():
+                replace_file(incoming, self.weights_dir)
+            else:
+                self.weights_dir.mkdir(parents=True, exist_ok=True)
             for suffix in ("-wal", "-shm"):
                 self.path.with_name(self.path.name + suffix).unlink(missing_ok=True)
             replace_file(staging / "architectures.sqlite", self.path)
@@ -524,6 +561,8 @@ class ArchitectureStore:
                     self._swap(staging, include_weights)
                 finally:
                     shutil.rmtree(staging, ignore_errors=True)
+                    self._ready = self._migrated = False
+                    self._verified.clear()
         return {"restored": str(path), "pre_restore_backup": pre_restore,
                 "architectures": count, "weights_restored": include_weights}
 

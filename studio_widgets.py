@@ -43,6 +43,16 @@ def normalize_scroll_delta(delta):
     return units if units != 0 else (1 if delta > 0 else -1)
 
 
+WHEEL_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")  # X11 reports the wheel as buttons 4 and 5
+
+
+def wheel_delta(event):
+    """The wheel delta of a <MouseWheel> or X11 <Button-4/5> event (120 per notch up for buttons)."""
+    if getattr(event, "num", None) in (4, 5) and not event.delta:
+        return 120 if event.num == 4 else -120
+    return event.delta
+
+
 def label(parent, text="", style="TLabel", **kwargs):
     return ttk.Label(parent, text=text, style=style, **kwargs)
 
@@ -118,16 +128,18 @@ class ScrollPage(ttk.Frame):
         self.canvas.configure(yscrollcommand=scroll.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
-        self.bind_all("<MouseWheel>", self.scroll, add="+")
+        for sequence in WHEEL_EVENTS:
+            self.bind_all(sequence, self.scroll, add="+")
 
     def scroll(self, event):
         # The pointer may be over a nested card; text and tables scroll independently.
-        if event.widget.winfo_class() in {"Text", "Treeview", "TCombobox"}:
+        # Tk-internal widgets (a combobox's popdown list) arrive as plain path strings.
+        if not isinstance(event.widget, tk.Misc) or event.widget.winfo_class() in {"Text", "Treeview", "TCombobox"}:
             return
         widget = event.widget
         while widget is not None:
             if widget is self:
-                self.canvas.yview_scroll(-normalize_scroll_delta(event.delta), "units")
+                self.canvas.yview_scroll(-normalize_scroll_delta(wheel_delta(event)), "units")
                 return "break"
             widget = widget.master
 
@@ -179,7 +191,12 @@ class ExampleEditor(tk.Toplevel):
         ttk.Combobox(bottom, textvariable=self.review, values=("Review", "Good"), state="readonly", width=10).pack(side="left", padx=(0, 15))
         button(bottom, "Save example", self.save, True)
         button(bottom, "Cancel", self.destroy)
-        self.grab_set()
+        if parent.winfo_viewable():  # a transient of a hidden window is never mapped: waiting would hang
+            self.wait_visibility()  # a grab on a window that is not mapped yet fails on Linux
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass  # not viewable: the dialog still works, just not modally
 
     def save(self):
         try:
@@ -281,11 +298,18 @@ def _background_of(widget):
 
 
 def help_icon(parent, key):
-    """A small "?" that shows the glossary entry on hover and toggles it on click."""
+    """A small "?" that shows the glossary entry on hover, toggles it on click, and on keyboard focus (Tab) too."""
     text = help_text(key)
-    icon = tk.Label(parent, text="?", bg=_background_of(parent), fg=ACCENT, font=(FONT, 9, "bold"), cursor="question_arrow", padx=3)
+    icon = tk.Label(parent, text="?", bg=_background_of(parent), fg=ACCENT, font=(FONT, 9, "bold"), cursor="question_arrow", padx=3,
+                    takefocus=1, highlightthickness=1, highlightcolor=ACCENT, highlightbackground=_background_of(parent))
     tip = Tooltip(icon, text)
-    icon.bind("<Button-1>", lambda _e: tip.hide() if tip.window else tip.show(), add="+")
+    toggle = lambda _e: tip.hide() if tip.window else tip.show()  # noqa: E731
+    icon.bind("<Button-1>", toggle, add="+")
+    for sequence in ("<Return>", "<space>"):
+        icon.bind(sequence, toggle, add="+")
+    icon.bind("<FocusIn>", tip.show, add="+")
+    icon.bind("<FocusOut>", tip.hide, add="+")
+    icon.bind("<Escape>", tip.hide, add="+")
     icon.help_key = key
     return icon
 

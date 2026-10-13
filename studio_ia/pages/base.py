@@ -1,0 +1,47 @@
+"""Page base class: standard header (breadcrumb, h1, lead) over a scrolling body."""
+from __future__ import annotations
+
+from tkinter import ttk
+
+from studio_widgets import ScrollPage
+from studio_ia.theme import C, GUTTER, tk_label
+
+
+class Page(ttk.Frame):
+    """Subclass and set `title`, `lead`, optional `crumb` (tuple of path parts after the leading "‹ ")."""
+
+    title = ""
+    lead = ""
+    crumb: tuple = ()
+
+    def __init__(self, parent, services, navigate=None, title=None, lead=None, crumb=None):
+        super().__init__(parent)
+        self.services = services
+        self.navigate = navigate or (lambda route: None)
+        self.title = title if title is not None else self.title
+        self.lead = lead if lead is not None else self.lead
+        self.crumb = tuple(crumb) if crumb is not None else self.crumb
+        scroll = ScrollPage(self)
+        scroll.canvas.configure(bg=C["bg"])
+        scroll.pack(fill="both", expand=True)
+        outer = ttk.Frame(scroll.body)
+        outer.pack(fill="both", expand=True, padx=2 * GUTTER, pady=2 * GUTTER)
+        self.header = ttk.Frame(outer)
+        self.header.pack(fill="x")
+        if self.crumb:
+            link = tk_label(self.header, "‹ " + " / ".join(self.crumb), 13, "muted", cursor="hand2", takefocus=1)
+            link.pack(anchor="w", pady=(0, GUTTER // 2))
+            for seq in ("<Button-1>", "<Return>", "<space>"):
+                link.bind(seq, lambda _e: self.navigate("builder"))
+        self.h1 = ttk.Label(self.header, text=self.title, style="H1.TLabel")
+        self.h1.pack(anchor="w")
+        self.lead_label = ttk.Label(self.header, text=self.lead, style="Lead.TLabel", wraplength=760, justify="left")
+        self.lead_label.pack(anchor="w", pady=(GUTTER // 2, 0))
+        self.body = ttk.Frame(outer)
+        self.body.pack(fill="both", expand=True, pady=(2 * GUTTER, 0))
+
+    def refresh(self):
+        """Re-read services and redraw. Called when the page is shown."""
+
+    def on_event(self, kind, payload):
+        """Services event (queue, versions, ...), delivered on the Tk thread while the page is shown."""

@@ -109,7 +109,7 @@ class CurriculumPage(unittest.TestCase):
                 for stage in app.curriculum["stages"]:
                     stage.update(steps=12, max_records=24, eval_records=8, context=32)
                 app.curriculum["context"] = 32
-                app.curriculum_base = dict(BASE, context=32)
+                app.curriculum_settings = lambda: (dict(BASE, context=32), 32, None)
                 app.start_curriculum()
                 deadline = time.monotonic() + 60
                 while app.job_kind and time.monotonic() < deadline:

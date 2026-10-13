@@ -25,7 +25,8 @@ class WSD:
         decay_start = warmup + self.cfg.stable_fraction * remaining
         if step <= decay_start:
             return lr
-        progress = min(1.0, (step - decay_start) / max(1.0, total - decay_start))
+        span = total - decay_start
+        progress = 1.0 if span <= 0 else min(1.0, (step - decay_start) / span)
         return lr * (1.0 - progress)
 
 

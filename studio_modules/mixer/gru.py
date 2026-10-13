@@ -1,12 +1,10 @@
-"""Causal gated recurrent unit with explicit reverse-time gradients."""
+"""Causal gated recurrent unit."""
 from __future__ import annotations
+
+import torch
 
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
-
-
-def sigmoid(x, xp):
-    return 1 / (1 + xp.exp(-x))
 
 
 class GRULayer(Layer):
@@ -20,48 +18,20 @@ class GRULayer(Layer):
             self.add(f"gru.{gate}.bh", (d,), "bias")
 
     def forward(self, x, ctx):
-        xp = self.xp
-        h = xp.zeros((x.shape[0], x.shape[2]), dtype=x.dtype)
-        states, saved = [], []
+        p = self.params
+        # the input projections for every position at once; only the recurrence runs step by step
+        xz = x @ p["gru.z.x"] + p["gru.z.bx"]
+        xr = x @ p["gru.r.x"] + p["gru.r.bx"]
+        xn = x @ p["gru.n.x"] + p["gru.n.bx"]
+        h = torch.zeros((x.shape[0], x.shape[2]), dtype=x.dtype, device=x.device)
+        states = []
         for t in range(x.shape[1]):
-            xt, previous = x[:, t], h
-            z = sigmoid(xt @ self.params["gru.z.x"] + self.params["gru.z.bx"]
-                        + previous @ self.params["gru.z.h"] + self.params["gru.z.bh"], xp)
-            r = sigmoid(xt @ self.params["gru.r.x"] + self.params["gru.r.bx"]
-                        + previous @ self.params["gru.r.h"] + self.params["gru.r.bh"], xp)
-            nh = previous @ self.params["gru.n.h"] + self.params["gru.n.bh"]
-            n = xp.tanh(xt @ self.params["gru.n.x"] + self.params["gru.n.bx"] + r * nh)
-            h = (1 - z) * n + z * previous
+            z = torch.sigmoid(xz[:, t] + h @ p["gru.z.h"] + p["gru.z.bh"])
+            r = torch.sigmoid(xr[:, t] + h @ p["gru.r.h"] + p["gru.r.bh"])
+            n = torch.tanh(xn[:, t] + r * (h @ p["gru.n.h"] + p["gru.n.bh"]))
+            h = (1 - z) * n + z * h
             states.append(h)
-            saved.append((xt, previous, z, r, n, nh))
-        out = ctx.emit("gru.state", xp.stack(states, axis=1))
-        self.cache = saved
-        return out
-
-    def backward(self, dy):
-        xp = self.xp
-        dx = xp.empty_like(dy)
-        dh = xp.zeros_like(dy[:, 0])
-        for t in reversed(range(dy.shape[1])):
-            xt, previous, z, r, n, nh = self.cache[t]
-            total = dy[:, t] + dh
-            dn = total * (1 - z)
-            dz = total * (previous - n) * z * (1 - z)
-            dh = total * z
-            dnp = dn * (1 - n * n)
-            dr = dnp * nh * r * (1 - r)
-            dnh = dnp * r
-            dx_t = xp.zeros_like(xt)
-            for gate, derivative in (("z", dz), ("r", dr), ("n", dnp)):
-                self.grads[f"gru.{gate}.x"] += xt.T @ derivative
-                self.grads[f"gru.{gate}.bx"] += derivative.sum(axis=0)
-                dx_t += derivative @ self.params[f"gru.{gate}.x"].T
-            for gate, derivative in (("z", dz), ("r", dr), ("n", dnh)):
-                self.grads[f"gru.{gate}.h"] += previous.T @ derivative
-                self.grads[f"gru.{gate}.bh"] += derivative.sum(axis=0)
-                dh += derivative @ self.params[f"gru.{gate}.h"].T
-            dx[:, t] = dx_t
-        return dx
+        return ctx.emit("gru.state", torch.stack(states, dim=1))
 
 
 @register

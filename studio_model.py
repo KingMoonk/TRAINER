@@ -1,6 +1,6 @@
-"""A language-model training engine with handwritten NumPy/CuPy gradients.
+"""A language-model training engine on PyTorch (CPU, CUDA or Apple MPS).
 
-The same transformer runs on CPU or CUDA without autograd or pretrained weights.
+The transformer, tokenizer, checkpoint format and sampler are this repository's own; autograd supplies the gradients.
 
 Data-pipeline config keys (stable API, also used by the curriculum trainer):
   tokenizer  "byte" | "character"   - byte is the default: 263 tokens, no unknown characters, so every
@@ -24,6 +24,7 @@ import json
 import math
 import os
 import random
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -32,8 +33,10 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
     os.environ.setdefault(_variable, "4")
 
 import numpy as np
+import torch
 
 from studio_arch import parameter_breakdown, validate_spec
+from studio_backend import DEVICES
 from studio_core import atomic_json, fingerprint, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
@@ -42,7 +45,7 @@ from studio_modules.ops import softmax as _softmax
 from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
 from studio_modules.tokenizer.byte import Tokenizer
 from studio_planning import merge_duplicate_lineage
-from studio_registry import for_slot
+from studio_registry import for_slot, get as get_module
 from studio_slots import ASSISTANT, BOS, EOS, OFFSET, PAD, SYSTEM, UNK, USER
 from studio_spec import config_from_spec, is_model_spec, model_spec, module_of, structure_key, validate_spec as validate_model_spec
 
@@ -59,6 +62,7 @@ DEFAULT_CONFIG = {
 # anchored windows with the assistant objective train answers only with their prompt in view.
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
+EVAL_WINDOWS = 400  # evaluation reads at most this many windows, spread evenly over the set
 
 
 def validate_config(config):
@@ -91,7 +95,7 @@ def validate_config(config):
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
-    for key, low, high in [("dropout", 0, .5), ("validation", 0, .4), ("learning_rate", 1e-7, .1), ("weight_decay", 0, 1)]:
+    for key, low, high in [("dropout", 0, .5), ("validation", 0, .4), ("learning_rate", 1e-7, _learning_rate_limit(spec)), ("weight_decay", 0, 1)]:
         cfg[key] = float(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
@@ -101,9 +105,21 @@ def validate_config(config):
         raise ValueError("Invalid tokenizer or objective.")
     if cfg["windowing"] not in WINDOWINGS:
         raise ValueError("Windowing must be anchored or sequential.")
-    if cfg["device"] not in {"auto", "cpu", "cuda"}:
-        raise ValueError("Device must be auto, cpu, or cuda.")
+    if cfg["device"] not in DEVICES:
+        raise ValueError("Device must be auto, cpu, cuda, or mps.")
     return cfg
+
+
+def _learning_rate_limit(spec):
+    """The optimizer module's own upper bound for its peak rate (SGD allows up to 1, AdamW 0.1)."""
+    optimizer = spec["train"]["optimizer"]["id"] if is_model_spec(spec) else "adamw"
+    try:
+        module = get_module("optimizer", optimizer)
+    except ValueError:
+        return .1
+    import dataclasses
+    fields = {f.name: f for f in dataclasses.fields(module.config)} if module.config else {}
+    return fields["lr"].metadata.get("max", .1) if "lr" in fields else .1
 
 
 def effective_spec(cfg):
@@ -143,7 +159,25 @@ def build_optimizer(model):
     return optimizer.build(optimizer_cfg, model.dims, None).attach(model), schedule.build(schedule_cfg, model.dims, None)
 
 
+def vocabulary_guess(cfg, vocab=263):
+    """The vocabulary a config will have: fixed tokenizers know it, custom BPE is capped by its setting, characters are unknown."""
+    spec = cfg.get("architecture")
+    if is_model_spec(spec):
+        entry = spec.get("tokenizer", {})
+        try:
+            module = get_module("tokenizer", entry.get("id", "byte"))
+        except ValueError:
+            return vocab
+        fixed = module.vocab(module.parse(entry.get("config")))
+        if fixed:
+            return fixed
+        if module.short == "bpe_custom":
+            return int(entry.get("config", {}).get("vocab_size", 512))
+    return vocab
+
+
 def parameter_estimate(cfg, vocab=263):
+    vocab = vocabulary_guess(cfg, vocab)
     if is_model_spec(cfg.get("architecture")):
         return estimate(validate_model_spec(cfg["architecture"]), vocab)["total"]
     if cfg.get("architecture"):
@@ -339,7 +373,23 @@ def load_checkpoint(path):
                 state, name = key[5:].split("::", 1)
                 metadata["optimizer_state"].setdefault(state, {})[name] = archive[key].copy()
         metadata["m"], metadata["v"] = metadata["optimizer_state"].get("m", {}), metadata["optimizer_state"].get("v", {})
+    if not metadata.get("history"):
+        metadata["history"] = read_metrics(Path(path).parent / "metrics.jsonl")
     return metadata
+
+
+def read_metrics(path):
+    """The rows of a run's metrics.jsonl (a partial last line from a crash is skipped)."""
+    rows = []
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    return rows
 
 
 def _tuples(value):
@@ -415,22 +465,58 @@ def partition_examples(examples, fraction, sampler, grouped=True):
     return training, validation, report
 
 
+def _piece(tokenizer, index):
+    """The text (or bytes) behind one vocabulary id, for matching rows across tokenizers; None for special tokens."""
+    if index < OFFSET:
+        return ("special", index)
+    if tokenizer.kind == "character":
+        return tokenizer.characters[index - OFFSET]
+    pieces = getattr(tokenizer, "pieces", None)
+    if pieces is not None:
+        return pieces[index - OFFSET]
+    decoder = getattr(tokenizer, "decoder", None)
+    if decoder is not None:
+        return decoder.get(index - OFFSET)
+    return tokenizer.decode([index])
+
+
+def remap_vocabulary(old, old_tokenizer, tokenizer, fresh):
+    """Rows (or columns) of vocabulary-shaped tensors re-indexed by piece when the tokenizer changed.
+
+    `fresh` maps the parameter name to the new model's freshly initialised tensor (NumPy), so pieces the old
+    tokenizer never had keep their fresh values. Returns the remapped dict (other tensors unchanged).
+    """
+    if old_tokenizer.serialize() == tokenizer.serialize():
+        return old
+    old_rows = {}
+    for i in range(old_tokenizer.vocab_size):
+        old_rows.setdefault(_piece(old_tokenizer, i), i)
+    mapping = [(i, old_rows.get(_piece(tokenizer, i))) for i in range(tokenizer.vocab_size)]
+    old_vocab = old_tokenizer.vocab_size
+    out = dict(old)
+    for name, value in old.items():
+        value = np.asarray(value)
+        if name not in fresh:
+            continue
+        target = np.array(fresh[name], copy=True)
+        if value.ndim >= 1 and value.shape[0] == old_vocab and target.shape[0] == tokenizer.vocab_size and value.shape[1:] == target.shape[1:]:
+            for new_index, old_index in mapping:
+                if old_index is not None:
+                    target[new_index] = value[old_index]
+            out[name] = target
+        elif value.ndim >= 1 and value.shape[-1] == old_vocab and target.shape[-1] == tokenizer.vocab_size and value.shape[:-1] == target.shape[:-1]:
+            for new_index, old_index in mapping:
+                if old_index is not None:
+                    target[..., new_index] = value[..., old_index]
+            out[name] = target
+    return out
+
+
 def _initialize_from(model, tokenizer, path):
     """Transplant weights from a checkpoint into the model's (possibly different) architecture."""
     data = load_checkpoint(path)
-    xp = model.xp
-    old = {key: xp.asarray(value) for key, value in data["model"].items()}
     old_tokenizer = Tokenizer.restore(data["tokenizer"])
-    if "token" in old and old_tokenizer.serialize() != tokenizer.serialize() and old_tokenizer.kind == tokenizer.kind == "character":
-        # Different alphabets: keep rows for shared characters and the special tokens, the rest stay fresh.
-        rows = model.p["token"].copy()
-        old_rows = {char: i + OFFSET for i, char in enumerate(old_tokenizer.characters)}
-        for i, char in enumerate(tokenizer.characters):
-            if char in old_rows and old["token"].shape[1] == rows.shape[1]:
-                rows[i + OFFSET] = old["token"][old_rows[char]]
-        if old["token"].shape[1] == rows.shape[1]:
-            rows[:OFFSET] = old["token"][:OFFSET]
-        old["token"] = rows
+    old = remap_vocabulary(data["model"], old_tokenizer, tokenizer, model.state_arrays())
     return transplant(old, model)
 
 
@@ -506,8 +592,15 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     if checkpoint:
         model.load_weights(checkpoint["model"])
         for state in optimizer.states:
-            for key in model.p:
-                getattr(optimizer, state)[key][...] = model.xp.asarray(checkpoint["optimizer_state"][state][key])
+            saved = checkpoint["optimizer_state"].get(state, {})
+            for key, target in getattr(optimizer, state).items():
+                value = saved.get(key)
+                if value is None or tuple(np.shape(value)) != tuple(target.shape) or not np.isfinite(value).all():
+                    raise ValueError(f"Checkpoint optimizer state {state} for {key} is missing or invalid.")
+                target.copy_(torch.as_tensor(np.asarray(value), dtype=target.dtype, device=target.device))
+        previous_best = Path(resume).parent / "best.npz"
+        if previous_best.is_file():
+            shutil.copy2(previous_best, directory / "best.npz")  # the best so far carries over until this run beats it
         step = checkpoint["step"]
         best = checkpoint["best"] if checkpoint["best"] is not None else float("inf")
         optimizer.steps = checkpoint["optimizer_steps"]
@@ -518,7 +611,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             raise ValueError("Total steps must exceed the checkpoint step.")
     record = {"name": cfg["name"], "createdAt": now(), "status": "training", "step": step, "steps": cfg["steps"],
               "parameters": model.parameter_count, "vocabulary": tokenizer.vocab_size,
-              "backend": "cupy" if model.backend.device == "cuda" else "numpy", "device": model.backend.device,
+              "backend": "torch", "device": model.backend.device,
               "device_name": model.backend.name,
               "train_examples": len(training), "validation_examples": len(validation), "resumed_from": str(resume) if resume else None,
               "initialized_from": str(init_from) if init_from else None,
@@ -544,7 +637,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     def save(filename):
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
                     "tokenizer": tokenizer.serialize(), "step": step, "best": best if math.isfinite(best) else None,
-                    "optimizer_steps": optimizer.steps, "history": history, "data_hash": digest,
+                    "optimizer_steps": optimizer.steps, "history": [], "data_hash": digest,  # history lives in metrics.jsonl
                     "sampler_state": sampler.getstate(), "model_rng": model.rng.bit_generator.state,
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
@@ -557,12 +650,14 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             np.savez_compressed(stream, **arrays)
         replace_file(temporary, path)
 
-    def evaluate(samples):
+    def evaluate(samples, limit=EVAL_WINDOWS):
+        """Plain cross-entropy over a fixed, evenly spread subset of the windows (all of them when few)."""
         total, count = 0., 0
-        for start in range(0, min(len(samples), cfg["batch_size"] * 20), cfg["batch_size"]):
+        chosen = np.linspace(0, len(samples) - 1, min(len(samples), limit), dtype=int) if len(samples) > limit else np.arange(len(samples))
+        for start in range(0, len(chosen), cfg["batch_size"]):
             if stop.is_set():
                 return None  # a part-way result must never pick the best checkpoint
-            x, y = batch_arrays(samples[start:start + cfg["batch_size"]])
+            x, y = batch_arrays([samples[int(i)] for i in chosen[start:start + cfg["batch_size"]]])
             targets = int((y != -100).sum())
             total += model.loss(x, y) * targets
             count += targets
@@ -585,6 +680,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     trained_tokens = 0
     budget_reason = None
     detector_state = set()
+    rate = cfg["learning_rate"]
+    last_report = 0.
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
@@ -635,7 +732,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 detector_state = active
                 path = save_snapshot(directory, snapshot, keep=snapshot_keep)
                 emit({"type": "viz_snapshot", "step": step, "path": str(path), "markers": snapshot["markers"]})
-            if token_budget is not None or wall_seconds is not None or step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"]:
+            due = step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"] or time.monotonic() - last_report >= 1.
+            if due:
+                last_report = time.monotonic()
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
                         "trained_tokens": trained_tokens, "elapsed_seconds": time.monotonic() - started})
             if payload:
@@ -659,8 +758,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         atomic_json(directory / "run.json", record)
         emit({"type": "done", "run": record, "directory": str(directory)})
         return record
-    except Exception as exc:
-        record.update(status="failed", error=str(exc), step=step)
+    except BaseException as exc:
+        record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
         atomic_json(directory / "run.json", record)
         raise
 
@@ -679,15 +778,30 @@ class LocalModel:
     def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
         tokens = [BOS]
         roles = {"user": USER, "assistant": ASSISTANT, "system": SYSTEM}
+        starts = []  # (position of each message's role token, role id) so a cut window starts with the right role
         for message in messages:
+            starts.append((len(tokens), roles.get(message["role"], USER)))
             tokens += [roles.get(message["role"], USER)] + self.tokenizer.encode(message["content"]) + [EOS]
+        starts.append((len(tokens), ASSISTANT))
         tokens += [ASSISTANT]
         result = []
+        context = self.config["context"]
+
+        def window():
+            if len(tokens) <= context:
+                return tokens
+            cut = tokens[-context:]
+            first = len(tokens) - context
+            owner = [role for position, role in starts if position <= first]
+            if owner and first not in {position for position, _ in starts}:
+                cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
+            return cut
+
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
             # Transfer only the final vocabulary vector for seeded CPU sampling.
-            output = self.model.forward(np.array([tokens[-self.config["context"]:]], dtype=np.int64))
+            output = self.model.forward(np.array([window()], dtype=np.int64))
             logits = self.model.backend.to_cpu(output[0, -1]).astype(np.float64)
             logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
             if temperature <= 0:

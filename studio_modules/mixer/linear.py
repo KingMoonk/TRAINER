@@ -1,9 +1,12 @@
-"""Normalized causal linear attention with ELU+1 features and recurrent sums."""
+"""Normalized causal linear attention with ELU+1 features and cumulative sums."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from studio_modules.ops import linear, linear_back, merge_heads, split_heads
+import torch
+import torch.nn.functional as F
+
+from studio_modules.ops import linear, merge_heads, split_heads
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Issue, Layer
 
@@ -26,54 +29,18 @@ class LinearAttention(Layer):
             self.add("linear.qkv.b", (3 * d,), "bias")
             self.add("linear.proj.b", (d,), "bias")
 
-    def _feature(self, x):
-        return self.xp.where(x > 0, x + 1, self.xp.exp(x))
-
     def forward(self, x, ctx):
-        xp = self.xp
-        raw_q, raw_k, v = [split_heads(part, self.heads) for part in xp.split(linear(self, x, "linear.qkv"), 3, axis=-1)]
-        q = ctx.emit("linear.q", self._feature(raw_q))
-        k = ctx.emit("linear.k", self._feature(raw_k))
+        raw_q, raw_k, v = [split_heads(part, self.heads) for part in linear(self, x, "linear.qkv").chunk(3, dim=-1)]
+        q = ctx.emit("linear.q", F.elu(raw_q) + 1)
+        k = ctx.emit("linear.k", F.elu(raw_k) + 1)
         v = ctx.emit("linear.v", v)
-        batch, heads, length, depth = q.shape
-        matrix = xp.zeros((batch, heads, depth, depth), dtype=x.dtype)
-        vector = xp.zeros((batch, heads, depth), dtype=x.dtype)
-        outputs, saved = [], []
-        for t in range(length):
-            qt, kt, vt = q[:, :, t], k[:, :, t], v[:, :, t]
-            matrix = matrix + kt[..., :, None] * vt[..., None, :]
-            vector = vector + kt
-            numerator = xp.einsum("bhi,bhij->bhj", qt, matrix)
-            denominator = xp.sum(qt * vector, axis=-1, keepdims=True) + self.eps
-            outputs.append(numerator / denominator)
-            saved.append((matrix, vector, numerator, denominator))
-        stream = ctx.emit("linear.out", xp.stack(outputs, axis=2))
-        merged = merge_heads(stream)
-        self.cache = (x, raw_q, raw_k, q, k, v, saved, merged)
-        return linear(self, merged, "linear.proj")
-
-    def backward(self, dy):
-        xp = self.xp
-        x, raw_q, raw_k, q, k, v, saved, merged = self.cache
-        dstream = split_heads(linear_back(self, dy, merged, "linear.proj"), self.heads)
-        dq, dk, dv = xp.zeros_like(q), xp.zeros_like(k), xp.zeros_like(v)
-        batch, heads, length, depth = q.shape
-        dmatrix = xp.zeros((batch, heads, depth, depth), dtype=x.dtype)
-        dvector = xp.zeros((batch, heads, depth), dtype=x.dtype)
-        for t in reversed(range(length)):
-            matrix, vector, numerator, denominator = saved[t]
-            qt, kt, vt = q[:, :, t], k[:, :, t], v[:, :, t]
-            dn = dstream[:, :, t] / denominator
-            dd = -xp.sum(dstream[:, :, t] * numerator, axis=-1, keepdims=True) / (denominator * denominator)
-            dq[:, :, t] = xp.einsum("bhj,bhij->bhi", dn, matrix) + dd * vector
-            dmatrix = dmatrix + qt[..., :, None] * dn[..., None, :]
-            dvector = dvector + dd * qt
-            dk[:, :, t] = xp.einsum("bhij,bhj->bhi", dmatrix, vt) + dvector
-            dv[:, :, t] = xp.einsum("bhi,bhij->bhj", kt, dmatrix)
-        dq *= xp.where(raw_q > 0, 1, xp.exp(raw_q))
-        dk *= xp.where(raw_k > 0, 1, xp.exp(raw_k))
-        dqkv = xp.concatenate([merge_heads(value) for value in (dq, dk, dv)], axis=-1)
-        return linear_back(self, dqkv, x, "linear.qkv")
+        # Causal prefix sums of k_i v_j and of k; each position reads only earlier positions. Memory: T × h² per head.
+        kv = torch.cumsum(k.unsqueeze(-1) * v.unsqueeze(-2), dim=2)
+        ks = torch.cumsum(k, dim=2)
+        numerator = torch.einsum("bhti,bhtij->bhtj", q, kv)
+        denominator = (q * ks).sum(dim=-1, keepdim=True) + self.eps
+        stream = ctx.emit("linear.out", numerator / denominator)
+        return linear(self, merge_heads(stream), "linear.proj")
 
 
 @register

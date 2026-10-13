@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import copy
 import json
-import queue
 import random
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from studio_core import normalize, uid
+from studio_core import atomic_json, normalize, now, uid
 from studio_model import LocalModel
 from studio_rlhf import (AUTO_DEFAULTS, DEFAULT_RUBRIC, DPO_DEFAULTS, LOSS_TYPES, MIN_PAIRS_TO_TRAIN, OllamaTeacher,
                          PreferenceStore, auto_rlhf, compare_checkpoints, dpo_train, evaluate_checkpoint, load_settings,
@@ -27,6 +26,8 @@ TAB_TO_STEP = {0: 0, 1: 1, 2: 1, 3: 1, 4: 2, 5: 3}
 TABS = ("Check model", "Vote", "Teacher voting", "Saved votes", "Train", "Compare")
 TAB_CHECK, TAB_RATE, TAB_AUTO, TAB_SAVED, TAB_IMPROVE, TAB_COMPARE = range(6)
 KEEP_NOTE = "Only keep a new checkpoint if it beats the current one head-to-head."
+HELDOUT_PATH = Path("data") / "heldout_prompts.json"  # relative to the workspace root; shared with the auto loop's gate
+HELDOUT_SIZE = 200
 
 
 def short(text, size=70):
@@ -36,6 +37,58 @@ def short(text, size=70):
 
 def prompt_text(messages):
     return "\n\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
+
+
+def prompt_key(messages):
+    """Normalised user text of a prompt, used to keep held-out prompts out of pairs and corrections."""
+    return " ".join(" ".join(str(m.get("content", "")) for m in messages if m.get("role") == "user").casefold().split())
+
+
+def heldout_prompts(workspace, dataset_id):
+    """The workspace's fixed held-out prompts, sampled once from the working dataset into HELDOUT_PATH.
+
+    They never become preference pairs or dataset corrections on this page, so the arena tests on prompts
+    the model was not trained on here. Runs on a worker thread (it may sample the dataset)."""
+    path = Path(workspace.root) / HELDOUT_PATH
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))["prompts"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"The held-out prompt file {path} is unreadable. Repair it, or delete it to sample a new set.") from exc
+    if not dataset_id:
+        raise ValueError("Choose a working dataset with user → assistant conversations.")
+    size = max(1, min(HELDOUT_SIZE, workspace.count(dataset_id) // 5))
+    prompts = prompts_from(workspace.sample(dataset_id, limit=size, seed=random.randrange(1 << 30)))
+    if not prompts:
+        raise ValueError("The working dataset has no user → assistant conversations to use as prompts.")
+    atomic_json(path, {"format": 1, "dataset_id": dataset_id, "created": now(), "prompts": prompts})
+    return prompts
+
+
+def training_prompts(workspace, dataset_id, limit=2000):
+    """A fresh sample of the working dataset's prompts minus the held-out set (worker thread)."""
+    held = {prompt_key(p["messages"]) for p in heldout_prompts(workspace, dataset_id)}
+    prompts = [p for p in prompts_from(workspace.sample(dataset_id, limit=limit, seed=random.randrange(1 << 30)))
+               if prompt_key(p["messages"]) not in held]
+    if not prompts:
+        raise ValueError("The working dataset has no user → assistant conversations left outside the held-out test prompts.")
+    return prompts
+
+
+def last_val_loss(path):
+    """Latest val_loss in a run's metrics.jsonl; partial or corrupt lines (a run still writing) are skipped."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            value = json.loads(line).get("val_loss")
+        except (ValueError, AttributeError):
+            continue
+        if value is not None:
+            return value
+    return None
 
 
 class Collapsible(ttk.Frame):
@@ -88,6 +141,9 @@ class AlignMixin:
         self.align_prompts = []
         self.rubric = normalize_rubric(self.align_settings["rubric"])
         self.arena_examples = []
+        self._pref_cache = None  # ((mtime_ns, size), rows) of the preference file
+        self._pref_shown = None  # what the preference browser currently displays
+        self._heldout_cache = (None, set())
         self._build_align()
 
     # ------------------------------------------------------------------ page
@@ -474,7 +530,7 @@ class AlignMixin:
         if name == "align":
             if not self.align_checkpoint.get():
                 self.use_latest_checkpoint()
-            self.refresh_pref_stats()
+            self.refresh_pref_stats(reread=False)
 
     def use_latest_checkpoint(self):
         for record in self.workspace.runs():
@@ -485,8 +541,38 @@ class AlignMixin:
                     return
         self.status_var.set("No checkpoints yet · train a model first.")
 
-    def refresh_pref_stats(self):
-        stats = self.preferences.stats()
+    def pref_snapshot(self, reread=False):
+        """All preference rows, parsed once per change of the file (size/mtime) or after a write (reread)."""
+        try:
+            stat = self.preferences.path.stat()
+            key = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            key = None
+        if reread or self._pref_cache is None or self._pref_cache[0] != key:
+            self._pref_cache = (key, self.preferences.all())
+        return self._pref_cache[1]
+
+    def heldout_keys(self):
+        """Prompt keys of the held-out file; re-read only when the file changes."""
+        path = Path(self.workspace.root) / HELDOUT_PATH
+        try:
+            key = path.stat().st_mtime_ns
+        except OSError:
+            return set()
+        if self._heldout_cache[0] != key:
+            try:
+                keys = {prompt_key(p["messages"]) for p in json.loads(path.read_text(encoding="utf-8"))["prompts"]}
+            except (OSError, ValueError, KeyError, TypeError):
+                keys = set()
+            self._heldout_cache = (key, keys)
+        return self._heldout_cache[1]
+
+    def refresh_pref_stats(self, reread=True):
+        """Callers run this after writing preferences, so it re-reads by default (once, for stats and browser)."""
+        rows = self.pref_snapshot(reread)
+        human = sum(r.get("source") == "human" for r in rows)
+        stats = {"total": len(rows), "human": human, "teacher": len(rows) - human,
+                 "rewrites": sum(r.get("kind") in {"rewrite", "edit"} for r in rows)}
         total = stats["total"]
         self.pref_count.set(f"{stats['human']:,} of your votes saved · {total:,} pairs in total")
         if total >= MIN_PAIRS_TO_TRAIN:
@@ -506,14 +592,11 @@ class AlignMixin:
             raise ValueError("Choose an existing checkpoint (.npz) to align.")
         return path
 
-    def dataset_prompts(self, limit=2000):
+    def working_dataset(self):
         dataset = self.selected_dataset()
         if not dataset:
             raise ValueError("Choose a working dataset with user → assistant conversations.")
-        prompts = prompts_from(self.workspace.sample(dataset, limit=limit, seed=random.randrange(1 << 30)))
-        if not prompts:
-            raise ValueError("The working dataset has no user → assistant conversations to use as prompts.")
-        return prompts
+        return dataset
 
     def align_log(self, text):
         self.teacher_log.configure(state="normal")
@@ -529,20 +612,23 @@ class AlignMixin:
         try:
             path, size = self.checkpoint_path(), int(self.eval_size.get())
             float(self.target_error.get())
-            examples = self.workspace.sample(self.selected_dataset(), limit=size, seed=1)
-            if not examples:
+            dataset = self.selected_dataset()
+            if not dataset:
                 raise ValueError("Choose a working dataset to check against.")
         except ValueError as exc:
             messagebox.showerror("Cannot check the model", str(exc), parent=self)
             return
         device = self.inference_device.get()
-        val_loss = None
-        metrics = Path(path).parent / "metrics.jsonl"
-        if metrics.exists():
-            rows = [json.loads(line) for line in metrics.read_text(encoding="utf-8").splitlines() if line.strip()]
-            val_loss = next((r["val_loss"] for r in reversed(rows) if r.get("val_loss") is not None), None)
+
+        def work():  # sampling and file reads stay off the Tk thread
+            examples = self.workspace.sample(dataset, limit=size, seed=1)
+            if not examples:
+                raise ValueError("The working dataset has no examples to check against.")
+            report = evaluate_checkpoint(path, examples, device, size, self.stop)
+            return {**report, "run_val_loss": last_val_loss(Path(path).parent / "metrics.jsonl")}
 
         def done(report):
+            val_loss = report.get("run_val_loss")
             if report.get("stopped"):
                 self.ready_verdict.set("CHECK STOPPED  ·  it did not finish, so there is no verdict. Run the check again.")
                 self.ready_label.configure(foreground=WARN)
@@ -557,7 +643,7 @@ class AlignMixin:
             self.ready_verdict.set(("READY TO POLISH" if ready else "TRAIN MORE FIRST") +
                                    f"  ·  wrong {report['token_error'] * 100:.1f}% of the time vs {target * 100:.0f}% goal, over {report['tokens']:,} words{unknown}")
             self.ready_label.configure(foreground=ACCENT if ready else WARN)
-        self.start_job("evaluation", lambda: evaluate_checkpoint(path, examples, device, size, self.stop), done)
+        self.start_job("evaluation", work, done)
 
     # ------------------------------------------------------------------ step 2a: human feedback
 
@@ -601,29 +687,42 @@ class AlignMixin:
                 prompt = {"messages": messages, "reference": None}
             elif own_prompt:
                 prompt = {"messages": [{"role": "user", "content": own_prompt}], "reference": None}
-            else:
-                if not self.align_prompts:
-                    self.align_prompts = self.dataset_prompts()
+            elif self.align_prompts:
                 prompt = self.align_prompts.pop()
+            else:
+                prompt, dataset = None, self.working_dataset()  # sampled by the job, off the Tk thread
         except ValueError as exc:
             messagebox.showerror("Cannot compare", str(exc), parent=self)
             return
         self.comparison = None
         for box in self.reply_boxes:
             set_text(box, "Generating…")
-        set_text(self.compare_prompt, prompt_text(prompt["messages"]))
-        self.reference_text.set(f"Dataset reference answer: {prompt['reference'][:400]}" if prompt.get("reference") else "")
+        set_text(self.compare_prompt, prompt_text(prompt["messages"]) if prompt else "Picking a prompt…")
+        self.reference_text.set(f"Dataset reference answer: {prompt['reference'][:400]}" if prompt and prompt.get("reference") else "")
 
         def work():
+            pool, chosen = None, prompt
+            if chosen is None:
+                pool = training_prompts(self.workspace, dataset)
+                chosen = pool.pop()
             model = self.ensure_align_model(path, device)
-            first = model.generate(prompt["messages"], tokens, temps[0], 40, self.stop)
-            second = model.generate(prompt["messages"], tokens, temps[1], 40, self.stop)
+            first = model.generate(chosen["messages"], tokens, temps[0], 40, self.stop)
+            second = model.generate(chosen["messages"], tokens, temps[1], 40, self.stop)
             if first.strip() == second.strip():
-                second = model.generate(prompt["messages"], tokens, max(1.2, temps[1] + .3), 0, self.stop)
-            return first, second
+                second = model.generate(chosen["messages"], tokens, max(1.2, temps[1] + .3), 0, self.stop)
+            if self.stop.is_set():  # cut-off replies must not become a votable comparison
+                return None
+            return chosen, pool, (first, second)
 
-        def done(replies):
-            self.comparison = {"prompt": prompt, "replies": replies, "checkpoint": path}
+        def done(result):
+            if result is None:
+                for box in self.reply_boxes:
+                    set_text(box, "(stopped · press Next for a new comparison)")
+                return
+            chosen, pool, replies = result
+            if pool is not None:
+                self.align_prompts = pool
+            self.comparison = {"prompt": chosen, "replies": replies, "checkpoint": path}
             self.show_comparison()
         self.start_job("comparison", work, done)
 
@@ -633,6 +732,8 @@ class AlignMixin:
         a, b = self.comparison["replies"]
         chosen, rejected = (a, b) if winner == "A" else (b, a)
         try:
+            if prompt_key(self.comparison["prompt"]["messages"]) in self.heldout_keys():
+                raise ValueError("This prompt is one of the held-out test prompts, so no pair was saved")
             record = self.preferences.add(self.comparison["prompt"]["messages"], chosen, rejected, "human", kind="comparison",
                                           checkpoint=self.comparison.get("checkpoint", ""), reference=self.comparison["prompt"].get("reference"),
                                           source_id=self.comparison["prompt"].get("source_id"))
@@ -681,6 +782,10 @@ class AlignMixin:
             answer = content(box)
             if not answer:
                 return
+            if prompt_key(comparison["prompt"]["messages"]) in self.heldout_keys():
+                self.status_var.set("This prompt is one of the held-out test prompts, so the answer was not saved.")
+                dialog.destroy()
+                return
             ids = []
             for reply in comparison["replies"]:
                 if reply.strip() != answer.strip():
@@ -709,6 +814,8 @@ class AlignMixin:
     def align_hotkey(self, event):
         if getattr(self, "active_page", None) != "align" or self.align_tabs.index(self.align_tabs.select()) != TAB_RATE:
             return
+        if not isinstance(event.widget, tk.Misc):  # e.g. a combobox popdown reports its Tcl path as a str
+            return
         if event.widget.winfo_class() in {"Text", "TEntry", "Entry", "TCombobox"} or event.widget.winfo_toplevel() is not self:
             return
         action = {"1": lambda: self.vote("A"), "2": lambda: self.vote("B"), "3": self.write_answer, "4": lambda: self.next_comparison(None),
@@ -721,14 +828,18 @@ class AlignMixin:
     def pref_rows(self):
         mode = self.pref_filter.get()
         sources = {"Your votes": {"human"}, "Teacher": {"teacher"}}.get(mode)
-        return self.preferences.all(sources)
+        return [r for r in self.pref_snapshot() if sources is None or self.preferences.kind_of(r) in sources]
 
     def refresh_pref_browser(self):
         if not hasattr(self, "pref_tree"):
             return
+        rows = self.pref_rows()
+        shown = [(r["id"], r.get("source"), r.get("kind"), r["chosen"], r["rejected"]) for r in rows]
+        if shown == self._pref_shown:
+            return  # unchanged: skip rebuilding the Treeview
+        self._pref_shown = shown
         selected = set(self.pref_tree.selection())
         self.pref_tree.delete(*self.pref_tree.get_children())
-        rows = self.pref_rows()
         for row in reversed(rows):  # newest first
             who = "you" if row.get("source") == "human" else str(row.get("source", "?")).replace("teacher:", "teacher · ")
             prompt = next((m["content"] for m in reversed(row["messages"]) if m["role"] == "user"), row["messages"][-1]["content"])
@@ -745,7 +856,7 @@ class AlignMixin:
 
     def show_pref_detail(self):
         ids = self.selected_pref_ids()
-        row = self.preferences.get(ids[0]) if len(ids) == 1 else None
+        row = next((r for r in self.pref_snapshot() if r.get("id") == ids[0]), None) if len(ids) == 1 else None
         for box in (self.pref_prompt, self.pref_chosen, self.pref_rejected):
             set_text(box, "")
         if row is None:
@@ -937,7 +1048,7 @@ class AlignMixin:
                 raise ValueError("Choose an Ollama teacher model (press “Find models”).")
             cfg = self.auto_config()
             dpo = self.dpo_config()
-            prompts = self.dataset_prompts()
+            dataset = self.working_dataset()
         except (ValueError, RuntimeError) as exc:
             messagebox.showerror("Cannot start", str(exc), parent=self)
             return
@@ -969,7 +1080,7 @@ class AlignMixin:
                 text = result["aborted"] + " " + text
             self.auto_status.set(text)
             self.align_log(text)
-        self.start_job("automated improvement", lambda: auto_rlhf(path, prompts, teacher, self.preferences, self.workspace.run_dir, cfg, dpo, emit,
+        self.start_job("automated improvement", lambda: auto_rlhf(path, training_prompts(self.workspace, dataset), teacher, self.preferences, self.workspace.run_dir, cfg, dpo, emit,
                                                                   self.stop, self.pause, teacher.judge_teacher()), done)
 
     def rlhf_event(self, event):
@@ -1050,12 +1161,14 @@ class AlignMixin:
 
     def arena_defaults(self):
         self.arena_a.set(self.align_checkpoint.get())
-        runs = self.workspace.runs()
-        base = ""
-        for record in runs:  # the run this one was trained from, if recorded
-            if str(Path(record["directory"]) / "last.npz") == self.arena_a.get() and record.get("base_checkpoint"):
-                base = record["base_checkpoint"]
-                break
+        parents = {Path(r["directory"]): r["base_checkpoint"] for r in self.workspace.runs() if r.get("base_checkpoint")}
+        base, current, seen = "", self.arena_a.get(), set()
+        # Any checkpoint file of a run counts, and each auto round starts from the previous round's
+        # checkpoint, so walk back through post-training runs to the original model.
+        while current and current not in seen:
+            seen.add(current)
+            current = parents.get(Path(current).parent, "")
+            base = current or base
         if base:
             self.arena_b.set(base)
         elif not self.arena_b.get():
@@ -1073,9 +1186,7 @@ class AlignMixin:
             count, samples = int(self.arena_prompts.get()), int(self.arena_samples.get())
             if count < 1 or samples < 1:
                 raise ValueError("Use at least 1 test prompt and 1 answer per prompt.")
-            pool = self.dataset_prompts()
-            random.shuffle(pool)
-            prompts = pool[:count]
+            dataset = self.selected_dataset()
         except (ValueError, RuntimeError) as exc:
             messagebox.showerror("Cannot compare", str(exc), parent=self)
             return
@@ -1091,8 +1202,11 @@ class AlignMixin:
 
         def done(result):
             self.show_arena_result(result)
-        self.start_job("checkpoint comparison", lambda: compare_checkpoints(a, b, prompts, judge, samples, both_orders=both, device=device,
-                                                                           stop=self.stop, emit=emit), done)
+        def work():  # the fixed held-out prompts: never voted on or added as corrections here
+            pool = heldout_prompts(self.workspace, dataset)
+            prompts = random.sample(pool, min(count, len(pool)))
+            return compare_checkpoints(a, b, prompts, judge, samples, both_orders=both, device=device, stop=self.stop, emit=emit)
+        self.start_job("checkpoint comparison", work, done)
 
     def show_arena_result(self, result):
         n = result["n"]
@@ -1132,17 +1246,6 @@ class AlignMixin:
         else:
             super().toggle_pause()
 
-    def poll(self):
-        deferred = []
-        try:
-            for _ in range(200):
-                kind, value = self.events.get_nowait()
-                if kind == "rlhf":
-                    self.rlhf_event(value)
-                else:
-                    deferred.append((kind, value))
-        except queue.Empty:
-            pass
-        for item in deferred:
-            self.events.put(item)
-        super().poll()
+    def register_handlers(self):
+        super().register_handlers()
+        self.handlers["rlhf"] = self.rlhf_event

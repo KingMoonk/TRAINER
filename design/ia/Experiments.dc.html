@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Compare runs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0e1014;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:#9f8cff;text-decoration:none}a:hover{color:#b9abff}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1080px; background: #0e1014; color: #e6e8ec; font-size: 15px; line-height: 1.45">
+<nav aria-label="Studio areas" style="flex: 1 1 220px; box-sizing: border-box; padding: 24px 16px; border-right: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 4px">
+<div style="font-size: 20px; font-weight: 700; letter-spacing: 0.02em; padding: 0 12px 20px">GROUNDWORK</div>
+<a href="Builder.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 9px; border-left: 3px solid #9f8cff; background: #1b1f27; color: #e6e8ec"><span style="font-weight: 600; color: #9f8cff">Network designer</span><span style="font-size: 12px; color: #8f97a6">shape the model</span></a>
+<a href="Pretraining.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Pretraining</span><span style="font-size: 12px; color: #8f97a6">data in, it learns</span></a>
+<a href="Feedback.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Post-training</span><span style="font-size: 12px; color: #8f97a6">learns to answer</span></a>
+<a href="Chat.dc.html" style="display: flex; flex-direction: column; gap: 2px; padding: 12px 12px 12px 12px; color: #c3c8d1"><span style="font-weight: 600">Chat</span><span style="font-size: 12px; color: #8f97a6">use it</span></a>
+<div style="margin-top: auto; padding: 14px 12px 0; border-top: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-size: 11px; letter-spacing: 0.08em; color: #8f97a6">THIS COMPUTER</span>
+<span style="color: #c3c8d1">Training <b style="color: #e6e8ec">version 5</b> · catching up</span>
+<span role="progressbar" aria-label="Version 5 training" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100" style="display: block; height: 6px; background: #20242c"><span style="display: block; height: 6px; width: 40%; background: #9f8cff"></span></span>
+<span style="color: #8f97a6">about [N] min left · then 3 queued</span>
+<span style="color: #8f97a6">Chat uses <b style="color: #e6e8ec">version 4</b> · best so far</span>
+<a href="Queue.dc.html" style="padding: 6px 0">Queue and schedule</a>
+</div>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 32px 40px; display: flex; flex-direction: column; gap: 20px">
+<header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between">
+<div>
+<h1 style="margin: 0; font-size: 32px">Compare runs</h1>
+<div style="color: #8f97a6; margin-top: 6px">Change one thing, hold the rest equal, run several seeds. A difference counts only if it is larger than the spread across seeds.</div>
+</div>
+</header>
+<nav aria-label="Breadcrumb" style="display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border-bottom: 1px solid #2a2f3a"><a href="Builder.dc.html" style="padding: 12px 0">‹ Network designer</a><span style="color: #8f97a6">/ Compare runs</span></nav>
+<section aria-label="Setup" style="display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; padding: 16px; background: #15181e; border: 1px solid #2a2f3a">
+<label style="flex: 1 1 260px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8f97a6">Question<input type="text" value="Does a Mamba-style mixer beat attention at this size and data?" style="min-height: 44px; box-sizing: border-box; background: #1b1f27; color: #e6e8ec; border: 1px solid #2a2f3a; font: inherit; font-size: 15px; padding: 0 12px"></label>
+<div style="display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8f97a6">Hold equal
+<div role="group" aria-label="Hold equal" style="display: flex; flex-wrap: wrap; gap: 4px">
+<sc-for list="{{ modes }}" as="m" hint-placeholder-count="4"><button type="button" onClick="{{ m.pick }}" aria-pressed="{{ m.on }}" style="min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px; cursor: pointer; background: {{ m.bg }}; color: {{ m.fg }}; border: 1px solid #2a2f3a">{{ m.name }}</button></sc-for>
+</div>
+</div>
+<label style="display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8f97a6">Seeds<input type="number" value="3" style="width: 72px; min-height: 44px; box-sizing: border-box; background: #1b1f27; color: #e6e8ec; border: 1px solid #2a2f3a; font: inherit; font-size: 15px; padding: 0 10px"></label>
+<button type="button" onClick="{{ toggleLr }}" aria-pressed="{{ lr.on }}" style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; font: inherit; font-size: 14px; text-align: left; cursor: pointer; background: transparent; color: #e6e8ec; border: 0"><span aria-hidden="true" style="width: 36px; height: 20px; flex: 0 0 36px; border-radius: 10px; background: {{ lr.track }}; position: relative"><span style="position: absolute; top: 2px; left: {{ lr.knob }}; width: 16px; height: 16px; border-radius: 50%; background: #e6e8ec"></span></span>Retune learning rate per variant</button>
+</section>
+<div style="display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: #c3c8d1"><span>{{ modeNote }}</span><span style="color: #8f97a6">Seeds change the starting weights only; every run reads the same data in the same order. Every run uses the same schedule (warm-up, steady, cool-down) scaled to its length. {{ lr.note }}</span></div>
+<section aria-label="Variants" style="display: flex; flex-direction: column; border: 1px solid #2a2f3a; background: #15181e">
+<div style="display: grid; grid-template-columns: 56px minmax(0, 2fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; font-size: 13px; color: #8f97a6; border-bottom: 1px solid #2a2f3a"><span>Run</span><span>Change from base</span><span>Matching (approximate)</span><span>Final error · bits/char</span><span>vs base</span></div>
+<sc-for list="{{ runs }}" as="r" hint-placeholder-count="4">
+<div style="display: grid; grid-template-columns: 56px minmax(0, 2fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 14px 16px; align-items: center; font-size: 14px; border-bottom: 1px solid #20242c">
+<span style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #0e1014; background: {{ r.color }}">{{ r.id }}</span>
+<span style="display: flex; flex-direction: column; gap: 2px"><b>{{ r.title }}</b><span style="font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #8f97a6">{{ r.diff }}</span></span>
+<span style="color: #c3c8d1">{{ r.adjust }}</span>
+<span style="font-family: ui-monospace, Menlo, monospace">[N] · spread [N]</span>
+<span style="font-family: ui-monospace, Menlo, monospace; color: #8f97a6">{{ r.delta }}</span>
+</div>
+</sc-for>
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 16px">
+<a href="Builder.dc.html" style="padding: 10px 16px; border: 1px solid #2a2f3a; color: #e6e8ec">Add a variant from the designer</a>
+<div role="group" aria-label="Your prediction" style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto"><span style="font-size: 13px; color: #8f97a6; padding-right: 6px">Before it runs, your guess for B:</span><sc-for list="{{ guess }}" as="g" hint-placeholder-count="3"><button type="button" onClick="{{ g.pick }}" aria-pressed="{{ g.on }}" style="min-height: 40px; padding: 0 12px; font: inherit; font-size: 13px; cursor: pointer; background: {{ g.bg }}; color: {{ g.fg }}; border: 1px solid #2a2f3a">{{ g.label }}</button></sc-for></div>
+<button type="button" style="min-height: 44px; padding: 0 20px; font: inherit; font-weight: 600; cursor: pointer; background: #9f8cff; color: #0e1014; border: 0">{{ runLabel }}</button>
+</div>
+</section>
+<section aria-label="Error curves" style="padding: 20px; background: #15181e; border: 1px solid #2a2f3a; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; letter-spacing: 0.08em; color: #8f97a6"><span>ERROR (BITS PER CHARACTER) VS {{ xAxis }}</span><span>line: mean of seeds · band: spread across seeds</span></div>
+<div style="height: 220px; border-left: 1px solid #2a2f3a; border-bottom: 1px solid #2a2f3a; display: flex; align-items: center; justify-content: center; color: #8f97a6; font-size: 14px">Curves stream in here while runs train. Your guess is shown next to the result.</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px"><sc-for list="{{ runs }}" as="r" hint-placeholder-count="4"><span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 3px; background: {{ r.color }}"></span>{{ r.id }} · {{ r.title }}</span></sc-for></div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { mode: 'params', lr: true, guess: -1 }; }
+  renderVals() {
+    const st = this.state, mode = st.mode;
+    const M = {
+      params: { name: 'Parameters', note: 'Each variant’s width is re-solved so its parameter count lands within about 2% of the base. Same data and amount of text for all.', x: 'TEXT SEEN' },
+      compute: { name: 'Compute', note: 'Each run stops at about the same total training compute. Cheaper variants see more text.', x: 'TRAINING COMPUTE' },
+      tokens: { name: 'Text seen', note: 'Every run sees the same text. Sizes are allowed to differ, so read the comparison with that in mind.', x: 'TEXT SEEN' },
+      time: { name: 'Wall-clock', note: 'Every run gets the same minutes on this computer. Rewards variants that are fast here; may not hold on other hardware.', x: 'MINUTES' }
+    };
+    const adj = {
+      params: ['—', 'width re-solved · [N]M', 'none needed · [N]M', 'none needed · [N]M'],
+      compute: ['—', 'stops at base compute · sees about [N]% more text', 'same compute', 'same compute'],
+      tokens: ['—', '[N]M parameters', '[N]M parameters', '[N]M parameters'],
+      time: ['—', '[N] min budget', '[N] min budget', '[N] min budget']
+    }[mode];
+    const base = [
+      { id: 'A', title: 'Base: version 4', diff: 'base spec', color: '#e6e8ec', delta: '—' },
+      { id: 'B', title: 'Mamba-style mixer', diff: 'mixer: attention → ssm · channel: mlp_gelu → none · position: rope → none', color: '#9f8cff', delta: '[N] · inside the spread?' },
+      { id: 'C', title: 'Wide thinking room', diff: 'ff: 1024 → 2048', color: '#e5b567', delta: '[N]' },
+      { id: 'D', title: 'Muon optimizer', diff: 'optimizer: adamw → muon', color: '#6cb4ee', delta: '[N]' }
+    ];
+    const runs = base.map((r, i) => Object.assign({ adjust: i === 0 ? adj[i] : adj[i] + (st.lr ? '' : ' · learning rate not retuned') }, r));
+    const modes = Object.keys(M).map((k) => ({ name: M[k].name, on: mode === k, bg: mode === k ? '#9f8cff' : '#1b1f27', fg: mode === k ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ mode: k }) }));
+    const guess = ['Better', 'About the same', 'Worse'].map((label, i) => ({ label, on: st.guess === i, bg: st.guess === i ? '#e58fb0' : '#1b1f27', fg: st.guess === i ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ guess: i }) }));
+    return {
+      modes, runs, guess, modeNote: M[mode].note, xAxis: M[mode].x,
+      lr: { on: st.lr, track: st.lr ? '#9f8cff' : '#2a2f3a', knob: st.lr ? '18px' : '2px',
+        note: st.lr ? 'Each variant first gets a short learning-rate sweep, so none loses just because the base’s rate suits it badly.' : 'Variants use the base’s learning rate; a variant can lose only because that rate suits it badly.' },
+      toggleLr: () => this.setState({ lr: !st.lr }),
+      runLabel: st.lr ? 'Queue 12 runs + 9 short sweeps' : 'Queue 12 runs'
+    };
+  }
+}
+</script>
+</body>
+</html>

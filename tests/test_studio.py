@@ -5,10 +5,27 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
 
+from studio_compile import CompiledModel
 from studio_core import Workspace, fingerprint, normalize, parse_file
 from studio_model import (BOS, DEFAULT_CONFIG, LocalModel, ScratchTransformer, Tokenizer, WindowStore, batch_arrays,
                           encode_example, load_checkpoint, samples_from, train, validate_config)
+from studio_spec import model_spec
+from tests.torchcheck import to_np
+
+
+def fp64_model(cfg, vocabulary):
+    """The configured model compiled in double precision, so finite differences isolate differentiation errors."""
+    cfg = validate_config(cfg)
+    spec = model_spec(cfg)
+    spec["train"]["precision"] = {"id": "fp64"}
+    return CompiledModel(spec, vocabulary, seed=cfg["seed"], device=cfg["device"], batch_size=cfg["batch_size"])
+
+
+def perturb(parameter, delta):
+    with torch.no_grad():
+        parameter.copy_(torch.as_tensor(delta, dtype=parameter.dtype))
 
 
 class DataChecks(unittest.TestCase):
@@ -36,6 +53,32 @@ class DataChecks(unittest.TestCase):
         self.assertEqual(normalize({"user": "two minus two", "assistant": 0})["assistant"], "0")
 
 
+class WorkspaceLockChecks(unittest.TestCase):
+    def test_apply_mutates_and_saves_under_the_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(directory)
+            def mutate(state):
+                self.assertTrue(workspace.lock._is_owned())  # held while the state changes
+                state["datasets"].append({"id": "x", "name": "X"})
+                return "done"
+            self.assertEqual(workspace.apply(mutate), "done")
+            self.assertEqual(Workspace(directory).state["datasets"][-1]["id"], "x")  # and saved
+
+
+class VariantChecks(unittest.TestCase):
+    def test_every_differing_block_is_listed(self):
+        import copy
+        from studio_net_variants import block_differences
+        from studio_spec import default_spec, set_block, validate_spec
+        base = default_spec()
+        base["dims"]["n_layer"] = 3
+        base = validate_spec(base)
+        other = copy.deepcopy(base)
+        set_block(other, 2, "mixer", {"id": "gru"})
+        other["dims"]["n_layer"] = 4
+        self.assertEqual(block_differences(base, validate_spec(other)), ["block 3: mixer attention → gru", "block 4: added"])
+
+
 class TrainingChecks(unittest.TestCase):
     def config(self, **values):
         cfg = dict(DEFAULT_CONFIG, device="cpu", width=32, layers=1, heads=2, context=32, expansion=2,
@@ -60,26 +103,23 @@ class TrainingChecks(unittest.TestCase):
         np.testing.assert_allclose(a[:, :3], b[:, :3], atol=1e-6, rtol=1e-6)
 
     def test_handwritten_gradients_against_finite_differences(self):
-        model = ScratchTransformer(dict(self.config(), width=16), 12)
-        # Double precision isolates differentiation errors from float32 rounding.
-        model.p = {key: value.astype(np.float64) for key, value in model.p.items()}
-        model.g = {key: np.zeros_like(value) for key, value in model.p.items()}
+        model = fp64_model(dict(self.config(), width=16), 12)
         x = np.array([[1, 3, 8, 2, 4, 9], [1, 3, 10, 2, 4, 11]])
         y = np.array([[-100, -100, -100, -100, 9, 2], [-100, -100, -100, -100, 11, 2]])
         model.loss_and_backward(x, y)
         rng = np.random.default_rng(77)
         for key, parameter in model.p.items():
             for _ in range(3):
-                direction = rng.normal(size=parameter.shape)
+                direction = rng.normal(size=tuple(parameter.shape))
                 direction /= np.linalg.norm(direction)
-                expected = float((model.g[key] * direction).sum())
-                original = parameter.copy()
+                expected = float((to_np(model.g[key]) * direction).sum())
+                original = to_np(parameter).copy()
                 epsilon = 1e-5
-                parameter[...] = original + epsilon * direction
+                perturb(parameter, original + epsilon * direction)
                 positive = model.loss(x, y)
-                parameter[...] = original - epsilon * direction
+                perturb(parameter, original - epsilon * direction)
                 negative = model.loss(x, y)
-                parameter[...] = original
+                perturb(parameter, original)
                 actual = (positive - negative) / (2 * epsilon)
                 self.assertAlmostEqual(expected, actual, delta=2e-6, msg=key)
 

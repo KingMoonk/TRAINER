@@ -30,7 +30,7 @@ DEFAULTS = {"tokenizer": "byte", "embedding": "learned", "position": "learned", 
             "init": "gpt2", "precision": "fp32"}
 # Run settings an architecture may carry along (older designs stored them); the Training setup page supplies the rest.
 RUN_INTS = {"steps": (1, 1000000), "batch_size": (1, 128), "accumulation": (1, 64), "eval_every": (1, 100000), "seed": (0, 2147483647)}
-RUN_CHOICES = {"objective": ("all", "assistant"), "device": ("auto", "cpu", "cuda")}
+RUN_CHOICES = {"objective": ("all", "assistant"), "device": ("auto", "cpu", "cuda", "mps")}
 
 
 def is_model_spec(value):

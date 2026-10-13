@@ -50,6 +50,10 @@ class HotReload(unittest.TestCase):
         self.assertEqual(app.winfo_id(), window)
         self.assertEqual(shapes[0][:2], built[:2])  # same global handlers and widgets as a first launch
         self.assertEqual(shapes[2], shapes[0])  # and repeating it adds no handlers, widgets or timers
+        commands = len(app._tclCommands)
+        dev.rebuild(app, type(app), Workspace(self.directory))
+        self.shape()
+        self.assertEqual(len(app._tclCommands), commands)  # nor Tcl callbacks
         app.show_page("training")
 
     def test_reload_swaps_in_fresh_code(self):
@@ -60,6 +64,7 @@ class HotReload(unittest.TestCase):
             self.assertIsNot(type(app), old)
             self.assertIs(type(app), sys.modules["studio_gui"].Studio)
             self.assertEqual(str(app.workspace.root), self.directory)
+            sys.modules["studio_registry"].get("mixer", "attention")  # studio_modules re-registered into the fresh registry
         finally:  # later test modules hold the original module objects, so put them back
             sys.modules.update(modules)
             dev.rebuild(app, old, Workspace(self.directory))

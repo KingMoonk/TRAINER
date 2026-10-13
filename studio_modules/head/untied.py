@@ -12,14 +12,7 @@ class UntiedHead(Layer):
         self.add("output.b", (dims.vocab,), "bias")
 
     def forward(self, x, ctx):
-        self.cache = x
         return x @ self.params["output.w"] + self.params["output.b"]
-
-    def backward(self, dlogits):
-        x = self.cache
-        self.grads["output.w"] += x.reshape(-1, x.shape[-1]).T @ dlogits.reshape(-1, dlogits.shape[-1])
-        self.grads["output.b"] += dlogits.sum(axis=tuple(range(dlogits.ndim - 1)))
-        return dlogits @ self.params["output.w"].T
 
 
 @register

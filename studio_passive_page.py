@@ -22,7 +22,7 @@ STOP_WORDS = {"duration": "the time limit was reached", "patience": "it stopped 
 STEPS = (("Train", "until the error settles"), ("Save", "a checkpoint"), ("Learn", "from the teacher"), ("Go again", "or step back if worse"))
 PHASES = {"train": 0, "save": 1, "teach": 2, "idle": 3}
 CRASHES = ("If the trainer stops (no heartbeat for 60 seconds, or its process is gone), the watchdog starts it again from the last saved step. "
-           "After 5 restarts in 10 minutes it gives up and tells you why when you are back. If you close Groundwork nothing happens; reopening it "
+           "After 5 restarts in 10 minutes, or 5 in a row without a new checkpoint, it gives up and tells you why when you are back. If you close Groundwork nothing happens; reopening it "
            "picks the session up where it is. If the computer restarts, the watchdog comes back when you sign in and resumes an unfinished session.")
 
 
@@ -492,7 +492,7 @@ class PassiveMixin:
                                 ("Beats the model I started with in (%)", pf["win"], "Share of head-to-head replies; needs a teacher. Leave blank to turn this off.")])
         label(box.body, "It stops at whichever comes first, and always keeps the best checkpoint.", "CardMuted.TLabel").pack(anchor="w", pady=(6, 0))
         box = drill(f, "Limits", s["limits"])
-        rows(box, [("Memory it may use", pf["memory"], "The trainer slows down rather than go past this.", list(MEMORY)), ("Checkpoints to keep", pf["keep"], "Older ones are cleared; the best is always kept."),
+        rows(box, [("Memory it may use", pf["memory"], "Best effort: past this, the round starts again with smaller batches.", list(MEMORY)), ("Checkpoints to keep", pf["keep"], "Older ones are cleared; the best is always kept."),
                                 ("Keep the computer awake", pf["awake"], ""), ("Pause on battery power", pf["battery"], "")])
         box = drill(f, "When to save a checkpoint", s["plateau"])
         rows(box, [("Save when the test error improves by less than (%)", pf["improve"], "Across the checks below."), ("across (checks in a row)", pf["checks"], ""),
@@ -516,6 +516,9 @@ class PassiveMixin:
     def passive_start(self):
         try:
             plan = merge_plan({**plan_from_form(self._passive_values()), **self._passive_data()})
+            missing = [s for s in plan["data"]["sources"] if s not in {d.get("id") for d in self.workspace.state["datasets"]}]
+            if missing:
+                raise ValueError("These datasets no longer exist: " + ", ".join(map(str, missing)) + ". Pick the training data again.")
             session_id = self._passive_store().create(plan)
         except (ValueError, TypeError) as exc:
             messagebox.showerror("Cannot start passive training", str(exc), parent=self)
@@ -545,7 +548,7 @@ class PassiveMixin:
         label(f, "", foreground=WARN, textvariable=pv["problem"], wraplength=900, justify="left").pack(anchor="w")
         pv["chart"] = c = tk.Canvas(f, bg=PANEL, height=260, highlightthickness=0)
         c.pack(fill="x", pady=10)
-        c.bind("<Configure>", lambda _e: self._pv.get("id") and draw_running(c, self._passive_session()))
+        c.bind("<Configure>", lambda _e: self._pv.get("session") and draw_running(c, self._pv["session"]))  # a resize redraws the last refresh, no record read
         pv["strip"] = strip(f)
         pv["strip"].pack(fill="x", pady=(0, 10))
         box = drill(f, "This round", pv["round"])
@@ -569,6 +572,7 @@ class PassiveMixin:
 
     def _passive_update_running(self, session):
         pv, state, plan = self._pv, session["state"], session["plan"]
+        pv["session"] = session
         cps, teacher = state.get("checkpoints", []), state.get("teacher", {})
         pv["lead"].set(f"Stops after {duration_words(duration_seconds(plan))}, or sooner if it stops getting better. You can close Groundwork; it carries on.")
         pv["pause"].configure(text="Resume" if session["status"] == "paused" else "Pause")
@@ -591,6 +595,11 @@ class PassiveMixin:
             health = self._passive_health(session) or {}
         except Exception:
             health = {}
+        if health.get("watchdog") == "Stopped":  # it died or never came back after a restart: nothing would ever finish this session
+            try:
+                self._passive_launch(session["id"])
+            except Exception:
+                self.log(traceback.format_exc())
         restarts = health.get("restarts", len(session.get("restarts", [])))
         trainer, heard = health.get("trainer", "Unknown"), health.get("heard")
         pv["trainer"].set(trainer)
@@ -599,7 +608,7 @@ class PassiveMixin:
         pv["watchdog_note"].set("Restarts the trainer if it stops")
         memory = state.get("memory") or {}
         pv["memory"].set(f"{size_words(memory['used'])} of {size_words(memory['limit'])}" if memory.get("limit") else "Not measured yet")
-        pv["memory_note"].set("Over the limit, the round restarts with smaller batches")
+        pv["memory_note"].set("Best effort: over the limit, the round restarts with smaller batches")
         reach = teacher.get("reachable")
         pv["teacher"].set("Not set up" if not teacher.get("model") else "Reachable" if reach else "Not reachable" if reach is False else "Not checked yet")
         pv["teacher_note"].set("If it can't be reached, that round skips the lesson")
@@ -614,7 +623,15 @@ class PassiveMixin:
     def passive_stop(self):
         session = self._passive_store().active()
         if session and messagebox.askyesno("Stop and keep the best", "Stop training now? The best checkpoint so far is kept.", parent=self):
-            self._passive_store().command(session["id"], "stop")
+            store = self._passive_store()
+            store.command(session["id"], "stop")
+            try:
+                trainer = (self._passive_health(session) or {}).get("trainer")
+            except Exception:
+                trainer = None
+            if trainer == "Stopped":  # no trainer to take the command: end the session here, or it stays "running" and blocks the next one
+                store.update(session["id"], status="stopped", command="", state={**session["state"], "stop_reason": "user", "phase": "idle"})
+                store.append(session["id"], {"type": "stop", "reason": "user", "best": session["state"].get("best")})
         self.refresh_passive()
 
     def _passive_picked(self, widget):
@@ -704,6 +721,9 @@ class PassiveMixin:
         chosen = [r for r in rows if r["id"] in ids and r.get("status") == "pending"]
         if not chosen:
             return
+        for r in chosen:
+            r["status"] = status
+        store.set_lessons(session_id, rows)  # first: a failure below must not leave them pending, or Keep again adds them twice
         if status == "kept":
             workspace = self.workspace
             dataset = next((d["id"] for d in workspace.state["datasets"] if d["name"] == "Passive lessons"), None)
@@ -711,11 +731,14 @@ class PassiveMixin:
                 previous = workspace.state.get("selectedDatasetId")
                 dataset = workspace.create_dataset("Passive lessons", "Better answers the teacher wrote during passive training.")
                 workspace.state["selectedDatasetId"] = previous  # creating a dataset selects it; keep the user's choice
-            workspace.add(dataset, [{"messages": r["messages"] + [{"role": "assistant", "content": r["answer"]}]} for r in chosen], source="passive")
+            try:
+                workspace.add(dataset, [{"messages": r["messages"] + [{"role": "assistant", "content": r["answer"]}]} for r in chosen], source="passive")
+            except BaseException:
+                for r in chosen:
+                    r["status"] = "pending"
+                store.set_lessons(session_id, rows)
+                raise
             self.refresh_datasets()
-        for r in chosen:
-            r["status"] = status
-        store.set_lessons(session_id, rows)
         self._passive_fill_lessons()
 
     def passive_continue(self):

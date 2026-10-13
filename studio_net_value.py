@@ -14,6 +14,7 @@ class ValueMapView(ProbeView):
 
     def compute(self, source, text, block, head):
         model, _ = probe_model(source)
+        model.p = model.state_arrays()  # NumPy views for the linear algebra below; the probe model is private
         spec = model.spec
         mixer = block_at(spec, block)["mixer"]
         d = spec["dims"]["d_model"]

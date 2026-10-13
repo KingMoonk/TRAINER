@@ -16,12 +16,14 @@ import time
 import traceback
 from pathlib import Path
 
-from studio_core import module_command
+from studio_core import atomic_json, module_command
 from studio_passive import ACTIVE, PassiveStore, trainer_command
 
 HEARTBEAT_SECONDS, MAX_RESTARTS, RESTART_WINDOW, POLL_SECONDS = 60, 5, 600, 5
+LOG_LIMIT = 5 * 1024 * 1024  # a log past this size starts afresh at the next spawn
 REPO = Path(__file__).resolve().parent
 _children: dict[int, subprocess.Popen] = {}  # children we spawned: reaped here so a dead trainer is not a zombie that still "exists"
+_lines: dict[tuple, str] = {}  # Windows: command line by (pid, creation time); reading one starts PowerShell
 
 
 # --------------------------------------------------------------------------- processes
@@ -53,13 +55,33 @@ def alive(pid):
     return True
 
 
+def _created(pid):
+    """Windows: the creation time of process `pid`, or None. A pid and its creation time name one process for good."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    times = [wintypes.FILETIME() for _ in range(4)]
+    ok = kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in times])
+    kernel.CloseHandle(handle)
+    return (times[0].dwHighDateTime << 32 | times[0].dwLowDateTime) if ok else None
+
+
 def command_line(pid):
     """The command line of process `pid`: "" when there is no such process, None when it could not be read."""
     try:
         if sys.platform == "win32":
-            # ponytail: one PowerShell start per call (about half a second) on Windows; cache by start time if the poll ever feels heavy.
+            key = (int(pid), _created(pid))  # PowerShell takes about half a second and the page asks every 2 seconds: once per process
+            if key[1] is not None and key in _lines:
+                return _lines[key]
             command = ["powershell", "-NoProfile", "-Command", f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"]
-            return subprocess.run(command, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip()
+            line = subprocess.run(command, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip()
+            if key[1] is not None:
+                _lines[key] = line
+            return line
         return subprocess.run(["ps", "-o", "command=", "-p", str(int(pid))], capture_output=True, text=True, timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
@@ -72,39 +94,52 @@ def ours(pid, *needles, read=command_line):
 
 
 def spawn(command, log_path, cwd):
-    """Start `command` fully detached, output appended to `log_path`; returns its pid."""
-    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+    """Start `command` fully detached, output appended to `log_path` (started afresh past LOG_LIMIT); returns its pid."""
+    for pid, child in list(_children.items()):
+        if child.poll() is not None:  # reaped: no zombie left behind for each finished trainer or watchdog
+            del _children[pid]
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     options = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW, "close_fds": True} if sys.platform == "win32" else {"start_new_session": True}
-    with open(log_path, "ab") as log:
+    with open(log_path, "wb" if log_path.exists() and log_path.stat().st_size > LOG_LIMIT else "ab") as log:
         child = subprocess.Popen(command, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **options)
     _children[child.pid] = child
     return child.pid
 
 
 def terminate(pid, *, run=subprocess.run, platform=sys.platform, is_alive=alive, sleep=time.sleep, grace=5.0):
-    """Stop a silent trainer: SIGTERM, then SIGKILL after `grace` seconds (Windows: taskkill /T /F)."""
+    """Stop a silent trainer: SIGTERM, then SIGKILL after `grace` seconds (Windows: taskkill /T /F). True once it is gone."""
     try:
         if platform == "win32":
             run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-            return
-        os.kill(pid, signal.SIGTERM)
-        waited = 0.0
-        while is_alive(pid) and waited < grace:
-            sleep(0.1)
-            waited += 0.1
-        if is_alive(pid):
-            os.kill(pid, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGTERM)
+            waited = 0.0
+            while is_alive(pid) and waited < grace:
+                sleep(0.1)
+                waited += 0.1
+            if is_alive(pid):
+                os.kill(pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
         pass
+    for _ in range(20):  # a kill is not instant: up to two seconds for it to land
+        if not is_alive(pid):
+            return True
+        sleep(0.1)
+    return False
 
 
 # --------------------------------------------------------------------------- keep awake, battery
 
 def keep_awake(pid, *, platform=sys.platform, popen=subprocess.Popen):
-    """Ask the computer not to sleep while process `pid` runs. Windows: call it from inside that process (the request is per thread)."""
+    """Ask the computer not to sleep while process `pid` runs; returns a handle for release_awake, or None.
+    Windows: call it from inside that process, from the thread that will release it (the request is per thread)."""
+    quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     try:
         if platform == "darwin":
-            return popen(["caffeinate", "-i", "-w", str(pid)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return popen(["caffeinate", "-i", "-w", str(pid)], **quiet)
+        if platform.startswith("linux"):  # systemd machines; without systemd-inhibit this raises FileNotFoundError and nothing happens
+            return popen(["systemd-inhibit", "--what=sleep:idle", "--who=Groundwork", "--why=Passive training", "--mode=block", "tail", f"--pid={pid}", "-f", "/dev/null"], **quiet)
         if platform == "win32":
             import ctypes
             ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
@@ -114,8 +149,26 @@ def keep_awake(pid, *, platform=sys.platform, popen=subprocess.Popen):
     return None
 
 
-def on_battery(*, platform=sys.platform, run=subprocess.run):
+def release_awake(handle, *, platform=sys.platform):
+    """Undo keep_awake (while paused). Never raises."""
     try:
+        if hasattr(handle, "terminate"):
+            handle.terminate()
+            handle.wait(timeout=5)
+        elif handle is True and platform == "win32":
+            import ctypes
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)  # ES_CONTINUOUS alone clears this thread's request
+    except (OSError, AttributeError, subprocess.SubprocessError):
+        pass
+
+
+def on_battery(*, platform=sys.platform, run=subprocess.run, supplies=Path("/sys/class/power_supply")):
+    try:
+        if platform.startswith("linux"):
+            read = lambda p, name: (p / name).read_text().strip() if (p / name).exists() else ""  # noqa: E731
+            found = [(read(p, "type"), read(p, "online")) for p in supplies.iterdir()] if supplies.is_dir() else []
+            adapters = [online for kind, online in found if kind != "Battery" and online]
+            return any(kind == "Battery" for kind, _ in found) and bool(adapters) and "1" not in adapters
         if platform == "darwin":
             out = run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
             return "Battery Power" in out.splitlines()[0]
@@ -148,15 +201,23 @@ def _watch_command(root):
 
 
 def install(root, *, home=None, run=subprocess.run, platform=sys.platform):
-    """Start the watchdog at sign-in. Returns the plist path / task name, or None (never raises: training must go on)."""
+    """Start the watchdog at sign-in. Returns the plist / .desktop path or the task name, or None (never raises: training must go on)."""
     root = Path(root).resolve()
     try:
         if platform == "darwin":
             path = Path(home or Path.home()) / "Library" / "LaunchAgents" / f"com.groundwork.passive.{_label(root)}.plist"
             path.parent.mkdir(parents=True, exist_ok=True)
             log = str(root / "data" / "passive-watchdog.log")
+            # KeepAlive: launchd starts it again only if it crashed; a watchdog that finished (no session left) stays finished
             path.write_bytes(plistlib.dumps({"Label": path.stem, "ProgramArguments": module_command("studio_passive_watch", "--root", str(root)), "WorkingDirectory": str(REPO),
-                                             "RunAtLoad": True, "KeepAlive": False, "StandardOutPath": log, "StandardErrorPath": log}))
+                                             "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False}, "StandardOutPath": log, "StandardErrorPath": log}))
+            return str(path)
+        if platform.startswith("linux"):
+            path = _desktop(root, home)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            quote = lambda a: '"' + "".join("\\" + c if c in '"`$\\' else c for c in a).replace("\\", "\\\\").replace("%", "%%") + '"'  # noqa: E731 (Desktop Entry spec)
+            path.write_text("[Desktop Entry]\nType=Application\nName=Groundwork passive training\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
+                            f"Path={REPO}\nExec={' '.join(map(quote, module_command('studio_passive_watch', '--root', str(root))))}\n")
             return str(path)
         if platform == "win32":
             # ponytail: runs the script by path so the repo is on sys.path without a working directory; a moved repo needs the next session to reinstall.
@@ -164,7 +225,10 @@ def install(root, *, home=None, run=subprocess.run, platform=sys.platform):
             python = python.with_name("pythonw.exe") if python.with_name("pythonw.exe").exists() else python
             name = f"GroundworkPassive-{_label(root)}"
             command = module_command("studio_passive_watch", "--root", str(root)) if getattr(sys, "frozen", False) else [str(python), str(REPO / "studio_passive_watch.py"), "--root", str(root)]
-            run(["schtasks", "/Create", "/TN", name, "/TR", subprocess.list2cmdline(command), "/SC", "ONLOGON", "/F"],
+            script = _script(root)  # schtasks /TR holds at most 261 characters; the command line itself can be longer
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text('@echo off\r\nstart "" ' + subprocess.list2cmdline(command).replace("%", "%%") + "\r\n", encoding="utf-8")
+            run(["schtasks", "/Create", "/TN", name, "/TR", f'"{script}"', "/SC", "ONLOGON", "/F"],
                 capture_output=True, check=True)
             return name
     except (OSError, subprocess.SubprocessError):
@@ -172,13 +236,24 @@ def install(root, *, home=None, run=subprocess.run, platform=sys.platform):
     return None
 
 
+def _desktop(root, home=None):
+    return Path(home or Path.home()) / ".config" / "autostart" / f"groundwork-passive-{_label(root)}.desktop"
+
+
+def _script(root):
+    return Path(root) / "data" / f"passive-watchdog-{_label(root)}.cmd"
+
+
 def uninstall(root, *, home=None, run=subprocess.run, platform=sys.platform):
     root = Path(root).resolve()
     try:
         if platform == "darwin":
             (Path(home or Path.home()) / "Library" / "LaunchAgents" / f"com.groundwork.passive.{_label(root)}.plist").unlink(missing_ok=True)
+        elif platform.startswith("linux"):
+            _desktop(root, home).unlink(missing_ok=True)
         elif platform == "win32":
             run(["schtasks", "/Delete", "/TN", f"GroundworkPassive-{_label(root)}", "/F"], capture_output=True)
+            _script(root).unlink(missing_ok=True)
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -193,7 +268,7 @@ def _memo(store, session_id):
 
 
 def _remember(store, session_id, memo):
-    (store.directory(session_id) / "watchdog.json").write_text(json.dumps(memo))
+    atomic_json(store.directory(session_id) / "watchdog.json", memo)
 
 
 def _power(store, session, memo, battery):
@@ -202,23 +277,25 @@ def _power(store, session, memo, battery):
     if not session["plan"]["limits"]["pause_on_battery"] and not memo.get("paused"):
         return None
     if session["plan"]["limits"]["pause_on_battery"] and battery():
-        if session["status"] == "running" and not session["command"] and not memo.get("paused"):
-            store.command(sid, "pause")
+        # only ever replaces no command or a pause: a stop or the user's resume written since `session` was read wins
+        if session["status"] == "running" and not session["command"] and not memo.get("paused") and store.command(sid, "pause", expect=("", "pause")):
             _remember(store, sid, {**memo, "paused": True})
             return "battery_paused"
         return None
     if not memo.get("paused"):
         return None
     word = None
-    if session["status"] == "paused" or session["command"] == "pause":
-        store.command(sid, "resume")
+    if (session["status"] == "paused" or session["command"] == "pause") and store.command(sid, "resume", expect=("", "pause")):
         word = "battery_resumed"
     _remember(store, sid, {**memo, "paused": False})
     return word
 
 
-def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_battery=on_battery, ours=ours):
-    """One watchdog pass. Returns none | ok | paused | started | restarted | gave_up | battery_paused | battery_resumed."""
+def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_battery=on_battery, ours=ours, woke=False):
+    """One watchdog pass. Returns none | ok | paused | started | restarted | waiting | gave_up | battery_paused | battery_resumed.
+
+    `woke`: this watchdog was not running for a while (it just started, or the computer slept); a restart now is not held against the trainer.
+    """
     session = store.active()
     if session is None:
         return "none"
@@ -231,21 +308,28 @@ def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_
             store.append(sid, {"type": "power", "reason": word})  # the engine's own pause/resume lines say when; this says why
         return word or ("paused" if session["status"] == "paused" else "ok")
     first = not pid and not memo.get("spawned")
-    if not first and sum(t - r < RESTART_WINDOW for r in session["restarts"]) >= MAX_RESTARTS:
+    saved = len(session["state"].get("checkpoints", []))
+    stuck = "checkpoints" in memo and memo["checkpoints"] == saved  # no new checkpoint since the last (re)start
+    in_window = sum(t - r < RESTART_WINDOW for r in session["restarts"]) >= MAX_RESTARTS
+    if not first and not woke and (in_window or (stuck and memo.get("fruitless", 0) >= MAX_RESTARTS)):
         if running:
             kill(pid)
-        message = f"The trainer kept stopping, so passive training gave up after {MAX_RESTARTS} restarts in {RESTART_WINDOW // 60} minutes." + (f" The last problem: {session['error']}" if session["error"] else " See trainer.log.")
+        why = f"{MAX_RESTARTS} restarts in {RESTART_WINDOW // 60} minutes" if in_window else f"{MAX_RESTARTS} restarts in a row without a new checkpoint"
+        message = f"The trainer kept stopping, so passive training gave up after {why}." + (f" The last problem: {session['error']}" if session["error"] else " See trainer.log.")
         store.update(sid, status="failed", error=message)
         store.append(sid, {"type": "error", "message": message})
         return "gave_up"
     if running:
         kill(pid)
+        if alive(pid):
+            return "waiting"  # never two trainers: spawn on a later pass, once the old one is gone
     new = spawn(trainer_command(store.root, sid), store.directory(sid) / "trainer.log", REPO)
-    _remember(store, sid, {**memo, "spawned": t})
+    fruitless = memo.get("fruitless", 0) if first or woke else memo.get("fruitless", 0) + 1 if stuck else 0
+    _remember(store, sid, {**memo, "spawned": t, "checkpoints": saved, "fruitless": fruitless})
     if first:
         store.update(sid, trainer_pid=new)
         return "started"
-    store.update(sid, trainer_pid=new, restarts=[*session["restarts"], t][-50:])
+    store.update(sid, trainer_pid=new, **({} if woke else {"restarts": [*session["restarts"], t][-50:]}))
     store.append(sid, {"type": "restart", "reason": "silent" if running else "stopped", "pid": new})
     return "restarted"
 
@@ -255,25 +339,30 @@ def check(store, *, now=time.time, spawn=spawn, alive=alive, kill=terminate, on_
 def watch(root, *, poll=POLL_SECONDS, sleep=time.sleep, me=None, **hooks):
     """Check every `poll` seconds until no session is active; then remove the sign-in entry and return."""
     store, me, clock, last = PassiveStore(root), me or os.getpid(), hooks.get("now", time.time), None
+    error, logged = None, 0.0
     while True:
-        session = store.active()
-        if session is None:
-            uninstall(root)
-            return
-        other = session["watchdog_pid"]
-        if other and other != me and hooks.get("alive", alive)(other) and hooks.get("ours", ours)(other, "studio_passive_watch"):
-            return
-        if other != me:
-            store.update(session["id"], watchdog_pid=me)
-        t = clock()
-        gap, last = None if last is None else t - last, t
-        if gap is not None and gap > 6 * poll and session["trainer_pid"]:
-            # this loop was asleep (the computer slept): the heartbeat looks old only because nobody was awake to hear it, so the trainer gets a fresh grace period
-            _remember(store, session["id"], {**_memo(store, session["id"]), "spawned": t})
-        try:
-            check(store, **hooks)
+        try:  # a locked record, a full disk or a failed spawn must not end the watchdog
+            session = store.active()
+            if session is None:
+                uninstall(root)
+                return
+            other = session["watchdog_pid"]
+            if other and other != me and hooks.get("alive", alive)(other) and hooks.get("ours", ours)(other, "studio_passive_watch"):
+                return
+            if other != me:
+                store.update(session["id"], watchdog_pid=me)
+            t = clock()
+            gap, last = None if last is None else t - last, t
+            slept = gap is not None and gap > 6 * poll
+            if slept and session["trainer_pid"]:
+                # this loop was asleep (the computer slept): the heartbeat looks old only because nobody was awake to hear it, so the trainer gets a fresh grace period
+                _remember(store, session["id"], {**_memo(store, session["id"]), "spawned": t})
+            check(store, woke=gap is None or slept, **hooks)  # first pass (sign-in after a reboot, say) or after a sleep: a restart is not the trainer's fault
         except Exception:
-            traceback.print_exc()  # a locked record or a failed spawn must not end the watchdog
+            text = traceback.format_exc()
+            if text != error or time.monotonic() - logged >= 60:  # the same failure every 5 seconds is said once a minute
+                print(text, file=sys.stderr, flush=True)
+                error, logged = text, time.monotonic()
         sleep(poll)
 
 

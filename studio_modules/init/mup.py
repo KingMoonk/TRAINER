@@ -8,8 +8,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-import numpy as np
+import torch
 
+from studio_modules.init.gpt2 import fill_normal
 from studio_registry import ModuleSpec, register
 
 
@@ -25,8 +26,8 @@ class MuPInit:
     def __init__(self, cfg):
         self.cfg = cfg
 
+    @torch.no_grad()
     def apply(self, layer, rng, dims):
-        xp = layer.xp
         m = dims.d_model / self.cfg.base_width
         sgd = self.cfg.optimizer_family == "sgd"
         kind = type(layer).__name__.lower()
@@ -41,11 +42,11 @@ class MuPInit:
                 std = self.cfg.std / (m if readout else math.sqrt(m) if hidden else 1)
                 if role == "residual_out" and self.cfg.scale_residual:
                     std /= math.sqrt(2 * dims.n_layer)
-                parameter[...] = xp.asarray(rng.normal(0, std, parameter.shape).astype(np.dtype(layer.dtype)))
+                fill_normal(parameter, rng, std)
             elif role == "gain":
-                parameter.fill(1)
+                parameter.fill_(1)
             elif role == "bias":
-                parameter.fill(0)
+                parameter.fill_(0)
             # LR multipliers (Tensor Programs V, table 8): readout 1/m; hidden 1/m for Adam, 1 for SGD; input-like 1 for Adam, m for SGD
             if readout or (hidden and not sgd):
                 layer.lr_scale[name] = 1 / m
@@ -65,7 +66,7 @@ class MuP(ModuleSpec):
     blurb = "Maximal Update Parametrization: width-scaled initialization, learning rates, attention scores and tied-readout logits from an explicit base width."
     ref = "Yang et al. 2022 (Tensor Programs V)"
     config = MuPConfig
-    backward = "Initialization and LR multipliers; score/logit scaling in layer-specific forward/backward passes"
+    backward = "Initialization and LR multipliers; score/logit scaling in the layers' forward passes"
 
     def build(self, cfg, dims, rng):
         return MuPInit(cfg)

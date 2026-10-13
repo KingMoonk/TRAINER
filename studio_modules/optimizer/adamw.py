@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import torch
+
 from studio_registry import ModuleSpec, register
 from studio_slots import Optimizer
 
@@ -21,15 +23,13 @@ class AdamW(Optimizer):
 
     def apply(self, key, parameter, gradient, lr):
         cfg = self.cfg
-        self.m[key] *= cfg.beta1
-        self.m[key] += (1 - cfg.beta1) * gradient
-        self.v[key] *= cfg.beta2
-        self.v[key] += (1 - cfg.beta2) * gradient * gradient
+        self.m[key].mul_(cfg.beta1).add_(gradient, alpha=1 - cfg.beta1)
+        self.v[key].mul_(cfg.beta2).addcmul_(gradient, gradient, value=1 - cfg.beta2)
         m = self.m[key] / (1 - cfg.beta1 ** self.steps)  # undo the bias from starting both averages at zero
         v = self.v[key] / (1 - cfg.beta2 ** self.steps)
         if self.decays(key):
-            parameter *= 1 - lr * cfg.weight_decay
-        parameter -= lr * m / (self.xp.sqrt(v) + cfg.eps)
+            parameter.mul_(1 - lr * cfg.weight_decay)
+        parameter.sub_(lr * m / (torch.sqrt(v) + cfg.eps))
 
 
 @register
@@ -40,7 +40,7 @@ class AdamWSpec(ModuleSpec):
     blurb = "Adaptive per-parameter step sizes with decoupled weight decay."
     ref = "Loshchilov & Hutter 2019"
     config = AdamWConfig
-    backward = "Update rule in NumPy · checked against a hand-computed step"
+    backward = "Update rule in PyTorch · checked against a hand-computed step"
 
     def build(self, cfg, dims, rng):
         return AdamW(cfg)

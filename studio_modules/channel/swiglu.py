@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from studio_modules.ops import activate, activate_derivative, linear, linear_back
+import torch.nn.functional as F
+
+from studio_modules.ops import linear
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -27,17 +29,8 @@ class SwiGLULayer(Layer):
 
     def forward(self, x, ctx):
         pre = ctx.emit("swiglu.pre", linear(self, x, "gate"))
-        gate, sigmoid = activate(self.xp, pre, "silu")
-        up = linear(self, x, "up")
-        act = ctx.emit("swiglu.act", gate * up)
-        self.cache = (x, pre, sigmoid, gate, up, act)
+        act = ctx.emit("swiglu.act", F.silu(pre) * linear(self, x, "up"))
         return linear(self, act, "down")
-
-    def backward(self, dy):
-        x, pre, sigmoid, gate, up, act = self.cache
-        dact = linear_back(self, dy, act, "down")
-        dx = linear_back(self, dact * up * activate_derivative(pre, sigmoid, "silu"), x, "gate")
-        return dx + linear_back(self, dact * gate, x, "up")
 
 
 @register

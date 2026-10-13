@@ -15,6 +15,7 @@ from studio_model import (LocalModel, Tokenizer, batch_arrays, load_checkpoint, 
                           samples_from, train, validate_config)
 from studio_spec import config_from_spec, default_spec
 from tests import legacy_gpt
+from tests.torchcheck import to_np
 
 
 EXAMPLES = [{"text": f"Counting up from {number}: {number}, {number + 1}, {number + 2}."}
@@ -71,7 +72,7 @@ class LegacyCheckpoint(unittest.TestCase):
             self.assertEqual(restored["model_rng"], old.rng.bit_generator.state)
             local = LocalModel(checkpoint, device="cpu")
             probe = np.array([[1, 3, 11, 12, 13]], dtype=np.int64)
-            np.testing.assert_allclose(local.model.forward(probe), old.forward(probe), atol=1e-6)
+            np.testing.assert_allclose(to_np(local.model.forward(probe)), old.forward(probe), atol=1e-5)
 
             step(2)
             step(3)
@@ -81,9 +82,9 @@ class LegacyCheckpoint(unittest.TestCase):
             self.assertEqual(resumed["optimizer_steps"], optimizer.steps)
             self.assertEqual(resumed["model_rng"], old.rng.bit_generator.state)
             for key in old.p:
-                np.testing.assert_allclose(resumed["model"][key], old.p[key], atol=1e-6, err_msg=key)
-                np.testing.assert_allclose(resumed["m"][key], optimizer.m[key], atol=1e-6, err_msg=key)
-                np.testing.assert_allclose(resumed["v"][key], optimizer.v[key], atol=1e-6, err_msg=key)
+                np.testing.assert_allclose(resumed["model"][key], old.p[key], atol=1e-5, err_msg=key)
+                np.testing.assert_allclose(resumed["m"][key], optimizer.m[key], atol=1e-5, err_msg=key)
+                np.testing.assert_allclose(resumed["v"][key], optimizer.v[key], atol=1e-5, err_msg=key)
 
     def test_resume_rejects_changed_optimizer_recipe(self):
         with tempfile.TemporaryDirectory() as directory:

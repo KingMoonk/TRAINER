@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import queue
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -75,8 +74,6 @@ class CurriculumMixin:
     def _build_training(self):
         super()._build_training()
         self.curriculum = {"stages": [], "context": DEFAULT_CONTEXT}
-        self.curriculum_base = None
-        self.curriculum_register = None
         self._build_curriculum_card()
         self.refresh_curriculum()
 
@@ -182,12 +179,12 @@ class CurriculumMixin:
         if not self._editable():
             return
         try:
-            base, context, register = self.curriculum_settings()
+            base, context, _ = self.curriculum_settings()
         except (ValueError, TypeError) as exc:
             messagebox.showerror("Cannot build the plan", str(exc), parent=self)
             return
         plan = default_plan(self.workspace, base, context=context, replay=DEFAULT_REPLAY if self.curriculum_replay.get() else 0.0)
-        self.curriculum, self.curriculum_base, self.curriculum_register = plan, base, register
+        self.curriculum = plan
         self.refresh_curriculum()
         note = f"{len(plan['stages'])} stages · byte tokenizer · context {context} (same in every stage)."
         if plan["warnings"]:
@@ -254,7 +251,7 @@ class CurriculumMixin:
         if not self.curriculum["stages"]:
             self.build_curriculum_plan()
         try:
-            base, context, register = self.curriculum_settings() if self.curriculum_base is None else (self.curriculum_base, self.curriculum["context"], self.curriculum_register)
+            base, context, register = self.curriculum_settings()  # always current: the Blueprint may have changed
             plan = copy.deepcopy({k: v for k, v in self.curriculum.items() if k in {"name", "stages", "warnings"}})
             plan.update(context=context, replay=DEFAULT_REPLAY if self.curriculum_replay.get() else 0.0)
             for stage in plan["stages"]:
@@ -263,7 +260,6 @@ class CurriculumMixin:
         except (ValueError, TypeError) as exc:
             messagebox.showerror("Cannot start", str(exc), parent=self)
             return
-        self.curriculum_base = base
         self.history = []
         self.draw_loss()
         self.toggle_curriculum(True)
@@ -278,8 +274,9 @@ class CurriculumMixin:
         if saved is None:
             messagebox.showinfo("Nothing to resume", "There is no stopped or unfinished plan yet.", parent=self)
             return
+        # The resumed plan keeps its own saved base_config (its checkpoints were trained with it); nothing
+        # is cached here, so a later Start reads the Blueprint again.
         self.curriculum = {k: v for k, v in saved.items() if k != "base_config"}
-        self.curriculum_base = saved.get("base_config")
         self.refresh_curriculum()
         self.curriculum_note.set(f"Resuming {saved['name']} from its first unfinished stage.")
         self.start_job("curriculum", lambda: resume_plan(self.workspace, saved["id"], self._curriculum_emit, self.stop, self.pause),
@@ -320,17 +317,6 @@ class CurriculumMixin:
         else:
             super().toggle_pause()
 
-    def poll(self):
-        deferred = []
-        try:
-            for _ in range(200):
-                kind, value = self.events.get_nowait()
-                if kind == "curriculum":
-                    self.curriculum_event(value)
-                else:
-                    deferred.append((kind, value))
-        except queue.Empty:
-            pass
-        for item in deferred:
-            self.events.put(item)
-        super().poll()
+    def register_handlers(self):
+        super().register_handlers()
+        self.handlers["curriculum"] = self.curriculum_event

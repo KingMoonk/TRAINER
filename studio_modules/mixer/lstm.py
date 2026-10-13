@@ -1,7 +1,8 @@
-"""Causal long short-term memory with explicit reverse-time gradients."""
+"""Causal long short-term memory."""
 from __future__ import annotations
 
-from studio_modules.mixer.gru import sigmoid
+import torch
+
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -16,46 +17,19 @@ class LSTMLayer(Layer):
         self.add("lstm.bh", (4 * d,), "bias")
 
     def forward(self, x, ctx):
-        xp = self.xp
-        h = xp.zeros((x.shape[0], x.shape[2]), dtype=x.dtype)
-        c = xp.zeros_like(h)
-        states, saved = [], []
+        p = self.params
+        projected = x @ p["lstm.x"] + p["lstm.bx"]
+        h = torch.zeros((x.shape[0], x.shape[2]), dtype=x.dtype, device=x.device)
+        c = torch.zeros_like(h)
+        states = []
         for t in range(x.shape[1]):
-            xt, hp, cp = x[:, t], h, c
-            raw = xt @ self.params["lstm.x"] + self.params["lstm.bx"] + hp @ self.params["lstm.h"] + self.params["lstm.bh"]
-            i, f, g, o = xp.split(raw, 4, axis=-1)
-            i, f, g, o = sigmoid(i, xp), sigmoid(f, xp), xp.tanh(g), sigmoid(o, xp)
-            c = f * cp + i * g
-            h = o * xp.tanh(c)
+            raw = projected[:, t] + h @ p["lstm.h"] + p["lstm.bh"]
+            i, f, g, o = raw.chunk(4, dim=-1)
+            i, f, g, o = torch.sigmoid(i), torch.sigmoid(f), torch.tanh(g), torch.sigmoid(o)
+            c = f * c + i * g
+            h = o * torch.tanh(c)
             states.append(h)
-            saved.append((xt, hp, cp, i, f, g, o, c))
-        out = ctx.emit("lstm.state", xp.stack(states, axis=1))
-        self.cache = saved
-        return out
-
-    def backward(self, dy):
-        xp = self.xp
-        dx = xp.empty_like(dy)
-        dh = xp.zeros_like(dy[:, 0])
-        dc = xp.zeros_like(dh)
-        for t in reversed(range(dy.shape[1])):
-            xt, hp, cp, i, f, g, o, c = self.cache[t]
-            total = dy[:, t] + dh
-            tanh_c = xp.tanh(c)
-            do = total * tanh_c * o * (1 - o)
-            dc = dc + total * o * (1 - tanh_c * tanh_c)
-            di = dc * g * i * (1 - i)
-            df = dc * cp * f * (1 - f)
-            dg = dc * i * (1 - g * g)
-            draw = xp.concatenate((di, df, dg, do), axis=-1)
-            self.grads["lstm.x"] += xt.T @ draw
-            self.grads["lstm.h"] += hp.T @ draw
-            self.grads["lstm.bx"] += draw.sum(axis=0)
-            self.grads["lstm.bh"] += draw.sum(axis=0)
-            dx[:, t] = draw @ self.params["lstm.x"].T
-            dh = draw @ self.params["lstm.h"].T
-            dc = dc * f
-        return dx
+        return ctx.emit("lstm.state", torch.stack(states, dim=1))
 
 
 @register

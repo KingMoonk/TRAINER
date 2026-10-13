@@ -2,11 +2,11 @@
 
 A native Python desktop studio for creating datasets and training your own language model from random weights.
 
-**NumPy and pandas provide the CPU version; optional CuPy enables NVIDIA GPU acceleration.** Python's built-in Tkinter supplies the interface. The transformer, backward pass, optimizer, tokenizer, checkpoint format and text sampler are implemented in this repository. Everything runs locally; CPU and GPU use the same handwritten learning code.
+**PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** Python's built-in Tkinter supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
 
 ## Quickstart
 
-Requires Python 3.9 or newer with Tkinter.
+Requires Python 3.12 or newer with Tkinter (the pinned NumPy 2.5 and pandas 3.0 need 3.12).
 
 macOS / Linux:
 
@@ -74,9 +74,11 @@ Use the `.venv` interpreter in PyCharm. Python must include Tkinter (included wi
 
 Choose **Model blueprint → Compute device**:
 
-- `auto` (default): use the first CUDA GPU if the driver, CuPy, and CUDA kernel checks pass; otherwise use NumPy on CPU and show the reason.
-- `cuda`: require GPU execution. If it is unavailable, report the error instead of silently changing devices.
-- `cpu`: use NumPy without requiring CuPy or probing CUDA in the training engine.
+- `auto` (default): use a CUDA GPU, else an Apple GPU (Metal), when a small calculation check passes; otherwise the CPU, with the reason shown. Small models stay on the CPU because kernel launches cost more than the arithmetic.
+- `cuda` / `mps`: require that device. If it is unavailable, report the error instead of silently changing devices.
+- `cpu`: never probe a GPU.
+
+float64 precision is not available on Apple GPUs; such runs fall back to the CPU.
 
 Chat has a separate **Inference device** selector. For chat, reload the checkpoint after changing this setting. The model status and training log show the actual device. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
 
@@ -87,15 +89,9 @@ For a machine with an NVIDIA driver and CUDA 13 toolkit already installed:
 .\.venv\Scripts\python.exe train.py --list-devices
 ```
 
-If the machine has a compatible NVIDIA driver but no CUDA toolkit, install the runtime components in the virtual environment using CuPy's optional `ctk` extra:
+PyTorch's default wheel from PyPI already includes Apple Metal (MPS) support. For an NVIDIA GPU install the CUDA build of PyTorch that matches your driver (see requirements-gpu.txt), then restart the studio. The backend targets one GPU (device 0).
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install "cupy-cuda13x[ctk]>=14.2,<15"
-```
-
-See the [official CuPy installation guide](https://docs.cupy.dev/en/stable/install.html) for CUDA compatibility and CUDA 12 alternatives. Install only one CuPy distribution in an environment. Restart the studio after installing GPU support. This backend currently targets a single NVIDIA GPU (device 0).
-
-Weights, activations, attention, handwritten gradients, and Adam state stay on GPU during GPU training. Initialization and dropout random draws remain NumPy-based for compatibility with existing saved random states; batches and dropout masks transfer to the GPU. Checkpoints transfer numeric arrays back to NumPy for storage. Inference transfers the final vocabulary vector back for seeded token sampling. GPU reductions may differ slightly from CPU floating-point results. Small models or batches may run faster on CPU because kernel launch and transfer overhead can dominate. Initial CUDA kernel compilation can make the first step slower.
+Weights, activations and optimizer state stay on the GPU during GPU training. Initialization and dropout random draws remain NumPy-based so saved random states stay portable; batches and dropout masks transfer to the GPU. Checkpoints store NumPy arrays (`.npz`), so a checkpoint trained on one device loads on any other. GPU reductions may differ slightly from CPU floating-point results. Small models or batches run faster on the CPU because kernel launch and transfer overhead dominate; `auto` keeps them there.
 
 ## Workflow
 
@@ -108,10 +104,10 @@ The file picker is the supported import method; operating-system drag-and-drop i
 
 ## The learning engine
 
-`studio_model.py` retains the original decoder-only training path using NumPy or CuPy arrays:
+`studio_model.py` drives the decoder-only training path on PyTorch tensors; `studio_compile.py` assembles a ModelSpec from the registry's modules and runs it with autograd:
 
-- Learned token/position embeddings, pre-layer normalization, multi-head causal self-attention, residual paths, tanh-approximation GELU, dropout, final normalization and tied output embeddings.
-- Explicit gradients for every operation, stable cross-entropy, global gradient clipping, gradient accumulation, AdamW with bias correction, warmup and cosine learning-rate decay.
+- Learned token/position embeddings, pre-layer normalization, multi-head causal self-attention, residual paths, tanh-approximation GELU, dropout, final normalization and tied output embeddings, plus the alternative modules in `studio_modules/` (RoPE, ALiBi, RMSNorm, GQA, linear attention, SSM, GRU, LSTM, convolution, SwiGLU, mixture of experts, untied heads).
+- Gradients by autograd (every module's forward pass is checked against finite differences in float64), stable cross-entropy, global gradient clipping, gradient accumulation, AdamW with bias correction (also SGD, Lion and Muon), warmup with cosine or warmup-stable-decay schedules.
 - Character vocabularies fitted to the training split, or a fixed UTF-8 byte vocabulary with special conversation tokens. Character tokenizers use an unknown token for unseen characters; bytes cover all UTF-8 text.
 - Next-token prediction on raw text. Conversation targets can include every token or only assistant content and end-of-turn markers.
 

@@ -17,7 +17,8 @@ import random
 import threading
 from pathlib import Path
 
-from studio_core import atomic_json, fingerprint, now, uid
+from studio_catalog import CATALOG
+from studio_core import atomic_json, messages_of, now, uid
 from studio_model import train, validate_config
 from studio_planning import build_training_set
 from studio_spec import is_model_spec
@@ -39,6 +40,7 @@ STAGE_DEFAULTS = {  # base steps, learning rate, record cap, training objective
 DEFAULT_CONTEXT = 256
 DEFAULT_REPLAY = 0.15
 DONE_STATES = {"completed", "skipped"}
+HELD_OUT_SPLITS = {"validation", "test"}  # never auto-assigned to a training stage
 
 
 # --------------------------------------------------------------------------- planning
@@ -50,13 +52,9 @@ def catalog_id_of(dataset):
 def dataset_stage(dataset):
     """Stage of a registered dataset: catalog field, else known catalog ids, else name hints, else instructions."""
     cid = catalog_id_of(dataset)
-    try:
-        from studio_catalog import CATALOG
-        entry = next((e for e in CATALOG if e["id"] == cid), None)
-        if entry and entry.get("stage") in STAGE_ORDER:
-            return entry["stage"]
-    except Exception:
-        pass
+    entry = next((e for e in CATALOG if e["id"] == cid), None)
+    if entry and entry.get("stage") in STAGE_ORDER:
+        return entry["stage"]
     if cid in FALLBACK_STAGE:
         return FALLBACK_STAGE[cid]
     name = str(dataset.get("name", "")).lower()
@@ -67,14 +65,16 @@ def dataset_stage(dataset):
     return "instructions"
 
 
+def dataset_split(dataset):
+    entry = next((e for e in CATALOG if e["id"] == catalog_id_of(dataset)), None)
+    return str(dataset.get("split") or (entry or {}).get("split") or "")
+
+
 def dataset_records(workspace, dataset):
     count = dataset.get("recordCount")
     if isinstance(count, int) and count >= 0:
         return count
-    try:
-        return int(workspace.audit(dataset["id"])["records"])
-    except Exception:
-        return 0
+    return int(workspace.count(dataset["id"]))  # SELECT COUNT for disk datasets; no audit DataFrame
 
 
 def default_plan(workspace, base_config=None, context=None, replay=0.0, dataset_ids=None, name="Train on everything"):
@@ -86,7 +86,16 @@ def default_plan(workspace, base_config=None, context=None, replay=0.0, dataset_
     for dataset in workspace.state["datasets"]:
         if dataset_ids is not None and dataset["id"] not in dataset_ids:
             continue
-        records = dataset_records(workspace, dataset)
+        label = dataset.get("name", dataset["id"])
+        if dataset_split(dataset) in HELD_OUT_SPLITS:
+            warnings.append(f"Skipped {label}: it is a {dataset_split(dataset)} split, kept out of training.")
+            continue
+        try:
+            records = dataset_records(workspace, dataset)
+            stage = dataset_stage(dataset)
+        except Exception as exc:
+            warnings.append(f"Skipped {label}: could not read it ({exc}).")
+            continue
         if records <= 0:
             continue
         cid = catalog_id_of(dataset)
@@ -94,7 +103,7 @@ def default_plan(workspace, base_config=None, context=None, replay=0.0, dataset_
             warnings.append(f"Skipped {dataset.get('name', cid)}: its passages need a context of at least {LONG_SOURCES[cid]}, "
                             f"but this plan uses {context}. Raise the context to include it.")
             continue
-        groups[dataset_stage(dataset)].append((dataset, records))
+        groups[stage].append((dataset, records))
     stages = []
     for stage in STAGE_ORDER:
         members = groups[stage]
@@ -153,6 +162,8 @@ def _stage_config(state, stage, index):
             spec["tokenizer"] = {"id": "byte"}
             spec["dims"]["n_ctx"] = context
         else:
+            if not isinstance(spec.get("embedding"), dict):
+                raise ValueError("The Blueprint architecture has no embedding section; open it in the Blueprint and save it again.")
             spec["embedding"]["tokenizer"] = "byte"
             spec["embedding"]["context"] = context
     cfg["architecture"] = spec
@@ -255,6 +266,42 @@ def _checkpoint(run_dir):
     return None
 
 
+def _prompt_key(row):
+    """Normalised prompt text, so the same question in two datasets (GSM8K inside MetaMathQA) shares one key."""
+    text = row.get("text") or next((m.get("content", "") for m in messages_of(row) if m.get("role") == "user"), "")
+    return " ".join(str(text).casefold().split())
+
+
+def _held_out(workspace, state, eval_dir, seed, emit, stop):
+    """Sample each stage's held-out file once, before any training; return the plan-wide prompt-key registry.
+
+    Every stage's training rows are filtered against this registry, so no held-out prompt is trained on
+    in any stage, even when stages share a dataset or one dataset contains another's questions.
+    """
+    stages = state["stages"]
+    paths = [eval_dir / f"stage{j + 1}.jsonl" for j in range(len(stages))]
+    registry = {_prompt_key(row) for path in paths for row in _read_jsonl(path)}
+    missing = [j for j, stage in enumerate(stages) if not paths[j].is_file() and stage["status"] not in DONE_STATES]
+    if missing:  # rows an earlier attempt already trained on cannot be held out any more
+        trained = {_prompt_key(row) for stage in stages for run_dir in stage.get("run_dirs") or []
+                   for row in _read_jsonl(Path(run_dir) / "dataset.jsonl")}
+    for j in missing:
+        want = int(stages[j].get("eval_records", 100))
+        rows = []
+        for row in _build(workspace, stages[j]["dataset_ids"], max(1, want * 3), seed + 7919 + j, emit, stop):
+            key = _prompt_key(row)
+            if len(rows) < want and key and key not in registry and key not in trained:
+                rows.append(row)
+                registry.add(key)
+        _write_jsonl(paths[j], rows)
+        if not rows:
+            text = f"Stage {j + 1} ({stages[j].get('name', '')}) has no held-out rows; forgetting is not measured for it."
+            state.setdefault("warnings", []).append(text)
+            emit({"type": "info", "text": "Warning: " + text})
+    registry.discard("")
+    return registry
+
+
 def _summary(state):
     return copy.deepcopy({k: v for k, v in state.items() if k not in {"base_config"}})
 
@@ -331,6 +378,20 @@ def _execute(workspace, state, emit, stop, pause):
     seed = int((state.get("base_config") or {}).get("seed", 42))
     state["status"] = "running"
     _save(state, emit)
+    try:
+        registry = _held_out(workspace, state, eval_dir, seed, emit, stop)
+    except InterruptedError:
+        state["status"] = "stopped"
+        _save(state, emit)
+        return state
+    except Exception:
+        state["status"] = "failed"
+        _save(state, emit)
+        raise
+
+    def unseen(rows):
+        return [row for row in rows if _prompt_key(row) not in registry]
+
     from studio_rlhf import evaluate_checkpoint
     for index, stage in enumerate(stages):
         if stage["status"] in DONE_STATES:
@@ -344,22 +405,25 @@ def _execute(workspace, state, emit, stop, pause):
                 _save(state, emit, index)
                 emit({"type": "info", "text": f"{label}: preparing {stage['max_records']:,} records."})
                 resume_from, examples = None, None
-                if stage.get("run_dir") and (Path(stage["run_dir"]) / "last.npz").is_file():
-                    resume_from = str(Path(stage["run_dir"]) / "last.npz")
-                    examples = _read_jsonl(Path(stage["run_dir"]) / "dataset.jsonl")
-                    emit({"type": "info", "text": f"{label}: resuming from {Path(stage['run_dir']).name}."})
-                eval_path = eval_dir / f"stage{index + 1}.jsonl"
+                # Newest last.npz over every attempt: a second stop before its first save must not lose the first.
+                saved = [Path(d) / "last.npz" for d in stage.get("run_dirs") or [] if (Path(d) / "last.npz").is_file()]
+                if saved:
+                    newest = max(saved, key=lambda path: path.stat().st_mtime_ns)
+                    resume_from = str(newest)
+                    # Not filtered: the checkpoint already trained on this exact snapshot, and train() checks its hash.
+                    examples = _read_jsonl(newest.parent / "dataset.jsonl") or None
+                    emit({"type": "info", "text": f"{label}: resuming from {newest.parent.name}."})
                 if examples is None:
-                    examples = _build(workspace, stage["dataset_ids"], stage["max_records"], seed + index, emit, stop)
+                    total = sum(int(workspace.count(key)) for key in stage["dataset_ids"])
+                    cap = int(stage["max_records"])
+                    # Held-out rows are filtered out, so training is capped at total - held-out, never the whole stage.
+                    request = max(1, min(total, cap + int(stage.get("eval_records", 100))))
+                    examples = unseen(_build(workspace, stage["dataset_ids"], request, seed + index, emit, stop))[:cap]
                     replay = []
                     if state["replay"] > 0 and index:
-                        replay = _replay_rows(stages[:index], int(state["replay"] * len(examples)), seed + index)
+                        replay = unseen(_replay_rows(stages[:index], int(state["replay"] * len(examples)), seed + index))
                         examples = examples + replay
                     stage["replay_records"] = len(replay)
-                    if not eval_path.is_file():
-                        trained = {fingerprint(e) for e in examples}
-                        pool = _build(workspace, stage["dataset_ids"], int(stage["eval_records"]) * 3 + len(trained) // 4, seed + 7919 + index, emit, stop)
-                        _write_jsonl(eval_path, [e for e in pool if fingerprint(e) not in trained][:int(stage["eval_records"])])
                 stage["records_used"] = len(examples)
                 previous = next((stages[j]["checkpoint"] for j in range(index - 1, -1, -1) if stages[j].get("checkpoint")), None) or state.get("init_from")
                 cfg = _stage_config(state, stage, index)

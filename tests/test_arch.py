@@ -5,12 +5,29 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from studio_arch import (config_from_spec, default_spec, new_block, parameter_breakdown, parameter_names,
                          spec_from_config, spec_hash, transplant, validate_spec)
+from studio_compile import CompiledModel
 from studio_core import normalize
 from studio_model import (DEFAULT_CONFIG, LocalModel, ScratchTransformer, load_checkpoint, parameter_estimate,
                           train, validate_config)
+from studio_spec import model_spec
+from tests.torchcheck import to_np
+
+
+def fp64_model(cfg, vocabulary):
+    """The configured model compiled in double precision, so finite differences isolate differentiation errors."""
+    cfg = validate_config(cfg)
+    spec = model_spec(cfg)
+    spec["train"]["precision"] = {"id": "fp64"}
+    return CompiledModel(spec, vocabulary, seed=cfg["seed"], device=cfg["device"], batch_size=cfg["batch_size"])
+
+
+def perturb(parameter, delta):
+    with torch.no_grad():
+        parameter.copy_(torch.as_tensor(delta, dtype=parameter.dtype))
 
 
 def mixed_spec(width=16):
@@ -104,13 +121,11 @@ class MixedGradients(unittest.TestCase):
     def test_finite_differences_on_mixed_spec(self):
         for scale in (.3, .5):  # tiny init puts pre-activations on the relu kink, so perturb the weights
             cfg = config_from_spec(mixed_spec())
-            model = ScratchTransformer(cfg, 12)
-            model.p = {k: v.astype(np.float64) for k, v in model.p.items()}
+            model = fp64_model(cfg, 12)
             rng = np.random.default_rng(5)
             for k, v in model.p.items():
                 if scale and not k.endswith(".g"):
-                    v += rng.normal(0, scale, v.shape)
-            model.g = {k: np.zeros_like(v) for k, v in model.p.items()}
+                    perturb(v, to_np(v) + rng.normal(0, scale, tuple(v.shape)))
             x = np.array([[1, 3, 8, 2, 4, 9], [1, 3, 10, 2, 4, 11]])
             y = np.array([[-100, -100, -100, -100, 9, 2], [-100, -100, -100, -100, 11, 2]])
             model.loss_and_backward(x, y)
@@ -120,15 +135,15 @@ class MixedGradients(unittest.TestCase):
             rng = np.random.default_rng(77)
             for key, parameter in model.p.items():
                 for _ in range(2):
-                    direction = rng.normal(size=parameter.shape)
+                    direction = rng.normal(size=tuple(parameter.shape))
                     direction /= np.linalg.norm(direction)
-                    expected = float((model.g[key] * direction).sum())
-                    original = parameter.copy()
-                    parameter[...] = original + 1e-5 * direction
+                    expected = float((to_np(model.g[key]) * direction).sum())
+                    original = to_np(parameter).copy()
+                    perturb(parameter, original + 1e-5 * direction)
                     positive = model.loss(x, y)
-                    parameter[...] = original - 1e-5 * direction
+                    perturb(parameter, original - 1e-5 * direction)
                     negative = model.loss(x, y)
-                    parameter[...] = original
+                    perturb(parameter, original)
                     self.assertAlmostEqual(expected, (positive - negative) / 2e-5, delta=2e-6 + 1e-4 * abs(expected), msg=f"{key} scale={scale}")
 
     def test_attention_stays_causal_with_per_block_heads(self):

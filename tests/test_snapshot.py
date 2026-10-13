@@ -7,6 +7,7 @@ from studio_compile import CompiledModel
 from studio_model import build_optimizer, train
 from studio_snapshot import capture, load, one_step, save
 from studio_spec import default_spec, validate_spec
+from tests.torchcheck import to_np
 
 
 class Snapshots(unittest.TestCase):
@@ -21,19 +22,20 @@ class Snapshots(unittest.TestCase):
         ids = np.array([[1, 2, 3]])
         targets = np.array([[2, 3, 4]])
         snapshot = one_step(model, ids, targets, optimizer=optimizer)
-        before = {key: value.copy() for key, value in model.p.items()}
+        before = {key: to_np(value).copy() for key, value in model.p.items()}
         logits, tape = model.forward(ids, training=True, tape=True, trace=True)
         loss, dy = model.objective(logits, targets, gradient=True)
         model.backward(dy, tape)
         optimizer.update(model, .001)
         self.assertAlmostEqual(snapshot['loss'], loss)
         for key, value in model.p.items():
+            value = to_np(value)
             np.testing.assert_array_equal(snapshot['arrays'][f'weight::{key}'], value)
             np.testing.assert_array_equal(snapshot['arrays'][f'update::{key}'], value - before[key])
         for key, value in tape.forward_values.items():
-            np.testing.assert_array_equal(snapshot['arrays'][f'forward::{key}'], value)
+            np.testing.assert_array_equal(snapshot['arrays'][f'forward::{key}'], to_np(value))
         for key, value in tape.backward_values.items():
-            np.testing.assert_array_equal(snapshot['arrays'][f'backward::{key}'], value)
+            np.testing.assert_array_equal(snapshot['arrays'][f'backward::{key}'], to_np(value))
 
     def test_round_trip_without_pickle(self):
         snapshot = capture(self.model(), [[1, 2]], 4)

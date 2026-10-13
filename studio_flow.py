@@ -60,7 +60,6 @@ class WorkflowMixin:
     def __init__(self, workspace=None):
         self.record_page = 0
         self.record_page_size = 100
-        self.search_after = None
         self._stats_cache = {}
         super().__init__(workspace)
         self.show_page("home")
@@ -377,7 +376,6 @@ class WorkflowMixin:
     def _build_datasets(self):
         super()._build_datasets()
         page = self.pages["datasets"]
-        self.search.trace_add("write", lambda *_: self.reset_record_page())
         pager = ttk.Frame(page)
         pager.pack(fill="x", pady=(8, 0), before=self.dataset_links)
         button(pager, "← Previous", lambda: self.page_records(-1))
@@ -390,11 +388,9 @@ class WorkflowMixin:
         self.example_detail.pack(fill="x")
         self.examples_tree.bind("<<TreeviewSelect>>", lambda _: self.preview_example())
 
-    def reset_record_page(self):
+    def search_changed(self):
         self.record_page = 0
-        if self.search_after:
-            self.after_cancel(self.search_after)
-        self.search_after = self.after(220, self.refresh_examples)
+        super().search_changed()
 
     def page_records(self, direction):
         count = self.workspace.count(self.selected_dataset(), query=self.search.get().strip())
@@ -705,32 +701,23 @@ class WorkflowMixin:
             text += "\nWarning: " + " ".join(report["warnings"])
         return text + "\nmixture.json saved with this run"
 
-    def poll(self):
-        # Dispatch workflow-specific messages, then leave model/chat events to the base loop.
-        deferred = []
-        try:
-            import queue
-            for _ in range(200):
-                kind, value = self.events.get_nowait()
-                if kind == "catalog_progress":
-                    text = value.get("text", "Working…")
-                    self.status_var.set(text)
-                    self.catalog_status.set(text)
-                    total = value.get("total") or 0
-                    completed = value.get("completed", 0)
-                    if total:
-                        self.task_progress.configure(value=min(100, completed / total * 100))
-                elif kind == "catalog_registered":
-                    self.refresh_datasets(value)
-                elif kind == "mixture_ready":
-                    self.mixture_report.set(self.mixture_summary(value))
-                    self.log(self.mixture_report.get())
-                else:
-                    deferred.append((kind, value))
-        except queue.Empty:
-            pass
-        for item in deferred:
-            self.events.put(item)
-        if self.job_kind is None:
-            self.task_progress.configure(value=0)
-        super().poll()
+    def register_handlers(self):
+        super().register_handlers()
+        self.handlers.update(catalog_progress=self.catalog_progress, catalog_registered=self.refresh_datasets,
+                             mixture_ready=self.mixture_ready)
+
+    def catalog_progress(self, value):
+        text = value.get("text", "Working…")
+        self.status_var.set(text)
+        self.catalog_status.set(text)
+        total = value.get("total") or 0
+        if total and self.job_kind is not None:
+            self.task_progress.configure(value=min(100, value.get("completed", 0) / total * 100))
+
+    def mixture_ready(self, value):
+        self.mixture_report.set(self.mixture_summary(value))
+        self.log(self.mixture_report.get())
+
+    def job_ended(self):
+        super().job_ended()
+        self.task_progress.configure(value=0)

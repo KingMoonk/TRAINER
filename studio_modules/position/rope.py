@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import torch
+
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -20,31 +22,22 @@ class RotaryPosition(Layer):
     def forward(self, x, ctx):
         return x
 
-    def backward(self, dx):
-        return dx
-
     def _angles(self, x):
         depth = x.shape[-1]
-        xp = self.xp
-        positions = xp.arange(x.shape[-2], dtype=self.dtype)
-        inv = self.base ** (-2 * xp.arange(depth // 2, dtype=self.dtype) / depth)
+        positions = torch.arange(x.shape[-2], dtype=x.dtype, device=x.device)
+        inv = self.base ** (-2 * torch.arange(depth // 2, dtype=x.dtype, device=x.device) / depth)
         angle = positions[:, None] * inv[None, :]
-        return xp.cos(angle)[None, None], xp.sin(angle)[None, None]
+        return torch.cos(angle)[None, None], torch.sin(angle)[None, None]
 
-    def _turn(self, x, reverse=False):
+    def _turn(self, x):
         if x.shape[-1] % 2:
             raise ValueError("RoPE requires an even query/key head width.")
         cosine, sine = self._angles(x)
-        if reverse:
-            sine = -sine
         even, odd = x[..., 0::2], x[..., 1::2]
-        return self.xp.stack((even * cosine - odd * sine, even * sine + odd * cosine), axis=-1).reshape(x.shape)
+        return torch.stack((even * cosine - odd * sine, even * sine + odd * cosine), dim=-1).reshape(x.shape)
 
     def rotate(self, q, k):
         return self._turn(q), self._turn(k)
-
-    def rotate_back(self, dq, dk):
-        return self._turn(dq, True), self._turn(dk, True)
 
 
 @register

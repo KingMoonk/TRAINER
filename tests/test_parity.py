@@ -6,6 +6,7 @@ import numpy as np
 from studio_arch import config_from_spec, validate_spec
 from studio_model import AdamW, ScratchTransformer, validate_config
 from tests import legacy_gpt
+from tests.torchcheck import to_np
 
 BASE = {"width": 32, "layers": 2, "heads": 4, "context": 32, "expansion": 4, "dropout": .1, "batch_size": 4,
         "seed": 7, "device": "cpu", "learning_rate": .003}
@@ -34,12 +35,13 @@ class Parity(unittest.TestCase):
         new = ScratchTransformer(config, 40)
         self.assertEqual(set(old.p), set(new.p))
         for name in old.p:
-            np.testing.assert_array_equal(old.p[name], new.p[name], err_msg=name)
+            np.testing.assert_array_equal(old.p[name], to_np(new.p[name]), err_msg=name)
         before, after = curve(old, legacy_gpt.AdamW(old)), curve(new, AdamW(new))
         self.assertLess(before[-1], before[0] - .2)  # it really trained, so the comparison means something
-        self.assertLess(np.abs(before - after).max(), 1e-6)
+        # float32 matmul order differs between NumPy and PyTorch, so the two engines drift by rounding over 100 steps
+        self.assertLess(np.abs(before - after).max(), 2e-3)
         for name in old.p:
-            np.testing.assert_allclose(old.p[name], new.p[name], atol=1e-6, err_msg=name)
+            np.testing.assert_allclose(old.p[name], to_np(new.p[name]), atol=2e-3, err_msg=name)
 
     def test_uniform_config_trains_the_same_for_100_steps(self):
         self.check(BASE)

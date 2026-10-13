@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import copy
 import json
-import threading
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
@@ -21,7 +20,6 @@ class ExperimentsView(NetworkView):
 
     def __init__(self, parent, host):
         super().__init__(parent, host)
-        self.stop = None
         line = ttk.Frame(self)
         line.pack(fill="x")
         self.variant = tk.StringVar()
@@ -60,12 +58,13 @@ class ExperimentsView(NetworkView):
         self.message.set("Each seed trains the base and variant on the same data. Results report achieved budgets.")
 
     def cancel(self):
-        if self.stop is not None:
-            self.stop.set()
+        if self.host.job_kind == "network experiment":
+            self.host.stop_job()
 
     def start(self):
-        if self.stop is not None and not self.stop.is_set():
-            self.message.set("A comparison is already running.")
+        """Runs as a host job: busy(), Stop, close() and hot reload all see it, and a second run waits for the first to end."""
+        if self.host.busy():
+            self.message.set("Another task is running; stop it and wait for it to finish first.")
             return
         try:
             seeds = [int(value.strip()) for value in self.seeds.get().split(",")]
@@ -80,22 +79,22 @@ class ExperimentsView(NetworkView):
         except (ValueError, KeyError) as error:
             self.message.set(str(error))
             return
+        output = self.host.workspace.run_dir / uid("experiment")
+        host = self.host
+
+        def work():
+            try:
+                examples = build_training_set(host.workspace, ids, max_records=2000, seed=seeds[0])["examples"]
+                emit = lambda event: host.events.put(("net_view", (self, self.event, (True, event))))  # noqa: E731
+                return True, run(experiment, examples, output, emit=emit, stop=host.stop)
+            except Exception as error:
+                return False, str(error)
+        if not host.start_job("network experiment", work, lambda outcome: self.winfo_exists() and self.complete(*outcome)):
+            return
         self.table.delete(*self.table.get_children())
         self.runs_by_key.clear()
         self.draw_chart([])
-        self.stop = threading.Event()
-        output = self.host.workspace.run_dir / uid("experiment")
         self.message.set("Preparing shared training data…")
-        def worker():
-            try:
-                examples = build_training_set(self.host.workspace, ids, max_records=2000, seed=seeds[0])["examples"]
-                def emit(event):
-                    self.host.net_view_events.put((self, self.event, (True, event)))
-                results = run(experiment, examples, output, emit=emit, stop=self.stop)
-                self.host.net_view_events.put((self, self.complete, (True, results)))
-            except Exception as error:
-                self.host.net_view_events.put((self, self.complete, (False, str(error))))
-        threading.Thread(target=worker, daemon=True, name="network-experiment").start()
 
     def event(self, ok, event):
         if event.get("type") == "metric":
@@ -111,7 +110,6 @@ class ExperimentsView(NetworkView):
             self.message.set(f"Variant {event['variant']} · seed {event['seed']} · adjustment {event['adjustments'] or 'none'}")
 
     def complete(self, ok, result):
-        self.stop = None
         if not ok:
             self.message.set(str(result))
             return

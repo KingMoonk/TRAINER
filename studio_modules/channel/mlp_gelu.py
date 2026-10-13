@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from studio_modules.ops import activate, activate_derivative, linear, linear_back
+from studio_modules.ops import activate, linear
 from studio_registry import ModuleSpec, register
 from studio_slots import Estimate, Layer
 
@@ -36,27 +36,14 @@ class MLP(Layer):
             self.add("f2.b", (d,), "bias")
 
     def forward(self, x, ctx):
-        inputs, pres, saved, act = [], [], [], x
-        for name in self.names:
-            inputs.append(act)
+        act = x
+        for i, name in enumerate(self.names):
             pre = linear(self, act, name)
-            act, keep = activate(self.xp, pre, self.kind)
-            pres.append(pre)
-            saved.append(keep)
-        # Only the final hidden layer exposes these hooks, also for legacy multi-layer MLPs.
-        pre = ctx.emit("mlp.pre", pre)
-        act, keep = activate(self.xp, pre, self.kind)
-        pres[-1], saved[-1] = pre, keep
+            if i == len(self.names) - 1:
+                pre = ctx.emit("mlp.pre", pre)  # only the final hidden layer exposes hooks, also for legacy multi-layer MLPs
+            act = activate(pre, self.kind)
         act = ctx.emit("mlp.act", act)
-        self.cache = (inputs, pres, saved, act)
         return linear(self, act, "f2")
-
-    def backward(self, dy):
-        inputs, pres, saved, act = self.cache
-        dact = linear_back(self, dy, act, "f2")
-        for j in reversed(range(self.layers)):
-            dact = linear_back(self, dact * activate_derivative(pres[j], saved[j], self.kind), inputs[j], self.names[j])
-        return dact
 
 
 @register

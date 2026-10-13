@@ -4,7 +4,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import tkinter as tk
 
 from studio_arch import validate_spec
@@ -18,7 +18,8 @@ TINY = {"embedding": {"tokenizer": "character", "width": 16, "context": 32, "dro
 
 
 class FakeViz:
-    running = True
+    running = connected = True
+    exit_code = log_path = None
 
     def __init__(self):
         self.sent = []
@@ -29,7 +30,7 @@ class FakeViz:
     def poll(self):
         return []
 
-    def stop(self):
+    def stop(self, wait=True):
         self.running = False
 
 
@@ -346,6 +347,56 @@ class NetworkPage(unittest.TestCase):
         app.net_telemetry({"type": "telemetry", "step": 1, "total": 2, "loss": 1.0, "lr": 0.1,
                            "embedding": {}, "blocks": [], "output": {}})
         self.assertEqual(viz.sent[-1]["type"], "telemetry")
+
+    def test_session_state_jobs_and_viewer_startup(self):
+        app, store, arch = self.open_page()
+        # a failed run never restarts itself later
+        app._net_run, app._net_live_pending = {"arch": arch}, True
+        with patch("studio_gui.messagebox.showerror"):
+            app.job_error(("boom", "trace"))
+        self.assertEqual((app._net_run, app._net_live_pending), (None, False))
+        # notes that could not be committed do not follow the user to another architecture
+        app.net_error, app.net_notes = "broken", ["stale note"]
+        app.net_open(arch)
+        self.assertEqual(app.net_notes, [])
+        # Versions › Backups restores its own selection, not the inspector's
+        path = app.net_backup()
+        versions = app.net_views["Versions"]
+        versions.refresh()
+        versions.trees["Backups"].selection_set(path)
+        app.backup_tree.selection_remove(*app.backup_tree.selection())
+        with patch("studio_network.messagebox.askyesno", return_value=True), \
+                patch.object(store, "restore", return_value={"architectures": 1}) as restore:
+            versions.restore_backup()
+        restore.assert_called_once_with(path)
+        # Experiments is a host job: refused while another one runs
+        app.job_kind = "training"
+        try:
+            app.net_views["Experiments"].start()
+        finally:
+            app.job_kind = None
+        self.assertIn("Another task", app.net_views["Experiments"].message.get())
+        # only the newest inspection request is delivered
+        done, view = Mock(), app.net_views["Trace a token"]
+        view.work(lambda: time.sleep(.2) or "old", done)
+        view.work(lambda: "new", done)
+        self.pump(.5)
+        done.assert_called_once_with(True, "new")
+        # weight edits from the viewer are saved one at a time
+        viz = app.viz = FakeViz()
+        app._net_weight_edit_busy = True
+        app.net_edit_viewer_weight({"weight": "x", "row": 0, "column": 0, "delta": .1})
+        self.assertIn("still being saved", viz.sent[-1]["message"])
+        app._net_weight_edit_busy = False
+        # a viewer that dies while starting shows the end of its log
+        log = Path(self.directory.name) / "viewer.log"
+        log.write_text("Traceback\nImportError: no panda3d\n", encoding="utf-8")
+        viz.connected, viz.exit_code, viz.log_path = False, 1, log
+        app._net_viewer_seen = False
+        with patch("studio_network.messagebox.showerror") as error:
+            app.net_poll_viewer()
+        self.assertIn("no panda3d", error.call_args[0][1])
+        self.assertIsNone(app._net_viewer_job)  # and polling stops with the process
 
     def test_architecture_management(self):
         app, store, arch = self.open_page()

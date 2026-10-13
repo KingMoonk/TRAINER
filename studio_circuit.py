@@ -10,7 +10,7 @@ import re
 import time
 import tkinter as tk
 
-from studio_widgets import FONT, _wheel_notches, _ZOOM_BASE
+from studio_widgets import FONT, WHEEL_EVENTS, _wheel_notches, _ZOOM_BASE, wheel_delta
 from studio_spec import block_at
 from studio_registry import get as module_for
 
@@ -24,6 +24,9 @@ BW, GAP, SUB = 212, 52, 36          # block width, gap between chips, bus-to-sub
 EMB = (0, -100, 132, 100)
 HEAD_COLS, HEAD_STEP, HEAD_SIZE = 6, 24, 19
 MLP_COLS, MLP_STEP, MLP_SIZE = 8, 18, 14
+MAX_HEAD_PADS = 16                  # wider heads draw this many pads plus an "N of M" note
+NEUTRAL = 0.1                       # pad level when nothing was measured: uniform, never invented
+NORM_TAGS = {"layernorm": "LN", "rmsnorm": "RMS"}
 
 _RGB: dict[str, tuple] = {}
 
@@ -61,11 +64,18 @@ def lenient(spec):
             continue
         att = raw.get("attention") if isinstance(raw.get("attention"), dict) else {}
         mlp = raw.get("mlp") if isinstance(raw.get("mlp"), dict) else {}
+        enabled = bool(att.get("enabled", True))
+        # *_id / *_name are display fields the Network page adds from the ModelSpec; legacy specs are attention + LayerNorm
         blocks.append({"id": str(raw.get("id") or f"blk_{i:06x}"), "label": str(raw.get("label") or f"Block {i + 1}"),
-                       "att": bool(att.get("enabled", True)), "heads": _num(att.get("heads"), 4, 1, 16),
+                       "att": enabled, "heads": _num(att.get("heads"), 4, 1, 4096),
+                       "mixer_id": str(raw.get("mixer_id") or ("attention" if enabled else "none")),
+                       "mixer_name": str(raw.get("mixer_name") or "Softmax attention"),
+                       "norm_id": str(raw.get("norm_id") or "layernorm"), "channel_name": raw.get("channel_name"),
                        "mlp": bool(mlp.get("enabled", True)), "exp": _num(mlp.get("expansion"), 4, 1, 8),
                        "layers": _num(mlp.get("layers"), 1, 1, 4), "act": str(mlp.get("activation", "gelu"))})
     return {"name": str(spec.get("name") or "My network"), "tok": str(emb.get("tokenizer", "character")),
+            "head_name": str(spec.get("head_name") or "Tied to embedding"), "tied": spec.get("head_id", "tied") == "tied",
+            "final_name": str(spec.get("final_name") or "LayerNorm"),
             "width": _num(emb.get("width"), 64, 1, 4096), "ctx": _num(emb.get("context"), 128, 1, 4096),
             "drop": _num(emb.get("dropout"), 0.1, 0, 1, float), "blocks": blocks,
             "train": spec.get("training") if isinstance(spec.get("training"), dict) else {}}
@@ -80,7 +90,7 @@ def layout(s):
     x = EMB[2] + GAP
     blocks, top, bottom = [], -130, 130
     for i, b in enumerate(s["blocks"]):
-        ah = 44 + HEAD_STEP * _ceil(b["heads"], HEAD_COLS) + 6 if b["att"] else 46
+        ah = 44 + HEAD_STEP * _ceil(min(b["heads"], MAX_HEAD_PADS), HEAD_COLS) + 6 + (14 if b["heads"] > MAX_HEAD_PADS else 0) if b["att"] else 46
         rows = _ceil(6 * b["exp"], MLP_COLS)
         mh = 44 + b["layers"] * (rows * MLP_STEP + 9) + 2 if b["mlp"] else 46
         att, mlp = (x + 20, -(SUB + ah), x + BW - 20, -SUB), (x + 20, SUB, x + BW - 20, SUB + mh)
@@ -148,7 +158,8 @@ class CircuitCanvas(tk.Canvas):
             self.bind(f"<ButtonPress-{button}>", self._pan_start)
             self.bind(f"<B{button}-Motion>", self._pan_move)
             self.bind(f"<ButtonRelease-{button}>", self._pan_end)
-        self.bind("<MouseWheel>", self._wheel)
+        for sequence in WHEEL_EVENTS:
+            self.bind(sequence, self._wheel)
         self.bind("<Motion>", self._hovering)
         self.bind("<Leave>", lambda _: self.owner.net_hover(""))
         self.anim = self.after(60, self._tick)
@@ -234,7 +245,7 @@ class CircuitCanvas(tk.Canvas):
 
     def _wheel(self, event):
         cx, cy = self.winfo_pointerx() - self.winfo_rootx(), self.winfo_pointery() - self.winfo_rooty()
-        notches = _wheel_notches(event.delta)
+        notches = _wheel_notches(wheel_delta(event))
         self.zoom(_ZOOM_BASE ** notches, cx, cy)
         return "break"
 
@@ -382,9 +393,15 @@ class CircuitCanvas(tk.Canvas):
             return f"Block {index + 1} · attention head {head + 1}{live}"
         if kind == "n":
             layer, unit = int(parts[3]), int(parts[4])
-            neurons = ((block or {}).get("mlp") or {}).get("neurons")
+            mlp = (block or {}).get("mlp") or {}
+            neurons = mlp.get("neurons")
             last = layer == self.s["blocks"][index]["layers"] - 1
-            live = f" · activity {neurons[min(len(neurons) - 1, unit * len(neurons) // max(1, self._unit_count(index)))]:.2f}" if neurons and last else ""
+            live = ""
+            if neurons and last:
+                sample = neurons[min(len(neurons) - 1, unit * len(neurons) // max(1, self._unit_count(index)))]
+                peak = mlp.get("peak")
+                live = (f" · activity {sample:.2f} of the busiest in a sample of {len(neurons)} neurons (relative)"
+                        + (f"; busiest mean |activation| {peak:.3g}" if isinstance(peak, (int, float)) else "; absolute scale not reported"))
             return f"Block {index + 1} · MLP layer {layer + 1} neuron pad {unit + 1}{live}"
         if kind == "e" and ident == "out":
             return "Output head pad"
@@ -517,9 +534,10 @@ class CircuitCanvas(tk.Canvas):
         self.create_polygon(ax, ay, ax - 1.6 * r, ay - r * .8, ax - 1.6 * r, ay + r * .8, fill=BUS, outline="")
         # tied weights + loss + gradient traces
         e_cx, o_cx = (EMB[0] + EMB[2]) / 2, (g["out"][0] + g["out"][2]) / 2
-        tied = [(o_cx, g["out"][1]), (o_cx, g["y_tied"]), (e_cx, g["y_tied"]), (e_cx, EMB[1])]
-        self._line(tied, ACCENT["tied"], 2, ("k:out",), dash=(7, 5))
-        self._text((e_cx + o_cx) / 2, g["y_tied"] - 14, "TIED WEIGHTS  ·  output head shares the embedding table", 11.5, ACCENT["tied"], "center", tags=("k:out",))
+        if s["tied"]:
+            tied = [(o_cx, g["out"][1]), (o_cx, g["y_tied"]), (e_cx, g["y_tied"]), (e_cx, EMB[1])]
+            self._line(tied, ACCENT["tied"], 2, ("k:out",), dash=(7, 5))
+            self._text((e_cx + o_cx) / 2, g["y_tied"] - 14, "TIED WEIGHTS  ·  output head shares the embedding table", 11.5, ACCENT["tied"], "center", tags=("k:out",))
         loss = [(o_cx, g["out"][3]), (o_cx, g["train"][1])]
         self._line(loss, ACCENT["train"], 2.4, ("k:train",))
         self._text(o_cx + 12, (g["out"][3] + g["train"][1]) / 2, "loss", 11.5, ACCENT["train"], tags=("k:train",))
@@ -529,29 +547,32 @@ class CircuitCanvas(tk.Canvas):
         # branch taps first, then the signal dots, then the chips so dots slip underneath them
         later = []
         for b, d in zip(s["blocks"], blocks):
-            for kind, sign, box, on in (("att", -1, d["att"], b["att"]), ("mlp", 1, d["mlp"], b["mlp"])):
+            for kind, sign, box, on in (("att", -1, d["att"], b["mixer_id"] != "none"), ("mlp", 1, d["mlp"], b["mlp"])):
                 key = f"b:{d['id']}:{kind}"
                 accent = ACCENT[kind]
                 if on:
                     near = box[3] if sign < 0 else box[1]
                     self._line([(d["tin"], 0), (d["tin"], near)], accent, 2.2, ("k:" + key,))
                     self._line([(d["tout"], near), (d["tout"], 0)], accent, 2.2, ("k:" + key,))
-                    ln = (d["tin"] - 15, sign * SUB / 2 - 7, d["tin"] + 15, sign * SUB / 2 + 7)
-                    self._rrect(*ln, 4, fill=CHIP, outline=ACCENT["final"], width=1.2, tags=("k:" + key,))
-                    self._text(d["tin"], sign * SUB / 2, "LN", 9, ACCENT["final"], "center", True, ("k:" + key,))
+                    if b["norm_id"] != "none":
+                        ln = (d["tin"] - 15, sign * SUB / 2 - 7, d["tin"] + 15, sign * SUB / 2 + 7)
+                        self._rrect(*ln, 4, fill=CHIP, outline=ACCENT["final"], width=1.2, tags=("k:" + key,))
+                        tag = NORM_TAGS.get(b["norm_id"], b["norm_id"][:3].upper())
+                        self._text(d["tin"], sign * SUB / 2, tag, 9, ACCENT["final"], "center", True, ("k:" + key,))
                     px, py = self._p(d["tout"], 0)
                     r = 8 * self.z
                     self.create_oval(px - r, py - r, px + r, py + r, fill=CHIP, outline=accent, width=max(1, 2 * self.z), tags=("k:" + key,))
                     self.create_line(px - r * .55, py, px + r * .55, py, fill=accent, width=max(1, 1.6 * self.z), tags=("k:" + key,))
                     self.create_line(px, py - r * .55, px, py + r * .55, fill=accent, width=max(1, 1.6 * self.z), tags=("k:" + key,))
-                    later.append(lambda b=b, d=d, box=box, key=key, kind=kind: (self._attention_chip if kind == "att" else self._mlp_chip)(b, d, box, key))
+                    chip = self._mlp_chip if kind == "mlp" else self._attention_chip if b["att"] else self._mixer_chip
+                    later.append(lambda b=b, d=d, box=box, key=key, chip=chip: chip(b, d, box, key))
                 else:
                     later.append(lambda box=box, kind=kind, key=key: self._ghost(box, kind, key))
         self._build_dots()
         for draw in later:
             draw()
         self._embedding_chip(key="emb")
-        self._simple_chip(g["final"], "final", "FINAL NORM", "LayerNorm", self._params("final"), "lr")
+        self._simple_chip(g["final"], "final", "FINAL NORM", s["final_name"], self._params("final"), "lr")
         self._output_chip(g["out"])
         self._training_chip(g["train"])
         self.restyle()
@@ -593,21 +614,31 @@ class CircuitCanvas(tk.Canvas):
         x0, y0, x1, y1 = box
         self._chip(box, ACCENT["att"], key)
         params = self._params(f"{d['id']}:attention")
-        self._title(x0, y0, "ATTENTION", f"{b['heads']} head{'s' * (b['heads'] != 1)}" + (f"  ·  {params}" if params else ""), key, ACCENT["att"])
-        cols = min(HEAD_COLS, b["heads"])
+        kind = "" if b["mixer_id"] == "attention" else f"  ·  {b['mixer_name']}"
+        self._title(x0, y0, "ATTENTION", f"{b['heads']} head{'s' * (b['heads'] != 1)}{kind}" + (f"  ·  {params}" if params else ""), key, ACCENT["att"])
+        shown = min(b["heads"], MAX_HEAD_PADS)
+        cols = min(HEAD_COLS, shown)
         gx = x0 + ((x1 - x0) - (cols * HEAD_STEP - (HEAD_STEP - HEAD_SIZE))) / 2
-        for h in range(b["heads"]):
+        for h in range(shown):
             px, py = gx + (h % HEAD_COLS) * HEAD_STEP, y0 + 46 + (h // HEAD_COLS) * HEAD_STEP
-            level = 0.08 + 0.1 * (((h * 37 + d["i"] * 11) % 7) / 7)
-            self.pads[("h", d["id"], h)] = self._pad(px, py, HEAD_SIZE, ACCENT["att"], ("k:" + key, f"p:h:{d['id']}:{h}"), level)
+            self.pads[("h", d["id"], h)] = self._pad(px, py, HEAD_SIZE, ACCENT["att"], ("k:" + key, f"p:h:{d['id']}:{h}"), NEUTRAL)
             if self.z > 0.9:
                 self._text(px + HEAD_SIZE / 2, py + HEAD_SIZE / 2, str(h + 1), 8, MUTED, "center", tags=("k:" + key, f"p:h:{d['id']}:{h}"))
+        if shown < b["heads"]:
+            self._text((x0 + x1) / 2, y1 - 10, f"{shown} of {b['heads']} heads shown  …", 10, MUTED, "center", tags=("k:" + key,))
+
+    def _mixer_chip(self, b, d, box, key):
+        """A sequence mixer that is not attention (SSM, GRU, LSTM, convolution, linear attention): name only, no head pads."""
+        x0, y0, _x1, _y1 = box
+        self._chip(box, ACCENT["att"], key)
+        params = self._params(f"{d['id']}:attention")
+        self._title(x0, y0, "MIXER", b["mixer_name"] + (f"  ·  {params}" if params else ""), key, ACCENT["att"])
 
     def _mlp_chip(self, b, d, box, key):
         x0, y0, x1, y1 = box
         self._chip(box, ACCENT["mlp"], key)
         params = self._params(f"{d['id']}:mlp")
-        sub = f"×{b['exp']}  ·  {b['layers']}L  ·  {b['act']}" + (f"  ·  {params}" if params else "")
+        sub = (f"{b['channel_name']}  ·  ×{b['exp']}  ·  {b['layers']}L" if b["channel_name"] else f"×{b['exp']}  ·  {b['layers']}L  ·  {b['act']}") + (f"  ·  {params}" if params else "")
         self._title(x0, y0, "MLP", sub, key, ACCENT["mlp"])
         units = 6 * b["exp"]
         cols = min(MLP_COLS, units)
@@ -617,8 +648,7 @@ class CircuitCanvas(tk.Canvas):
             top = y0 + 46 + layer * group
             for u in range(units):
                 px, py = gx + (u % MLP_COLS) * MLP_STEP, top + (u // MLP_COLS) * MLP_STEP
-                level = 0.06 + 0.12 * (((u * 53 + layer * 7 + d["i"] * 3) % 9) / 9)
-                self.pads[("n", d["id"], layer, u)] = self._pad(px, py, MLP_SIZE, ACCENT["mlp"], ("k:" + key, f"p:n:{d['id']}:{layer}:{u}"), level)
+                self.pads[("n", d["id"], layer, u)] = self._pad(px, py, MLP_SIZE, ACCENT["mlp"], ("k:" + key, f"p:n:{d['id']}:{layer}:{u}"), NEUTRAL)
             if layer < b["layers"] - 1:
                 ly = top + d["rows"] * MLP_STEP + 1
                 self._line([(x0 + 18, ly), (x1 - 18, ly)], mix(BG, ACCENT["mlp"], .35), 1, ("k:" + key,), glow=False)
@@ -636,7 +666,7 @@ class CircuitCanvas(tk.Canvas):
         self._text(x0 + 14, y1 - 52, (params + " params") if params else "", 11.5, ACCENT["emb"], bold=True, tags=("k:emb",))
         for i in range(24):
             px, py = x0 + 17 + (i % 8) * 15.5, y1 - 40 + (i // 8) * 10.5
-            self.pads[("e", "emb", i)] = self._pad(px, py, 9, ACCENT["emb"], ("k:emb", f"p:e:emb:{i}"), 0.1 + 0.1 * ((i * 5 % 7) / 7))
+            self.pads[("e", "emb", i)] = self._pad(px, py, 9, ACCENT["emb"], ("k:emb", f"p:e:emb:{i}"), NEUTRAL)
 
     def _simple_chip(self, box, key, title, sub, params, legs):
         x0, y0, x1, y1 = box
@@ -649,8 +679,8 @@ class CircuitCanvas(tk.Canvas):
         x0, y0, x1, y1 = box
         self._chip(box, ACCENT["out"], "out", "lrtb", 12, 5)
         self._text(x0 + 14, y0 + 20, "OUTPUT HEAD", 14, TEXT, bold=True, tags=("k:out",))
-        self._text(x0 + 14, y0 + 40, "tied to embedding", 11.5, MUTED, tags=("k:out",))
-        self._text(x0 + 14, y0 + 58, "x · Eᵀ → logits", 11.5, ACCENT["out"], tags=("k:out",))
+        self._text(x0 + 14, y0 + 40, self.s["head_name"], 11.5, MUTED, tags=("k:out",))
+        self._text(x0 + 14, y0 + 58, "x · Eᵀ → logits" if self.s["tied"] else "x · W → logits", 11.5, ACCENT["out"], tags=("k:out",))
         self._text(x0 + 14, y0 + 78, "next-token probs", 11.5, MUTED, tags=("k:out",))
         for i in range(10):
             px, py = x0 + 14 + i * 13.2, y1 - 28
@@ -685,7 +715,7 @@ class CircuitCanvas(tk.Canvas):
         for k in range(max(5, int(main["total"] / 240))):
             self.dot_items.append(self._dot(0, k * main["total"] / max(5, int(main["total"] / 240)), BUS, False))
         for b, d in zip(self.s["blocks"], g["blocks"]):
-            for kind, box, on, sign in (("att", d["att"], b["att"], -1), ("mlp", d["mlp"], b["mlp"], 1)):
+            for kind, box, on, sign in (("att", d["att"], b["mixer_id"] != "none", -1), ("mlp", d["mlp"], b["mlp"], 1)):
                 if on:
                     near = box[3] if sign < 0 else box[1]
                     self.paths.append(_path([(d["tin"], 0), (d["tin"], near), (d["tout"], near), (d["tout"], 0)]))
@@ -702,6 +732,12 @@ class CircuitCanvas(tk.Canvas):
         core = self.create_oval(0, 0, 0, 0, fill=mix(color, "#ffffff", .55), outline="", state="hidden" if grad else "normal")
         return {"path": path_index, "off": offset, "glow": glow, "core": core, "grad": grad, "color": color}
 
+    def start_animation(self):
+        """Resume the signal animation; it stops by itself while the Network page is not shown."""
+        if self.anim is None:
+            self.last_tick = time.monotonic()
+            self.anim = self.after(40, self._tick)
+
     def _tick(self):
         self.anim = None
         try:
@@ -710,6 +746,8 @@ class CircuitCanvas(tk.Canvas):
             now = time.monotonic()
             dt = min(0.1, now - self.last_tick)
             self.last_tick = now
+            if not self.owner.net_active():
+                return  # off-page: no timer at all; start_animation() resumes when the page is shown
             if self.owner.net_visible() and self.dot_items:
                 training = self.owner.net_is_training()
                 self.phase += dt * (260 if training else 80)
@@ -797,7 +835,7 @@ class CircuitCanvas(tk.Canvas):
                 if entropy and rest[0] < len(entropy):
                     level = max(0.0, min(1.0, (1 - entropy[rest[0]] / ctx_max) * 1.7))
                 else:
-                    level = 0.08 + 0.1 * (((rest[0] * 37 + self._index(bid) * 11) % 7) / 7)
+                    level = NEUTRAL
                 self._pad_level(item, ACCENT["att"], level)
             elif kind == "n":
                 layer, unit = rest
@@ -808,20 +846,18 @@ class CircuitCanvas(tk.Canvas):
                     if layer == spec_block["layers"] - 1 and mlp.get("neurons"):
                         n = mlp["neurons"]
                         level = n[min(len(n) - 1, unit * len(n) // (6 * spec_block["exp"]))]
-                    else:
-                        level = float(mlp.get("active_fraction", .3)) * (.55 + .45 * (((unit * 31 + layer * 17) % 9) / 9))
+                    else:  # one measured number for the whole layer, shown uniformly
+                        level = float(mlp.get("active_fraction", NEUTRAL))
                 else:
-                    level = 0.06 + 0.12 * (((unit * 53 + layer * 7 + self._index(bid) * 3) % 9) / 9)
+                    level = NEUTRAL
                 self._pad_level(item, ACCENT["mlp"], max(0.0, min(1.0, level)))
             elif kind in ("e", "o"):
-                idx = rest[-1]
                 rms = (t.get("embedding") or {}).get("rms") if t else None
-                shade = .5 + .5 * ((idx * 7 % 5) / 5)
-                level = 0.1 + 0.1 * ((idx * 5 % 7) / 7)
+                level = NEUTRAL
                 if kind == "e" and rms is not None:
-                    level = max(0.0, min(1.0, rms / 1.6 * shade))
+                    level = max(0.0, min(1.0, rms / 1.6))
                 elif kind == "o" and t:
-                    level = max(0.0, min(1.0, 0.25 + 0.7 * self.heat.get("out", 0) * shade))
+                    level = max(0.0, min(1.0, 0.25 + 0.7 * self.heat.get("out", 0)))
                 self._pad_level(item, ACCENT["emb"] if kind == "e" else ACCENT["out"], level)
         # residual stream brightness
         base = (t.get("embedding") or {}).get("rms") if t else None
@@ -870,7 +906,8 @@ class ResidualStream(tk.Canvas):
         self.spec = None
         self.rows = []
         self.bind("<Button-1>", self._select)
-        self.bind("<MouseWheel>", self._scroll)
+        for sequence in WHEEL_EVENTS:
+            self.bind(sequence, self._scroll)
         self.bind("<Configure>", lambda _event: self.draw())
 
     def set_spec(self, spec, estimate=None):
@@ -878,7 +915,8 @@ class ResidualStream(tk.Canvas):
         self.draw()
 
     def _scroll(self, event):
-        self.yview_scroll(-int(_wheel_notches(event.delta) or (1 if event.delta > 0 else -1)), "units")
+        delta = wheel_delta(event)
+        self.yview_scroll(-int(_wheel_notches(delta) or (1 if delta > 0 else -1)), "units")
         return "break"
 
     def _select(self, event):

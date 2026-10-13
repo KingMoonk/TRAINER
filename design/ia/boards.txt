@@ -1,0 +1,1270 @@
+
+
+######## Builder.dc.html
+Build your model
+Change the picture. See what it costs and what it does.
+{{ run.pill }}
+Next word
+scores every piece in the word list, picks one
+↑
+{{ s.label }}
+{{ s.tag }}
+Blocks
+rounds of processing per word
+−
+{{ blocks.n }}
++
+{{ blocks.was }}
+{{ c.name }}
+{{ c.hint }}
+{{ o.label }}
+↑
+Your text, cut into pieces
+{{ words.count }}
+{{ o.label }}
+{{ w }}
+look-back heads: each looks for something different in earlier words (attention)
+thinking room: works on each word by itself (MLP)
+WHAT YOUR CHANGES COST
+{{ k.name }}
+{{ k.say }}
+now
+new
+Training memory:
+[fits / doesn’t fit]
+on this computer at 16 rows per step. The bars compare weights, gradients and optimizer state (16 bytes per parameter at 32-bit); the engine adds activations, which grow with rows per step.
+WHAT TO EXPECT
+{{ x }}
+{{ tray.kicker }}
+{{ c }}
+{{ tray.text }}
+Quick test first
+{{ tray.bLabel }}
+{{ tray.aLabel }}
+WHILE TRAINING · ERROR IN BITS PER CHARACTER
+Example shape
+— version 4
+{{ see.trainV5 }}
+WHEN ANSWERING · SAME QUESTION, BOTH VERSIONS
+The largest planet in our solar system is …
+version 4
+[its answer appears here, word by word]
+version 5
+{{ see.answerV5 }}
+Answering never stops training. It shares the computer, so training slows while it answers. Each version answers with its best checkpoint.
+LOOK INSIDE
+Trace a position
+Inside a head
+Value map
+Loss
+Head lab
+3D
+Compare runs
+Quick test
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { cur: { L: 4, H: 4, W: 1, V: 2 }, draft: { L: 6, H: 4, W: 2, V: 2 }, phase: 'edit', ver: 4 }; }
+  renderVals() {
+    const st = this.state, cur = st.cur, dr = st.draft;
+    const FF = [512, 1024, 2048], VS = [256, 8192, 50257];
+    const cfg = (s) => ({ V: VS[s.V], d: 256, T: 256, L: s.L, H: s.H, ff: FF[s.W] });
+    const P = (c) => c.V * c.d + c.T * c.d + c.L * (4 * c.d * c.d + 4 * c.d + 2 * c.d * c.ff + c.ff + c.d + 4 * c.d) + 2 * c.d;
+    const C = (c) => 6 * (c.L * (4 * c.d * c.d + 2 * c.d * c.ff) + c.V * c.d) + 6 * c.L * c.T * c.d;
+    const TM = (c) => 16 * P(c);
+    const MEM = (c) => 4 * P(c) + 2 * c.L * c.d * 4 * c.T;
+    const a = cfg(cur), b = cfg(dr);
+    const editing = st.phase === 'edit';
+    const set = (patch) => { if (editing) this.setState({ draft: Object.assign({}, dr, patch) }); };
+    const words = ['Letters', 'Small word list', 'Large word list'], widths = ['Narrow', 'Normal', 'Wide'];
+    const changes = [];
+    if (dr.L !== cur.L) changes.push((dr.L > cur.L ? 'more' : 'fewer') + ' blocks (' + cur.L + ' → ' + dr.L + ')');
+    if (dr.H !== cur.H) changes.push('look-back heads ' + cur.H + ' → ' + dr.H);
+    if (dr.W !== cur.W) changes.push(widths[dr.W].toLowerCase() + ' thinking room');
+    if (dr.V !== cur.V) changes.push(words[dr.V].toLowerCase());
+    const n = st.ver, nv = 'version ' + (n + 1);
+    // tower
+    const maxL = Math.max(cur.L, dr.L), slabs = [];
+    for (let i = 0; i < maxL; i++) {
+      const added = i >= cur.L, removed = i >= dr.L;
+      slabs.push({ label: 'Block ' + (i + 1), eyes: Array.from({ length: removed ? cur.H : dr.H }, (_, k) => k), thinkW: [36, 72, 144][removed ? cur.W : dr.W] + 'px',
+        bg: added ? '#211c12' : '#1b1f27', bd: added ? '1px dashed #e5b567' : '1px solid #2a2f3a', op: removed ? '0.35' : '1',
+        tag: added ? 'new' : removed ? 'removed' : (dr.H !== cur.H || dr.W !== cur.W ? 'changed' : ''), tagColor: '#e5b567' });
+    }
+    const seg = (on, wasCur) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec', bd: wasCur && !on ? '1px dashed #9f8cff' : '1px solid #2a2f3a' });
+    const controls = [
+      { name: 'Look-back heads', hint: 'how many things each block looks for at once', color: '#e58fb0', opts: [1, 4, 8].map((h) => Object.assign({ label: String(h), on: dr.H === h, pick: () => set({ H: h }) }, seg(dr.H === h, cur.H === h))) },
+      { name: 'Thinking room', hint: 'space to work on each word', color: '#6cb4ee', opts: widths.map((w, i) => Object.assign({ label: w, on: dr.W === i, pick: () => set({ W: i }) }, seg(dr.W === i, cur.W === i))) }
+    ];
+    const blocks = { n: dr.L, color: dr.L !== cur.L ? '#e5b567' : '#e6e8ec', was: dr.L !== cur.L ? 'was ' + cur.L : '', less: () => set({ L: Math.max(1, dr.L - 1) }), more: () => set({ L: Math.min(12, dr.L + 1) }) };
+    const prompt = 'The largest planet in our solar system is';
+    const chips = dr.V === 0 ? prompt.split('').map((c) => (c === ' ' ? '␣' : c)) : dr.V === 2 ? ['The', ' largest', ' planet', ' in', ' our', ' solar', ' system', ' is'] : ['pieces depend on your data'];
+    const wordsV = { count: dr.V === 0 ? '41 pieces, one per character' : dr.V === 2 ? '8 pieces' : 'built from your data when you save', chips,
+      opts: words.map((w, i) => Object.assign({ label: w, on: dr.V === i, pick: () => set({ V: i }) }, seg(dr.V === i, cur.V === i))) };
+    const say = (x, y, more, less) => { const r = y / x; return Math.abs(r - 1) < 0.05 ? 'about the same' : r > 1 ? 'about ' + r.toFixed(1) + '× ' + more : 'about ' + (1 / r).toFixed(1) + '× ' + less; };
+    const bar = (x, y) => { const m = Math.max(x, y); return [Math.round(x / m * 100) + '%', Math.round(y / m * 100) + '%']; };
+    const costs = [['Size', P(a), P(b), 'bigger', 'smaller'], ['Time per training step', C(a), C(b), 'slower', 'faster'], ['Memory while training', TM(a), TM(b), 'more', 'less']].map(([name, x, y, mo, le]) => {
+      const [wa, wb] = bar(x, y), s = say(x, y, mo, le);
+      return { name, say: s, a: wa, b: wb, color: s === 'about the same' ? '#8f97a6' : '#e5b567', barB: s === 'about the same' ? '#9f8cff' : '#e5b567' };
+    });
+    const expect = [];
+    if (dr.L > cur.L) expect.push('More blocks: each word gets more rounds of processing, and every training step takes longer. With little data it may memorize rather than learn; watch the test line.');
+    if (dr.L < cur.L) expect.push('Fewer blocks: smaller and faster. It may not get its error as low.');
+    if (dr.L !== cur.L) expect.push('Last time blocks changed (2 → 4, version 2 → 3), error moved by [N] bits per character.');
+    if (dr.H !== cur.H) expect.push('Different look-back heads: same size, same speed. Each block splits its looking into ' + (dr.H > cur.H ? 'more, narrower' : 'fewer, wider') + ' views. Whether that helps at this size is something to test, not assume.');
+    if (dr.W > cur.W) expect.push('More thinking room: more to learn in every block, so bigger and slower.');
+    if (dr.W < cur.W) expect.push('Less thinking room: smaller and faster, with less capacity in every block.');
+    if (dr.V === 0 && cur.V !== 0) expect.push('Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.');
+    if (dr.V === 1 && cur.V !== 1) expect.push('Small word list: built from your own data. A much smaller table; text splits into somewhat more pieces.');
+    if (dr.V === 2 && cur.V !== 2) expect.push('Large word list: GPT-2’s list. A big table, short sequences.');
+    if (!expect.length) expect.push('Change something in the picture to see what to expect.');
+    // states
+    const ph = st.phase;
+    const wordChanged = dr.V !== cur.V;
+    const startNote = wordChanged ? 'The word list changed, so the old word table doesn’t fit: ' + nv + ' has to start from scratch.'
+      : dr.H !== cur.H ? nv[0].toUpperCase() + nv.slice(1) + ' reuses version ' + n + '’s weights split into a different number of heads, so its error jumps at first and then recovers.'
+      : (dr.L < cur.L || dr.W < cur.W) ? 'Removed parts are dropped from version ' + n + '’s weights; error rises a little, then recovers.'
+      : 'New parts start at zero, so ' + nv + ' begins exactly where version ' + n + ' is and catches up from there.';
+    const tray = ph === 'edit' ? (changes.length ? {
+        kicker: 'NOT SAVED · ONLY THIS PAGE SEES THESE', chips: changes, text: 'Nothing else in the app sees these yet. Saving makes ' + nv + '.', bg: '#211c12', line: '#e5b567',
+        hasQuick: true, hasA: true, aLabel: 'Save as ' + nv, a: () => this.setState({ phase: 'saved' }), hasB: true, bLabel: 'Discard', b: () => this.setState({ draft: Object.assign({}, cur) }) }
+      : { kicker: 'NO CHANGES', chips: [], text: 'Version ' + n + ' is the current design. Chat answers with the best checkpoint on held-back text.', bg: '#15181e', line: '#2a2f3a', hasA: false, hasB: false })
+      : ph === 'saved' ? { kicker: nv.toUpperCase() + (wordChanged ? ' SAVED · NEEDS TRAINING FROM SCRATCH' : ' SAVED · NEEDS CATCH-UP TRAINING'), chips: [], text: startNote + ' Chat keeps version ' + n + ' until ' + nv + ' beats it on held-back text, or you choose it.', bg: '#26171a', line: '#ef8a7a',
+        hasA: true, aLabel: wordChanged ? 'Add training to the queue' : 'Add catch-up to the queue', a: () => this.setState({ phase: 'queued' }), hasB: !wordChanged, bLabel: 'Start from scratch instead', b: () => this.setState({ phase: 'queued' }) }
+      : ph === 'queued' ? { kicker: 'QUEUED ON THIS COMPUTER', chips: [], text: nv[0].toUpperCase() + nv.slice(1) + ' waits behind the current job. The sidebar and “Queue and schedule” show where it is.', bg: '#15181e', line: '#6cb4ee', hasA: true, aLabel: 'Move it to the front', a: () => this.setState({ phase: 'training' }), hasB: false }
+      : { kicker: nv.toUpperCase() + (wordChanged ? ' IS TRAINING' : ' IS CATCHING UP'), chips: [], text: 'Version ' + n + '’s run is paused and can resume. Chat switches to ' + nv + ' only when it beats version ' + n + ' on held-back text, or when you pick it.', bg: '#1a1730', line: '#9f8cff', hasA: true, aLabel: 'Start new changes', a: () => this.setState({ phase: 'edit', ver: n + 1, cur: Object.assign({}, dr), draft: Object.assign({}, dr) }), hasB: false };
+    const run = ph === 'training' ? { pill: nv[0].toUpperCase() + nv.slice(1) + (wordChanged ? ' is training' : ' is catching up'), dot: '#9f8cff', w: '4%' } : { pill: 'Version ' + n + ' is training', dot: '#9f8cff', w: '62%' };
+    const see = ph === 'training' ? { v5color: '#e5b567', trainV5: '- - ' + nv + ': ' + (wordChanged ? 'starts from scratch' : 'starts from version ' + n + '’s level'), answerV5: 'answers from its best checkpoint so far', path: wordChanged ? 'M30 22 C 90 80, 150 112, 240 128' : 'M470 142 C 500 140, 540 146, 590 149' }
+      : { v5color: '#5b6271', trainV5: nv + ': appears once it trains', answerV5: ph === 'edit' ? 'save your changes and train them to compare' : 'has no trained weights yet', path: '' };
+    const machine = ph === 'training' ? { now: nv, what: wordChanged ? 'from scratch' : 'catching up', pct: 4, w: '4%', next: 'about [N] min left · version ' + n + ' paused' }
+      : ph === 'queued' ? { now: 'version ' + n, what: 'steady phase', pct: 62, w: '62%', next: 'about [N] min left · then ' + nv }
+      : { now: 'version ' + n, what: 'steady phase', pct: 62, w: '62%', next: 'about [N] min left · nothing queued' };
+    return { slabs, controls, blocks, words: wordsV, costs, expect, tray, run, see, machine };
+  }
+}
+
+######## Chat.dc.html
+Chat
+Talk to any trained version. Compare two to see what a change really did.
+LIVE
+{{ head.using }}
+{{ head.mode }}
+{{ cmpBtn.label }}
+[Your message]
+{{ a.tag }}
+[Its reply]
+Teach a correction
+saved for Post-training round 3: the teacher is this model with your correction in front of it
+{{ p.tag }}
+[Its reply]
+This one is better
+Picking a reply saves a rated pair for Post-training round 4. It changes nothing until that round is trained.
+THE VERDICT
+{{ verdict.line }}
+{{ verdict.sub }}
+{{ howLabel }}
+Training saved.
+Take the newer version’s error on held-back text. Find how much training the older one needed to reach that same error. The gap is the saving. Read off the two error-versus-compute curves; no new runs. Only runs trained to the same length on the same schedule are compared; otherwise there is no verdict.
+Checked at several sizes and seeds.
+A change only counts if the saving holds at two or three sizes and is larger than the spread across seeds. Gains that appear at one size and vanish at another are treated as noise.
+Error is measured per character,
+not per word piece, so versions with different word lists can be compared fairly. The held-back text is never used for training.
+Run the size check in Compare runs
+Message
+Send
+VERSIONS
+example verdicts
+{{ shelfHint }}
+{{ v.name }}
+{{ v.chip }}
+{{ v.change }}
+{{ v.slot }}
+{{ s.name }}
+{{ s.val }}
+Checkpoints: pretraining [N] · post-training [N]
+Test this change properly
+Open in designer
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { use: 3, b: 2, compare: false, how: false }; }
+  renderVals() {
+    const st = this.state;
+    const BEST = 3;
+    const V = [
+      { name: 'Version 1', change: 'Starting design: GPT-2 style', chip: 'baseline', tone: 'n', answers: 'not yet' },
+      { name: 'Version 2', change: 'Rotating positions instead of learned ones', chip: 'better', tone: 'g', answers: 'not yet' },
+      { name: 'Version 3', change: '4 blocks instead of 2', chip: 'better', tone: 'g', answers: 'not yet' },
+      { name: 'Version 4', change: 'Simpler normalization (RMSNorm)', chip: 'within the spread', tone: 'n', answers: 'yes' },
+      { name: 'Version 5', change: '6 blocks and wide thinking room', chip: 'catching up', tone: 'c', answers: 'not yet', training: true }
+    ];
+    const col = { g: '#9f8cff', n: '#8f97a6', c: '#ef8a7a' };
+    const A = '#9f8cff', B = '#6cb4ee';
+    const versions = V.map((v, i) => {
+      const isA = i === st.use, isB = st.compare && i === st.b;
+      const on = isA || isB;
+      return { name: v.name, change: v.change, chip: v.chip, chipColor: col[v.tone], blocked: false, op: '1', on,
+        open: isA && !st.compare,
+        bd: isA ? '2px solid ' + A : isB ? '2px solid ' + B : '1px solid #2a2f3a', bg: on ? '#1b1f27' : 'transparent',
+        slot: isA ? (st.compare ? 'left reply' : 'answering now') : isB ? 'right reply' : i === BEST ? 'best on held-back text' : v.training ? 'still training · answers from its best checkpoint so far' : '',
+        slotColor: isA ? A : isB ? B : '#8f97a6',
+        pick: () => { if (st.compare) { if (i !== st.use) this.setState({ b: i }); } else this.setState({ use: i, b: i > 0 ? i - 1 : 1 }); } };
+    });
+    const a = V[st.use], b = V[st.b];
+    const older = st.use < st.b ? a : b, newer = st.use < st.b ? b : a;
+    const unfinished = a.training || b.training;
+    const cur = V[st.use];
+    return {
+      versions, compare: st.compare, single: !st.compare, how: st.how,
+      head: { using: cur.name + ' · checkpoint [N]', mode: st.use === BEST ? 'follows the best checkpoint' : 'picked by you · ' + (V[BEST].name) + ' is best' },
+      a: { tag: cur.name + ' · checkpoint [N]' + (cur.answers === 'yes' ? '' : ' · hasn’t practised answering yet') },
+      pair: [{ tag: a.name, color: A }, { tag: b.name, color: B }],
+      cmpBtn: st.compare ? { label: 'Back to one version', bg: '#9f8cff', fg: '#0e1014' } : { label: 'Compare two versions', bg: 'transparent', fg: '#9f8cff' },
+      toggleCompare: () => this.setState({ compare: !st.compare, how: false }),
+      toggleHow: () => this.setState({ how: !st.how }), howLabel: st.how ? 'Hide how this is measured' : 'How this is measured',
+      verdict: unfinished
+        ? { color: '#e5b567', line: 'No verdict yet: version 5 hasn’t finished its schedule.', sub: 'Error mid-schedule looks worse than it will after the cool-down, so only runs trained to the same length on the same schedule are compared. Its replies are still worth reading.' }
+        : { color: '#e6e8ec', line: 'To reach the same error, ' + newer.name + ' needs [N]% of the training ' + older.name + ' needed.', sub: 'Under 100% means the change saves training. Held at [N] of 3 sizes · larger than the spread across 3 seeds · same length and schedule · error per character on held-back text' },
+      score: [{ name: 'Error on held-back text', val: '[N] bits/char' }, { name: 'Answers prompts', val: cur.answers }, { name: 'Checked problems passed', val: '[k] of [n]' }, { name: 'Judge preferred it over previous', val: '[k] of [n]' }, { name: 'Size · speed', val: '[N]M · [N] pieces/s' }],
+      shelfHint: st.compare ? 'Pick the version for the right-hand reply.' : 'Chat follows the best checkpoint unless you pick one. Switching is live; nothing retrains.',
+      placeholder: st.compare ? 'Ask both versions the same thing' : 'Type a message'
+    };
+  }
+}
+
+######## Experiments.dc.html
+Compare runs
+Change one thing, hold the rest equal, run several seeds. A difference counts only if it is larger than the spread across seeds.
+‹ Network designer
+/ Compare runs
+Question
+Hold equal
+{{ m.name }}
+Seeds
+Retune learning rate per variant
+{{ modeNote }}
+Seeds change the starting weights only; every run reads the same data in the same order. Every run uses the same schedule (warm-up, steady, cool-down) scaled to its length. {{ lr.note }}
+Run
+Change from base
+Matching (approximate)
+Final error · bits/char
+vs base
+{{ r.id }}
+{{ r.title }}
+{{ r.diff }}
+{{ r.adjust }}
+[N] · spread [N]
+{{ r.delta }}
+Add a variant from the designer
+Before it runs, your guess for B:
+{{ g.label }}
+{{ runLabel }}
+ERROR (BITS PER CHARACTER) VS {{ xAxis }}
+line: mean of seeds · band: spread across seeds
+Curves stream in here while runs train. Your guess is shown next to the result.
+{{ r.id }} · {{ r.title }}
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { mode: 'params', lr: true, guess: -1 }; }
+  renderVals() {
+    const st = this.state, mode = st.mode;
+    const M = {
+      params: { name: 'Parameters', note: 'Each variant’s width is re-solved so its parameter count lands within about 2% of the base. Same data and amount of text for all.', x: 'TEXT SEEN' },
+      compute: { name: 'Compute', note: 'Each run stops at about the same total training compute. Cheaper variants see more text.', x: 'TRAINING COMPUTE' },
+      tokens: { name: 'Text seen', note: 'Every run sees the same text. Sizes are allowed to differ, so read the comparison with that in mind.', x: 'TEXT SEEN' },
+      time: { name: 'Wall-clock', note: 'Every run gets the same minutes on this computer. Rewards variants that are fast here; may not hold on other hardware.', x: 'MINUTES' }
+    };
+    const adj = {
+      params: ['—', 'width re-solved · [N]M', 'none needed · [N]M', 'none needed · [N]M'],
+      compute: ['—', 'stops at base compute · sees about [N]% more text', 'same compute', 'same compute'],
+      tokens: ['—', '[N]M parameters', '[N]M parameters', '[N]M parameters'],
+      time: ['—', '[N] min budget', '[N] min budget', '[N] min budget']
+    }[mode];
+    const base = [
+      { id: 'A', title: 'Base: version 4', diff: 'base spec', color: '#e6e8ec', delta: '—' },
+      { id: 'B', title: 'Mamba-style mixer', diff: 'mixer: attention → ssm · channel: mlp_gelu → none · position: rope → none', color: '#9f8cff', delta: '[N] · inside the spread?' },
+      { id: 'C', title: 'Wide thinking room', diff: 'ff: 1024 → 2048', color: '#e5b567', delta: '[N]' },
+      { id: 'D', title: 'Muon optimizer', diff: 'optimizer: adamw → muon', color: '#6cb4ee', delta: '[N]' }
+    ];
+    const runs = base.map((r, i) => Object.assign({ adjust: i === 0 ? adj[i] : adj[i] + (st.lr ? '' : ' · learning rate not retuned') }, r));
+    const modes = Object.keys(M).map((k) => ({ name: M[k].name, on: mode === k, bg: mode === k ? '#9f8cff' : '#1b1f27', fg: mode === k ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ mode: k }) }));
+    const guess = ['Better', 'About the same', 'Worse'].map((label, i) => ({ label, on: st.guess === i, bg: st.guess === i ? '#e58fb0' : '#1b1f27', fg: st.guess === i ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ guess: i }) }));
+    return {
+      modes, runs, guess, modeNote: M[mode].note, xAxis: M[mode].x,
+      lr: { on: st.lr, track: st.lr ? '#9f8cff' : '#2a2f3a', knob: st.lr ? '18px' : '2px',
+        note: st.lr ? 'Each variant first gets a short learning-rate sweep, so none loses just because the base’s rate suits it badly.' : 'Variants use the base’s learning rate; a variant can lose only because that rate suits it badly.' },
+      toggleLr: () => this.setState({ lr: !st.lr }),
+      runLabel: st.lr ? 'Queue 12 runs + 9 short sweeps' : 'Queue 12 runs'
+    };
+  }
+}
+
+######## Feedback.dc.html
+Post-training
+Four rounds, always in this order. Same design throughout; only the weights shift.
+STARTS FROM
+Version 4 · best checkpoint from Pretraining
+{{ s.mark }}
+{{ s.name }}
+{{ s.status }}
+At this size the gain from each round is small. The shape of the pipeline is what you are learning.
+Click a round to see it.
+{{ card.kicker }}
+{{ card.method }}
+{{ card.lead }}
+PROMPT · NOT SCORED
+[A prompt from a conversation]
+ANSWER · IT LEARNS TO WRITE THIS
+[The answer from the same conversation]
+[N]
+conversations (Dolly, Alpaca, yours)
+[N]
+corrections you wrote
+[N]
+practice problems with answers
+A few thousand is enough. Only the answer part is scored. No frozen copy and no leash: this round is ordinary training on good examples.
+PROMPT · RULE: SORT
+Sort these letters: d b a c
+its answer
+rule
+score
+vs group average (0.5)
+{{ g.text }}
+{{ g.rule }}
+{{ g.score }}
+{{ g.push }}
+Copy this: hello
+6 of 6 passed
+nothing to learn here: every answer equals the average
+Rules it can check: copy, reverse, sort, count, small addition, stay under a length, end cleanly. A teacher’s rubric can add a smaller second score, but an answer that fails a rule gets the minimum whatever the rubric says.
+PROMPT
+[A prompt]
+ITS ANSWER · SHADED BY HOW SURPRISED THE TEACHER WAS BY EACH WORD
+{{ h.w }}
+not surprised
+very surprised · pushed toward what the teacher would write
+illustrative words
+Teacher
+{{ o.label }}
+{{ teacherNote }}
+The teacher must share this model’s word list, so your local model (Ollama) can’t teach here. It keeps two jobs: rewriting prompts and judging.
+{{ r.tag }}
+[{{ r.name }}]
+{{ r.label }}
+For each pair you rated, the learning copy widens the gap between your pick and the other, compared with the frozen starting copy. Both can become less likely; the gap is what it is trained on. Bar heights are illustrative.
+How far it may move
+{{ o.label }}
+{{ leash.note }}
+Only pairs a person rated count here; the judge model’s picks never do. Optional, and always last.
+{{ card.action }}
+{{ card.link }}
+{{ card.foot }}
+{{ gate.kicker }}
+step [N] of [N] · about [N] min left
+VERDICT
+{{ gate.verdict }}
+Chat moves to the new checkpoint only if both hold:
+{{ c.mark }}
+{{ c.name }}
+{{ c.detail }}
+·
+Judge preferred it on [k] of [n] prompts
+shown for context; never decides alone
+{{ gate.result }}
+MOCK
+{{ flipLabel }}
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { view: 1, pick: '', leash: 1, teacher: 0, fail: false }; }
+  renderVals() {
+    const st = this.state, v = st.view;
+    // status of each round in this mock: 0 done, 1 running, 2 queued, 3 optional / not started
+    const R = [
+      { name: 'Practice answers', status: 'done', sc: '#6cb4ee', state: 'done' },
+      { name: 'Practice with checks', status: 'done · live', sc: '#6cb4ee', state: 'done' },
+      { name: 'Learn from a teacher', status: 'in the queue', sc: '#c3c8d1', state: 'queued' },
+      { name: 'Your votes', status: 'optional · 46 pairs rated', sc: '#8f97a6', state: 'idle' }
+    ];
+    const stages = R.map((r, i) => {
+      const on = i === v, done = r.state === 'done';
+      return { name: r.name, status: r.status, statusColor: r.sc, on, mark: done ? '✓' : String(i + 1),
+        fill: done ? '#6cb4ee' : r.state === 'running' ? '#9f8cff' : 'transparent', numColor: done || r.state === 'running' ? '#0e1014' : '#8f97a6',
+        ring: done ? '#6cb4ee' : r.state === 'running' ? '#9f8cff' : '#2a2f3a', bg: on ? '#1b1f27' : 'transparent', top: on ? '#9f8cff' : '#2a2f3a',
+        pick: () => this.setState({ view: i, fail: false }) };
+    });
+    const cards = [
+      { kicker: 'ROUND 1 · PRACTICE ANSWERS', method: 'supervised fine-tuning', lead: 'Teaches the shape of an answer, not the skill. Pretraining taught it to continue text; here it studies prompts paired with good answers.',
+        hasAction: false, hasLink: true, link: 'Add conversations in Your data', href: 'YourData.dc.html', foot: 'Corrections you teach in Chat that need a whole new answer also land here.' },
+      { kicker: 'ROUND 2 · PRACTICE WITH CHECKS', method: 'reinforcement learning with rule-checked rewards', lead: 'For each prompt it writes 6 answers. A rule scores each one. Answers above the group’s average are made more likely; answers below it, less likely.',
+        hasAction: false, hasLink: true, link: 'Make problems a rule can check', href: 'MakeData.dc.html', foot: 'Prompts where all answers pass, or all fail, teach nothing and are skipped.' },
+      { kicker: 'ROUND 3 · LEARN FROM A TEACHER', method: 'on-policy distillation', lead: 'It writes its own answer; the teacher reads along and scores every word. It learns most where the teacher was most surprised.',
+        hasAction: true, action: 'Move to the front of the queue', hasLink: false, foot: 'Also runs on its own after a night of training on new text: new text can erode how it answers, and a short lesson from the previous best version restores it without losing the new text.' },
+      { kicker: 'ROUND 4 · YOUR VOTES', method: 'direct preference optimisation (DPO)', lead: 'Two answers to one prompt; you pick the better one. Training widens the gap between your pick and the other.',
+        hasAction: true, action: 'Add votes round to the queue', hasLink: true, link: 'Rate pairs in Chat', href: 'Chat.dc.html', foot: '46 pairs rated. 1 in 5 is held back to check the result.' }
+    ];
+    const card = Object.assign({ title: R[v].name }, cards[v]);
+    const G = [['a b c d', 1], ['a b d c', 0], ['a b c d', 1], ['a c b d', 0], ['a b c d', 1], ['d c b a', 0]];
+    const group = G.map(([text, s]) => ({ text, rule: s ? 'pass' : 'fail', score: s.toFixed(1), color: s ? '#6cb4ee' : '#ef8a7a',
+      barL: s ? '50%' : '10%', push: s ? '↑ +0.5 · pushed up' : '↓ −0.5 · pushed down' }));
+    const words = [['The', 0], ['capital', 0], ['of', 0], ['Australia', 0.1], ['is', 0], ['Sydney', 0.95], [',', 0.3], ['which', 0.2], ['is', 0.1], ['on', 0.1], ['the', 0], ['coast', 0.4]];
+    const heat = words.map(([w, h]) => ({ w, bg: h < 0.05 ? '#1b1f27' : 'rgba(239,138,122,' + (0.15 + 0.7 * h).toFixed(2) + ')' }));
+    const T = [['Previous best version', 'version 4 · checkpoint [N]. Always exists and shares the word list.'], ['This model, with your correction in front of it', 'From Chat’s “Teach a correction”: the teacher sees your correction; the student doesn’t.']];
+    const teachers = T.map(([label], i) => ({ label, on: st.teacher === i, bg: st.teacher === i ? '#9f8cff' : '#1b1f27', fg: st.teacher === i ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ teacher: i }) }));
+    const replies = ['A', 'B'].map((k) => {
+      const picked = st.pick === k;
+      return { name: 'Answer ' + k, tag: 'checkpoint [N] · answer ' + k, label: picked ? 'Picked: ' + k + ' is better' : k + ' is better',
+        bd: picked ? '2px solid #9f8cff' : '1px solid #2a2f3a', btnBg: picked ? '#9f8cff' : 'transparent', btnFg: picked ? '#0e1014' : '#9f8cff', vote: () => this.setState({ pick: k }) };
+    });
+    const L = [['Close', 'Small, safe changes. Needs more pairs to show an effect.'], ['Medium', 'A balance. A good default.'], ['Far', 'Bigger changes from fewer pairs, with more risk of forgetting.']];
+    const leash = { word: L[st.leash][0].toLowerCase(), note: L[st.leash][1],
+      opts: L.map((l, i) => ({ label: l[0], on: st.leash === i, bg: st.leash === i ? '#9f8cff' : '#1b1f27', fg: st.leash === i ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ leash: i }) })) };
+    const VERD = ['Answers now look like answers.', 'Answers that passed the check became more likely than ones that failed.', 'Its answers moved toward the teacher’s at [k] of [n] words.', 'Widened the gap on [k] of [n] held-back pairs.'];
+    const s = R[v].state, fail = st.fail && s === 'done';
+    const chk = (name, detail, m) => ({ name, detail, mark: m === null ? '…' : m ? '✓' : '✕', color: m === null ? '#8f97a6' : m ? '#6cb4ee' : '#ef8a7a' });
+    const measured = s === 'done';
+    const checks = [
+      chk('Held-back text: error did not rise', measured ? (fail ? '[N] bits per character, was [N]: rose' : '[N] bits per character, was [N]') : 'measured when the round ends', measured ? !fail : null),
+      chk('Checked problems: pass rate did not fall', measured ? '[k] of [n] held-back problems, was [k] of [n]' : 'measured when the round ends', measured ? true : null)
+    ];
+    const gate = {
+      kicker: s === 'done' ? 'RESULT · ROUND ' + (v + 1) : s === 'running' ? 'TRAINING · ROUND ' + (v + 1) : 'WHEN THIS ROUND ENDS',
+      running: s === 'running', canFlip: s === 'done', checks,
+      verdict: s === 'done' ? VERD[v] : s === 'running' ? 'So far: ' + VERD[v].charAt(0).toLowerCase() + VERD[v].slice(1) + ' (on training prompts; held-back check at the end)' : 'Will read: “' + VERD[v] + '”',
+      vColor: s === 'done' ? '#6cb4ee' : '#2a2f3a',
+      result: s === 'done' ? (fail ? 'Kept for comparison, not live. Chat stays on the previous checkpoint.' : v === 1 ? 'Live: Chat uses version 4 · checkpoint [N] from the next message. Switch back any time in Chat.' : 'Passed and went live; round 2 started from this checkpoint.') : s === 'running' ? 'Chat keeps version 4 · checkpoint [N] until this round passes both checks.' : 'Until then, Chat keeps its current checkpoint.',
+      line: s === 'done' ? (fail ? '#e5b567' : '#6cb4ee') : '#2a2f3a', bg: s === 'done' ? (fail ? '#211c12' : '#121a22') : 'transparent'
+    };
+    return {
+      stages, card, gate, group, heat, teachers, teacherNote: T[st.teacher][1], replies, leash,
+      r1: v === 0, r2: v === 1, r3: v === 2, r4: v === 3,
+      flipCheck: () => this.setState({ fail: !st.fail }), flipLabel: st.fail ? 'Show: both checks pass' : 'Show: a check fails'
+    };
+  }
+}
+
+######## HeadLab.dc.html
+Head lab
+Where does each attention head look, and how much does the model rely on it? Switch heads off and watch the answer change.
+‹ Network designer
+Look inside / Head lab
+LIVE
+Experiments on version 4 · checkpoint [N]. Switching heads off only affects answers on this page. Nothing retrains, and Chat is unchanged.
+16 HEADS · CLICK ONE
+Each tile shows where that head looks on prepared text: a random sequence repeated twice, where the common patterns are easy to tell apart. Dark cells are the future, which it can’t see.
+{{ rankLabel }}
+Switch all back on
+{{ b.name }}
+{{ h.label }}
+{{ h.sub }}
+{{ gridNote }}
+{{ cur.name }}
+{{ cur.state }}
+{{ t }}
+{{ r.tok }}
+Prepared text: four random pieces, then the same four again. Each row is a piece reading earlier pieces. Brighter cells will show where this head’s attention goes once the engine fills them in.
+Before switching it off, guess how much the error rises:
+{{ g.label }}
+{{ cur.offLabel }}
+Test its attention pattern
+THREE PATTERN TESTS · ON PREPARED TEXT
+{{ t.name }}
+{{ t.what }}
+[passes / no]
+These describe where the head looks, not what it does with what it sees. Switching it off shows how much the model relies on it, not why.
+{{ changed.kicker }}
+The largest planet in our solar system is …
+all heads on
+[its answer]
+{{ changed.offLabel }}
+[its answer]
+error on held-back text
+[N] → [N] bits/char
+you guessed
+{{ guessed }}
+A big rise means the model relied on these heads. Little or no change means they weren’t doing much on this text, or other heads covered for them. Models can compensate, so no change doesn’t prove a head is useless.
+Switch a head off to see how the answer and the error change without it. Switch several off to see whether they cover for each other.
+{{ howLabel }}
+Switching off
+replaces the head’s output with its average over held-back text, so the rest of the model still gets a normal-sized signal. Setting it to zero instead is harsher; the engine can do both.
+Ranking by importance
+switches each head off on its own and measures how much the error rises. Heads are ranked by that rise.
+The three tests
+measure attention on prepared text: share on the previous word, share on the first word (an idle-head sign), and, for induction, on random sequences repeated twice, share on the word after the earlier copy of the current word.
+Step through one head’s maths in Inside a head
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { sel: 5, off: {}, ranked: false, tested: {}, how: false, guess: -1 }; }
+  renderVals() {
+    const st = this.state, off = st.off;
+    const toks = ['zq', 'mor', 'tib', 'lun', 'zq', 'mor', 'tib', 'lun'];
+    const grid = (dim) => { const g = []; for (let q = 0; q < 8; q++) for (let k = 0; k < 8; k++) g.push(k > q ? '#0a0b0e' : (dim ? '#1b1f27' : '#2a2f3a')); return g; };
+    const name = (k) => 'Block ' + (Math.floor(k / 4) + 1) + ' · head ' + (k % 4 + 1);
+    const blocks = [0, 1, 2, 3].map((b) => ({ name: 'Block ' + (b + 1), heads: [0, 1, 2, 3].map((h) => {
+      const k = b * 4 + h, isOff = !!off[k], sel = st.sel === k;
+      return { label: 'Head ' + (h + 1), aria: name(k) + (isOff ? ', switched off' : ''), on: sel, cells: grid(isOff),
+        sub: isOff ? 'switched off' : st.ranked ? 'error +[N]' : (st.tested[k] ? '[pattern match]' : 'no pattern yet'),
+        subColor: isOff ? '#e5b567' : '#8f97a6', op: isOff ? '0.55' : '1',
+        bg: sel ? '#1b1f27' : 'transparent', bd: sel ? '2px solid #9f8cff' : (isOff ? '1px dashed #e5b567' : '1px solid #2a2f3a'),
+        pick: () => this.setState({ sel: k }) };
+    }) }));
+    const k = st.sel, isOff = !!off[k];
+    const nOff = Object.keys(off).filter((x) => off[x]).length;
+    const big = toks.map((t, q) => ({ tok: t, cells: toks.map((_, kk) => (kk > q ? '#0a0b0e' : '#2a2f3a')) }));
+    const tests = [
+      { name: 'Previous word', what: 'Looks at the word just before.', path: 'M30 25 Q20 10 10 25 M50 25 Q40 10 30 25 M70 25 Q60 10 50 25 M90 25 Q80 10 70 25 M110 25 Q100 10 90 25' },
+      { name: 'Parks on the first word', what: 'Most of its attention goes to the first piece. This often means the head is idle here (an attention sink), not that the first piece matters.', path: 'M30 25 Q20 12 10 25 M50 25 Q30 4 10 25 M70 25 Q40 0 10 25 M110 25 Q60 -6 10 25' },
+      { name: 'Copying a pattern (induction)', what: 'Sees “A B … A” and looks at B, the word after the earlier A.', path: 'M110 25 Q70 0 30 25' }
+    ];
+    return {
+      guess: ['A lot', 'A little', 'Not at all'].map((label, i) => ({ label, on: st.guess === i, bg: st.guess === i ? '#e58fb0' : '#1b1f27', fg: st.guess === i ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ guess: i }) })),
+      guessed: ['a lot', 'a little', 'not at all'][st.guess] || 'no guess',
+      blocks, toks, big, tests, anyOff: nOff > 0, noneOff: nOff === 0, how: st.how,
+      rank: () => this.setState({ ranked: !st.ranked }), rankLabel: st.ranked ? 'Hide importance' : 'Rank heads by importance',
+      allOn: () => this.setState({ off: {} }),
+      gridNote: st.ranked ? 'Each tile shows how much the error rises without that head. The engine fills these in by switching heads off one at a time.' : 'Click a tile to inspect a head. Use the buttons on the right to switch it off or test its attention pattern.',
+      cur: { name: name(k), state: isOff ? 'switched off' : 'on',
+        offLabel: isOff ? 'Switch it back on' : 'Switch it off', offBg: isOff ? '#9f8cff' : 'transparent', offFg: isOff ? '#0e1014' : '#9f8cff',
+        toggle: () => { const o = Object.assign({}, off); if (isOff) delete o[k]; else o[k] = true; this.setState({ off: o }); },
+        tested: !!st.tested[k], test: () => this.setState({ tested: Object.assign({}, st.tested, { [k]: true }) }) },
+      changed: { kicker: nOff ? 'WHAT CHANGED · ' + nOff + (nOff === 1 ? ' HEAD OFF' : ' HEADS OFF') : 'WHAT CHANGES', offLabel: nOff === 1 ? 'with 1 head off' : 'with ' + nOff + ' heads off' },
+      toggleHow: () => this.setState({ how: !st.how }), howLabel: st.how ? 'Hide how this works' : 'How this works'
+    };
+  }
+}
+
+######## HeadZoom.dc.html
+Inside a head
+One attention head, one step at a time, on a real prompt.
+‹ Network designer
+Look inside / Inside a head
+Block 3 · head 1 · 8 tokens
+{{ st.n }}. {{ st.name }}
+ROWS: KEYS k = W_K x · COLUMNS: QUERIES q = W_Q x
+{{ cur.unit }}
+{{ c.tok }}
+q{{ c.i }}
+{{ r.tok }}
+k{{ r.i }}
+{{ c.txt }}
+{{ cur.note }}
+Example scores chosen to show each step. The engine fills in the real ones for your model and prompt.
+STEP {{ cur.n }}
+{{ cur.name }}
+{{ cur.formula }}
+{{ cur.why }}
+SELECTED CELL
+{{ cell.label }}
+q · k
+{{ cell.raw }}
+÷ √64 = 8
+{{ cell.scaled }}
+After mask
+{{ cell.masked }}
+Softmax weight
+{{ cell.weight }}
+OUTPUT AT “is” = Σ weight × v
+{{ m.tok }}
+{{ m.a }}
+The result is 64 numbers, mostly the value vector of “planet”. W_O maps it back to 256 and adds it to the stream.
+Where V and W_O meet
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { step: 1, ci: 2, cj: 7 }; }
+  renderVals() {
+    const toks = ['The', 'largest', 'planet', 'in', 'our', 'solar', 'system', 'is'];
+    const S = [
+      [3.0, 14.0, 11.0, -12.0, 1.0, -3.8, -12.4, 4.4],
+      [-13.0, 9.0, 26.3, -11.5, -2.1, 9.2, -10.5, 27.9],
+      [3.6, 12.5, 6.0, 21.5, 13.3, -12.7, 10.0, 34.6],
+      [-10.0, -10.7, -5.4, 8.9, -8.9, 2.3, 3.9, -3.6],
+      [1.3, -12.2, -12.3, -8.2, 5.1, -2.0, 12.2, 2.4],
+      [-1.3, -5.6, 8.2, 5.6, -7.2, 2.1, 29.4, 10.5],
+      [6.4, -5.9, 13.4, -10.7, -2.3, 7.2, -9.7, 19.2],
+      [-12.9, 4.7, 7.4, 2.0, 10.5, -5.2, 5.5, 8.1]
+    ];
+    const n = 8;
+    const sc = S.map((r) => r.map((v) => v / 8));
+    const A = S.map((r) => r.map(() => 0));
+    for (let j = 0; j < n; j++) {
+      let m = -Infinity; for (let i = 0; i <= j; i++) m = Math.max(m, sc[i][j]);
+      let z = 0; for (let i = 0; i <= j; i++) z += Math.exp(sc[i][j] - m);
+      for (let i = 0; i <= j; i++) A[i][j] = Math.exp(sc[i][j] - m) / z;
+    }
+    const step = this.state.step;
+    const defs = [
+      { name: 'Raw scores', formula: 'score[i, j] = k_i · q_j', unit: 'q · k', why: 'Each query asks a question; each key advertises what its token offers. A large dot product means a good match.', note: 'Every pair is scored, including keys that come after the query. The mask removes those next.' },
+      { name: 'Scale', formula: 'score / √d_head = score / 8', unit: 'q · k / 8', why: 'Dot products of 64-number vectors grow with the dimension. Dividing by √64 keeps softmax out of its flat, saturated region, where gradients vanish.', note: 'Same pattern, smaller numbers.' },
+      { name: 'Causal mask', formula: 'score[i, j] = −∞  where i > j', unit: 'masked', why: 'A position may only read itself and earlier positions. Setting future scores to −∞ makes their softmax weight exactly 0.', note: 'Everything below the diagonal is masked: key i comes after query j.' },
+      { name: 'Softmax per column', formula: 'a[:, j] = softmax(score[:, j])', unit: 'weights · columns sum to 1', why: 'Each query column becomes a probability distribution over the keys it can see.', note: '“is” puts 0.58 on “planet” and 0.25 on “largest”.' },
+      { name: 'Weighted sum of values', formula: 'out_j = Σ_i a[i, j] · v_i', unit: 'weights used for “is”', why: 'Each position collects a blend of earlier value vectors, weighted by its column. This is the only place in the block where information moves between positions.', note: 'Showing the column for “is”. Every column does the same in parallel.' }
+    ];
+    const cur = Object.assign({ n: step }, defs[step - 1]);
+    const f2 = (v) => v.toFixed(2);
+    const heat = (v, scale) => {
+      const a = Math.min(1, Math.abs(v) / scale) * 0.85 + 0.08;
+      return v >= 0 ? 'rgba(229,181,103,' + a.toFixed(2) + ')' : 'rgba(108,180,238,' + a.toFixed(2) + ')';
+    };
+    const rows = toks.map((t, i) => ({
+      tok: t, i: i + 1,
+      cells: toks.map((u, j) => {
+        const masked = i > j;
+        let txt, bg, fg = '#e6e8ec';
+        if (step === 1) { txt = S[i][j].toFixed(1); bg = heat(sc[i][j], 4.5); }
+        else if (step === 2) { txt = f2(sc[i][j]); bg = heat(sc[i][j], 4.5); }
+        else if (masked) { txt = step === 3 ? '−∞' : '0'; bg = '#0a0b0e'; fg = '#5b6271'; }
+        else if (step === 3) { txt = f2(sc[i][j]); bg = heat(sc[i][j], 4.5); }
+        else {
+          const w = A[i][j]; const dim = step === 5 && j !== 7;
+          txt = f2(w); bg = 'rgba(232,237,245,' + (dim ? w * 0.25 : w * 0.92 + 0.04).toFixed(2) + ')'; fg = !dim && w > 0.5 ? '#0e1014' : (dim ? '#5b6271' : '#e6e8ec');
+        }
+        const selected = this.state.ci === i && this.state.cj === j;
+        return { txt, bg, fg, bd: selected ? '2px solid #9f8cff' : '1px solid transparent', aria: 'key ' + t + ', query ' + u + ': ' + txt, pick: () => this.setState({ ci: i, cj: j }) };
+      })
+    }));
+    const cols = toks.map((t, j) => ({ tok: t, i: j + 1, color: step === 5 && j === 7 ? '#e5b567' : '#e6e8ec' }));
+    const ci = this.state.ci, cj = this.state.cj, mk = ci > cj;
+    const cell = { label: 'k' + (ci + 1) + ' “' + toks[ci] + '” · q' + (cj + 1) + ' “' + toks[cj] + '”', raw: S[ci][cj].toFixed(1), scaled: f2(sc[ci][cj]), masked: mk ? '−∞' : f2(sc[ci][cj]), weight: f2(A[ci][cj]) };
+    const mix = toks.map((t, i) => ({ tok: t, v: A[i][7] })).sort((a, b) => b.v - a.v).slice(0, 5).map((m) => ({ tok: m.tok, a: f2(m.v), w: Math.round(m.v * 100) + '%' }));
+    const steps = defs.map((d, k) => ({ n: k + 1, name: d.name, current: step === k + 1 ? 'step' : 'false', bg: step === k + 1 ? '#9f8cff' : '#1b1f27', fg: step === k + 1 ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ step: k + 1 }) }));
+    return {
+      steps, cur, rows, cols, cell, mix, isOut: step === 5,
+      back: () => this.setState({ step: Math.max(1, step - 1) }),
+      next: () => this.setState({ step: Math.min(5, step + 1) })
+    };
+  }
+}
+
+######## Inside3D.dc.html
+Inside the network
+Build the model from the inside and watch it train, from a window of positions down to single weights.
+‹ Network designer
+Look inside / 3D
+{{ m.name }}
+Reduce motion
+{{ z.n }} · {{ z.name }}
+{{ z.scale }}
+{{ t.tok }}
+{{ o.tok }}
+far end: the next token each lane is trained on; the last lane is the model’s guess
+near end: input token, embedded
+{{ g.label }}
+SOCKET · BLOCK {{ socketN }} · TOKEN MIXER
+{{ c.name }}
+{{ c.note }}
+Same registry as the Sandbox. Drop a module into the socket to rebuild that gate.
+stream at “is” after block 3
+[token]
+[p] · [token] [p] · [token] [p]
+Step
+[N] / [N]
+Test loss
+[N]
+Tokens / s
+[N]
+●
+white pulses: forward pass
+■
+orange wave: gradients flowing back
+▮
+brightness: size of the last update
+{{ hud.kicker }}
+{{ hud.title }}
+{{ hud.body }}
+{{ playLabel }}
+{{ scrubLabel }}
+W A S D move · Q / E down / up · drag to look · Tab next block · R ride the selected position · B build · Space play / pause
+WHAT YOU’RE SEEING
+{{ l.name }}
+{{ l.text }}
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { level: 'window', mode: 'build', socket: 2, mixer: ['attention', 'attention', 'attention', 'attention'], playing: true }; }
+  renderVals() {
+    const st = this.state;
+    const seg = (on) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    const modes = [['build', 'Build'], ['train', 'Train'], ['ride', 'Ride a position']].map(([id, name]) => Object.assign({ name, on: st.mode === id, pick: () => this.setState({ mode: id }) }, seg(st.mode === id)));
+    const toks = ['The', 'largest', 'planet', 'in', 'our', 'solar', 'system', 'is'];
+    const outToks = ['largest', 'planet', 'in', 'our', 'solar', 'system', 'is', '?'];
+    const outs = outToks.map((t, i) => ({ tok: t, left: (39.82 + 2.909 * i).toFixed(2) + '%', color: i === 7 ? '#9f8cff' : '#8f97a6' }));
+    const tp = [11.82, 22.73, 33.64, 44.55, 55.45, 66.36, 77.27, 88.18];
+    const tokens = toks.map((t, i) => ({ tok: t, left: tp[i] + '%', top: '96.45%', color: i === 7 ? '#9f8cff' : '#c3c8d1' }));
+    const short = { attention: 'attention', gqa: 'GQA', linear: 'linear attn', ssm: 'SSM', gru: 'GRU', conv: 'conv' };
+    const gy = [54.51, 45.64, 40.79, 37.72];
+    const gates = gy.map((y, b) => ({ left: '50%', top: y + '%', size: (13 - b) + 'px', label: 'Block ' + (b + 1) + ' · ' + short[st.mixer[b]] }));
+    const sockets = gy.map((y, b) => ({ left: '50%', top: y + '%', d: (30 - b * 5) + 'px', bd: st.socket === b ? '2px solid #e5b567' : '1px dashed #e5b567', aria: 'Socket: block ' + (b + 1) + ' token mixer', pick: () => this.setState({ socket: b }) }));
+    const opts = [['attention', 'Softmax attention', '263K'], ['gqa', 'Grouped-query attention', '197K'], ['linear', 'Linear attention', '263K'], ['ssm', 'Selective SSM', '438K'], ['gru', 'GRU', '395K'], ['conv', 'Causal convolution', '[N]']];
+    const choices = opts.map(([id, name, p]) => {
+      const on = st.mixer[st.socket] === id;
+      return Object.assign({ name, note: on ? 'in this gate' : p, blocked: false, pick: () => { const m = st.mixer.slice(); m[st.socket] = id; this.setState({ mixer: m }); } }, { bg: on ? '#e5b567' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    });
+    const H = {
+      build: { kicker: 'BUILD', title: 'Standing in front of block ' + (st.socket + 1), body: 'Each gate has sockets for its norm, token mixer and channel mixer. Select a socket to swap what fills it. The lanes and beams update when you place a module.' },
+      train: { kicker: 'TRAIN · LIVE', title: 'Every position learns at once', body: 'One forward pass predicts the next piece at every position together. The mask is what keeps it honest: beams reach only to the left, so no position sees its own answer. Then one backward wave starts from all positions’ errors at the same time and runs back through every layer. Brightness shows how much each part changed on the last step.' },
+      ride: { kicker: 'RIDE A POSITION', title: 'Riding the stream at “is” through block 3', body: 'The camera sits on this position’s lane. The token ID is fixed; the vector on the lane is what changes. Beams show where it reads from. The readout applies the final norm and unembedding to the stream here (the logit lens); early layers are not trained for this, so read it loosely.' }
+    }[st.mode];
+    const legend = [
+      { name: 'Lanes', text: 'one per position. A lane is that position’s residual stream: a vector each block adds to, running away from you through the layers. Near end: the input token. Far end: the next token it is trained to predict.', color: '#4b4380' },
+      { name: 'Bars on a lane', text: 'the stream vector’s size at that depth.', color: '#9f8cff' },
+      { name: 'Gates', text: 'one per block. Inside, beams connect a lane only to lanes on its left: the causal mask.', color: '#e5b567' },
+      { name: 'Towers', text: 'the channel mixer working on each lane alone.', color: '#6cb4ee' },
+      { name: 'Orange wave', text: 'the backward pass: starts from every position’s error at once and carries gradients back to the embeddings.', color: '#ef8a7a' }
+    ];
+    const tip = {
+      build: { kicker: 'TRY THIS', text: 'Put an SSM in blocks 1–3 and keep attention in block 4. Then switch to Ride a token: the SSM gates have no beams. Instead a state runs across the lanes, left to right, carrying a fixed-size summary of everything before.', href: 'Sandbox.dc.html', link: 'Try it in a quick test' },
+      train: { kicker: 'NOTE', text: 'The orange wave is a drawing of one backward pass. Which heads end up doing what is measured, not assumed: the Head lab reports it from the trained model.', href: 'HeadLab.dc.html', link: 'Measure the heads' },
+      ride: { kicker: 'TRY THIS', text: 'Press Tab to move to the next gate and watch the guess change. Press R on another token to ride its lane instead.', href: 'Trace.dc.html', link: 'Same data as Trace a token' }
+    }[st.mode];
+    const LV = {
+      window: { n: 1, name: 'Window', scale: 'a few positions, all layers' },
+      head: { n: 2, name: 'Head', scale: 'one head, one window',
+        hud: { kicker: 'ZOOM 4 · HEAD', title: 'Block 3, head 1, walked as a floor', body: 'Rows of tiles are keys, columns are queries. Each pillar is an attention weight; the dark tiles are masked. The amber column is “is”.' },
+        panelKicker: 'STEP THROUGH', actions: [{ label: 'Raw scores → scale → mask → softmax' }, { label: 'Pull the value vectors up through the pillars' }, { label: 'Ablate this head and watch the loss' }], panelNote: 'The same five steps as Inside a head, built in 3D.',
+        legend: [{ name: 'Pillars', text: 'softmax weights; each column sums to 1.', color: '#e6e8ec' }, { name: 'Amber column', text: 'the selected query.', color: '#e5b567' }, { name: 'Dark tiles', text: 'future positions, masked.', color: '#0a0b0e' }],
+        tip: { kicker: 'TRY THIS', text: 'Step backward to raw scores and watch the masked tiles rise as −∞ before softmax flattens them to zero.', href: 'HeadZoom.dc.html', link: 'Same head in 2D' } },
+      weights: { n: 3, name: 'Weights', scale: 'individual numbers',
+        hud: { kicker: 'ZOOM 5 · WEIGHTS', title: 'A corner of W_V, block 3, head 1', body: 'Each tile is one weight: amber positive, blue negative. During training, tiles flicker by the size of their last update.' },
+        panelKicker: 'AT THIS SCALE', actions: [{ label: 'Show gradients instead of weights' }, { label: 'Show update size ‖Δw‖' }, { label: 'Scale this head’s output and re-run the forward pass' }], panelNote: 'Shows a 16 × 16 window of the matrix. Pan to move the window.',
+        legend: [{ name: 'Amber', text: 'positive weight.', color: '#e5b567' }, { name: 'Blue', text: 'negative weight.', color: '#6cb4ee' }],
+        tip: { kicker: 'WHY IT’S HERE', text: 'Everything above is built from numbers like these, but a single weight rarely means anything on its own: what the model uses are directions made of many weights. To see an effect, scale a whole head’s output and watch the prediction move.', href: 'ValueMap.dc.html', link: 'What this matrix does' } }
+    };
+    const lvl = st.level, cur = LV[lvl];
+    const levels = Object.keys(LV).map((k) => Object.assign({ n: LV[k].n, name: LV[k].name, scale: LV[k].scale, on: lvl === k, pick: () => this.setState({ level: k }) }, seg(lvl === k)));
+    const win = lvl === 'window';
+    return {
+      levels, lv: cur.panelKicker ? cur : LV.head,
+      isWindow: win, isHead: lvl === 'head', isWeights: lvl === 'weights',
+      modes, tokens, outs, gates, sockets, choices, hud: win ? H : cur.hud, legend: win ? legend : cur.legend, tip: win ? tip : cur.tip,
+      socketN: st.socket + 1,
+      build: st.mode === 'build', train: st.mode === 'train', ride: st.mode === 'ride',
+      playLabel: st.playing ? 'Pause' : 'Play', togglePlay: () => this.setState({ playing: !st.playing }),
+      scrubLabel: 'Checkpoint shown'
+    };
+  }
+}
+
+######## LossView.dc.html
+Loss
+What one wrong or right prediction costs, and the gradient it sends back.
+‹ Network designer
+Look inside / Loss
+…The largest planet is
+?
+Step 0 (random weights)
+After training
+Token
+Model’s probability
+Target
+∂loss/∂logit
+{{ r.tok }}
+{{ r.p }}
+{{ r.y }}
+{{ r.g }}
+Softmax over all 50,257 tokens. The target is one-hot: 1 for “ Jupiter”, 0 for everything else. The gradient on each logit is simply p − target.
+CROSS-ENTROPY FOR THIS PREDICTION
+loss = −ln p(“ Jupiter”) = −ln {{ pJ }}
+{{ loss }}
+nats
+{{ lossNote }}
+WHY THE REST OF THE APP SAYS BITS PER CHARACTER
+Nats per piece depend on the word list: bigger pieces cost more nats each. Dividing by characters makes versions with different word lists comparable.
+bits per character = nats per piece ÷ (characters per piece × ln 2)
+This piece, “ Jupiter”, is 8 characters with its space: {{ loss }} ÷ (8 × 0.693) =
+{{ bpc }}
+bits per character. Over a whole text the engine uses the totals: all nats ÷ (all characters × ln 2).
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { trained: true, grad: true }; }
+  renderVals() {
+    const t = this.state.trained;
+    const u = 1 / 50257;
+    const dist = t
+      ? [[' Jupiter', NaN, 1], [' Saturn', NaN, 0], [' the', NaN, 0], [' Earth', NaN, 0], [' a', NaN, 0], ['all 50,252 others', NaN, 0]]
+      : [[' Jupiter', u, 1], [' Saturn', u, 0], [' the', u, 0], [' Earth', u, 0], [' a', u, 0], ['all 50,252 others', 50252 * u, 0]];
+    const fmtP = (p) => (isNaN(p) ? '[p]' : p < 0.001 ? p.toExponential(1) : p.toFixed(2));
+    const rows = dist.map(([tok, p, y], i) => {
+      const others = i === dist.length - 1;
+      const g = p - y;
+      return {
+        tok, p: fmtP(p), y: others ? '0 each' : String(y), w: isNaN(p) ? '0%' : Math.max(0.5, p * 100).toFixed(1) + '%',
+        g: others ? '+p each' : isNaN(p) ? (y ? '[p] − 1' : '+[p]') : (g < 0 ? '−' : '+') + fmtP(Math.abs(g)),
+        color: y ? '#e5b567' : '#e6e8ec', barColor: y ? '#e5b567' : '#6cb4ee'
+      };
+    });
+    const pJ = dist[0][1];
+    const loss = -Math.log(pJ);
+        const sel = (on) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    return {
+      rows, pJ: fmtP(pJ), loss: isNaN(loss) ? '[N]' : loss.toFixed(2), bpc: isNaN(loss) ? '[N]' : (loss / (8 * Math.LN2)).toFixed(2),
+      lossColor: t ? '#e6e8ec' : '#e5b567',
+      lossNote: t ? 'Falls as the model puts more probability on the target token. Measured by the engine on the trained checkpoint.' : 'Random weights spread probability almost evenly, about 1 / 50,257 per token. So the loss starts near ln 50,257 ≈ 10.8, where every loss curve on the Training page begins.',
+      trained: t, untrained: !t, uBg: sel(!t).bg, uFg: sel(!t).fg, tBg: sel(t).bg, tFg: sel(t).fg,
+      showTrained: () => this.setState({ trained: true }), showUntrained: () => this.setState({ trained: false })
+    };
+  }
+}
+
+######## MakeData.dc.html
+Make extra data
+Optional. Generate more, then keep what passes review.
+{{ k.name }}
+{{ k.note }}
+makes: {{ k.makes }}
+{{ k.safe }}
+EXAMPLE OF WHAT IT MAKES
+{{ sel.example }}
+{{ sel.where }}
+How many
+{{ sel.go }}
+Try 5 first
+Review drafts (0)
+Your data
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { k: 0 }; }
+  renderVals() {
+    const k = this.state.k;
+    const K = [
+      { name: 'Problems a rule can check', note: 'Sort, reverse, count, copy, small addition, length limits, ending cleanly.', makes: 'problems', safe: 'safe: the rule decides what is right', safeColor: '#6cb4ee',
+        example: 'Reverse: groundwork  →  rule: reverse', where: 'Goes to Your data → Problems. Used by Post-training round 2.', go: 'Generate problems' },
+      { name: 'Rewrite with your local model', note: 'Rephrases prompts and answers you already have, so round 1 sees more variety. Uses your local model (Ollama).', makes: 'conversations', safe: 'for review only: it can introduce mistakes', safeColor: '#e5b567',
+        example: '[your prompt, reworded]  →  [the same answer, reworded]', where: 'Goes to Your data → Conversations as drafts. Nothing is used until you mark it Good.', go: 'Make drafts' },
+      { name: 'Generate prose with your local model', note: 'Short passages in a style or topic you pick.', makes: 'text', safe: 'for review only: it can introduce mistakes', safeColor: '#e5b567',
+        example: '[a paragraph about tides, in plain English]', where: 'Goes to Your data → Text as drafts. Kept small next to real text.', go: 'Make drafts' }
+    ];
+    const kinds = K.map((x, i) => ({ name: x.name, note: x.note, makes: x.makes, safe: x.safe, safeColor: x.safeColor, on: i === k,
+      bg: i === k ? '#1b1f27' : 'transparent', bd: i === k ? '1px solid #9f8cff' : '1px solid #2a2f3a', pick: () => this.setState({ k: i }) }));
+    return { kinds, sel: K[k] };
+  }
+}
+
+######## Pretraining.dc.html
+Pretraining
+Feed it text. It learns by predicting the next word, over and over.
+MODEL BEING TRAINED
+Version 5 · from the Network designer
+Data
+what it reads
+{{ dataStatus }}
+{{ s.mark }}
+{{ s.name }}
+{{ s.note }}
+[N]% · [N] MB of [N] MB
+{{ s.action }}
+{{ dataLine }}
+ENOUGH TEXT?
+This model could use about [N]× more text than you have
+[N] word pieces per parameter; a common rule of thumb for the best use of compute is about 20. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.
+Plain text only. Conversations such as Dolly 15K and Alpaca belong to
+Post-training round 1
+; problems with a checkable answer to round 2. A model learns the language from plain text first.
+Batches
+how the text is fed in
+rebuilt automatically when the word list changes
+One step: {{ rowsN }} rows × 256 pieces. Each colour is a different example; the dark square marks where one ends.
+{{ r.label }}
+Layout shown with an example; real rows come from your data.
+Rows per step
+more rows: steadier learning, more memory
+{{ o.label }}
+Held back for testing
+split by example, exact duplicates removed, never trained on
+{{ o.label }}
+{{ perStep }} pieces per step · one pass over your data ≈ [N] steps
+Train
+continue or start over
+version 5 needs catch-up training
+{{ m.name }}
+{{ m.note }}
+How long
+{{ o.label }}
+[N] steps · about [N] min on this computer
+Learning rate:
+auto
+([N], set with width-scaled setup)
+Schedule:
+warm up, then steady
+· a short cool-down makes each checkpoint
+A steady schedule means training can keep going for as long as you like, and runs of different lengths stay comparable at any point.
+Add to the queue
+Runs after the current job on this computer, or right away if nothing is running. Chat keeps version 4 until version 5 beats it on held-back text.
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { use: { dolly: true, rec: false, mine: false, extra: false }, rows: 1, hold: 1, mode: 'cont', len: 1 }; }
+  renderVals() {
+    const st = this.state, u = st.use;
+    const seg = (on) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    const src = [
+      { id: 'dolly', name: 'Short stories · plain text', note: 'In your library · [N] million word pieces', action: 'Browse and clean', href: 'YourData.dc.html', downloading: false },
+      { id: 'rec', name: 'Recommended text collection', note: 'Encyclopedia, books, code · downloading', action: '', href: '#', downloading: true },
+      { id: 'mine', name: 'Your own files', note: 'Plain text, Markdown, code', action: 'Import files', href: '#', downloading: false },
+      { id: 'extra', name: 'Generated prose', note: 'From Make extra data · 0 so far', action: 'Make extra data', href: 'MakeData.dc.html', downloading: false }
+    ];
+    const sources = src.map((s) => {
+      const on = !!u[s.id], locked = s.downloading;
+      return { name: s.name, note: s.note, action: s.action, href: s.href, hasAction: !!s.action, downloading: s.downloading, on, locked,
+        mark: on ? '✓' : '', aria: (on ? 'Remove ' : 'Use ') + s.name, boxBg: on ? '#9f8cff' : 'transparent', boxBd: on ? '#9f8cff' : '#2a2f3a',
+        toggle: () => { if (!locked) this.setState({ use: Object.assign({}, u, { [s.id]: !on }) }); } };
+    });
+    const n = Object.keys(u).filter((k) => u[k]).length;
+    const ROWS = [8, 16, 32], HOLD = ['2%', '5%', '10%'];
+    const rowsN = ROWS[st.rows];
+    const pal = ['#3a3560', '#2a4558', '#4a3a2a', '#2f4a36', '#4a2f45'];
+    let seed = 3; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    let doc = 0, left = 9;
+    const grid = Array.from({ length: 6 }, (_, r) => ({ label: 'row ' + (r + 1), cells: Array.from({ length: 32 }, () => {
+      if (left === 0) { doc++; left = 4 + Math.floor(rnd() * 18); return '#0a0b0e'; }
+      left--; return pal[doc % pal.length]; }) }));
+    const modes = [
+      { id: 'cont', name: 'Continue from version 4', note: 'Recommended. Keeps what version 4 learned; parts that are new in version 5 start empty, so the curve starts at version 4’s level.', blocked: false },
+      { id: 'fresh', name: 'Start from scratch', note: 'New random weights. Only required when the word list changes. Slower to reach the same error.', blocked: false }
+    ].map((m) => ({ name: m.name, note: m.note, blocked: m.blocked, on: st.mode === m.id, op: m.blocked ? '0.5' : '1',
+      bg: st.mode === m.id ? '#1b1f27' : 'transparent', fg: '#e6e8ec', bd: st.mode === m.id ? '2px solid #9f8cff' : '1px solid #2a2f3a',
+      pick: () => { if (!m.blocked) this.setState({ mode: m.id }); } }));
+    return {
+      sources, grid, modes, rowsN,
+      dataStatus: n ? n + (n === 1 ? ' source' : ' sources') + ' selected' : 'nothing selected',
+      dataLine: n ? 'Training on [N] word pieces of plain text with version 5’s word list. The recommended collection joins when its download finishes.' : 'Pick at least one source.',
+      rows: ROWS.map((r, i) => Object.assign({ label: String(r), on: st.rows === i, pick: () => this.setState({ rows: i }) }, seg(st.rows === i))),
+      holds: HOLD.map((h, i) => Object.assign({ label: h, on: st.hold === i, pick: () => this.setState({ hold: i }) }, seg(st.hold === i))),
+      lengths: ['Short', 'Medium', 'Long'].map((l, i) => Object.assign({ label: l, on: st.len === i, pick: () => this.setState({ len: i }) }, seg(st.len === i))),
+      perStep: (rowsN * 256).toLocaleString('en-US')
+    };
+  }
+}
+
+######## Queue.dc.html
+This computer
+What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.
+NOW
+Version 5 · catching up from version 4
+{{ now.state }}
+step [N] of [N]
+schedule:
+steady phase
+learning rate: auto ([N])
+about [N] min left
+{{ now.btn }}
+Make a checkpoint now
+“Make a checkpoint now” branches off a short cool-down and keeps the main run going. Pausing keeps everything; the run resumes exactly where it stopped.
+UP NEXT · IN ORDER
+all done in about [N] h at the current plan
+{{ j.n }}
+{{ j.name }}
+{{ j.note }}
+{{ j.time }}
+Move up
+Remove
+Nothing waiting. When the current job ends, the computer keeps improving the current version in its steady phase, within the plan below.
+WHEN IT MAY TRAIN
+Hours
+{{ o.label }}
+Memory it may use
+{{ o.label }}
+{{ t.name }}
+{{ t.note }}
+Answering in Chat never stops training. It shares the computer, so training slows while it answers.
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { paused: false, jobs: [0, 1, 2], hours: 1, mem: 1, t: { battery: true, awake: false, best: true, idle: true } }; }
+  renderVals() {
+    const st = this.state;
+    const J = [
+      { name: 'Post-training · round 3 · learn from a teacher', note: 'teacher: version 4’s previous best checkpoint · added by you', time: 'about [N] min' },
+      { name: 'Compare runs · 4 variants × 3 seeds', note: '12 runs, same length and schedule; learning rate retuned per variant', time: 'about [N] h' },
+      { name: 'Restore how it answers', note: 'added automatically after tonight’s new text. New text can erode how it answers; a short lesson from the previous version restores it without losing the new text.', time: 'about [N] min' }
+    ];
+    const queue = st.jobs.map((id, i) => Object.assign({ n: i + 1, first: i === 0,
+      up: () => { if (i === 0) return; const a = st.jobs.slice(); [a[i - 1], a[i]] = [a[i], a[i - 1]]; this.setState({ jobs: a }); },
+      remove: () => this.setState({ jobs: st.jobs.filter((x) => x !== id) }) }, J[id]));
+    const seg = (on) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    const pick = (key, labels) => labels.map((l, i) => Object.assign({ label: l, on: st[key] === i, pick: () => this.setState({ [key]: i }) }, seg(st[key] === i)));
+    const T = [['idle', 'Only when I’m not using the computer', 'Pauses within a few seconds of keyboard or mouse use.'], ['battery', 'Pause on battery', 'Resumes when plugged in.'], ['awake', 'Keep the computer awake while training', 'Otherwise it pauses when the computer sleeps.'], ['best', 'Chat follows the best checkpoint', 'Chat uses the checkpoint with the lowest error on held-back text, not simply the newest.']];
+    const toggles = T.map(([k, name, note]) => ({ name, note, on: !!st.t[k], track: st.t[k] ? '#9f8cff' : '#2a2f3a', knob: st.t[k] ? '18px' : '2px', flip: () => this.setState({ t: Object.assign({}, st.t, { [k]: !st.t[k] }) }) }));
+    return {
+      queue, empty: st.jobs.length === 0, toggles,
+      hours: pick('hours', ['Any time', 'Nights only', 'Set hours']), mem: pick('mem', ['Half', 'Most', 'All']),
+      now: { state: st.paused ? 'paused' : 'running', btn: st.paused ? 'Resume' : 'Pause', toggle: () => this.setState({ paused: !st.paused }) }
+    };
+  }
+}
+
+######## Sandbox.dc.html
+Quick test
+Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real.
+‹ Network designer
+Quick test
+THROWAWAY
+Nothing here is saved as a version, and nothing in Pretraining or Chat changes. The test weights are thrown away afterwards.
+MOCK STATE
+{{ p.label }}
+WHAT YOU’RE TESTING
+THE CURRENT DESIGN
+Version 4
+4 blocks · 4 look-back heads · normal thinking room
+YOUR IDEA · NOT SAVED
+Version 4 with your change
+8 look-back heads (was 4)
+same size · same work per step
+Change the idea in the designer
+{{ c.name }}
+{{ o.label }}
+{{ c.note }}
+Your guess first
+{{ g.label }}
+the result shows next to it
+{{ runLabel }}
+{{ res.kicker }}
+{{ b.name }}
+{{ b.status }}
+Example shape
+— version 4
+- - your idea
+EARLY SIGNAL
+After the same [N] minutes, your idea’s error is
+[lower / about the same / higher]
+than version 4’s. You guessed
+{{ guessed }}
+One short run each, so only a clear gap counts. If they’re close, it needs a real comparison with more seeds and sizes. A design that never gets below the counting-word-frequencies line hasn’t learned to use context at all.
+Save idea as version 6
+Run a real comparison
+Discard idea
+DOES YOUR IDEA WORK AT ALL?
+{{ k.mark }}
+{{ k.name }}
+{{ k.what }}
+These catch broken designs in seconds. A failed check stops the test and says which part to look at.
+WHAT EACH WRITES
+version 4
+[sample]
+your idea
+[sample]
+{{ howLabel }}
+Fair by time, not steps.
+Both get the same minutes and the same tiny dataset, read in the same order. A slower design gets fewer steps, which is the honest answer to “what do I get for my time?”.
+Shrunk to a quarter.
+Both designs keep their shape at a quarter of the width, so a test fits in minutes. The learning rate is carried over with μP, so neither is starved by the smaller width. Small-size rankings can still flip at full size: treat a shrunk result as a hint.
+Memorize one batch.
+The idea trains on a single small batch over and over. A working model drives its error on that batch close to zero; if it can’t, something in the design or its maths is broken.
+Starts where it should.
+An untrained model guesses almost uniformly, so its first error should sit near the uniform-guess line (the log of the word-list size). Far above that points to a bad starting setup.
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { phase: 'done', data: 0, time: 1, size: 1, how: false, guess: 0 }; }
+  renderVals() {
+    const st = this.state, ph = st.phase;
+    const seg = (on) => ({ bg: on ? '#9f8cff' : '#1b1f27', fg: on ? '#0e1014' : '#e6e8ec' });
+    const mk = (key, labels) => labels.map((l, i) => Object.assign({ label: l, on: st[key] === i, pick: () => this.setState({ [key]: i }) }, seg(st[key] === i)));
+    const choices = [
+      { name: 'Tiny dataset', opts: mk('data', ['Short stories', 'A slice of your data', 'Practice problems']), note: ['A small plain-text sample; tiny models learn it quickly.', 'The first 1% of your Pretraining mix.', 'Answers can be checked exactly.'][st.data] },
+      { name: 'Time each', opts: mk('time', ['1 min', '3 min', '10 min']), note: 'Both designs get the same time.' },
+      { name: 'Size', opts: mk('size', ['Full', 'Shrunk to ¼']), note: st.size ? 'Faster; a hint, not proof.' : 'Exact designs; slower.' }
+    ];
+    const running = ph === 'running', done = ph === 'done';
+    const bars = [
+      { name: 'Version 4', color: '#9f8cff', w: done ? '100%' : running ? '100%' : '0%', status: done ? 'done · [N] steps' : running ? 'done · [N] steps' : 'waiting' },
+      { name: 'Your idea', color: '#e5b567', w: done ? '100%' : running ? '45%' : '0%', status: done ? 'done · [N] steps' : running ? 'step [N] · [N] s left' : 'waiting' }
+    ];
+    const y = (v) => (190 - v / 11 * 170).toFixed(1), x = (t) => (40 + t / 100 * 550).toFixed(1);
+    const curve = (k, floor, upto) => { let d = ''; for (let t = 0; t <= upto; t += 2) d += (t ? ' L ' : 'M ') + x(t) + ' ' + y(floor + (10.82 - floor) * Math.exp(-t / k)); return d; };
+    const guess = ['Lower', 'Same', 'Higher'].map((label, i) => Object.assign({ label, on: st.guess === i, pick: () => this.setState({ guess: i }) }, { bg: st.guess === i ? '#e58fb0' : '#1b1f27', fg: st.guess === i ? '#0e1014' : '#e6e8ec' }));
+    const plot = { uniY: y(7.4), uniTy: (y(7.4) - 5), a: running || done ? curve(16, 4.4, 100) : '', b: done ? curve(19, 4.2, 100) : running ? curve(19, 4.2, 45) : '', refY: y(10.82), refTy: (y(10.82) - 5) };
+    const st4 = done ? ['✓', '✓', '✓', '✓'] : running ? ['✓', '✓', '…', '…'] : ['', '', '', ''];
+    const rings = st4.map((m) => (m === '✓' ? '#9f8cff' : '#5b6271'));
+    const checks = [
+      ['Starts where it should', 'First error near the uniform-guess level.'],
+      ['Numbers stay finite', 'No overflow or not-a-number in errors or gradients.'],
+      ['Can memorize one batch', 'Drives its error on one small batch close to zero.'],
+      ['Error falls', 'Smoothed error drops by more than the step-to-step wobble.']
+    ].map(([name, what], i) => ({ name, what, mark: st4[i], ring: rings[i] }));
+    const phases = [['setup', 'Ready'], ['running', 'Running'], ['done', 'Done']].map(([id, label]) => ({ label, on: ph === id, bg: ph === id ? '#2a2f3a' : 'transparent', fg: ph === id ? '#e6e8ec' : '#8f97a6', pick: () => this.setState({ phase: id }) }));
+    return {
+      choices, bars, plot, guess, guessed: ['lower', 'about the same', 'higher'][st.guess] || 'nothing', checks, phases, running, done, hasResults: ph !== 'setup', how: st.how,
+      res: { kicker: done ? 'RESULT · SAME DATA, ORDER AND TIME' : 'RUNNING · ONE AFTER THE OTHER, SAME DATA ORDER' },
+      run: () => this.setState({ phase: 'running' }), runLabel: running ? 'Running…' : done ? 'Run again' : 'Run quick test',
+      toggleHow: () => this.setState({ how: !st.how }), howLabel: st.how ? 'Hide how quick tests work' : 'How quick tests work'
+    };
+  }
+}
+
+######## Trace.dc.html
+Trace a position
+Follow one position's stream through the model. Numbers appear when the engine has run your prompt.
+‹ Network designer
+Look inside / Trace a position
+EXAMPLE PROMPT · FOLLOWING THE LAST POSITION
+The largest planet in our solar system
+is
+Stage
+Size ‖x‖
+Relative change ‖Δx‖ / ‖x‖
+Direction kept · cosine with before
+Top guess if read here
+{{ s.name }}
+{{ s.what }}
+[N]
+{{ s.delta }}
+{{ s.delta }}
+[token] [p]
+Relative change says how much a stage added compared with what was already there; the cosine says whether it kept the direction (near 1) or turned it. Size alone grows steadily through most models and says little. The guess column is the logit lens: the final norm and unembedding applied early. Layers before the last are not trained to be read this way, so early guesses can look odd. Numbers appear when the engine has run your prompt.
+---- LOGIC ----
+class Component extends DCLogic {
+  renderVals() {
+    const stages = [
+      { name: 'Embedding', what: 'token vector (positions are applied inside attention)', delta: '—' },
+      { name: 'Block 1', what: 'attention adds, then MLP adds', delta: '[N]' },
+      { name: 'Block 2', what: 'attention adds, then MLP adds', delta: '[N]' },
+      { name: 'Block 3', what: 'attention adds, then MLP adds', delta: '[N]' },
+      { name: 'Block 4', what: 'attention adds, then MLP adds', delta: '[N]' },
+      { name: 'Output', what: 'final norm, then unembedding to logits', delta: '—' }
+    ];
+    return { stages };
+  }
+}
+
+######## Training.dc.html
+Pretraining · version 5 catching up
+Version 5 = version 4 with 6 blocks (was 4) and wide thinking room (was normal). The new parts start at zero, so it began exactly at version 4’s error. ·
+see the change
+Pause
+Stop after a short cool-down
+Step
+[N]
+of [N]
+Pass
+over your text ·
+[N]
+pieces seen
+Schedule:
+steady
+· learning rate: auto
+about
+[N] min
+left
+[N]
+error on training text, smoothed
+[N]
+error on held-back text
+[N]
+version 4’s best, held-back
+Learning
+All three in bits per character, so versions with different word lists compare fairly. Lower is better.
+Example shape, not real data
+training text, smoothed
+every step
+held-back text
+Chat still uses version 4.
+Version 5’s held-back error is inside version 4’s noise band. Chat switches when it is below the band at a checkpoint, or when you pick version 5 yourself.
+Compare them in Chat
+How the status and schedule work
+Status is one of three, decided from the run:
+Learning
+(smoothed error fell by more than the step-to-step noise over the last window),
+Flat
+(it didn’t),
+Memorising
+(held-back error rising while training error falls). Repeated passes over the same text help less each time and make memorising likely after a few; the fix is more text, or stopping at the best checkpoint.
+Schedule: warm-up, then a long steady stretch, then a cool-down where the learning rate falls to near zero. Checkpoints taken mid-steady look worse than they are; “Stop after a short cool-down” and “Make a checkpoint now” (in Queue and schedule) cool down a copy first.
+Learning rate “auto”: version 4’s tuned rate, rescaled for the new width so it doesn’t need retuning (μP). Change it only in Advanced.
+WHAT IT WRITES NOW · SAME PROMPT EVERY [N] STEPS
+always picks the likeliest next piece, so only training changes the text
+The largest planet in our solar system is …
+step 0
+[identical to version 4: the new parts start at zero]
+step [N]
+[sample]
+step [N]
+[sample]
+now · step [N]
+[sample]
+---- LOGIC ----
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+
+######## ValueMap.dc.html
+Value map
+How a head’s values are projected down and back up, and why the heads add up.
+‹ Network designer
+Look inside / Value map
+d_model 256 · heads
+{{ o.n }}
+head_dim = 256 ÷ {{ h }} =
+{{ hd }}
+ONE HEAD: WHAT IT CAN WRITE INTO THE STREAM
+x · 256
+W_V
+for this head
+256 → {{ hd }}
+v · {{ hd }}
+W_O
+rows for this head
+{{ hd }} → 256
+Δx · 256
+Together the two matrices form one 256 × 256 map, but its rank is at most
+{{ hd }}
+. Each head can only write into a subspace of at most {{ hd }} dimensions: a set of directions, not a block of coordinates.
+Weighting by attention happens on the {{ hd }}-number vectors in the middle, before W_O.
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { h: 4 }; }
+  renderVals() {
+    const h = this.state.h, hd = 256 / h;
+    const px = Math.max(8, hd);
+    const top = ((256 - px) / 2 / 256 * 100).toFixed(1), bot = (100 - top).toFixed(1);
+    const palette = ['#e5b567', '#6cb4ee', '#9f8cff', '#e58fb0', '#b8a4ff', '#9fd36b', '#f09a5e', '#d0a8e8'];
+    return {
+      h, hd, hdPx: px + 'px',
+      clipDown: 'polygon(0 0, 100% ' + top + '%, 100% ' + bot + '%, 0 100%)',
+      clipUp: 'polygon(0 ' + top + '%, 100% 0, 100% 100%, 0 ' + bot + '%)',
+      perHead: (2 * 256 * hd).toLocaleString('en-US'),
+      stripes: Array.from({ length: h }, (_, i) => ({ color: palette[i % palette.length] })),
+      opts: [1, 2, 4, 8].map((n) => ({ n, on: h === n, bg: h === n ? '#9f8cff' : '#1b1f27', fg: h === n ? '#0e1014' : '#e6e8ec', pick: () => this.setState({ h: n }) }))
+    };
+  }
+}
+
+######## YourData.dc.html
+Your data
+Three kinds, because each one trains a different stage.
+{{ kind.back }}
+{{ t.name }}
+{{ t.used }}
+{{ t.count }}
+{{ kind.lead }}
+{{ kind.sets }}
+Search
+{{ kind.colA }}
+{{ kind.colB }}
+STATUS
+{{ r.a }}
+{{ r.b }}
+{{ r.status }}
+{{ kind.note }}
+{{ kind.add }}
+Import files
+Near-duplicates ([N] found)
+{{ kind.make }}
+---- LOGIC ----
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { k: 1 }; }
+  renderVals() {
+    const k = this.state.k;
+    const K = [
+      { name: 'Text it reads', used: 'used by Pretraining', count: '[N] characters · 3 sets', back: 'Back to Pretraining', backHref: 'Pretraining.dc.html',
+        lead: 'Plain text. It learns by predicting the next piece.', sets: 'Short stories · Recommended collection · your files', search: 'Search text', colA: 'DOCUMENT', colB: 'FIRST LINE',
+        note: 'Held-back text is split off by document, after exact duplicates are removed, and never trained on.', add: 'Add a document', make: 'Generate prose',
+        rows: [['[document name]', '[first line]', 'In use'], ['[document name]', '[first line]', 'In use'], ['[document name]', '[first line]', 'Held back'], ['[document name]', '[first line]', 'Near-duplicate'], ['[document name]', '[first line]', 'In use']] },
+      { name: 'Conversations it practises', used: 'used by Post-training, round 1', count: '[N] conversations · 2 sets', back: 'Back to Post-training', backHref: 'Feedback.dc.html',
+        lead: 'A prompt and a good answer. Only the answer is trained on.', sets: 'Dolly 15K (14,996) · Alpaca · your corrections', search: 'Search conversations', colA: 'PROMPT', colB: 'ANSWER',
+        note: 'Open one to read, edit or mark it Good. Corrections you teach in Chat appear here.', add: 'Write a conversation', make: 'Make extra conversations',
+        rows: [['[prompt]', '[answer]', 'Good'], ['[prompt]', '[answer]', 'Review'], ['[prompt]', '[answer]', 'Review'], ['[prompt]', '[your correction]', 'From Chat'], ['[prompt]', '[answer]', 'Held back']] },
+      { name: 'Problems with a checkable answer', used: 'used by Post-training, round 2', count: '[N] problems · 7 rules', back: 'Back to Post-training', backHref: 'Feedback.dc.html',
+        lead: 'A prompt and a rule that decides if an answer is right. No answer key needed.', sets: 'Generated from rules · your own', search: 'Search problems', colA: 'PROMPT', colB: 'RULE',
+        note: 'A rule decides what is right, so these can be generated safely in any amount.', add: 'Write a problem', make: 'Generate problems a rule can check', mono: true,
+        rows: [['Sort these letters: d b a c', 'sort'], ['Reverse: groundwork', 'reverse'], ['How many r in "mirror"?', 'count'], ['17 + 25 =', 'small addition'], ['Describe rain in under 80 characters.', 'stay under 80 characters']].map((r) => r.concat(['Ready'])) }
+    ];
+    const kind = K[k];
+    const col = { 'In use': '#c3c8d1', 'Held back': '#6cb4ee', 'Near-duplicate': '#e5b567', Good: '#9f8cff', Review: '#8f97a6', 'From Chat': '#e58fb0', Ready: '#c3c8d1' };
+    const rows = kind.rows.map(([a, b, status]) => ({ a, b, status, color: col[status], font: kind.mono ? 'ui-monospace, Menlo, monospace' : 'inherit' }));
+    const tabs = K.map((t, i) => ({ name: t.name, used: t.used, count: t.count, on: i === k, bg: i === k ? '#1b1f27' : '#15181e', top: i === k ? '#9f8cff' : '#2a2f3a', pick: () => this.setState({ k: i }) }));
+    return { tabs, kind, rows };
+  }
+}

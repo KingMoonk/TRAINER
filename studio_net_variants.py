@@ -12,6 +12,22 @@ from studio_spec import block_at
 from studio_widgets import label
 
 
+def block_differences(old, new):
+    """One line per block whose norm, mixer or channel differs; blocks only one design has are listed too."""
+    lines = []
+    for index in range(max(old["dims"]["n_layer"], new["dims"]["n_layer"])):
+        before = block_at(old, index) if index < old["dims"]["n_layer"] else None
+        after = block_at(new, index) if index < new["dims"]["n_layer"] else None
+        if before is None or after is None:
+            lines.append(f"block {index + 1}: {'added' if before is None else 'removed'}")
+            continue
+        changes = [f"{slot} {before[slot]['id']} → {after[slot]['id']}" for slot in ("norm", "mixer", "channel")
+                   if before[slot]["id"] != after[slot]["id"]]
+        if changes:
+            lines.append(f"block {index + 1}: " + ", ".join(changes))
+    return lines or ["blocks: same modules in every block"]
+
+
 class VariantsView(NetworkView):
     title = "Variants"
 
@@ -50,7 +66,6 @@ class VariantsView(NetworkView):
         label(self.details, f"{chosen['name']}: {chosen_est['total']:,} parameters · {chosen_est['kv_bytes_per_token']:,} KV bytes/token").pack(anchor="w", pady=(4, 12))
         for slot in ("tokenizer", "embedding", "position", "head"):
             label(self.details, f"{slot}: {self.spec[slot]['id']} → {chosen[slot]['id']}").pack(anchor="w")
-        for slot in ("norm", "mixer", "channel"):
-            old, new = block_at(self.spec, 0)[slot]["id"], block_at(chosen, 0)[slot]["id"]
-            label(self.details, f"{slot}: {old} → {new}").pack(anchor="w")
+        for line in block_differences(self.spec, chosen):
+            label(self.details, line).pack(anchor="w")
         self.message.set("Parameter and cache values come from the selected modules' estimators.")
