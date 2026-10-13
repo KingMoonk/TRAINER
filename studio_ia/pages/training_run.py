@@ -24,6 +24,17 @@ def history_of(steps, heldout):
     return [{"loss": y, "val_loss": held.get(x)} for x, y in steps]
 
 
+def sample_rows(curve, step, pn):
+    """(label, text) lines under 'what it writes now': step 0, the logged samples, the newest marked 'now'; before the first sample, a wait note."""
+    rows = [(T["step_0"], T["identical_to"].replace("version 4", f"version {pn}"))]
+    rows += [(f"step {x['step']}", x["text"]) for x in (curve.get("samples") or [])]
+    if len(rows) > 1:
+        rows[-1] = (T["now_step"].format(step=curve["samples"][-1]["step"]), rows[-1][1])
+    else:
+        rows.append((T["now_step"].format(step=step if step is not None else "[N]"), T["no_sample_yet"]))
+    return rows
+
+
 def num(x):
     return "[N]" if x is None else f"{x:.3f}"
 
@@ -169,12 +180,7 @@ class TrainingRunPage(Page):
         Kicker(self.samples, T["what_writes_now"].replace("[N]", str(every or "[N]")), bg="panel").pack(anchor="w")
         tk_label(self.samples, T["always_picks"], 12, "dim", "panel").pack(anchor="w")
         tk_label(self.samples, curve.get("prompt") or T["example_prompt"], 14, "text2", "panel", font=font(14, serif=True)).pack(anchor="w", pady=6)
-        got = {x["step"]: x["text"] for x in curve.get("samples") or []}
-        rows = [(f"step {k}", t) for k, t in got.items()] or [(T["step_0"], None)]
-        if rows[0][0] == T["step_0"] and rows[0][1] is None:
-            rows[0] = (T["step_0"], T["identical_to"].replace("version 4", f"version {pn}"))
-        if len(rows) == 1:
-            rows.append((f"now · step {q.step if q.total else '[N]'}", "[sample]"))
+        rows = sample_rows(curve, q.step if q.total else None, pn)
         for label, text in rows:
             line = tk.Frame(self.samples, bg=C["panel"])
             line.pack(fill="x", pady=2)

@@ -171,6 +171,22 @@ class Services:
         """Import files into the kind's own set. Returns one report line per file."""
         raise NotImplementedError
 
+    def collection(self):
+        """The recommended text collection: one dict per source {id, name, size, records, state, completed, total, error};
+        state is "not downloaded" | "downloading" | "downloaded" | "imported"."""
+        raise NotImplementedError
+
+    def download_sources(self, ids=None):
+        """Download the whole recommended collection (ids None) or the listed sources, one after another, on a background
+        thread. Progress arrives as events "download" {id, text, completed, total}, then "download_done" {id} or
+        "download_failed" {id, error}. False when a download is already running."""
+        raise NotImplementedError
+
+    def import_source(self, source_id):
+        """Import one downloaded source into the text sets used for pretraining (background thread; events "import_done"
+        {id} or "download_failed" {id, error}). False when it is not downloaded or work is already running."""
+        raise NotImplementedError
+
     def generate_problems(self, rule, n, store=True, rng=None):
         """Rule-made problems (rule None = all rules). store=False previews. Returns problem_report(...)."""
         raise NotImplementedError
@@ -186,6 +202,15 @@ class Services:
 
     def review_data(self, example_id, keep):
         """keep -> mark Good; otherwise delete the example."""
+        raise NotImplementedError
+
+    def data_fields(self, example_id):
+        """The add_data fields of one stored example, to pre-fill an edit."""
+        raise NotImplementedError
+
+    def edit_data(self, example_id, fields):
+        """Replace the add_data fields of one example. A draft stays a draft until marked Good. Raises ValueError with a
+        plain message when the edit is empty, duplicates another example, or a problem no longer passes its rule."""
         raise NotImplementedError
 
     def references(self, version):
@@ -416,6 +441,17 @@ class FakeServices(Services):
     def import_data(self, kind, paths):
         return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
 
+    def collection(self):
+        return getattr(self, "_collection", [])
+
+    def download_sources(self, ids=None):
+        self.calls = getattr(self, "calls", []) + [("download_sources", ids)]
+        return True
+
+    def import_source(self, source_id):
+        self.calls = getattr(self, "calls", []) + [("import_source", source_id)]
+        return True
+
     def generate_problems(self, rule, n, store=True, rng=None):
         import random
         items = problem_items(rule, n, rng or random.Random())
@@ -439,6 +475,24 @@ class FakeServices(Services):
                         r["status"] = "Good"
                     else:
                         rows.remove(r)
+
+    def _find(self, example_id):
+        return next((k, r) for k, rows in self._rows().items() for r in rows if r["id"] == example_id)
+
+    def data_fields(self, example_id):
+        kind, r = self._find(example_id)
+        return {"text": {"text": r["b"]}, "conversations": {"user": r["a"], "assistant": r["b"]}, "problems": {"prompt": r["a"], "rule": r["b"]}}[kind]
+
+    def edit_data(self, example_id, fields):
+        self.edits = [*getattr(self, "edits", []), (example_id, fields)]
+        kind, r = self._find(example_id)
+        a, b = {"text": (r["a"], fields.get("text", "")), "conversations": (fields.get("user", ""), fields.get("assistant", "")),
+                "problems": (fields.get("prompt", ""), fields.get("rule", ""))}[kind]
+        if not (a.strip() and b.strip()):
+            raise ValueError("Nothing to save: fill in every part.")
+        if any(o is not r and (o["a"], o["b"]) == (a, b) for o in self._rows()[kind]):
+            raise ValueError("That is already in this set.")
+        r["a"], r["b"] = a, b
 
     def references(self, version):
         return {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None, "noise_band": None}
@@ -934,6 +988,69 @@ class WorkspaceServices(Services):
         import studio_data_kinds as dk
         return self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
 
+    # recommended text collection (studio_catalog does the fetching, checking and indexing) -----------------------
+    _busy: dict = {}  # source id -> {completed, total}; swapped for a fresh dict per run, never mutated while shared
+    _failed: dict = {}
+
+    @staticmethod
+    def collection_ids():
+        import studio_catalog as cat
+        return [e["id"] for e in cat.CATALOG if e["stage"] == "language" and e["default"]]
+
+    def collection(self):
+        import studio_catalog as cat
+        have = {d["catalog_id"]: d for d in cat.list_downloads(self.root)}
+        made = {d["id"] for d in self.workspace.state["datasets"]}
+        rows = []
+        for entry in (e for e in cat.CATALOG if e["id"] in self.collection_ids()):
+            cid, busy = entry["id"], self._busy.get(entry["id"])
+            state = ("downloading" if busy is not None else "imported" if f"catalog_{cid}" in made
+                     else "downloaded" if cid in have else "not downloaded")
+            rows.append({"id": cid, "name": entry["name"], "size": entry["size_hint"], "records": entry["records_hint"],
+                         "state": state, "completed": (busy or {}).get("completed", 0), "total": (busy or {}).get("total", 0),
+                         "error": self._failed.get(cid, "")})
+        return rows
+
+    def _background(self, ids, work, done):
+        with self._lock:
+            if self._busy:
+                return False
+            self._busy, self._failed = {i: {} for i in ids}, {}
+        def run():
+            for cid in ids:
+                try:
+                    work(cid)
+                    self._busy.pop(cid, None)
+                    self.emit(done, {"id": cid})
+                except Exception as error:  # shown to the person in plain words; the rest of the list still runs
+                    self._busy.pop(cid, None)
+                    self._failed[cid] = str(error) or error.__class__.__name__
+                    self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
+            self._busy = {}
+        self._worker = threading.Thread(target=run, daemon=True)
+        self._worker.start()
+        return True
+
+    def download_sources(self, ids=None):
+        import studio_catalog as cat
+
+        def work(cid):
+            def progress(info):
+                self._busy[cid] = {"completed": info["completed"], "total": info["total"]}
+                self.emit("download", {"id": cid, **info})
+            cat.download_dataset(cid, self.root, emit=progress)
+        return self._background(list(ids or self.collection_ids()), work, "download_done")
+
+    def import_source(self, source_id):
+        import studio_catalog as cat
+        result = next((d for d in cat.list_downloads(self.root) if d["catalog_id"] == source_id), None)
+        if result is None:
+            return False
+
+        def work(cid):
+            cat.register_download(self.workspace, result, emit=lambda info: self.emit("download", {"id": cid, **info}))
+        return self._background([source_id], work, "import_done")
+
     def generate_problems(self, rule, n, store=True, rng=None):
         import random
         import studio_data_kinds as dk
@@ -986,6 +1103,30 @@ class WorkspaceServices(Services):
             self.workspace.mark_reviewed([example_id])
         else:
             self.workspace.remove_examples([example_id])
+
+    def data_fields(self, example_id):
+        import studio_data_kinds as dk
+        e = self.workspace.get_example(example_id)
+        kind = dk.classify(e)
+        return {"text": {"text": e["text"]}, "conversations": {"user": e["user"], "assistant": e["assistant"]},
+                "problems": {"prompt": e["user"], "rule": dk.rule_of(e)}}[kind]
+
+    def edit_data(self, example_id, fields):
+        import studio_data_kinds as dk
+        import studio_rules
+        old = self.workspace.get_example(example_id)
+        kind = dk.classify(old)
+        new = {**old, "messages": []}  # normalize reads user/assistant (or text) once the old messages are cleared
+        if kind == "text":
+            new["text"] = fields.get("text", "")
+        elif kind == "conversations":
+            new.update(user=fields.get("user", ""), assistant=fields.get("assistant", ""))
+        else:
+            rule, prompt = fields["rule"], fields.get("prompt", "")
+            if old["assistant"] != dk.NO_KEY and not studio_rules.check(rule, prompt, old["assistant"]):
+                raise ValueError(f"That prompt no longer matches the stored answer under the rule \"{studio_rules.LABELS[rule]}\".")
+            new.update(user=prompt, rule=rule, metadata={**(old.get("metadata") or {}), "rule": rule})
+        self.workspace.update_example(new)
 
     def _heldout(self):
         path = self.root / "data" / "heldout.json"
@@ -1046,7 +1187,20 @@ class WorkspaceServices(Services):
         return {"steps": steps, "smooth": list(zip([s for s, _ in steps], studio_eval.smooth([b for _, b in steps]))),
                 "heldout": [(r["step"], bits(r["val_loss"])) for r in rows if r.get("val_loss") is not None],
                 "lr": [(r["step"], r["lr"]) for r in rows if r.get("lr") is not None],
-                "phases": [(0, warm, "warm-up"), (warm, decay, "steady"), (decay, total, "cool-down")], "total": total}
+                "phases": [(0, warm, "warm-up"), (warm, decay, "steady"), (decay, total, "cool-down")], "total": total,
+                **self._run_samples(run)}
+
+    @staticmethod
+    def _run_samples(run):
+        """The latest 'what it writes now' samples train() logged (samples.jsonl), with the prompt and the steps between them."""
+        def rows(name):
+            path = run / name
+            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line] if path.exists() else []
+        cfg = json.loads((run / "config.json").read_text(encoding="utf-8")) if (run / "config.json").exists() else {}
+        samples = rows("samples.jsonl")[-5:]
+        return {"samples": [{"step": x["step"], "text": x["text"]} for x in samples],
+                "sample_every": (cfg.get("sample_every") or 0) * cfg.get("eval_every", 0) or None,
+                "prompt": samples[-1]["prompt"] if samples else cfg.get("sample_prompt")}
 
     # chat / inspect ---------------------------------------------------------
     def _checkpoint(self, version):

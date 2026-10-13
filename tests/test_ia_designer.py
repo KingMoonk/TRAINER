@@ -6,6 +6,8 @@ from studio_ia.pages import builder as B
 from studio_ia.pages import compare as K
 from studio_ia.pages import quicktest as Q
 from studio_ia.services import FakeServices, Job, QueueState, Version
+from studio_ia.theme import C
+from studio_ia.widgets import plot_series
 from studio_model import validate_config
 from studio_spec import default_spec, validate_spec
 
@@ -153,6 +155,28 @@ class Compare(unittest.TestCase):
         self.assertIn("about the same (inside the spread)", K.guess_line("Worse", "B", {"delta": .02, "inside_spread": True}))
         self.assertIn("at least two seeds", K.guess_line("Better", "B", {"delta": .5, "inside_spread": None}))
         self.assertIn("no result yet", K.guess_line("Better", "B", None))
+
+    def test_axis_converts_to_tokens_or_minutes_and_falls_back_to_steps(self):
+        full = [[1, 4., 100, 30.], [2, 3., 200, 90.]]
+        self.assertEqual(K.axis_points(full, "steps"), [(1, 4.), (2, 3.)])
+        self.assertEqual(K.axis_points(full, "tokens"), [(100, 4.), (200, 3.)])
+        self.assertEqual(K.axis_points(full, "time"), [(.5, 4.), (1.5, 3.)])
+        self.assertIsNone(K.axis_points([[1, 4.], [2, 3.]], "tokens"))
+        self.assertIsNone(K.axis_points([[1, 4., None, None]], "time"))
+        self.assertEqual(K.axis_for([full, full], "time"), ("time", None))
+        self.assertEqual(K.axis_for([full, [[1, 4.]]], "tokens"), ("steps", "tokens"))
+        self.assertEqual(K.axis_for([[[1, 4.]]], "steps"), ("steps", None))
+
+    def test_series_are_coloured_per_arm_and_running_seeds_are_dashed(self):
+        done, running = K.arm_series(1, [(1, 4.)], False), K.arm_series(2, [(1, 4.)], True)
+        self.assertIsNone(done["dash"])
+        self.assertIsNotNone(running["dash"])
+        self.assertNotEqual(done["color"], running["color"])
+        lines = plot_series({"smooth": [(0, 1), (1, 2)], "series": [dict(done, points=[(0, 1), (1, 2)]), {"points": [(0, 1)]}, running | {"points": [(0, 1), (2, 2)]}]})
+        self.assertEqual([(len(pts), dash) for pts, _c, _w, dash in lines], [(2, None), (2, None), (2, (6, 4))])
+        self.assertEqual(lines[1][1], C["violet"])  # arm B
+        self.assertEqual(lines[2][1], C["amber"])
+        self.assertEqual(plot_series({"series": [{"points": [(0, 1), (1, 1)], "color": "#123456"}]})[0][1:], ("#123456", 2, None))
 
     def test_the_designer_hands_its_draft_over_through_services(self):
         fake = FakeServices()

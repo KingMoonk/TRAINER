@@ -289,12 +289,13 @@ def summarize(runs):
         values = [r['bpc'] for r in items]
         stats = seed_stats(values, base if variant and len(base) == len(values) else None)
         grid = [p[0] for p in items[0]['curve']]
-        mean = np.mean([np.interp(grid, [p[0] for p in r['curve']], [p[1] for p in r['curve']]) for r in items], axis=0) if grid else []
+        cols = min((len(p) for r in items for p in r['curve']), default=2)  # 2: step, bpc; 4 adds trained tokens and seconds
+        mean = [np.mean([np.interp(grid, [p[0] for p in r['curve']], [p[c] for p in r['curve']]) for r in items], axis=0) for c in range(1, cols)] if grid else []
         rows.append({'variant': variant, 'seeds': [r['seed'] for r in items], 'bpc': values, 'mean': stats['mean'],
                      'min': stats['min'], 'max': stats['max'], 'spread': stats['max'] - stats['min'],
                      'delta': stats.get('delta'), 'inside_spread': stats.get('within_noise'), 'lr': items[0].get('lr'),
                      'pieces_per_s': float(np.mean([r['pieces_per_s'] for r in items])),
-                     'peak_mb': max(r['peak_mb'] for r in items), 'curve': [[float(x), float(y)] for x, y in zip(grid, mean)]})
+                     'peak_mb': max(r['peak_mb'] for r in items), 'curve': [[float(x), *map(float, ys)] for x, *ys in zip(grid, *mean)]})
     return rows
 
 
@@ -351,7 +352,8 @@ def train_one(spec, steps, seed, examples, held, directory, emit, stop, pause=No
 
     def progress(event):
         if event.get('type') == 'metric' and event.get('step') and event.get('loss') is not None:
-            emit(dict(tag or {}, type='compare', step=event['step'], total=steps, bpc=event['loss'] / LN2))
+            emit(dict(tag or {}, type='compare', step=event['step'], total=steps, bpc=event['loss'] / LN2,
+                      trained_tokens=event.get('trained_tokens'), elapsed_seconds=event.get('elapsed_seconds')))
     try:
         with data_order():
             record = train(_config(spec, steps, seed, extra), examples, directory, emit=progress, stop=stop, pause=pause,
@@ -366,7 +368,9 @@ def train_one(spec, steps, seed, examples, held, directory, emit, stop, pause=No
     pieces = sum(len(tokenizer.encode(e['text'])) for e in examples)
     scale = pieces / max(1, chars) / LN2  # nats per piece -> bits per character
     rows = [json.loads(line) for line in (directory / 'metrics.jsonl').read_text().splitlines() if line.strip()]
-    curve = [[r['step'], r['loss'] * scale] for r in rows if r.get('loss') is not None]
+    curve = [[r['step'], r['loss'] * scale, r.get('trained_tokens'), r.get('elapsed_seconds')] for r in rows if r.get('loss') is not None]
+    if any(None in p for p in curve):  # rows without the engine's counters: steps only
+        curve = [p[:2] for p in curve]
     return {'bpc': bpc, 'curve': curve, 'steps': record['step'], 'directory': str(directory),
             'pieces_per_s': record['trained_tokens'] / max(.001, record['duration_seconds']),
             'peak_mb': max(0., _peak_mb() - before)}

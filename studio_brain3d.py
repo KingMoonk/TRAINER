@@ -12,7 +12,7 @@ from panda3d.core import (Filename, Geom, GeomNode, GeomTriangles, GeomVertexDat
                           GeomVertexWriter, LineSegs, TextNode, TransparencyAttrib, Vec3,
                           loadPrcFileData)
 
-from studio_scene import LEVELS, MODES, SceneModel
+from studio_scene import HEAD_STAGES, LEVELS, MODES, TILE_KINDS, SceneModel, clamp_index, next_stage, stats_line
 from studio_spec import block_at, default_spec, to_legacy_view, upgrade
 
 
@@ -99,6 +99,7 @@ class _SceneRenderer:
         self.edit_pending = False
         self.link_lost = False
         self.snapshot_paths, self.snapshot_index = [], -1
+        self.stats, self.info = {}, ''
         self.animation_elapsed = 0.
         self.hud = DirectLabel(text='', scale=.043, pos=(-.05, 0, .86), frameColor=(0, 0, 0, 0), text_fg=(.85, .92, 1, 1))
         self.level_menu = DirectOptionMenu(items=list(LEVELS), initialitem=1, scale=.04, pos=(-1.28, 0, .9), command=self.set_level)
@@ -110,8 +111,8 @@ class _SceneRenderer:
         DirectButton(text='Next', scale=.04, pos=(1.08, 0, -.8), command=lambda: self.scrub(1))
         DirectButton(text='Load replay', scale=.04, pos=(1.08, 0, .84), command=lambda: self.send({'type': 'load_replay'}))
         DirectButton(text='1 real step', scale=.04, pos=(1.08, 0, .7), command=lambda: self.send({'type': 'probe_step'}))
-        self.tile_menu = DirectOptionMenu(items=['weight', 'gradient', 'update'], scale=.04, pos=(-1.28, 0, .64), command=self.set_weight_kind)
-        self.step_menu = DirectOptionMenu(items=['scores', 'scale', 'mask', 'pattern', 'values'], initialitem=3,
+        self.tile_menu = DirectOptionMenu(items=list(TILE_KINDS), scale=.04, pos=(-1.28, 0, .64), command=self.set_weight_kind)
+        self.step_menu = DirectOptionMenu(items=list(HEAD_STAGES), initialitem=HEAD_STAGES.index('pattern'),
                                           scale=.04, pos=(-1.28, 0, .51), command=self.set_head_stage)
         import studio_registry as registry
         self.module_menu = DirectOptionMenu(items=[m.short for m in registry.for_slot('mixer')], scale=.04,
@@ -308,10 +309,18 @@ class _SceneRenderer:
         self.playing = not self.playing
 
     def scrub(self, delta):
+        self.scrub_to(self.snapshot_index + delta)
+
+    def scrub_to(self, index):
         if not self.snapshot_paths:
             return
-        self.snapshot_index = max(0, min(len(self.snapshot_paths) - 1, self.snapshot_index + delta))
+        self.snapshot_index = clamp_index(index, len(self.snapshot_paths))
         self.read_snapshot(self.snapshot_paths[self.snapshot_index])
+        self.send({'type': 'replay_state', 'index': self.snapshot_index, 'count': len(self.snapshot_paths)})
+
+    def show_hud(self):
+        line = stats_line(self.stats)
+        self.hud['text'] = self.info + (f' | training: {line}' if line else '')
 
     def read_snapshot(self, path):
         from studio_snapshot import load
@@ -492,7 +501,8 @@ class _SceneRenderer:
             if lens:
                 token = min(self.scene.selection.token, len(lens['ids']) - 1)
                 info += f" | predicted id {lens['ids'][token][0]} ({lens['probabilities'][token][0]:.3f})"
-        self.hud['text'] = info
+        self.info = info
+        self.show_hud()
 
     def handle_message(self, message):
         kind = message.get('type')
@@ -506,8 +516,20 @@ class _SceneRenderer:
                 if message['path'] not in self.snapshot_paths:
                     self.snapshot_paths.append(message['path'])
                 self.snapshot_index = len(self.snapshot_paths) - 1
+                self.send({'type': 'replay_state', 'index': self.snapshot_index, 'count': len(self.snapshot_paths)})
             except (OSError, ValueError, KeyError) as error:
                 self.hud['text'] = str(error)
+        elif kind == 'step':  # walk the head's forward pass: delta +1 / -1, or jump to a named stage
+            stage = next_stage(self.head_stage, message.get('delta', 0), message.get('stage'))
+            self.step_menu.set(HEAD_STAGES.index(stage))  # also runs set_head_stage
+        elif kind == 'scrub':
+            self.scrub_to(message['index'])
+        elif kind == 'show':  # weight tile kind at the Weights level
+            if message.get('what') in TILE_KINDS:
+                self.tile_menu.set(TILE_KINDS.index(message['what']))
+        elif kind == 'stats':
+            self.stats = message
+            self.show_hud()
         elif kind == 'replay':
             self.snapshot_paths = message.get('paths', [])
             self.snapshot_index = -1

@@ -12,7 +12,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from studio_vizbridge import VizBridge, ViewerLink, parse_viewer_args  # noqa: E402
+from studio_vizbridge import VizBridge, ViewerLink, _Session, parse_viewer_args  # noqa: E402
 
 ECHO_VIEWER = '''import sys, time
 sys.path.insert(0, {root!r})
@@ -74,6 +74,27 @@ class VizBridgeTests(unittest.TestCase):
         self.assertEqual(echoes[0]["spec"], spec)
         self.assertEqual(echoes[1]["block_id"], "blk_ab12cd")
         self.assertTrue(bridge.running)
+
+    def test_step_scrub_show_keep_order_and_stats_keep_only_the_latest(self):
+        bridge = self._bridge()
+        bridge.start()
+        messages = [{"type": "stats", "step": 1}, {"type": "step", "delta": 1}, {"type": "stats", "step": 2},
+                    {"type": "scrub", "index": 3}, {"type": "show", "what": "gradient"}, {"type": "stats", "step": 3}]
+        for m in messages:
+            bridge.send(m)
+        got = _wait_for(bridge, lambda r: any(m.get("msg", {}).get("step") == 3 for m in r))
+        echoes = [m["msg"] for m in got if m.get("type") == "echo"]
+        self.assertEqual([m["type"] for m in echoes if m["type"] != "stats"], ["step", "scrub", "show"])
+        self.assertEqual(echoes[-1], {"type": "stats", "step": 3})
+        self.assertEqual(echoes[-1], messages[-1])
+
+    def test_stats_coalesce_without_a_process(self):
+        bridge = VizBridge("unused.py")
+        bridge._sess = _Session()
+        for m in ({"type": "stats", "step": 1}, {"type": "scrub", "index": 1}, {"type": "stats", "step": 2}):
+            bridge._put(m)
+        self.assertEqual(list(bridge._sess.ordered), [{"type": "scrub", "index": 1}, "stats"])
+        self.assertEqual(bridge._sess.pending["stats"]["step"], 2)
 
     def test_command_replaces_the_python_and_script_pair(self):
         bridge = VizBridge("ignored.py", command=[sys.executable, str(self.echo)])

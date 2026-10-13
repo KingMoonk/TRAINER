@@ -12,6 +12,8 @@ from studio_summary import bin_edges
 
 LEVELS = ('Run', 'Model', 'Window', 'Head', 'Weights')
 MODES = ('Build', 'Train', 'Ride a token')
+HEAD_STAGES = ('scores', 'scale', 'mask', 'pattern', 'values')  # the forward pass of one head, in order
+TILE_KINDS = ('weight', 'gradient', 'update')
 LIMITS = {'Run': 2000, 'Model': 32, 'Window': 32, 'Head': 32, 'Weights': 16}
 
 
@@ -156,3 +158,29 @@ class SceneModel:
             return []
         prefix = direction + '::'
         return [(key[len(prefix):], value.copy()) for key, value in self.snapshot['arrays'].items() if key.startswith(prefix)]
+
+
+def next_stage(current, delta=0, stage=None):
+    """The head stage after stepping `delta` (clamped to the ends of the forward pass), or `stage` itself when it is a real one."""
+    if stage in HEAD_STAGES:
+        return stage
+    return HEAD_STAGES[max(0, min(len(HEAD_STAGES) - 1, HEAD_STAGES.index(current) + int(delta)))]
+
+
+def clamp_index(index, count):
+    """A snapshot index inside 0..count-1 (-1 when there are none)."""
+    return max(0, min(count - 1, int(index))) if count else -1
+
+
+def stats_line(stats):
+    """The one-line training readout from a 'stats' message: step, loss, learning rate, speed (missing values left out)."""
+    parts = []
+    if stats.get('step') is not None:
+        parts.append(f"step {stats['step']}" + (f"/{stats['total']}" if stats.get('total') else ''))
+    if stats.get('loss') is not None:
+        parts.append(f"loss {stats['loss']:.4f}")
+    if stats.get('lr') is not None:
+        parts.append(f"lr {stats['lr']:.2e}")
+    if stats.get('tokens_per_second'):
+        parts.append(f"{stats['tokens_per_second']:,.0f} tok/s")
+    return ' | '.join(parts)

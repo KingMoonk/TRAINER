@@ -18,7 +18,7 @@ from collections import deque
 from multiprocessing.connection import AuthenticationError, Client, Listener
 from pathlib import Path
 
-_COALESCE = ("telemetry", "spec", "viz_snapshot", "snapshot", "summary", "selection")
+_COALESCE = ("telemetry", "spec", "viz_snapshot", "snapshot", "summary", "selection", "stats")
 _POLL_S = 0.1
 _BRIDGES = weakref.WeakSet()  # one exit hook for every live bridge; a reloaded module's old bridges are not pinned
 

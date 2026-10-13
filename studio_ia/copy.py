@@ -146,6 +146,13 @@ COMPARE = {
     "x_axis_text": "TEXT SEEN",
     "x_axis_compute": "TRAINING COMPUTE",
     "x_axis_time": "MINUTES",
+    "x_axis_steps": "STEPS",
+    "axis_label": "Horizontal axis",
+    "axis_steps": "Steps",
+    "axis_tokens": "Text seen",
+    "axis_time": "Minutes",
+    "axis_fallback": "These runs did not record {what}, so the curves are drawn against steps. Steps are only fair between runs with the same batch size.",
+    "axis_fair": "Runs with different batch sizes or speeds compare fairly on text seen or minutes, not on steps.",
     "base_title": "Base: version 4",
     "base_diff": "base spec",
     "width_resolved": "width re-solved · [N]M",
@@ -343,6 +350,8 @@ TRAINING = {
     "step_0": "step 0",
     "identical_to": "[identical to version 4: the new parts start at zero]",
     "step_n": "step [N]",
+    "now_step": "now · step {step}",
+    "no_sample_yet": "the first sample appears at the next checkpoint",
 }
 
 HEAD_ZOOM = {
@@ -599,7 +608,15 @@ INSIDE3D = {
     "zoom_label": "ZOOM",
     "mode_label": "MODE",
     "head_zoom_hint": "Step through the head and scale its output with the menus in the viewer window.",
-    "build_note": "Swapping a module in the viewer does not change your saved design yet; make the change in the Network designer.",
+    "build_note": "Swapping a module in the viewer saves a new version of your design.",
+    "swap_change": "Swapped the {slot} of block {block} to {module} in the 3D viewer.",
+    "swap_saved": "Saved as version {n}: block {block} {slot} is now {module}.",
+    "swap_failed": "The viewer's change was not saved: {reason}",
+    "swap_no_version": "There is no saved version to change yet; the demo model cannot be saved.",
+    "show_weights": "Show the weights",
+    "step_back": "Step back",
+    "step_next": "Step forward",
+    "scrub_label": "Snapshot {n} of {count}",
     "values_note": "Values in the viewer are placeholders until a run has recorded snapshots; the shape of the mask is exact.",
 }
 
@@ -641,6 +658,16 @@ PRETRAINING = {
     "schedule_desc": "A steady schedule means training can keep going for as long as you like, and runs of different lengths stay comparable at any point.",
     "add_queue": "Add to the queue",
     "queue_note": "Runs after the current job on this computer, or right away if nothing is running. Chat keeps version 4 until version 5 beats it on held-back text.",
+    "collection": "Recommended collection",
+    "collection_desc": "plain text to download, checked, then added to your sources",
+    "download_all": "Download all",
+    "download": "Download",
+    "import": "Add to my sources",
+    "state_not downloaded": "Not downloaded",
+    "state_downloading": "Downloading",
+    "state_downloaded": "Downloaded",
+    "state_imported": "In your sources",
+    "failed": "Could not finish: {error} Nothing was added; try again.",
 }
 
 FEEDBACK = {
@@ -825,6 +852,8 @@ YOURDATA = {
     "pick_row": "Select a row to read it in full.",
     "mark_good": "Mark Good",
     "discard": "Discard",
+    "edit": "Edit",
+    "edit_failed": "Could not save the edit: {why}",
     "dialog": "Your data",
     "ask_text": "Document text",
     "ask_prompt": "Prompt",

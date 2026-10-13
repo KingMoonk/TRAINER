@@ -25,6 +25,29 @@ COLORS = ("text", "violet", "amber", "blue", "pink", "sage")
 STEPS, WALL_SECONDS = 300, 120.  # ponytail: fixed length per run; make it a choice when the board has one
 
 
+AXES = (("steps", "axis_steps", "x_axis_steps", 0, 1), ("tokens", "axis_tokens", "x_axis_text", 2, 1), ("time", "axis_time", "x_axis_time", 3, 60.))
+
+
+def axis_points(points, axis):
+    """[(x, bpc)] on the chosen axis, or None when any point lacks it. Points are [step, bpc(, trained_tokens, elapsed_seconds)]."""
+    _key, _label, _title, col, div = next(a for a in AXES if a[0] == axis)
+    if any(len(p) <= col or p[col] is None for p in points):
+        return None
+    return [(p[col] / div, p[1]) for p in points]
+
+
+def axis_for(curves, axis):
+    """(axis actually used, missing): the asked-for axis if every arm's curve has it, else steps and the axis that was missing."""
+    if axis != "steps" and any(axis_points(points, axis) is None for points in curves):
+        return "steps", axis
+    return axis, None
+
+
+def arm_series(n, points, live):
+    """Style of one arm's line: the arm's colour; a seed still running is dashed, the finished mean of seeds is solid."""
+    return {"points": points, "color": COLORS[n % len(COLORS)], "width": 2 if live else 3, "dash": (6, 4) if live else None}
+
+
 def million(n):
     return f"{n / 1e6:.2f}M"
 
@@ -109,6 +132,10 @@ class ComparePage(Page):
         self.curves_title = Kicker(self.curves, "", bg="panel")
         self.curves_title.pack(anchor="w")
         tk_label(self.curves, T["curves_desc"], 13, "muted", "panel").pack(anchor="w")
+        self.x_axis, self.axis_note = "steps", tk_label(self.curves, "", 13, "amber", "panel", wraplength=720)
+        self.axes = Segmented(self.curves, [T[a[1]] for a in AXES], T["axis_steps"], self.pick_axis)
+        self.axes.pack(anchor="w", pady=(6, 0))
+        self.axis_note.pack(anchor="w")
         self.legend = tk.Frame(self.curves, bg=C["panel"])
         self.legend.pack(anchor="w", pady=6)
         self.plots = tk.Frame(self.curves, bg=C["panel"])
@@ -163,6 +190,10 @@ class ComparePage(Page):
         self.mode = next(m[0] for m in MODE_KEYS if T[m[1]] == label)
         self.update_plan()
 
+    def pick_axis(self, label):
+        self.x_axis = next(a[0] for a in AXES if T[a[1]] == label)
+        self.draw_curves()
+
     def label_for(self, row, plan, lr_on):
         if not row["variant"]:
             return "—"
@@ -193,11 +224,10 @@ class ComparePage(Page):
 
     # drawing ----------------------------------------------------------------
     def update_plan(self):
-        _key, _mode, note, axis = next(m for m in MODE_KEYS if m[0] == self.mode)
+        _key, _mode, note, _axis = next(m for m in MODE_KEYS if m[0] == self.mode)
         lr_on = self.retune.value
         self.mode_note.configure(text=T[note])
         self.seeds_note.configure(text=T["seeds_note"].format(lr_note=T["lr_note_on" if lr_on else "lr_note_off"]))
-        self.curves_title.configure(text=T["curves_title"].format(xAxis=T[axis]).upper())
         self.guess_label.configure(text=T["before_runs"])
         try:
             self.plan = ex.plan(self.experiment())
@@ -246,6 +276,12 @@ class ComparePage(Page):
         final = {v["variant"]: v for v in (self.results or {}).get("variants", [])}
         curves = {n: v["curve"] for n, v in final.items()} or {n: pts for n, (_seed, pts) in self.live.items()}
         self.hint.pack_forget() if curves else self.hint.pack(anchor="w")
+        live = not final
+        axis, missing = axis_for(curves.values(), self.x_axis)
+        title = next(a[2] for a in AXES if a[0] == axis)
+        self.curves_title.configure(text=T["curves_title"].format(xAxis=T[title]).upper())
+        self.axis_note.configure(text=T["axis_fallback"].format(what=T[next(a[1] for a in AXES if a[0] == missing)].lower()) if missing
+                                 else T["axis_fair"] if axis == "steps" else "")
         refs = [(k, v) for k, v in ((self.results or {}).get("references") or {}).items()]
         names = {"uniform": "uniform guess", "unigram": "counting word frequencies"}
         for n, points in sorted(curves.items()):
@@ -254,7 +290,7 @@ class ComparePage(Page):
             plot = BpcPlot(self.plots, 640, 140, 14)
             plot.pack(anchor="w", pady=4)
             spread = final.get(n)
-            plot.set(smooth=[tuple(p) for p in points], refs=[(names[k], v) for k, v in refs],
+            plot.set(series=[arm_series(n, axis_points(points, axis), live)], refs=[(names[k], v) for k, v in refs],
                      band=(spread["min"], spread["max"]) if spread and len(spread["bpc"]) > 1 else None)
 
     # queue ------------------------------------------------------------------
@@ -291,7 +327,7 @@ class ComparePage(Page):
         if payload.get("type") == "compare" and payload.get("phase") == "run":
             seed, points = self.live.get(payload["variant"], (payload["seed"], []))
             points = [] if seed != payload["seed"] else points
-            self.live[payload["variant"]] = (payload["seed"], (points + [(payload["step"], payload["bpc"])])[-400:])
+            self.live[payload["variant"]] = (payload["seed"], (points + [(payload["step"], payload["bpc"], payload.get("trained_tokens"), payload.get("elapsed_seconds"))])[-400:])
             self.status.configure(text=f"Running {letter}, seed {payload['seed']}: step {payload['step']} of {payload.get('total')}.")
             self.draw_curves()
         elif payload.get("type") == "compare" and payload.get("phase") == "sweep":

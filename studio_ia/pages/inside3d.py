@@ -4,13 +4,17 @@ All decisions (modes, zoom levels, what is sent to the viewer, labels, enabled s
 at the top so tests can use them without Tk. The page only draws them."""
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
+from tkinter import ttk
 
 from studio_ia.copy import INSIDE3D as T
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI
 from studio_ia.theme import GUTTER, tk_label
 from studio_ia.widgets import Card, Kicker, Segmented, button
+from studio_scene import SceneModel
+from studio_spec import upgrade
 
 # (id, label on this page, name the viewer uses): the viewer's MODES are 'Build', 'Train', 'Ride a token'
 MODES = (("build", T["build_mode"], "Build"), ("train", T["train_mode"], "Train"), ("ride", T["ride_mode"], "Ride a token"))
@@ -88,6 +92,40 @@ def viewer_view(status, has_version):
             "note": T["viewer_on"] if running else T["viewer_off"], "notes": notes}
 
 
+def swap_spec(spec, message):
+    """(new spec, block index, slot, entry) for the viewer's 'module_swap' message, checked the way the designer checks it.
+    Raises ValueError when the block id is not one of the spec's or the swap is invalid."""
+    try:
+        index = int(str(message["block_id"]).removeprefix("blk_"), 16)  # block ids are blk_<index in hex>
+        slot, entry = message["slot"], message["entry"]
+    except (KeyError, ValueError):
+        raise ValueError("the viewer sent an unreadable change") from None
+    scene = SceneModel(copy.deepcopy(upgrade(spec)))
+    scene.swap(index, slot, entry)
+    return scene.spec, index, slot, entry
+
+
+def save_swap(services, message):
+    """Save the viewer's module swap as a new version. Returns (the sentence to show, the spec to send back or None)."""
+    version = services.current_version()
+    if version is None:
+        return T["swap_no_version"], None
+    try:
+        spec, index, slot, entry = swap_spec(version.spec, message)
+    except ValueError as error:
+        return T["swap_failed"].format(reason=error), None
+    args = {"slot": slot, "block": index + 1, "module": entry["id"]}
+    saved = services.save_version(spec, T["swap_change"].format(**args))
+    return T["swap_saved"].format(n=saved.number, **args), spec
+
+
+def stats_message(payload):
+    """The compact snapshot the viewer shows while a job trains, from a 'train' queue event; None for other events."""
+    if not isinstance(payload, dict) or payload.get("step") is None or payload.get("loss") is None:
+        return None
+    return {"type": "stats", **{k: payload.get(k) for k in ("step", "total", "loss", "lr", "tokens_per_second")}}
+
+
 def status_of(services):
     try:
         return services.viewer_status()
@@ -104,6 +142,7 @@ class Inside3DPage(Page):
         super().__init__(*args, **kw)
         self.scene = SceneState()
         self._poll = None
+        self._scrubbing = False  # True while the viewer's own position moves the slider
         self._build()
         self.bind("<Destroy>", self._cancel_poll, add="+")
 
@@ -129,6 +168,27 @@ class Inside3DPage(Page):
         self.levels.pack(anchor="w")
         self.scale_label = tk_label(pick, "", 13, "muted", "panel")
         self.scale_label.pack(anchor="w", pady=(6, 0))
+
+        self.moves = Card(self.body)
+        self.moves.pack(fill="x", pady=(GUTTER, 0))
+        Kicker(self.moves, T["step_through"], bg="panel").pack(anchor="w", pady=(0, 6))
+        self.move_buttons = [
+            button(self.moves, T["step_back"], lambda: self.send_view({"type": "step", "delta": -1})),
+            button(self.moves, T["step_next"], lambda: self.send_view({"type": "step", "delta": 1})),
+            button(self.moves, T["step_action_1"], lambda: self.send_view({"type": "step", "stage": "scores"})),
+            button(self.moves, T["step_action_2"], lambda: self.send_view({"type": "step", "stage": "values"})),
+            button(self.moves, T["show_weights"], lambda: self.send_view({"type": "show", "what": "weight"})),
+            button(self.moves, T["weights_action_1"], lambda: self.send_view({"type": "show", "what": "gradient"})),
+            button(self.moves, T["weights_action_2"], lambda: self.send_view({"type": "show", "what": "update"})),
+        ]
+        for b in self.move_buttons:
+            b.pack(anchor="w", pady=2)
+        self.scrub_label = tk_label(self.moves, "", 13, "muted", "panel")
+        self.scrub_label.pack(anchor="w", pady=(8, 0))
+        self.scrubber = ttk.Scale(self.moves, from_=0, to=0, command=self._scrub)
+        self.scrubber.pack(fill="x")
+        self.move_note = tk_label(self.moves, "", 13, "muted", "panel", wraplength=760)
+        self.move_note.pack(anchor="w", pady=(6, 0))
 
         self.hud_card = Card(self.body)
         self.hud_card.pack(fill="x", pady=(GUTTER, 0))
@@ -160,6 +220,8 @@ class Inside3DPage(Page):
     def _paint(self):
         view = viewer_view(status_of(self.services), self.has_version())
         self.launch.configure(text=view["button"], state="normal" if view["enabled"] else "disabled")
+        for b in self.move_buttons:
+            b.configure(state="normal" if view["scene_enabled"] else "disabled")
         self.note.configure(text=view["note"])
         self.notes_box.configure(text="\n".join(view["notes"]))
         sc = self.scene
@@ -191,9 +253,36 @@ class Inside3DPage(Page):
         self._paint()
         self._tick()
 
-    def _send_scene(self):
+    def send_view(self, message):
         if (status_of(self.services) or {}).get("running"):
-            self.services.viewer_send({"type": "scene", **self.scene.message()})
+            self.services.viewer_send(message)
+
+    def _send_scene(self):
+        self.send_view({"type": "scene", **self.scene.message()})
+
+    def _scrub(self, value):
+        if not self._scrubbing:
+            self.send_view({"type": "scrub", "index": round(float(value))})
+
+    def on_event(self, kind, payload):
+        """Training progress goes to the viewer as one compact 'stats' message (the link keeps only the latest)."""
+        message = stats_message(payload) if kind == "train" else None
+        if message:
+            self.send_view(message)
+
+    def _from_viewer(self, message):
+        kind = message.get("type") if isinstance(message, dict) else None
+        if kind == "module_swap":
+            text, spec = save_swap(self.services, message)
+            self.move_note.configure(text=text)
+            if spec is not None:
+                self.send_view({"type": "spec", "spec": spec, "selected": message.get("block_id")})
+        elif kind == "replay_state":
+            self._scrubbing = True
+            self.scrubber.configure(to=max(0, message["count"] - 1))
+            self.scrubber.set(message["index"])
+            self.scrub_label.configure(text=T["scrub_label"].format(n=message["index"] + 1, count=message["count"]))
+            self._scrubbing = False
 
     def pick_mode(self, label):
         self.scene.mode = label_to_id(MODES, label)
@@ -214,9 +303,11 @@ class Inside3DPage(Page):
         status = status_of(self.services) or {}
         if status.get("running"):
             try:
-                self.services.viewer_poll()  # ponytail: drained, not mirrored; the viewer's selection stays its own
+                messages = self.services.viewer_poll()  # the viewer's own selection stays its own; only swaps and the replay position are read
             except NotImplementedError:
                 return
+            for message in messages:
+                self._from_viewer(message)
             self._poll = self.after(1000, self._tick)
         elif self.launch.cget("text") == T["close_viewer"]:
             self._paint()  # the viewer window was closed from its own side

@@ -67,6 +67,45 @@ class Inside3DLogic(unittest.TestCase):
         self.assertEqual(svc.viewer_log[0][1], {"level": "Window", "mode": "Train"})
         self.assertFalse(svc.viewer_status()["running"])
 
+    def _version(self, svc):
+        from studio_spec import default_spec, validate_spec
+        spec = default_spec()
+        spec["dims"].update(d_model=16, n_layer=3, n_ctx=64, dropout=0.)
+        return svc.save_version(validate_spec(spec), "first")
+
+    def test_module_swap_saves_a_new_version(self):
+        svc = FakeServices()
+        text, spec = p.save_swap(svc, {"type": "module_swap", "block_id": "blk_000001", "slot": "mixer", "entry": {"id": "gru"}})
+        self.assertIn("version", text.lower())
+        self.assertEqual(spec, None)  # nothing to swap in: no version yet
+        first = self._version(svc)
+        text, spec = p.save_swap(svc, {"type": "module_swap", "block_id": "blk_000001", "slot": "mixer", "entry": {"id": "gru"}})
+        self.assertEqual(len(svc.versions()), 2)
+        saved = svc.current_version()
+        self.assertNotEqual(saved.spec, first.spec)
+        self.assertEqual(saved.spec["blocks"][0]["mixer"]["id"], "gru")
+        self.assertEqual(saved.spec["blocks"][0]["index"], 1)
+        self.assertEqual(spec, saved.spec)
+        self.assertIn("block 2", saved.change)
+        self.assertIn("Saved as version 2", text)
+
+    def test_bad_swap_saves_nothing(self):
+        svc = FakeServices()
+        self._version(svc)
+        for message in ({"block_id": "blk_000063", "slot": "mixer", "entry": {"id": "gru"}},
+                        {"block_id": "blk_000000", "slot": "mixer", "entry": {"id": "nope"}},
+                        {"block_id": "oops", "slot": "mixer", "entry": {"id": "gru"}}, {}):
+            text, spec = p.save_swap(svc, message)
+            self.assertIsNone(spec)
+            self.assertIn("not saved", text)
+        self.assertEqual(len(svc.versions()), 1)
+
+    def test_train_events_become_compact_stats(self):
+        self.assertEqual(p.stats_message({"job": "j", "step": 5, "total": 9, "loss": 1.5, "lr": 1e-3, "tokens_per_second": 900, "extra": 1}),
+                         {"type": "stats", "step": 5, "total": 9, "loss": 1.5, "lr": 1e-3, "tokens_per_second": 900})
+        self.assertIsNone(p.stats_message({"type": "heat"}))
+        self.assertIsNone(p.stats_message(None))
+
 
 if __name__ == "__main__":
     unittest.main()

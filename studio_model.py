@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
     "batch_size": 4, "accumulation": 1, "steps": 300, "learning_rate": 0.001,
     "weight_decay": 0.01, "warmup": 20, "eval_every": 25, "validation": 0.1,
     "seed": 42, "objective": "assistant", "windowing": "anchored", "device": "auto", "architecture": None,
+    "sample_every": 4, "sample_prompt": "The ",  # run page: a greedy sample of the prompt every N evaluation intervals (0 = off)
 }
 # Why these defaults: a character vocabulary over mixed datasets reaches thousands of symbols (hundreds of
 # thousands of embedding parameters, up to 8% unknown characters across datasets); bytes cost ~13% more
@@ -91,7 +92,7 @@ def validate_config(config):
     model_spec_given = is_model_spec(spec)
     structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 1024), ("expansion", 1, 8)]
     for key, low, high in structural + [("batch_size", 1, 128), ("accumulation", 1, 64),
-                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647)]:
+                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647), ("sample_every", 0, 100000)]:
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
@@ -681,13 +682,14 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     budget_reason = None
     detector_state = set()
     rate = cfg["learning_rate"]
+    first_step, planned = step, cfg["steps"]
     last_report = 0.
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
             if loss is not None:
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": 0., "lr": cfg["learning_rate"], "grad_norm": 0.})
-        while step < cfg["steps"] and not stop.is_set():
+        while step < planned and not stop.is_set():
             if token_budget is not None and trained_tokens >= token_budget:
                 budget_reason = "tokens"
                 break
@@ -700,8 +702,17 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 break
             tick = time.monotonic()
             next_step = step + 1
+            if step - first_step >= 2 and (wall_seconds is not None or token_budget is not None):
+                # A budget would cut the run off wherever it falls, usually in the steady phase. Instead re-plan the total from
+                # the measured pace (the run's elapsed time or tokens per step so far) so the schedule's cool-down ends exactly there.
+                left = [cfg["steps"] - step]
+                if wall_seconds is not None:
+                    left.append((wall_seconds - (tick - started)) * (step - first_step) / max(1e-9, tick - started))
+                if token_budget is not None:
+                    left.append((token_budget - trained_tokens) * (step - first_step) / max(1, trained_tokens))
+                planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
-            rate = schedule.rate(next_step, cfg["steps"], cfg["learning_rate"])
+            rate = schedule.rate(next_step, planned, cfg["learning_rate"])
             model.zero_grad()
             loss, token_count = 0., 0
             sample_telemetry = bool(telemetry_every) and (next_step == 1 or next_step % telemetry_every == 0)
@@ -721,7 +732,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             trained_tokens += token_count
             model.backend.synchronize()
             speed = token_count / max(.001, time.monotonic() - tick)
-            validation_loss = evaluate(val_samples) if step % cfg["eval_every"] == 0 or step == cfg["steps"] else None
+            validation_loss = evaluate(val_samples) if step % cfg["eval_every"] == 0 or step >= planned else None
             if snapshot_due:
                 from studio_snapshot import capture, save as save_snapshot
                 probe_ids, _ = batch_arrays(train_samples[:min(2, len(train_samples))])
@@ -732,20 +743,27 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 detector_state = active
                 path = save_snapshot(directory, snapshot, keep=snapshot_keep)
                 emit({"type": "viz_snapshot", "step": step, "path": str(path), "markers": snapshot["markers"]})
-            due = step == 1 or step % 5 == 0 or validation_loss is not None or step == cfg["steps"] or time.monotonic() - last_report >= 1.
+            due = step == 1 or step % 5 == 0 or validation_loss is not None or step >= planned or time.monotonic() - last_report >= 1.
             if due:
                 last_report = time.monotonic()
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
                         "trained_tokens": trained_tokens, "elapsed_seconds": time.monotonic() - started})
             if payload:
                 emit({"type": "telemetry", "step": step, "total": cfg["steps"], "loss": loss, "lr": rate, **payload})
-            if step % cfg["eval_every"] == 0 or step == cfg["steps"]:
+            if step % cfg["eval_every"] == 0 or step >= planned:
                 score = validation_loss if validation_loss is not None else evaluate(train_samples)  # no held-out windows: fixed training windows, not one random batch
                 if score is not None and score < best:
                     best = score
                     save("best.npz")
                 record["best_loss"] = best
                 save("last.npz")
+                if cfg["sample_every"] and (step >= planned or step // cfg["eval_every"] % cfg["sample_every"] == 0):
+                    text = complete(model, tokenizer, cfg["sample_prompt"])  # what the model writes now, from the weights in memory
+                    with (directory / "samples.jsonl").open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({"step": step, "text": text, "prompt": cfg["sample_prompt"]}) + "\n")
+                    emit({"type": "sample", "step": step, "text": text, "prompt": cfg["sample_prompt"]})
+        if step < cfg["steps"] and not (budget_reason or stop.is_set()):
+            budget_reason = "wall-clock" if wall_seconds is not None else "tokens"  # the re-planned cool-down finished
         if budget_reason and not stop.is_set():
             final_loss, final_validation = evaluate(train_samples), evaluate(val_samples)
             if final_loss is not None:
@@ -764,6 +782,21 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise
 
 
+def complete(model, tokenizer, prompt, max_tokens=48):
+    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
+    tokens, result = [BOS] + tokenizer.encode(prompt), []
+    with torch.no_grad():
+        for _ in range(max_tokens):
+            logits = model.backend.to_cpu(model.forward(np.array([tokens[-model.dims.n_ctx:]], dtype=np.int64))[0, -1]).astype(np.float64)
+            logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
+            token = int(logits.argmax())
+            if token == EOS:
+                break
+            result.append(token)
+            tokens.append(token)
+    return tokenizer.decode(result)
+
+
 class LocalModel:
     def __init__(self, path, seed=42, device="auto"):
         data = load_checkpoint(path)
@@ -774,6 +807,9 @@ class LocalModel:
         self.model.load_weights(data["model"])
         self.rng = np.random.default_rng(seed)
         self.step = data["step"]
+
+    def complete(self, prompt, max_tokens=48):
+        return complete(self.model, self.tokenizer, prompt, max_tokens)
 
     def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
         tokens = [BOS]

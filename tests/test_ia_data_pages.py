@@ -40,14 +40,17 @@ class YourDataLogicTest(unittest.TestCase):
     def test_collect_fields(self):
         said = []
         answers = iter(["Reverse: abc", "reverse"])
-        self.assertEqual(yd.collect_fields("problems", lambda _t: next(answers), said.append), {"prompt": "Reverse: abc", "rule": "reverse"})
+        self.assertEqual(yd.collect_fields("problems", lambda _t, _i='': next(answers), said.append), {"prompt": "Reverse: abc", "rule": "reverse"})
         answers = iter(["Reverse: abc", "poetry"])
-        self.assertIsNone(yd.collect_fields("problems", lambda _t: next(answers), said.append))
+        self.assertIsNone(yd.collect_fields("problems", lambda _t, _i='': next(answers), said.append))
         self.assertEqual(len(said), 1)
-        self.assertIsNone(yd.collect_fields("text", lambda _t: "   ", said.append))
-        self.assertIsNone(yd.collect_fields("conversations", lambda _t: None, said.append))
+        self.assertIsNone(yd.collect_fields("text", lambda _t, _i='': "   ", said.append))
+        self.assertIsNone(yd.collect_fields("conversations", lambda _t, _i='': None, said.append))
         answers = iter(["Hi", "Hello"])
-        self.assertEqual(yd.collect_fields("conversations", lambda _t: next(answers), said.append), {"user": "Hi", "assistant": "Hello"})
+        self.assertEqual(yd.collect_fields("conversations", lambda _t, _i='': next(answers), said.append), {"user": "Hi", "assistant": "Hello"})
+        shown = []
+        yd.collect_fields("problems", lambda t, i='': shown.append(i) or "reverse", said.append, {"prompt": "Reverse: abc", "rule": "reverse"})
+        self.assertEqual(shown, ["Reverse: abc", "reverse"])
 
     def test_every_tab_has_its_board_copy(self):
         for k in yd.KINDS:
@@ -124,6 +127,18 @@ class FakeServicesDataTest(unittest.TestCase):
         self.assertFalse(self.svc.add_data("conversations", {"user": "x", "assistant": "y"}))
         self.assertFalse(self.svc.add_data("text", {"text": " "}))
 
+    def test_edit_data_updates_the_row_and_refuses_empty_or_duplicate(self):
+        self.assertEqual(self.svc.data_fields("c1"), {"user": "Name a prime.", "assistant": "7 is a prime number."})
+        self.svc.edit_data("c1", {"user": "Name a prime.", "assistant": "11 is a prime number."})
+        self.assertEqual(self.svc.edits[-1][0], "c1")
+        self.assertEqual(self.svc.data("conversations", "11 is").rows[0]["id"], "c1")
+        with self.assertRaises(ValueError):
+            self.svc.edit_data("c1", {"user": "Say hello.", "assistant": "Hello there."})
+        with self.assertRaises(ValueError):
+            self.svc.edit_data("c1", {"user": " ", "assistant": "x"})
+        self.svc.edit_data("c2", {"user": "Say hello.", "assistant": "Hi."})
+        self.assertEqual(self.svc.data("conversations", "Hi.").rows[0]["status"], "Review")
+
 
 class WorkspaceServicesDataTest(unittest.TestCase):
     def setUp(self):
@@ -165,6 +180,42 @@ class WorkspaceServicesDataTest(unittest.TestCase):
         ds = ws.create_dataset("Generated prose")
         ws.add(ds, [{"text": "A paragraph about tides.", "quality": "Review", "synthetic": True}], "synthetic")
         self.assertEqual(self.svc.data("text").rows[0]["status"], "Review")
+
+    def test_edit_data_per_kind(self):
+        self.svc.add_data("text", {"text": "The tide came in."})
+        self.svc.add_data("conversations", {"user": "Hi", "assistant": "Hello"})
+        self.svc.add_data("problems", {"prompt": "Reverse: abc", "rule": "reverse"})
+        ids = {k: self.svc.data(k).rows[0]["id"] for k in yd.KINDS}
+        self.assertEqual(self.svc.data_fields(ids["text"]), {"text": "The tide came in."})
+        self.svc.edit_data(ids["text"], {"text": "The tide went out."})
+        self.svc.edit_data(ids["conversations"], {"user": "Hey", "assistant": "Hello there"})
+        self.assertEqual(self.svc.data_fields(ids["text"]), {"text": "The tide went out."})
+        self.assertEqual(self.svc.data_fields(ids["conversations"]), {"user": "Hey", "assistant": "Hello there"})
+        self.assertEqual(self.svc.data_fields(ids["problems"]), {"prompt": "Reverse: abc", "rule": "reverse"})
+        self.assertEqual({k: self.svc.data(k).count for k in yd.KINDS}, {"text": 1, "conversations": 1, "problems": 1})
+        with self.assertRaises(ValueError):
+            self.svc.edit_data(ids["conversations"], {"user": " ", "assistant": "x"})
+
+    def test_edit_problem_must_still_pass_its_rule(self):
+        self.svc.add_data("problems", {"prompt": "Reverse: abc", "rule": "reverse"})
+        self.svc.generate_problems("reverse", 1, rng=random.Random(1))
+        row = next(r for r in self.svc.data("problems").rows if r["a"] != "Reverse: abc")
+        word = row["a"].split(": ")[1]
+        self.svc.edit_data(row["id"], {"prompt": f"Reverse: {word}", "rule": "reverse"})  # unchanged prompt still passes
+        with self.assertRaises(ValueError) as caught:
+            self.svc.edit_data(row["id"], {"prompt": "Reverse: zzzzq", "rule": "reverse"})
+        self.assertIn("reverse", str(caught.exception))
+        self.assertEqual(self.svc.data_fields(row["id"])["prompt"], f"Reverse: {word}")
+
+    def test_edited_draft_stays_a_draft_until_marked_good(self):
+        ws = self.svc.workspace
+        ws.add(ws.create_dataset("Rewritten conversations"), [{"user": "a", "assistant": "b", "quality": "Review", "synthetic": True}], "synthetic")
+        row = self.svc.data("conversations").rows[0]
+        self.svc.edit_data(row["id"], {"user": "a2", "assistant": "b2"})
+        edited = self.svc.data("conversations").rows[0]
+        self.assertEqual((edited["a"], edited["status"], self.svc.draft_count()), ("a2", "Review", 1))
+        self.svc.review_data(edited["id"], True)
+        self.assertEqual((self.svc.data("conversations").rows[0]["status"], self.svc.draft_count()), ("Good", 0))
 
 
 if __name__ == "__main__":

@@ -8,9 +8,9 @@ from studio_model import AdamW, ScratchTransformer, validate_config
 from tests import legacy_gpt
 from tests.torchcheck import to_np
 
-BASE = {"width": 32, "layers": 2, "heads": 4, "context": 32, "expansion": 4, "dropout": .1, "batch_size": 4,
+BASE = {"width": 32, "layers": 2, "heads": 4, "context": 32, "expansion": 4, "dropout": 0., "batch_size": 4,
         "seed": 7, "device": "cpu", "learning_rate": .003}
-HYBRID = {"format": "groundwork-arch/1", "name": "hybrid", "embedding": {"tokenizer": "byte", "width": 32, "context": 32, "dropout": .1},
+HYBRID = {"format": "groundwork-arch/1", "name": "hybrid", "embedding": {"tokenizer": "byte", "width": 32, "context": 32, "dropout": 0.},
           "blocks": [{"id": "blk_aaaaaa", "attention": {"enabled": True, "heads": 2}, "mlp": {"enabled": True, "expansion": 2, "layers": 2, "activation": "relu"}},
                      {"id": "blk_bbbbbb", "attention": {"enabled": True, "heads": 4}, "mlp": {"enabled": False}},
                      {"id": "blk_cccccc", "attention": {"enabled": False}, "mlp": {"enabled": True, "expansion": 4, "layers": 1, "activation": "gelu"}}]}

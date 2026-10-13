@@ -44,6 +44,20 @@ def pretrain_config(spec, steps, rows, hold):
     return {**config_from_spec(spec), "steps": steps, "batch_size": rows, "validation": hold, "objective": "all"}
 
 
+def source_action(row):
+    """(button label, service to call) for a collection row; (None, None) while it works or once it is in your sources."""
+    return {"not downloaded": (T["download"], "download"), "downloaded": (T["import"], "import")}.get(row["state"], (None, None))
+
+
+def source_status(row, note=""):
+    """The plain-words line under a collection row: a failure first, then live progress, then the state."""
+    if row.get("error"):
+        return T["failed"].format(error=row["error"].rstrip(".") + ".")
+    if row["state"] == "downloading":
+        return note or T["state_downloading"]
+    return T["state_" + row["state"]]
+
+
 def sets_of(summary):
     return (summary["sets"] if isinstance(summary, dict) else summary.sets) or []
 
@@ -55,7 +69,7 @@ class PretrainingPage(Page):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.use, self.mode = {}, "catch_up"
-        self.preview = {}
+        self.preview, self.notes = {}, {}  # notes: latest progress line per source being fetched
         self.build()
 
     def build(self):
@@ -78,6 +92,10 @@ class PretrainingPage(Page):
         tk_label(row, T["text_only"] + " ", 13, "muted", "panel").pack(side="left")
         self._link(row, T["post_training_r1"], "post_training").pack(side="left")
         tk_label(row, T["post_training_r1_end"], 13, "muted", "panel").pack(side="left")
+        # recommended collection
+        self.collection_card = self._card(T["collection"], T["collection_desc"])
+        self.collection_rows = tk.Frame(self.collection_card, bg=C["panel"])
+        self.collection_rows.pack(fill="x")
         # enough text
         card = self._card(T["enough_text"])
         self.enough = tk_label(card, "", 17, "text", "panel", font=font(17, bold=True))
@@ -206,6 +224,41 @@ class PretrainingPage(Page):
         self.preview = self._preview()
         self.update_numbers()
         self.paint_modes(v, parent)
+        self.paint_collection()
+
+    def paint_collection(self):
+        try:
+            rows = self.services.collection()
+        except NotImplementedError:
+            rows = []
+        for child in self.collection_rows.winfo_children():
+            child.destroy()
+        for row in rows:
+            line = tk.Frame(self.collection_rows, bg=C["panel"])
+            line.pack(fill="x", pady=3)
+            tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
+            tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
+            label, action = source_action(row)
+            if action:
+                button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
+            tk_label(self.collection_rows, source_status(row, self.notes.get(row["id"], "")), 12,
+                     "coral" if row.get("error") else "muted", "panel", wraplength=720).pack(anchor="w")
+        if any(source_action(r)[1] == "download" for r in rows):
+            button(self.collection_rows, T["download_all"], lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
+
+    def fetch(self, source_id, action):
+        """Start a background download (all sources when source_id is None) or import; events repaint the card."""
+        started = self.services.download_sources(None if source_id is None else [source_id]) if action == "download" \
+            else self.services.import_source(source_id)
+        if started:
+            self.refresh()
+
+    def on_event(self, kind, payload):
+        if kind == "download":
+            self.notes[payload["id"]] = payload["text"]
+            self.paint_collection()
+        elif kind in ("download_done", "import_done", "download_failed"):
+            self.refresh()
 
     def toggle(self, dataset_id):
         self.use[dataset_id] = not self.use.get(dataset_id)

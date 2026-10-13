@@ -56,7 +56,7 @@ Use the `.venv` interpreter in PyCharm. Python must include Tkinter (included wi
 
 ## GPU acceleration
 
-Choose **Model blueprint → Compute device**:
+The `device` setting of a design (and `train.py --device`) chooses where training runs:
 
 - `auto` (default): use a CUDA GPU, else an Apple GPU (Metal), when a small calculation check passes; otherwise the CPU, with the reason shown. Small models stay on the CPU because kernel launches cost more than the arithmetic.
 - `cuda` / `mps`: require that device. If it is unavailable, report the error instead of silently changing devices.
@@ -64,7 +64,7 @@ Choose **Model blueprint → Compute device**:
 
 float64 precision is not available on Apple GPUs; such runs fall back to the CPU.
 
-Chat has a separate **Inference device** selector. For chat, reload the checkpoint after changing this setting. The model status and training log show the actual device. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
+Chat answers on the CPU. Resuming a run uses the currently selected training device, so CPU checkpoints can continue on GPU and vice versa.
 
 For a machine with an NVIDIA driver and CUDA 13 toolkit already installed:
 
@@ -79,10 +79,14 @@ Weights, activations and optimizer state stay on the GPU during GPU training. In
 
 ## Workflow
 
-1. **Dataset library:** create a dataset, choose one or multiple files with **Import files**, or write examples manually. JSONL, JSON, CSV, TSV, tagged TXT and plain text are supported. Pandas parses tables and computes dataset statistics. Edit prompt/response pairs, full conversations or raw text; mark examples reviewed; export JSONL or CSV. Exact content duplicates are skipped. Existing workspace datasets are retained.
-2. **Model blueprint:** use the guided setup to choose data, tokenizer, dimensions, training settings and objective. **Network → Design** edits a canonical ModelSpec; **Sandbox** swaps registry modules and their settings, while **Variants** compares named presets and estimates. Incompatible modules show why they are unavailable. These presets describe architectures and do not include pretrained weights.
-3. **Training console:** view actual training and validation loss, token throughput and optimizer steps. Pause, stop and save, inspect saved runs, resume checkpoints or export a complete run ZIP. Training runs on a worker thread so the UI stays responsive.
-4. **Playground:** load a `.npz` checkpoint and sample with temperature, top-k and response-length controls. Use **This reply is wrong** to send the conversation to Improve with feedback, where you pick a better reply or write the right one; an answer you write is also saved to the selected dataset.
+The window has four areas in the sidebar and a machine strip under them.
+
+1. **Network designer:** change the model picture and see what it costs. **Quick test** tries a design idea for a few minutes on a tiny dataset before you save it. **Compare runs** changes one thing, holds the rest equal and runs several seeds; a difference counts only when it is larger than the spread across seeds. **Look inside** opens Trace a position, Inside a head, Value map, Loss, Head lab and the 3D view.
+2. **Pretraining:** feed the model text; it learns by predicting the next character or token. **Your data** holds three kinds (text, conversations and checkable problems), because each trains a different stage. **Make extra data** generates more and keeps what passes review. A run's page shows step, schedule phase and error so far.
+3. **Post-training:** four rounds, always in the same order, on the same design; only the weights change.
+4. **Chat:** talk to any trained version, or compare two side by side. Chat moves to a newer version only when its held-back score beats the current one by more than the measured noise band.
+
+**This computer** (the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
@@ -99,9 +103,9 @@ This is a small-model experimentation studio. Training from scratch is suited to
 
 ## Network engine and inspection services
 
-The modular network engine represents a design as a validated, JSON-serializable `ModelSpec`. Its slots describe the tokenizer, embedding, position method, block norm/token mixer/channel mixer, output head, objective, optimizer, learning-rate schedule, initializer and precision. The compiler builds the residual-block template from that spec; registry metadata supplies module configuration fields, compatibility requirements, hooks and parameter/compute estimates. New modules live one per file under `studio_modules/<slot>/` and register themselves. The Network page now includes **Design**, **Sandbox**, **Variants**, **Experiments**, **Trace a token**, **Inside a head**, **Value map**, **Loss**, **Head lab**, **3D** and **Versions** tabs. Sandbox controls come from registry metadata; incompatible choices show their reason, and inspection controls are disabled when the selected block lacks required hooks.
+The modular network engine represents a design as a validated, JSON-serializable `ModelSpec`. Its slots describe the tokenizer, embedding, position method, block norm/token mixer/channel mixer, output head, objective, optimizer, learning-rate schedule, initializer and precision. The compiler builds the residual-block template from that spec; registry metadata supplies module configuration fields, compatibility requirements, hooks and parameter/compute estimates. New modules live one per file under `studio_modules/<slot>/` and register themselves. Designer controls come from registry metadata; incompatible choices show their reason, and inspection controls are disabled when the selected block lacks required hooks.
 
-The inspection tabs read saved checkpoints and report measured values: token attention and intermediate predictions, a head's scores and probabilities, value/output projection summaries, selected-token loss and gradient, and head ablation statistics. **Versions** manages architecture revisions, checkpoint weights and backups. These views describe the selected checkpoint; they do not explain a head's behavior beyond the measured quantities shown.
+The Look inside pages read saved checkpoints and report measured values: token attention and intermediate predictions, a head's scores and probabilities, value/output projection summaries, selected-token loss and gradient, and head ablation statistics. These views describe the selected checkpoint; they do not explain a head's behavior beyond the measured quantities shown.
 
 `Experiments` runs paired seeds and can hold tokens, estimated parameters, estimated compute or wall-clock time equal. It records width adjustments, achieved budgets and run metrics. Network training saves a snapshot every 50 steps; only the newest 20 snapshots per run are kept by default (`snapshot_keep`). Each snapshot includes full model weights and gradients, plus full updates when available. The 3D viewer is a separate window with five levels: Run, Model, Window, Head and Weights. Its menus choose level and Build/Train/Ride a token mode. Mouse drag orbits the camera, the wheel zooms between levels, and WASD/Q/E pans. Model shows binned attention and stream norms; Window and Head display at most 32 tokens. Replay controls play, pause and scrub saved snapshots; **1 real step** runs one optimizer step on a private copy from a checkpoint. At Weights, select weight/gradient/update and a matrix; keyboard `+`/`-` changes a weight by a small amount and saves a new checkpoint version.
 

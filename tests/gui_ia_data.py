@@ -78,6 +78,19 @@ class DataPagesTest(unittest.TestCase):
         page.go.invoke()
         self.assertIn("No local model", page.status.cget("text"))
 
+    def test_edit_button_shows_for_a_selected_row_and_saves(self):
+        page = self.app.show("your_data")
+        self.assertFalse(page.edit_button.winfo_ismapped())
+        page.table.selection_set("c1")
+        page.table.event_generate("<<TreeviewSelect>>")
+        self.app.update()
+        self.assertEqual(page.edit_button.cget("text"), Y["edit"])
+        self.assertTrue(page.edit_button.winfo_ismapped())
+        answers = iter(["Name a prime.", "11 is a prime number."])
+        page._ask = lambda _prompt, initial="": next(answers)
+        page.edit_button.invoke()
+        self.assertEqual(self.fake.edits[-1], ("c1", {"user": "Name a prime.", "assistant": "11 is a prime number."}))
+
     def test_navigation_carries_the_kind(self):
         page = self.app.show("your_data")
         self.click(find(page, Y["text_tab"]))

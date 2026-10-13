@@ -50,6 +50,22 @@ assert "block" not in link.sent[0], f"module_swap message should not contain 'bl
 assert len(app.ids) == 4
 # invalid head values are skipped: width 64 has no divisor between 8 and 16 except 16
 assert sb.valid_heads(64, 8, 1) == 16 and sb.valid_heads(48, 4, 1) == 6 and sb.valid_heads(64, 16, 1) is None
+# page -> viewer: step the head's forward pass, jump the scrubber, show gradients, feed training stats
+app.set_level("Head")
+app.handle_message({"type": "step", "delta": 1})
+assert app.head_stage == "values", app.head_stage
+app.handle_message({"type": "step", "stage": "scores"})
+assert app.head_stage == "scores"
+app.handle_message({"type": "show", "what": "gradient"})
+assert app.weight_kind == "gradient"
+app.handle_message({"type": "stats", "step": 7, "total": 10, "loss": 1.5, "lr": 1e-3})
+assert "step 7/10" in app.hud["text"] and "loss 1.5000" in app.hud["text"], app.hud["text"]
+app.snapshot_paths = ["a", "b", "c"]
+reads = []
+app.read_snapshot = reads.append
+app.handle_message({"type": "scrub", "index": 9})
+assert reads == ["c"] and app.snapshot_index == 2 and link.sent[-1] == {"type": "replay_state", "index": 2, "count": 3}, link.sent[-1]
+app.set_level("Model")
 # block count change re-frames the column but keeps the orbit angle and pitch
 cam = (app.cam_h, app.cam_p)
 spec2 = sb.sample_spec(5)

@@ -20,7 +20,7 @@ from tests.torchcheck import to_np
 EXAMPLES = [{"text": f"Counting up from {number}: {number}, {number + 1}, {number + 2}."}
             for number in range(8)]
 CONFIG = {"width": 16, "layers": 1, "heads": 2, "context": 32, "expansion": 2,
-          "dropout": .2, "batch_size": 2, "accumulation": 2, "steps": 3,
+          "dropout": 0., "batch_size": 2, "accumulation": 2, "steps": 3,
           "learning_rate": .003, "weight_decay": .01, "warmup": 0, "validation": 0,
           "eval_every": 3, "seed": 19, "objective": "all", "device": "cpu"}
 

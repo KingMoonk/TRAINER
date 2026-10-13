@@ -1,6 +1,6 @@
 """Your data: three tabs (text, conversations, problems) with counts, search, a table with STATUS, review and actions.
 
-Reads and writes only through services (data, add_data, import_data, review_data). Decision logic is in plain
+Reads and writes only through services (data, add_data, edit_data, import_data, review_data). Decision logic is in plain
 functions at the top so it runs without Tk.
 """
 from __future__ import annotations
@@ -43,20 +43,22 @@ def parse_rule(text):
     return next((k for k in rules.RULES if word in (k, k.replace("_", " "), rules.LABELS[k].casefold())), None)
 
 
-def collect_fields(kind, ask, say):
-    """Ask for the fields of one new item. ask(prompt) -> str | None; say(message) reports a problem. None = cancelled."""
+def collect_fields(kind, ask, say, initial=None):
+    """Ask for the fields of one item (initial = its current fields when editing). ask(prompt, initial) -> str | None;
+    say(message) reports a problem. None = cancelled."""
+    was = initial or {}
     if kind == "text":
-        text = ask(T["ask_text"])
+        text = ask(T["ask_text"], was.get("text", ""))
         return {"text": text} if text and text.strip() else None
     if kind == "conversations":
-        prompt = ask(T["ask_prompt"])
-        answer = ask(T["ask_answer"]) if prompt else None
+        prompt = ask(T["ask_prompt"], was.get("user", ""))
+        answer = ask(T["ask_answer"], was.get("assistant", "")) if prompt else None
         return {"user": prompt, "assistant": answer} if prompt and answer else None
-    prompt = ask(T["ask_problem"])
+    prompt = ask(T["ask_problem"], was.get("prompt", ""))
     if not prompt:
         return None
     names = ", ".join(rules.RULES)
-    rule = parse_rule(ask(T["ask_rule"].format(rules=names)))
+    rule = parse_rule(ask(T["ask_rule"].format(rules=names), was.get("rule", "")))
     if rule is None:
         say(T["unknown_rule"].format(rules=names))
         return None
@@ -122,6 +124,7 @@ class YourDataPage(Page):
         self.review_row = tk.Frame(self.detail, bg=C["panel"])
         ttk.Button(self.review_row, text=T["mark_good"], style="Primary.TButton", command=lambda: self._review(True)).pack(side="left")
         ttk.Button(self.review_row, text=T["discard"], command=lambda: self._review(False)).pack(side="left", padx=8)
+        self.edit_button = ttk.Button(self.detail, text=T["edit"], command=self.edit)
         self.note = tk_label(body, "", 13, "muted", wraplength=760)
         self.note.pack(fill="x", pady=GUTTER)
         buttons = tk.Frame(body, bg=C["bg"])
@@ -206,6 +209,9 @@ class YourDataPage(Page):
             self.review_row.pack(anchor="w", pady=(8, 0))
         else:
             self.review_row.pack_forget()
+        self.edit_button.pack_forget()
+        if row is not None:
+            self.edit_button.pack(anchor="w", pady=(8, 0))
 
     def _review(self, keep):
         if self.selected:
@@ -218,8 +224,23 @@ class YourDataPage(Page):
         self.only_dups = not self.only_dups
         self._render()
 
+    def _ask(self, prompt, initial=""):
+        return simpledialog.askstring(T["dialog"], prompt, parent=self, initialvalue=initial)
+
+    def edit(self):
+        if not self.selected:
+            return
+        fields = collect_fields(self.kind, self._ask, lambda m: messagebox.showinfo(T["dialog"], m, parent=self),
+                                self.services.data_fields(self.selected))
+        if fields is not None:
+            try:
+                self.services.edit_data(self.selected, fields)
+            except ValueError as error:
+                messagebox.showinfo(T["dialog"], T["edit_failed"].format(why=error), parent=self)
+            self.refresh()
+
     def add(self):
-        ask = lambda t: simpledialog.askstring(T["dialog"], t, parent=self)  # noqa: E731
+        ask = self._ask
         fields = collect_fields(self.kind, ask, lambda m: messagebox.showinfo(T["dialog"], m, parent=self))
         if fields is not None and not self.services.add_data(self.kind, fields):
             messagebox.showinfo(T["dialog"], T["already"], parent=self)

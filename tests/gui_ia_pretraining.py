@@ -36,6 +36,23 @@ class PretrainingTest(unittest.TestCase):
         self.assertIn("about 10.0× more text", t)
         self.assertGreater(len(page.grid.find_all()), 100)  # cells of the real first rows
 
+    def test_collection_buttons_call_the_services(self):
+        self.fake._collection = [{"id": "tinystories", "name": "TinyStories", "size": "64 MB", "records": "77,941 stories",
+                                  "state": "not downloaded", "completed": 0, "total": 0, "error": ""},
+                                 {"id": "wikitext2", "name": "WikiText-2", "size": "6 MB", "records": "15,488 paragraphs",
+                                  "state": "downloaded", "completed": 0, "total": 0, "error": ""}]
+        page = self.app.show("pretraining")
+        self.app.update()
+        t = "\n".join(texts(page))
+        self.assertIn("Download all", t)
+        self.assertIn("Add to my sources", t)
+        page.fetch(None, "download")
+        page.fetch("wikitext2", "import")
+        self.assertEqual(self.fake.calls, [("download_sources", None), ("import_source", "wikitext2")])
+        self.fake._collection[0]["error"] = "no network"
+        page.on_event("download_failed", {"id": "tinystories", "error": "no network"})
+        self.assertIn("Could not finish: no network.", "\n".join(texts(page)))
+
     def test_add_to_queue_defaults_to_catch_up(self):
         page = self.app.show("pretraining")
         page.add_to_queue()

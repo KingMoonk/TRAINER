@@ -8,7 +8,7 @@ from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
 from studio_ia.pages.post_training import blocker, step_line
-from studio_ia.pages.pretraining import can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
+from studio_ia.pages.pretraining import source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import size_text, storage_state, total_hours
 from studio_ia.pages.training_run import history_of, phase_at
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
@@ -123,6 +123,62 @@ class PageLogic(unittest.TestCase):
         self.assertEqual(len(rows[0]), 8)
         self.assertIn(-1, rows[0])
         self.assertTrue(set(rows[0]) <= {-1, 0, 1})
+
+
+class RecommendedCollection(unittest.TestCase):
+    @staticmethod
+    def fake_fetch(url, path, stop=None, emit=None, maximum=None, range_bytes=None):
+        from pathlib import Path
+        from studio_catalog import file_sha256
+        payload = b"a first story.<|endoftext|>a second story.<|endoftext|>" if Path(path).suffix == ".txt" else b"attribution"
+        Path(path).write_bytes(payload)
+        return {"url": url, "filename": Path(path).name, "bytes": len(payload), "sha256": file_sha256(path)}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.svc = WorkspaceServices(Workspace(self.tmp.name))
+        self.addCleanup(self.svc.close)
+        self.events = []
+        self.svc.subscribe(lambda kind, payload: self.events.append((kind, payload)))
+
+    def states(self):
+        return {r["id"]: r["state"] for r in self.svc.collection()}
+
+    def test_row_labels(self):
+        self.assertEqual(source_action({"state": "not downloaded"})[1], "download")
+        self.assertEqual(source_action({"state": "downloaded"})[1], "import")
+        self.assertEqual(source_action({"state": "downloading"}), (None, None))
+        self.assertEqual(source_action({"state": "imported"}), (None, None))
+        self.assertEqual(source_status({"state": "downloading"}, "Downloading x · 1.0 MB"), "Downloading x · 1.0 MB")
+        self.assertIn("Could not finish: no network.", source_status({"state": "not downloaded", "error": "no network"}))
+
+    def test_download_then_import_into_the_text_sets(self):
+        from unittest.mock import patch
+        self.assertEqual(set(self.states().values()), {"not downloaded"})
+        with patch("studio_catalog._fetch", side_effect=self.fake_fetch):
+            self.assertTrue(self.svc.download_sources(["tinystories"]))
+            self.svc._worker.join(10)
+            self.assertEqual(self.states()["tinystories"], "downloaded")
+            self.assertIn(("download_done", {"id": "tinystories"}), self.events)
+            self.assertFalse(self.svc.import_source("wikitext2"))  # not downloaded
+            self.assertTrue(self.svc.import_source("tinystories"))
+            self.svc._worker.join(10)
+        self.assertEqual(self.states()["tinystories"], "imported")
+        self.assertEqual(self.svc.data("text").count, 2)
+
+    def test_failure_is_reported_and_retryable(self):
+        from unittest.mock import patch
+        with patch("studio_catalog._fetch", side_effect=OSError("no network")):
+            self.svc.download_sources(["tinystories"])
+            self.svc._worker.join(10)
+        row = next(r for r in self.svc.collection() if r["id"] == "tinystories")
+        self.assertEqual((row["state"], row["error"]), ("not downloaded", "no network"))
+        self.assertIn(("download_failed", {"id": "tinystories", "error": "no network"}), self.events)
+        with patch("studio_catalog._fetch", side_effect=self.fake_fetch):
+            self.assertTrue(self.svc.download_sources(["tinystories"]))  # nothing left running
+            self.svc._worker.join(10)
+        self.assertEqual(self.states()["tinystories"], "downloaded")
 
 
 class StorageCard(unittest.TestCase):

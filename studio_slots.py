@@ -101,6 +101,7 @@ class Ctx:
         self.aux = 0.0              # auxiliary loss a module adds on top of the objective (MoE balance loss)
         self.scale = 1.0            # multiplier for the auxiliary loss in backward()
         self._mask = {}
+        self._gen = None
 
     def mask(self, length):
         """[T, T] bool, True where key position > query position (the future, which must stay hidden)."""
@@ -111,9 +112,12 @@ class Ctx:
     def drop(self, x):
         """Inverted dropout while training: (x * mask, mask). Outside training: (x, None)."""
         if self.training and self.dropout:
-            # the random stream stays on the CPU so a run is reproducible across devices
-            keep = self.rng.random(x.shape) >= self.dropout
-            mask = torch.as_tensor(keep, device=x.device).to(x.dtype) / (1 - self.dropout)
+            # Masks are drawn on the tensor's own device from a generator seeded by the model's NumPy stream, so a run
+            # is reproducible for a given seed and device, and resume (which restores that stream) stays deterministic.
+            if self._gen is None or self._gen.device != x.device:
+                self._gen = torch.Generator(x.device).manual_seed(int(self.rng.integers(2 ** 62)))
+            keep = torch.rand(x.shape, generator=self._gen, device=x.device) >= self.dropout
+            mask = keep.to(x.dtype) / (1 - self.dropout)
             return x * mask, mask
         return x, None
 

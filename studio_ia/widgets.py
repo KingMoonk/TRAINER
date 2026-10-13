@@ -209,12 +209,21 @@ class HeatGrid(tk.Canvas):
         self.configure(width=pad + cols * self.CELL, height=max(40, top + len(matrix) * self.CELL))
 
 
+def plot_series(d):
+    """The lines of a BpcPlot as (points, colour, width, dash): the faint per-step and bold smoothed lines, then each
+    `series` entry {points, color (theme name or hex), width=2, dash=None}. Lines under two points are dropped."""
+    lines = [(d.get("steps"), C["border"], 1, None), (d.get("smooth"), C["violet"], 3, None)]
+    lines += [(s["points"], C.get(s.get("color", "violet"), s.get("color")), s.get("width", 2), s.get("dash")) for s in d.get("series") or []]
+    return [(list(pts), color, width, dash) for pts, color, width, dash in lines if pts and len(pts) >= 2]
+
+
 class BpcPlot(tk.Canvas):
     """Error in bits per character. Faint per-step line, bold smoothed line, held-back dots, reference lines
     above an axis break, shaded unrun remainder and a learning-rate lane with phase bands underneath.
 
     set(steps=[(x, y)], smooth=[(x, y)], heldout=[(x, y)], refs=[(name, value)], total=None, progress=None,
-        lr=[(x, lr)], phases=[(start, end, name)], band=None)
+        lr=[(x, lr)], phases=[(start, end, name)], band=None, series=[{points, color, width, dash}])
+    `series` adds lines of their own colour and optional dash pattern, e.g. one per seed or a dashed held-back curve.
     Reference lines above the data range go in the strip above the break; `band` = (lo, hi) shades the noise band.
     With no data it shows `[N]`."""
 
@@ -236,6 +245,7 @@ class BpcPlot(tk.Canvas):
         w, h = max(self.winfo_width(), 200), self.h
         x0, x1 = m["l"], w - m["r"]
         pts = [p for k in ("steps", "smooth", "heldout") for p in d.get(k) or []]
+        pts += [p for s in d.get("series") or [] for p in s["points"]]
         if not pts:
             self.create_text(w / 2, h / 2, text="[N]", fill=C["dim"], font=font(22, mono=True))
             return
@@ -275,10 +285,8 @@ class BpcPlot(tk.Canvas):
                 self.create_text(x1, Y(val) - 8, text=name, anchor="e", fill=C["muted"], font=font(11))
         for v in (lo + 0.05 * (hi - lo), hi - 0.05 * (hi - lo)):
             self.create_text(x0 - 6, Y(v), text=f"{v:.2f}", anchor="e", fill=C["muted"], font=font(11, mono=True))
-        for key, color, width in (("steps", C["border"], 1), ("smooth", C["violet"], 3)):
-            line = [c for p in d.get(key) or [] for c in (X(p[0]), Y(p[1]))]
-            if len(line) >= 4:
-                self.create_line(*line, fill=color, width=width, smooth=False)
+        for points, color, width, dash in plot_series(d):
+            self.create_line(*[c for p in points for c in (X(p[0]), Y(p[1]))], fill=color, width=width, dash=dash)
         for x, y in d.get("heldout") or []:
             self.create_oval(X(x) - 4, Y(y) - 4, X(x) + 4, Y(y) + 4, fill=C["blue"], outline=C["panel"])
         # learning-rate lane

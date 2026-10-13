@@ -109,6 +109,22 @@ class CompareGui(unittest.TestCase):
             notes.add(page.mode_note.cget("text"))
         self.assertEqual(len(notes), 4)
 
+    def test_x_axis_choice_falls_back_to_steps_when_runs_lack_tokens_or_time(self):
+        page = self.app.show("compare")
+        page.add_variant(spec=self.variant(page))
+        rows = [{"variant": n, "seeds": [7], "bpc": [3.], "mean": 3., "min": 3., "max": 3., "spread": 0., "delta": None, "inside_spread": None,
+                 "lr": 1e-3, "pieces_per_s": 900., "peak_mb": 50., "curve": curve} for n, curve in ((0, [[1, 4., 100, 30.], [2, 3., 200, 90.]]), (1, [[1, 4.], [2, 3.]]))]
+        page.results = {"variants": rows, "references": {}}
+        page.modes.pick(T["params_mode"])
+        page.axes.pick(T["axis_time"])
+        self.app.update()
+        self.assertIn(T["x_axis_steps"], page.curves_title.cget("text"))
+        self.assertIn("did not record minutes", page.axis_note.cget("text"))
+        rows[1]["curve"] = [[1, 4., 150, 40.], [2, 3., 250, 80.]]
+        page.draw_curves()
+        self.assertIn(T["x_axis_time"], page.curves_title.cget("text"))
+        self.assertEqual(page.axis_note.cget("text"), "")
+
     def test_quicktest_needs_a_draft_and_a_guess(self):
         page = self.app.show("quicktest")
         page.start()
