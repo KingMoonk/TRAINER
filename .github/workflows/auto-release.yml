@@ -1,0 +1,87 @@
+name: Auto Release
+
+# After CI passes on master, read the Conventional Commits since the last v* tag, pick the semver bump,
+# tag the tested commit and dispatch release.yml (which builds the macOS and Windows executables).
+#   feat -> minor · fix/perf/revert/refactor/style -> patch · docs/chore/test/ci/build -> no release
+#   `!` or BREAKING CHANGE -> major, but only after approval on the `breaking-release` environment
+# Nothing releasable -> the run does nothing. "Run workflow" forces a bump or dry-runs the version math.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Force a bump level (default: derive from commits)"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      dry_run:
+        description: "Compute the version only; do not tag or build"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      next: ${{ steps.version.outputs.next }}
+      breaking: ${{ steps.version.outputs.breaking }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      # CI cancels superseded runs; if master moved on, the newer commit's run releases the whole range
+      - id: tip
+        if: github.event_name == 'workflow_run'
+        env:
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --no-tags origin master
+          [ "$(git rev-parse FETCH_HEAD)" = "$TESTED" ] || echo "stale=true" >> "$GITHUB_OUTPUT"
+      - id: version
+        if: steps.tip.outputs.stale != 'true'
+        env:
+          FORCE_BUMP: ${{ github.event.inputs.bump || 'auto' }}
+        run: .github/scripts/compute-release.sh
+      - run: echo "Dry run — would release v${{ steps.version.outputs.next }} (breaking=${{ steps.version.outputs.breaking }})"
+        if: steps.version.outputs.release == 'true' && github.event.inputs.dry_run == 'true'
+
+  tag:
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # breaking releases wait here: add required reviewers to the `breaking-release` environment in repo settings
+    environment: ${{ needs.plan.outputs.breaking == 'true' && 'breaking-release' || 'auto-release' }}
+    permissions:
+      contents: write  # push the tag
+      actions: write   # dispatch release.yml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - env:
+          NEXT: ${{ needs.plan.outputs.next }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$NEXT" -m "Groundwork $NEXT"
+          git push origin "v$NEXT"
+          # a tag pushed with the default token cannot start release.yml, so dispatch it against the tag
+          gh workflow run release.yml --ref "v$NEXT"

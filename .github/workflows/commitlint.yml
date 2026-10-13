@@ -1,0 +1,28 @@
+name: Commit lint
+
+# Conventional Commits, no third-party action: every commit subject and the PR title (the squash-merge subject).
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check subjects
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+        run: |
+          re='^(feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(\([^)]+\))?!?: .+'
+          bad=0
+          check() { [[ $1 =~ $re ]] || { echo "::error::Not a Conventional Commit: $1"; bad=1; }; }
+          check "$TITLE"
+          while IFS= read -r subject; do check "$subject"; done < <(git log --no-merges --format=%s "$RANGE")
+          exit $bad

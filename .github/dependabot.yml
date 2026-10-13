@@ -4,10 +4,12 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: monthly}
+    commit-message: {prefix: "ci(deps)"}  # workflow-only, never shipped: no release
     groups:
       actions: {patterns: ["*"]}
   - package-ecosystem: pip
     directory: /
     schedule: {interval: monthly}
+    commit-message: {prefix: "fix(deps)"}  # ships in the executable: patch release
     groups:
       python: {patterns: ["*"]}
