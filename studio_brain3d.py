@@ -340,7 +340,7 @@ class _SceneRenderer:
             ratios = [value for key, value in self.scene.snapshot.get('update_ratios', {}).items() if key.startswith(f'block{index}.')]
             brightness = min(1., max(ratios, default=0.) * 20)
             self.cube_at(root, (0, 0, .05), (6, .21, .04), (brightness, .25 + brightness * .5, .3, .8))
-        title = f"{index + 1} · {gate['entry']['mixer']['id']} / {gate['entry']['channel']['id']}"
+        title = f"{index + 1} | {gate['entry']['mixer']['id']} / {gate['entry']['channel']['id']}"
         self.label_at(root, title, (0, 0, 3.5), .35)
         if frame['level'] == 'Model':
             bins = len(frame['edges']) - 1
@@ -442,20 +442,20 @@ class _SceneRenderer:
                             height = .015 if masked else .03 + abs(value) / maximum * 1.5
                             self.cube_at(self.geometry, (x, y, height / 2), (.18, .18, height / 2), color)
                     if self.scene.show_numbers:
-                        self.label_at(self.geometry, f'{matrix.shape[0]}×{matrix.shape[1]} · range {matrix.min():.3g} … {matrix.max():.3g}', (0, 1, 1))
+                        self.label_at(self.geometry, f'{matrix.shape[0]}x{matrix.shape[1]} | range {matrix.min():.3g} to {matrix.max():.3g}', (0, 1, 1))
                 else:
                     self.label_at(self.geometry, 'Load a snapshot with the selected hooks or matrix.', (0, 0, 2))
             self.drawn_level = level
-        info = f"{self.scene.spec['name']} · {frame['level']} · {frame['mode']} · block {self.scene.selection.layer + 1}"
+        info = f"{self.scene.spec['name']} | {frame['level']} | {frame['mode']} | block {self.scene.selection.layer + 1}"
         if frame['step'] is not None:
-            info += f" · step {frame['step']}"
+            info += f" | step {frame['step']}"
         if frame['loss'] is not None:
-            info += f" · loss {frame['loss']:.4f}"
+            info += f" | loss {frame['loss']:.4f}"
         if self.scene.mode == 'Ride a token' and self.scene.snapshot:
             lens = self.scene.snapshot.get('lens', {}).get(str(self.scene.selection.layer))
             if lens:
                 token = min(self.scene.selection.token, len(lens['ids']) - 1)
-                info += f" · predicted id {lens['ids'][token][0]} ({lens['probabilities'][token][0]:.3f})"
+                info += f" | predicted id {lens['ids'][token][0]} ({lens['probabilities'][token][0]:.3f})"
         self.hud['text'] = info
 
     def tick(self, task):
