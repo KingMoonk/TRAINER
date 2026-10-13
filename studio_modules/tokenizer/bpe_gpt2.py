@@ -29,9 +29,11 @@ def bytes_to_unicode():
 
 
 def category(char):
-    if char.isspace():
+    # Match regex \s: Zs, Zl, Zp categories + ASCII whitespace and NEL (U+0085).
+    cat = unicodedata.category(char)
+    if cat in ("Zs", "Zl", "Zp") or char in (" ", "\t", "\n", "\r", "\f", "\v", "\x85"):
         return "space"
-    group = unicodedata.category(char)[0]
+    group = cat[0]
     return "letter" if group == "L" else "number" if group == "N" else "other"
 
 
