@@ -40,12 +40,25 @@ class SlowReads(unittest.TestCase):
         self.assertTrue(self.svc.ready(read))  # small store: read in place
         self.ws._dataset(self.big)["recordCount"] = 10 ** 6
         self.assertFalse(self.svc.ready(read))
-        self.assertNotIn("scan", self.svc._data)  # asking did not read anything
+        self.assertNotIn("summaries", self.svc._data)  # asking did not read anything
         read()
         self.assertTrue(self.svc.ready(read))
         self.ws.add(self.big, [{"text": "another"}])
         self.ws._dataset(self.big)["recordCount"] = 10 ** 6
         self.assertFalse(self.svc.ready(read))
+
+    def test_summary_is_saved_and_a_new_launch_reads_it_until_the_files_change(self):
+        first = {k: self.svc.data(k) for k in dk.KINDS}
+        example = self.svc.post_training(None)["example"]
+        with mock.patch.object(dk, "scan", wraps=dk.scan) as scan:
+            again = WorkspaceServices(Workspace(self.tmp.name))
+            self.addCleanup(again.close)
+            self.assertEqual(({k: again.data(k) for k in dk.KINDS}, again.post_training(None)["example"], scan.call_count), (first, example, 0))
+            later = Workspace(self.tmp.name)
+            later.add(self.big, [{"text": "written after the summary was saved"}])
+            after = WorkspaceServices(Workspace(self.tmp.name))
+            self.addCleanup(after.close)
+            self.assertEqual((after.data("text").count, scan.call_count), (31, 1))
 
     def test_scan_reports_what_it_reads(self):
         notes = []

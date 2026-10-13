@@ -253,5 +253,9 @@ class YourDataPage(Page):
     def import_files(self):
         paths = filedialog.askopenfilenames(parent=self)
         if paths:
-            messagebox.showinfo(T["dialog"], "\n".join(self.services.import_data(self.kind, paths)), parent=self)
-            self.reload()
+            kind = self.kind
+
+            def imported(lines):
+                messagebox.showinfo(T["dialog"], "\n".join(lines), parent=self)
+                self.reload()
+            self.background(lambda: self.services.import_data(kind, paths), imported, "Importing your files")

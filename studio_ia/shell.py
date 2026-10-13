@@ -172,7 +172,7 @@ class Studio(tk.Tk):
             else:
                 page = Page(self.main, self.services, self.show, title=spec.title, lead=spec.lead, crumb=spec.crumb)
             self.pages[route] = page
-            page.slow, page.reload = self.slow, lambda: self.show(route)
+            page.slow, page.background, page.reload = self.slow, self.background, lambda: self.show(route)
         page = self.pages[route]
         self._highlight(spec.area)
         self._wanted = route  # a later click wins over a page still loading
@@ -233,8 +233,12 @@ class Studio(tk.Tk):
         behind the loading panel, which shows what services.note() says is being read and how far along it is."""
         if self.services.ready(work):
             return then(work())
+        self.background(work, then, title)
+
+    def background(self, work, then, title="Working"):
+        """then(work()) with work() always on the worker: for work that is long every time or changes data."""
         self.services.note("")
-        self.load_title.configure(text=title)
+        self.load_title.configure(text=title or "Working")
         self.loader.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.loader.lift()
         self.jobs.put((work, then))

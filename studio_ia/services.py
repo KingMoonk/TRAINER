@@ -846,9 +846,41 @@ class WorkspaceServices(Services):
         finally:
             self._probe.on = False
 
-    def _scan(self):
+    def _stamp(self):
+        """Size and time of the files the stored data lives in: says whether data/summaries.json still describes them."""
+        db = self.workspace.db_path
+
+        def stat(path):
+            try:
+                s = path.stat()
+                return [s.st_mtime_ns, s.st_size] if s.st_size else None
+            except OSError:
+                return None
+        return [stat(self.workspace.path), stat(db), stat(db.with_name(db.name + "-wal"))]
+
+    def _summaries(self):
+        """{kind: DataSummary with every sample row, "example": the first training conversation}. Read from
+        data/summaries.json when the stored files have not changed since it was written, so a launch reads nothing twice."""
         import studio_data_kinds as dk
-        return self._fresh("scan", lambda: dk.scan(self.workspace, progress=self.note))
+        from studio_core import atomic_json
+
+        def make():
+            path, stamp = self.root / "data" / "summaries.json", self._stamp()
+            try:
+                saved = json.loads(path.read_text(encoding="utf-8"))
+                if saved["stamp"] == stamp:
+                    return {**{k: dk.DataSummary(**saved[k]) for k in dk.KINDS}, "example": saved["example"]}
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            scanned = dk.scan(self.workspace, progress=self.note)
+            out = {k: dk.summarize(self.workspace, k, limit=None, scanned=scanned, progress=self.note) for k in dk.KINDS}
+            first = next((e for e, _ in scanned[1]["conversations"] if not dk.held_back(e)), None)  # the first of post_rows("conversations")
+            out["example"] = {"prompt": first["user"], "answer": first["assistant"]} if first and first.get("user") else {}
+            self.note("Saving the summary")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_json(path, {**{k: asdict(out[k]) for k in dk.KINDS}, "example": out["example"], "stamp": stamp})
+            return out
+        return self._fresh("summaries", make)
 
     def pretrain_preview(self, dataset_ids, rows=16):
         import studio_estimate
@@ -958,13 +990,11 @@ class WorkspaceServices(Services):
             g = done.get(str(n))
             status = "running" if running == n else "queued" if n in waiting else "done" if g else "idle"
             rounds[n] = {"status": status, "note": ("live" if g["ok"] else "kept, not live") if g and status == "done" else ""}
-        import studio_data_kinds as dk
         convs = self.data("conversations")
-        prompt = next((e for e, _ in self._scan()[1]["conversations"] if not dk.held_back(e)), None)  # the first of post_rows("conversations")
         return {"rounds": rounds, "gates": {int(n): g for n, g in done.items()},
                 "counts": {"conversations": convs.count, "corrections": len(self._json("corrections.json", [])),
                            "problems": self.data("problems").count, "pairs": len(self._human_pairs())},
-                "example": {"prompt": prompt["user"], "answer": prompt["assistant"]} if prompt and prompt.get("user") else {}}
+                "example": self._summaries()["example"]}
 
     def post_rows(self, kind):
         import studio_data_kinds as dk
@@ -1028,7 +1058,7 @@ class WorkspaceServices(Services):
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
         import studio_data_kinds as dk
-        full = self._fresh(("data", kind), lambda: dk.summarize(self.workspace, kind, limit=None, scanned=self._scan(), progress=self.note))
+        full = self._summaries()[kind]
         return replace(full, rows=dk.matching(full.rows, query))
 
     _OWN_SETS = {"text": "Your files", "conversations": "Your conversations", "problems": "Your problems"}

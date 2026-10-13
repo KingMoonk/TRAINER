@@ -54,5 +54,10 @@ class Page(ttk.Frame):
         """then(work()) for a service read that may be long. The shell swaps in a version that keeps the Tk thread free."""
         then(work())
 
+    def background(self, work, then, title=""):
+        """then(work()) for work that is always long or changes data (a local-model call, an import): the shell
+        swaps in a version that runs it on its worker, never on the Tk thread. work() touches no widgets."""
+        then(work())
+
     def on_event(self, kind, payload):
         """Services event (queue, versions, ...), delivered on the Tk thread while the page is shown."""
