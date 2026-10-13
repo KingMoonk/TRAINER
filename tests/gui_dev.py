@@ -2,6 +2,7 @@
 import shutil
 import sys
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,8 @@ class HotReload(unittest.TestCase):
 
     def shape(self):
         app = self.app
+        time.sleep(.35)  # let one-shot startup timers (index_local_downloads at 300 ms) fire, so only recurring ones are counted
+        app.update()
         return ({seq: len(app.bind_class("all", seq)) for seq in app.bind_class("all")}, len(app.winfo_children()),
                 len(app.tk.splitlist(app.tk.call("after", "info"))))
 
