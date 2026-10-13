@@ -150,26 +150,5 @@ class VisualizationLimitTests(unittest.TestCase):
         self.assertEqual(np.asarray(weights["weight"]).shape, (16, 16))
 
 
-class InsideHeadDisplayTests(unittest.TestCase):
-    def test_scores_use_engine_logits_and_softmax_columns_add_up(self):
-        from types import SimpleNamespace
-        from unittest.mock import patch
-        from studio_net_head import InsideHeadView
-        tokens, steps = [f"t{i}" for i in range(20)], 20
-        logits = np.random.default_rng(0).normal(size=(1, 1, steps, steps))
-        pattern = np.tril(np.ones((steps, steps)))
-        pattern = (pattern / pattern.sum(axis=1, keepdims=True))[None, None]
-        hooks = {"block0.attn.q": np.zeros((1, 1, steps, 4)), "block0.attn.scores": np.zeros((1, 1, steps, steps)),
-                 "block0.attn.logits": logits, "block0.attn.pattern": pattern}
-        with patch("studio_net_head.forward", return_value={"hooks": hooks, "tokens": [tokens]}):
-            result = InsideHeadView.compute(None, "checkpoint", list(range(steps)), 0, 0)
-        np.testing.assert_array_equal(result[1], logits[0, 0].T)  # what softmax saw, not q·k/√d
-        view = SimpleNamespace(block=SimpleNamespace(get=lambda: "1"), head=SimpleNamespace(get=lambda: "1"))
-        text = InsideHeadView.describe(view, result)
-        earlier = [float(value) for value in text.splitlines()[-1].split()[2:]]
-        shown = pattern[0, 0][4:, 4:].sum(axis=1)
-        np.testing.assert_allclose(np.asarray(earlier) + shown, 1, atol=0.01)  # last 16 keys + earlier positions = 1
-
-
 if __name__ == "__main__":
     unittest.main()

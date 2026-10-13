@@ -27,22 +27,6 @@ py -3 -m venv .venv
 
 On Windows you can instead double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
 
-## Development with hot reload
-
-Recommended while editing the code. From the repo root, with the venv active or using its interpreter:
-
-```bash
-.venv/bin/python dev.py
-```
-
-`dev.py` starts the studio and applies code changes inside the open window. Nothing is relaunched, so the app never takes focus from the editor you are working in.
-
-- An edit is applied about a second after the files stop changing, and only while the studio is in the background. While you are using the studio, the status bar says the code changed and the reload waits until you switch away. Cmd+R (Ctrl+R on Windows) reloads at once.
-- A reload never interrupts a running job or an open dialog; it waits for them.
-- If the new code has an error, the old code keeps running and the error is shown in the status bar and the terminal. Fix the file and it reloads again.
-- A reload rebuilds every page: the window, its position and the current page stay, but text typed into fields, scroll positions and the chat on screen are reset. Saved work is untouched.
-- Changes to `dev.py` itself need a restart of `dev.py`. It watches the whole project and skips `.venv/`, `tests/`, `data/`, `runs/`, `exports/`, `artifacts/`, and dot-folders. Ctrl+C stops it.
-
 
 ## Lint and git hooks
 
@@ -188,13 +172,13 @@ Entry points and engine services sit in the repository root; swappable model/tra
 | Layer | Modules | Role |
 |---|---|---|
 | Entry points | `app.py`, `train.py`, `start_studio.bat` | Launch the desktop GUI, run training from the command line, or set up and launch on Windows. |
-| GUI shell | `studio_gui.py` | `NativeStudio` (Tk window, page registry) and `Studio`, which mixes in every page. |
-| GUI pages (mixins) | `studio_flow.py`, `studio_curriculum_page.py`, `studio_align.py`, `studio_network.py`, `studio_net_*.py` | Guided workflow, sequential training card, post-training alignment, and the Design, Sandbox, Variants, Experiments, inspection, 3D and Versions views. |
-| GUI helpers | `studio_widgets.py`, `studio_ux.py`, `studio_circuit.py`, `studio_glossary.py` | Shared widgets and example editor, Beginner/Advanced mode and time estimates, PCB-style network canvas, plain-English glossary. |
+| GUI shell | `studio_ia/shell.py` | `Studio` (Tk window, sidebar, page router). |
+| GUI pages | `studio_ia/pages/` | One page per route; pages talk only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
+| GUI helpers | `studio_ia/widgets.py`, `studio_ia/theme.py`, `studio_ia/copy.py`, `studio_ux.py`, `studio_glossary.py` | Shared widgets, colours and fonts, every string on screen, time estimates, plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
-| Network editing | `studio_arch.py`, `studio_archdb.py`, `studio_network.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
+| Network editing | `studio_arch.py`, `studio_archdb.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
 | Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
 | Inspection and experiments | `studio_inspect.py`, `studio_summary.py`, `studio_experiments.py`, `studio_snapshot.py`, `studio_scene.py` | Probe, summary, experiment, snapshot/replay and renderer-independent scene services. |
 | 3D viewer | `studio_vizbridge.py`, `studio_brain3d.py` | `studio_brain3d.py` is a Panda3D viewer run as a separate process. `studio_vizbridge.py` connects it to the GUI over a loopback socket. |
@@ -202,8 +186,7 @@ Entry points and engine services sit in the repository root; swappable model/tra
 ### Dependency flow
 
 ```
-app.py ──► studio_gui ──► page mixins (flow, network, align, curriculum)
-                     └──► studio_widgets, studio_ux, studio_glossary
+app.py ──► studio_ia.shell ──► studio_ia.pages ──► studio_ia.services ──► engine modules, studio_queue
 train.py ─┐
           ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
           │        ▲

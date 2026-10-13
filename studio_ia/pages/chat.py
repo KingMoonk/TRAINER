@@ -203,7 +203,8 @@ class ChatPage(Page):
             self.pane_frames[i].pack(side="left", fill="both", expand=True, padx=(0, GUTTER if i == 0 and self.compare else 0))
         for i, num in zip(keys, (self.use, self.b)):
             v = vs.get(num)
-            tag = name(v) + " · checkpoint [N]" if v else ""
+            step = self.services.checkpoint_step(v) if v else None
+            tag = (name(v) + (f" · checkpoint at step {step}" if step else "")) if v else ""
             if v and not self.compare and (v.scorecard or {}).get("answers") not in (True, "yes"):
                 tag += " · hasn’t practised answering yet"
             self.pane_tags[i].configure(text=tag)

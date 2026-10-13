@@ -69,7 +69,7 @@ CHAT = {
     "h1": "Chat",
     "lead": "Talk to any trained version. Compare two to see what a change really did.",
     "live": "LIVE",
-    "head_using": "{version} · checkpoint [N]",
+    "head_using": "{version}",
     "head_mode_follows": "follows the best checkpoint",
     "head_mode_picked": "picked by you · {best_version} is best",
     "compare_btn": "Compare two versions",

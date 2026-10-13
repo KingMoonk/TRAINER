@@ -10,7 +10,6 @@ import numpy as np
 
 from studio_core import fingerprint
 from studio_curriculum import _stage_config
-from studio_curriculum_page import CurriculumMixin
 from studio_model import (LocalModel, Tokenizer, batch_arrays, load_checkpoint, partition_examples,
                           samples_from, train, validate_config)
 from studio_spec import config_from_spec, default_spec
@@ -109,38 +108,6 @@ class CurriculumSpec(unittest.TestCase):
         self.assertEqual(normalized["objective"], "all")
         self.assertEqual(spec["dims"]["n_ctx"], 256)
 
-    def test_page_accepts_network_model_spec(self):
-        class Value:
-            def __init__(self, value):
-                self.value = value
-
-            def get(self):
-                return self.value
-
-            def set(self, value):
-                self.value = value
-
-        class Page(CurriculumMixin):
-            curriculum_context = Value("128")
-            curriculum_use_net = Value(True)
-            net_error = None
-            net_spec = default_spec()
-            arch_id = "saved-architecture"
-
-            def read_config(self):
-                return {"device": "cpu"}
-
-            def net_ensure(self):
-                pass
-
-            def net_flush(self):
-                pass
-
-        base, context, architecture_id = Page().curriculum_settings()
-        self.assertEqual(context, 256)
-        self.assertEqual(base["architecture"]["schema"], 1)
-        self.assertEqual(base["tokenizer"], "byte")
-        self.assertEqual(architecture_id, "saved-architecture")
 
 
 if __name__ == "__main__":

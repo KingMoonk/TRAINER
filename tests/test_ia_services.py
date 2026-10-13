@@ -39,6 +39,17 @@ class ServicesTest(unittest.TestCase):
         self.assertTrue(all(math.isfinite(x) for x in (r["uniform_bpc"], r["unigram_bpc"], r["best_so_far_bpc"], lo, hi)))
         self.assertGreater(r["uniform_bpc"], r["unigram_bpc"])
 
+    def test_chat_follows_a_version_only_outside_the_noise_band(self):
+        store, cards = self.svc.store, [dict(v.scorecard) for v in self.svc.versions()]
+        self.addCleanup(lambda: [store._update(n, scorecard=c) for n, c in enumerate(cards, 1)])
+        lo, _hi = self.svc.references(1)["noise_band"]
+        store._update(1, scorecard={"bpc": lo + 1e-6})
+        store._update(2, scorecard={"bpc": lo + 1e-9})   # lower, but inside version 1's band
+        self.assertEqual(self.svc.best_version().number, 1)
+        store._update(2, scorecard={"bpc": lo - 1e-6})   # below the band
+        self.assertEqual(self.svc.best_version().number, 2)
+        self.assertGreater(self.svc.checkpoint_step(1), 0)
+
     def test_data(self):
         self.assertEqual(self.svc.data("problems").count, 10)
 

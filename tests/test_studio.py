@@ -65,20 +65,6 @@ class WorkspaceLockChecks(unittest.TestCase):
             self.assertEqual(Workspace(directory).state["datasets"][-1]["id"], "x")  # and saved
 
 
-class VariantChecks(unittest.TestCase):
-    def test_every_differing_block_is_listed(self):
-        import copy
-        from studio_net_variants import block_differences
-        from studio_spec import default_spec, set_block, validate_spec
-        base = default_spec()
-        base["dims"]["n_layer"] = 3
-        base = validate_spec(base)
-        other = copy.deepcopy(base)
-        set_block(other, 2, "mixer", {"id": "gru"})
-        other["dims"]["n_layer"] = 4
-        self.assertEqual(block_differences(base, validate_spec(other)), ["block 3: mixer attention → gru", "block 4: added"])
-
-
 class TrainingChecks(unittest.TestCase):
     def config(self, **values):
         cfg = dict(DEFAULT_CONFIG, device="cpu", width=32, layers=1, heads=2, context=32, expansion=2,

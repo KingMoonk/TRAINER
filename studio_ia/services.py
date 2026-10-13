@@ -110,6 +110,10 @@ class Services:
     def best_version(self):
         raise NotImplementedError
 
+    def checkpoint_step(self, version):
+        """Training step at which the version's best checkpoint was saved, or None when unknown."""
+        return None
+
     def save_version(self, spec, change_text):
         raise NotImplementedError
 
@@ -645,10 +649,31 @@ class WorkspaceServices(Services):
         return self._version(rows[-1]) if rows else None
 
     def best_version(self):
-        row = self.store.best_version()
-        if row is None:  # nothing scored yet: the newest version that has a checkpoint
-            row = next((r for r in reversed(self._rows()) if r.get("best_checkpoint")), None)
-        return self._version(row) if row else None
+        """The version Chat follows: a later version takes over only when its held-back error is below the noise band of
+        the one it replaces (studio_gate.moves_chat), so a difference inside the noise never moves Chat."""
+        import studio_eval
+        import studio_gate
+        rows, docs, best = self._rows(), self._heldout(), None
+        for row in rows:
+            bpc = row.get("scorecard", {}).get("bpc")
+            if not row.get("best_checkpoint") or not isinstance(bpc, (int, float)):
+                continue
+            ckpt = best and self._abs(best["best_checkpoint"])
+            # ponytail: the band is one scoring pass over the held-back text on the caller's thread, cached per checkpoint
+            band = self._cached(("band", ckpt), lambda: studio_eval.noise_band(ckpt, docs)) if best and docs else None
+            if studio_gate.moves_chat(bpc, best and best["scorecard"]["bpc"], band):
+                best = row
+        if best is None:  # nothing scored yet: the newest version that has a checkpoint
+            best = next((r for r in reversed(rows) if r.get("best_checkpoint")), None)
+        return self._version(best) if best else None
+
+    def checkpoint_step(self, version):
+        from studio_model import read_metrics
+        v = self._as_version(version)
+        if v is None or not v.best_checkpoint:
+            return None
+        held = [r for r in read_metrics(Path(v.best_checkpoint).parent / "metrics.jsonl") if r.get("val_loss") is not None]
+        return min(held, key=lambda r: r["val_loss"])["step"] if held else None  # best.npz is saved at the lowest held-back loss
 
     def save_version(self, spec, change_text):
         row = self.store.save_version(spec, change_text or None)
