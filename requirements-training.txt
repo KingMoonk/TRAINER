@@ -1,3 +1,3 @@
 # The training engine: PyTorch on the CPU, a CUDA GPU or Apple Metal (MPS).
 # The default wheel from PyPI covers the CPU and Apple Metal; for an NVIDIA GPU see requirements-gpu.txt.
-torch>=2.6,<3
+torch>=2.14.1,<3
