@@ -207,6 +207,7 @@ class Workspace:
         self.run_dir = self.root / "runs"
         self.db_path = self.root / "data" / "records.sqlite"
         self.lock = threading.RLock()
+        self.revision = 0  # goes up with every change to the stored data, so a reader can cache what a full read costs
         if self.path.exists():
             self.state = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(self.state, dict) or any(not isinstance(self.state.get(k), list) for k in ("datasets", "examples")):
@@ -227,6 +228,7 @@ class Workspace:
 
     def save(self):
         with self.lock:
+            self.revision += 1
             atomic_json(self.path, self.state)
 
     def apply(self, mutate, save=True):
@@ -270,6 +272,8 @@ class Workspace:
             with connection:
                 yield connection
         finally:
+            if connection.total_changes:
+                self.revision += 1
             connection.close()
 
     @staticmethod
@@ -338,8 +342,10 @@ class Workspace:
     def iter_examples(self, dataset_id):
         if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
             with self._connect() as connection:
-                for row in connection.execute("SELECT payload FROM records WHERE dataset_id=? ORDER BY rowid", (dataset_id,)):
-                    yield json.loads(row[0])
+                cursor = connection.execute("SELECT payload FROM records WHERE dataset_id=? ORDER BY rowid", (dataset_id,))
+                while batch := cursor.fetchmany(2000):  # a read never holds more than one batch; WAL keeps writers unblocked
+                    for row in batch:
+                        yield json.loads(row[0])
         else:
             yield from self.examples(dataset_id)
 

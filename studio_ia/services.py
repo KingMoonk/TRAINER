@@ -1,7 +1,7 @@
 """The one façade pages talk to. `Services` is the protocol; `FakeServices` is an in-memory stand-in."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import numpy as np
@@ -89,6 +89,17 @@ class Services:
             deliver()
         else:
             self._ui.after(0, deliver)
+
+    # slow reads: what one is doing right now, polled by the shell's loading panel ---------------------------------
+    loading = ("", None)
+
+    def note(self, text, fraction=None):
+        """Safe from any thread. fraction None = no measurable progress yet."""
+        self.loading = (text, fraction)
+
+    def ready(self, work):
+        """True when work() (service reads only) will not keep the Tk thread waiting; otherwise the shell hands it to its worker."""
+        return True
 
     # staged design change: the Network designer's unsaved draft, read by Quick test and Compare runs ----------------
     _staged = None
@@ -609,6 +620,10 @@ def _doc(row):
     return "\n".join(s for s in (row.get("user"), row.get("assistant")) if s)
 
 
+class _Cold(BaseException):
+    """Raised inside ready(): the read asked for is not cached. Not an Exception, so no page's own handler swallows it."""
+
+
 class WorkspaceServices(Services):
     """Every Services method over the real modules. Queue events fire on the runner thread and hop to Tk via emit."""
 
@@ -627,6 +642,7 @@ class WorkspaceServices(Services):
         self.runner.subscribe(self._record_job)
         self._models, self._cache = {}, {}
         self._lock = threading.RLock()
+        self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
 
     def close(self):
         if getattr(self, "_viz", None) is not None:
@@ -808,6 +824,32 @@ class WorkspaceServices(Services):
         held = set(self._heldout())
         return [e for e in rows if e["text"] not in held]
 
+    def _fresh(self, key, make):
+        """make() once per state of the stored data (Workspace.revision). No lock: the shell's one worker does the
+        long reads in turn, and the Tk thread asks ready() first, so it only ever picks up a finished result."""
+        revision = self.workspace.revision
+        hit = self._data.get(key)
+        if hit is None or hit[0] != revision:
+            if getattr(self._probe, "on", False):
+                raise _Cold
+            hit = self._data[key] = (revision, make())
+        return hit[1]
+
+    def ready(self, work):
+        self._probe.on = True
+        try:
+            work()
+            return True
+        except _Cold:  # a small store is read in milliseconds, in place; a large one goes to the worker
+            state = self.workspace.state
+            return len(state["examples"]) + sum(d.get("recordCount") or 0 for d in state["datasets"]) <= 5000
+        finally:
+            self._probe.on = False
+
+    def _scan(self):
+        import studio_data_kinds as dk
+        return self._fresh("scan", lambda: dk.scan(self.workspace, progress=self.note))
+
     def pretrain_preview(self, dataset_ids, rows=16):
         import studio_estimate
         import studio_spec
@@ -815,20 +857,31 @@ class WorkspaceServices(Services):
         v = self.current_version()
         if v is None or not v.spec:
             return {}
-        held = set(self._heldout())
-        docs = [e["text"] for e in self._text_rows(dataset_ids) if e["text"] not in held]
-        module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
-        tok = module.fit(cfg, [{"text": d} for d in docs])
         context = v.spec["dims"]["n_ctx"]
-        small = sum(map(len, docs)) <= 5_000_000  # larger text: the size stays [N] rather than a guess
-        encoded = [tok.encode(d) for d in docs] if small else []
+
+        def make():
+            self.note("Reading the chosen text")
+            held = set(self._heldout())
+            docs = [e["text"] for e in self._text_rows(dataset_ids) if e["text"] not in held]
+            self.note("Building the word list")
+            module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
+            tok = module.fit(cfg, [{"text": d} for d in docs])
+            small = sum(map(len, docs)) <= 5_000_000  # larger text: the size stays [N] rather than a guess
+            self.note("Counting word pieces")
+            encoded = [tok.encode(d) for d in docs] if small else []
+            return {"pieces": sum(map(len, encoded)) + len(docs) if small else None,
+                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
+                    "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
+        heldout = self.root / "data" / "heldout.json"
+        key = ("preview", tuple(dataset_ids), rows, json.dumps(v.spec, sort_keys=True, default=str),
+               heldout.stat().st_mtime_ns if heldout.exists() else None)
+        preview = self._fresh(key, make)
         speed = None
         for ver in reversed(self.versions()):
             for run in reversed(ver.runs):
                 got = [r["tokens_per_second"] for r in read_metrics(Path(run) / "metrics.jsonl") if r.get("tokens_per_second")]
                 speed = speed or (got[-1] if got else None)
-        return {"pieces": sum(map(len, encoded)) + len(docs) if small else None, "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
-                "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows), "tokens_per_second": speed}
+        return {**preview, "tokens_per_second": speed}
 
     # job results -> versions
     def _to(self, number, status):
@@ -905,8 +958,9 @@ class WorkspaceServices(Services):
             g = done.get(str(n))
             status = "running" if running == n else "queued" if n in waiting else "done" if g else "idle"
             rounds[n] = {"status": status, "note": ("live" if g["ok"] else "kept, not live") if g and status == "done" else ""}
+        import studio_data_kinds as dk
         convs = self.data("conversations")
-        prompt = next((r for r in self.post_rows("conversations")), None)
+        prompt = next((e for e, _ in self._scan()[1]["conversations"] if not dk.held_back(e)), None)  # the first of post_rows("conversations")
         return {"rounds": rounds, "gates": {int(n): g for n, g in done.items()},
                 "counts": {"conversations": convs.count, "corrections": len(self._json("corrections.json", [])),
                            "problems": self.data("problems").count, "pairs": len(self._human_pairs())},
@@ -974,7 +1028,8 @@ class WorkspaceServices(Services):
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
         import studio_data_kinds as dk
-        return dk.summarize(self.workspace, kind, query=query)
+        full = self._fresh(("data", kind), lambda: dk.summarize(self.workspace, kind, limit=None, scanned=self._scan(), progress=self.note))
+        return replace(full, rows=dk.matching(full.rows, query))
 
     _OWN_SETS = {"text": "Your files", "conversations": "Your conversations", "problems": "Your problems"}
     _DRAFT_SETS = {"conversations": "Rewritten conversations", "text": "Generated prose"}
@@ -1179,7 +1234,7 @@ class WorkspaceServices(Services):
         cpp = 1.0  # characters per piece; nats per piece / ln2 / cpp = bits per character
         if docs and any((run / n).exists() for n in ("best.npz", "last.npz")):
             tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
-            cpp = sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs))
+            cpp = self._cached(("cpp", str(run)), lambda: sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)))
         bits = lambda nats: nats / LN2 / cpp  # noqa: E731
         steps = [(r["step"], bits(r["loss"])) for r in rows]
         sched = train.get("schedule", {})

@@ -1,6 +1,8 @@
 """Studio window: sidebar (four areas + machine strip) and the page router."""
 from __future__ import annotations
 
+import queue
+import threading
 import tkinter as tk
 from collections import namedtuple
 from tkinter import ttk
@@ -9,16 +11,11 @@ from studio_ux import format_duration
 from studio_ia import services as services_module
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, SIDEBAR_W, apply, font, tk_label
-from studio_ia.widgets import Kicker, Progress
+from studio_ia.widgets import Progress
 
 Route = namedtuple("Route", "area title lead crumb")
 
-AREAS = [
-    ("designer", "Network designer", "Shape the model, then see what it costs."),
-    ("pretraining", "Pretraining", "Feed it text; it learns to predict the next word."),
-    ("post", "Post-training", "Teach it how to answer."),
-    ("chat", "Chat", "Talk to any trained version."),
-]
+AREAS = [("designer", "Network designer"), ("pretraining", "Pretraining"), ("post", "Post-training"), ("chat", "Chat")]
 AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat"}
 LI = ("Network designer", "Look inside")
 
@@ -75,6 +72,7 @@ class Studio(tk.Tk):
         self._build_sidebar()
         self.main = ttk.Frame(self)
         self.main.pack(side="left", fill="both", expand=True)
+        self._build_loader()
         from studio_ia.pages import head_lab, head_zoom, loss, trace, value_map  # look-inside pages (S7)
         from studio_ia.pages import inside3d  # look-inside 3D page (S11)
         self.register("inside3d", inside3d.Inside3DPage)
@@ -91,7 +89,7 @@ class Studio(tk.Tk):
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         tk_label(side, "Groundwork Studio", 17, "text", "panel", font=font(17, bold=True)).pack(fill="x", padx=GUTTER, pady=GUTTER)
-        for key, name, gloss in AREAS:
+        for key, name in AREAS:
             row = tk.Frame(side, bg=C["panel"], takefocus=1, cursor="hand2", highlightthickness=1,
                            highlightbackground=C["panel"], highlightcolor=C["violet"])
             row.pack(fill="x")
@@ -100,19 +98,16 @@ class Studio(tk.Tk):
             inner = tk.Frame(row, bg=C["panel"])
             inner.pack(side="left", fill="x", expand=True, padx=(GUTTER - 3, GUTTER), pady=10)
             title = tk_label(inner, name, 15, "text", "panel", font=font(15, bold=True))
-            sub = tk_label(inner, gloss, 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER - 3)
             title.pack(fill="x")
-            sub.pack(fill="x")
-            for w in (row, stripe, inner, title, sub):
+            for w in (row, stripe, inner, title):
                 w.bind("<Button-1>", lambda _e, k=key: self.show(AREA_HOME[k]))
             for seq in ("<Return>", "<space>"):
                 row.bind(seq, lambda _e, k=key: self.show(AREA_HOME[k]))
-            self._area_rows[key] = (row, stripe, inner, title, sub)
+            self._area_rows[key] = (row, stripe, inner, title)
         # machine strip
         tk.Frame(side, bg=C["border2"], height=1).pack(side="bottom", fill="x")
         strip = tk.Frame(side, bg=C["panel"])
         strip.pack(side="bottom", fill="x", padx=GUTTER, pady=GUTTER)
-        Kicker(strip, "This computer", bg="panel").pack(fill="x")
         self.strip_now = tk_label(strip, "", 13, "text", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self.strip_bar = Progress(strip)
         self.strip_next = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
@@ -151,11 +146,11 @@ class Studio(tk.Tk):
         self.strip_chat.configure(text=f"Chat uses version {v.number} · best so far" if v else "Chat has no trained version yet")
 
     def _highlight(self, area):
-        for key, (row, stripe, inner, title, sub) in self._area_rows.items():
+        for key, (row, stripe, inner, title) in self._area_rows.items():
             on = key == area
             bg = C["violet_bg"] if on else C["panel"]
             stripe.configure(bg=C["violet"] if on else C["panel"])
-            for w in (row, inner, title, sub):
+            for w in (row, inner, title):
                 w.configure(bg=bg)
             row.configure(highlightbackground=bg)
 
@@ -177,14 +172,94 @@ class Studio(tk.Tk):
             else:
                 page = Page(self.main, self.services, self.show, title=spec.title, lead=spec.lead, crumb=spec.crumb)
             self.pages[route] = page
-        if self.route:
+            page.slow, page.reload = self.slow, lambda: self.show(route)
+        page = self.pages[route]
+        self._highlight(spec.area)
+        self._wanted = route  # a later click wins over a page still loading
+
+        def warm():
+            try:
+                page.preload()
+            except Exception:  # refresh() meets the same error on the Tk thread, as it always did
+                pass
+
+        def loaded(_none):
+            self._loading.discard(route)
+            if self._wanted == route:
+                self._reveal(route)
+        if type(page).preload is Page.preload:
+            self._reveal(route)
+        elif route not in self._loading:  # events that arrive while it loads do not queue the same read again
+            self._loading.add(route)
+            self.slow(warm, loaded, f"Opening {spec.title}")
+        return page
+
+    def _reveal(self, route):
+        page = self.pages[route]
+        if self.route and self.route != route:
             self.pages[self.route].pack_forget()
         self.route = route
-        page = self.pages[route]
-        page.pack(fill="both", expand=True)
-        self._highlight(spec.area)
+        if not page.winfo_manager():
+            page.pack(fill="both", expand=True)
+        self.loader.place_forget()
         page.refresh()
-        return page
+
+    # long reads: one worker takes them from a queue; the Tk thread only polls for results ---------------------
+    def _build_loader(self):
+        self.jobs, self.results, self._waiting, self._wanted, self._loading = queue.Queue(), queue.Queue(), 0, None, set()
+        threading.Thread(target=self._work, daemon=True).start()
+        self.loader = tk.Frame(self.main, bg=C["bg"])
+        box = tk.Frame(self.loader, bg=C["bg"])
+        box.place(relx=.5, rely=.4, anchor="center", width=440)
+        self.load_title = tk_label(box, "", 17, font=font(17, bold=True))
+        self.load_text = tk_label(box, "", 13, "muted", wraplength=440)
+        self.load_bar = Progress(box)
+        self.load_title.pack(fill="x")
+        self.load_text.pack(fill="x", pady=(6, 8))
+        self.load_bar.pack(fill="x")
+
+    def _work(self):
+        while True:
+            work, then = self.jobs.get()
+            if work is None:
+                return
+            try:
+                self.results.put((then, work(), None))
+            except Exception as error:
+                self.results.put((then, None, error))
+
+    def slow(self, work, then, title="Working"):
+        """then(work()) on the Tk thread. work() is service reads only; when one is not cached it runs on the worker
+        behind the loading panel, which shows what services.note() says is being read and how far along it is."""
+        if self.services.ready(work):
+            return then(work())
+        self.services.note("")
+        self.load_title.configure(text=title)
+        self.loader.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.loader.lift()
+        self.jobs.put((work, then))
+        self._waiting += 1
+        if self._waiting == 1:
+            self._poll()
+
+    def _poll(self):
+        text, fraction = self.services.loading
+        self.load_text.configure(text=text or "Getting things ready")
+        self.load_bar.set(fraction)
+        while self._waiting:
+            try:
+                then, value, error = self.results.get_nowait()
+            except queue.Empty:
+                break
+            self._waiting -= 1
+            if not self._waiting:
+                self.loader.place_forget()
+            if error is None:
+                then(value)
+            else:
+                self.report_callback_exception(type(error), error, error.__traceback__)
+        if self._waiting:
+            self.after(60, self._poll)
 
     def on_event(self, kind, payload):
         if kind == "queue":
@@ -193,6 +268,7 @@ class Studio(tk.Tk):
             self.pages[self.route].on_event(kind, payload)
 
     def destroy(self):
+        self.jobs.put((None, None))
         self.unsubscribe()
         close = getattr(self.services, "close", None)
         if close:

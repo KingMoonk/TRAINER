@@ -192,6 +192,11 @@ class PretrainingPage(Page):
         return int(self.rows.value)
 
     # state ---------------------------------------------------------------
+    def preload(self):
+        for s in sets_of(self.services.data("text")):
+            self.use.setdefault(s["id"], True)
+        self._preview()
+
     def refresh(self):
         v = self.version()
         parent = self.parent(v)
@@ -258,11 +263,11 @@ class PretrainingPage(Page):
             self.notes[payload["id"]] = payload["text"]
             self.paint_collection()
         elif kind in ("download_done", "import_done", "download_failed"):
-            self.refresh()
+            self.reload()
 
     def toggle(self, dataset_id):
         self.use[dataset_id] = not self.use.get(dataset_id)
-        self.refresh()
+        self.reload()
 
     def _preview(self):
         ids = self.chosen()

@@ -43,5 +43,16 @@ class Page(ttk.Frame):
     def refresh(self):
         """Re-read services and redraw. Called when the page is shown."""
 
+    def preload(self):
+        """The slow service reads refresh() is about to make, and nothing else: it can run off the Tk thread, so no widgets."""
+
+    def reload(self):
+        """refresh() after the stored data may have changed. The shell swaps in a version that loads behind its panel."""
+        self.refresh()
+
+    def slow(self, work, then):
+        """then(work()) for a service read that may be long. The shell swaps in a version that keeps the Tk thread free."""
+        then(work())
+
     def on_event(self, kind, payload):
         """Services event (queue, versions, ...), delivered on the Tk thread while the page is shown."""
