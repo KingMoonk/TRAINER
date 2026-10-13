@@ -59,7 +59,7 @@ def build(directory):
     # Train two versions
     _train_versions(directory, examples[:50])
 
-    # Write queue.json with defaults from BUILD.md S2
+    # Write queue.json with the queue defaults
     queue_state = {
         "now": None,
         "up_next": [],
