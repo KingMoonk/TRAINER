@@ -335,6 +335,11 @@ class Services:
         of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
         raise NotImplementedError
 
+    def lr_range_test(self, spec, stop=None):
+        """studio_compute.lr_range_test for `spec` on a slice of the chosen text: a throwaway copy trained for about a hundred
+        steps while the learning rate rises. Slow: call it off the Tk thread. `stop` (a threading.Event) ends it early."""
+        raise NotImplementedError
+
     # data (S5) / evaluation (S4) / chat ------------------------------------
     def data(self, kind, query=""):
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
@@ -628,6 +633,12 @@ class FakeServices(Services):
         from studio_ia import pieces
         return pieces.word_lists([r["b"] for r in self._rows()["text"]])  # no GPT-2 list: nothing is downloaded here
 
+    def lr_range_test(self, spec, stop=None):
+        rates = [1e-6 * 10 ** (i * 6 / 99) for i in range(100)]
+        losses = [5.5 - 2.5 * min(1., max(0., (i - 30) / 50)) for i in range(100)]
+        return dict(rates=rates, losses=losses, smoothed=losses, suggestion=rates[70] / 10, steepest=70, diverged=False, cancelled=False,
+                    lr_min=1e-6, lr_max=1.)
+
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
@@ -832,6 +843,7 @@ from pathlib import Path  # noqa: E402
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
+RANGE_CHARS = 400_000  # characters of the chosen text the learning-rate test trains on: a hundred small steps never read more
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
 FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
@@ -1290,6 +1302,15 @@ class WorkspaceServices(Services):
             texts, _ = dk.text_sample(self.workspace, ids, pieces.SAMPLE_CHARS, exclude=set(self._heldout()))
             return pieces.word_lists(texts, self._cached("gpt2", self._gpt2))
         return self._fresh("word_lists", make)
+
+    def lr_range_test(self, spec, stop=None):
+        import studio_compute
+        import studio_data_kinds as dk
+        ids = [d["id"] for d in self.workspace.state["datasets"]]
+        texts, _ = dk.text_sample(self.workspace, ids, RANGE_CHARS, exclude=set(self._heldout()))
+        if not texts:
+            raise ValueError("There is no plain text to try it on. Add some in Your data.")
+        return studio_compute.lr_range_test(spec, [{"text": t} for t in texts], stop=stop)
 
     def _gpt2(self):
         """GPT-2's list, downloaded once into data/gpt2 as training with it would; None when it cannot be fetched."""
