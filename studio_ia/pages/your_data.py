@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import studio_rules as rules  # names and labels of the rules only
 from studio_ia.copy import YOURDATA as T
-from studio_ia.pages.base import Page
+from studio_ia.pages.base import Page, Throttle
 from studio_ia.pages.pretraining import source_action, source_status
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import _activate, button, tip
@@ -89,22 +89,6 @@ class Search:
 
     def wanted(self, token):
         return token == self.token
-
-
-class Throttle:
-    """One pass per `interval` seconds: ready(now) is True (and starts the next interval) or False; wait(now) is the time left."""
-
-    def __init__(self, interval=PROGRESS_EVERY):
-        self.interval, self.last = interval, None
-
-    def ready(self, now):
-        if self.last is None or now - self.last >= self.interval:
-            self.last = now
-            return True
-        return False
-
-    def wait(self, now):
-        return 0.0 if self.last is None else max(0.0, self.interval - (now - self.last))
 
 
 def collection_shown(summary):
@@ -223,7 +207,7 @@ class YourDataPage(Page):
         self.collection_rows = tk.Frame(card, bg=C["panel"])
         self.collection_rows.pack(fill="x", pady=(6, 0))
         self.notes, self.collections, self.status_labels, self.painted = {}, {}, {}, None  # notes: source id -> latest progress line
-        self.throttle, self.dirty, self.flush_timer, self.resize_timer = Throttle(), set(), None, None
+        self.throttle, self.dirty, self.flush_timer, self.resize_timer = Throttle(PROGRESS_EVERY), set(), None, None
         _activate(self.back, self.go_back)
 
     # navigation ---------------------------------------------------------------------

@@ -1,12 +1,13 @@
 """Pretraining: Data -> Batches -> Train for the current design version."""
 from __future__ import annotations
 
+import time
 import tkinter as tk
 import uuid
 
 from studio_ia.copy import PRETRAINING as T
 from studio_ia.expectation import expectation, table_params
-from studio_ia.pages.base import Page
+from studio_ia.pages.base import Page, Throttle
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon, tip
@@ -15,6 +16,8 @@ ROWS = ("8", "16", "32")
 HOLD = ("2%", "5%", "10%")
 LENGTHS = {"Short": 1, "Medium": 2, "Long": 4}  # passes over the chosen text
 RULE = 20  # word pieces per parameter, a rule of thumb only
+ABOUT_RIGHT = (0.8 * RULE, 1.5 * RULE)  # ratios in this band read "about right"; below it too little, above it plenty
+PROGRESS_EVERY = 0.5  # seconds between repaints of a download's status line
 PALETTE = ("#3a3560", "#2a4558", "#4a3a2a", "#2f4a36", "#4a2f45")
 END = "#0a0b0e"
 
@@ -59,6 +62,33 @@ def source_status(row, note=""):
     return T["state_" + row["state"]]
 
 
+def collection_view(rows):
+    """What the collection card shows for `rows`: the same value means the widgets on screen are already right. Progress
+    numbers are left out on purpose; they only move the status line, which is updated in place."""
+    return tuple((r["id"], r["name"], r["size"], r["records"], r["state"], r.get("error") or "") for r in rows)
+
+
+def enough_text(ratio):
+    """(headline, key) for `ratio` word pieces per parameter: too little, about right, or plenty. Plenty means one pass
+    already covers the rule of thumb, so repeating the text is not needed."""
+    low, high = ABOUT_RIGHT
+    if ratio < low:
+        return T["text_estimate"].format(times=f"{RULE / max(ratio, 1e-9):.1f}"), "little"
+    if ratio <= high:
+        return T["text_about_right"], "about_right"
+    return T["text_plenty"].format(times=f"{ratio / RULE:.0f}" if ratio >= 3 * RULE else f"{ratio / RULE:.1f}"), "plenty"
+
+
+def ratio_text(ratio):
+    """A word-pieces-per-parameter ratio in plain words: exact when small, rounded to two digits when large."""
+    if ratio < 10:
+        return f"{ratio:.2f}"
+    if ratio < 100:
+        return f"{ratio:.1f}"
+    digits = len(str(int(ratio))) - 2
+    return f"about {round(ratio, -digits):,.0f}"
+
+
 def version_expectation(spec, preview, passes):
     """(headline, details) of what to expect from this version after `passes` passes over the chosen text; empty until the size preview is known."""
     params = (preview or {}).get("params")
@@ -82,6 +112,8 @@ class PretrainingPage(Page):
         super().__init__(*a, **kw)
         self.use, self.mode = {}, "catch_up"
         self.preview, self.notes = {}, {}  # notes: latest progress line per source being fetched
+        self.painted, self.status_labels = None, {}  # collection_view on screen; each source's status label
+        self.throttle, self.dirty, self.flush_timer = Throttle(PROGRESS_EVERY), set(), None
         self.build()
 
     def build(self):
@@ -272,6 +304,10 @@ class PretrainingPage(Page):
             rows = self.services.collection()
         except NotImplementedError:
             rows = []
+        view = collection_view(rows)
+        if view == self.painted:  # progress only moves the status lines, which are updated in place
+            return
+        self.painted, self.status_labels = view, {}
         for child in self.collection_rows.winfo_children():
             child.destroy()
         for row in rows:
@@ -282,8 +318,9 @@ class PretrainingPage(Page):
             label, action = source_action(row)
             if action:
                 button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
-            tk_label(self.collection_rows, source_status(row, self.notes.get(row["id"], "")), 12,
-                     "coral" if row.get("error") else "muted", "panel", wraplength=720).pack(anchor="w")
+            status = self.status_labels[row["id"]] = tk_label(self.collection_rows, source_status(row, self.notes.get(row["id"], "")), 12,
+                                                              "coral" if row.get("error") else "muted", "panel", wraplength=720)
+            status.pack(anchor="w")
         if any(source_action(r)[1] == "download" for r in rows):
             button(self.collection_rows, T["download_all"], lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
 
@@ -292,16 +329,38 @@ class PretrainingPage(Page):
         started = self.services.download_sources(None if source_id is None else [source_id]) if action == "download" \
             else self.services.import_source(source_id)
         if started:
-            self.refresh()
+            self.paint_collection()
 
     def on_event(self, kind, payload):
-        if kind == "download":
+        if kind == "download":  # several a second: only the status line changes, at most PROGRESS_EVERY apart
             self.notes[payload["id"]] = payload["text"]
-            self.paint_collection()
+            self.dirty.add(payload["id"])
+            self._flush_soon()
         elif kind in ("download_done", "import_done", "download_failed"):
             self.paint_collection()  # cheap: manifests and the set list only
         elif kind == "downloads_finished":
             self.quiet_reload()  # re-counting every row is slow; the page stays usable while it runs
+
+    def _flush_soon(self):
+        if self.flush_timer is not None:
+            return
+        now = time.monotonic()
+        if self.throttle.ready(now):  # the first change of a burst is drawn at once; the rest wait for the next tick
+            self._flush_notes()
+        else:
+            self.flush_timer = self.after(int(self.throttle.wait(now) * 1000) + 20, self._flush_later)
+
+    def _flush_later(self):
+        self.flush_timer = None
+        self.throttle.ready(time.monotonic())
+        self._flush_notes()
+
+    def _flush_notes(self):
+        for source_id in self.dirty:
+            label = self.status_labels.get(source_id)
+            if label is not None and label.winfo_exists():  # a progress line means it is being fetched, whatever the rows say
+                label.configure(text=self.notes[source_id], fg=C["muted"])
+        self.dirty.clear()
 
     def toggle(self, dataset_id):
         self.use[dataset_id] = not self.use.get(dataset_id)
@@ -321,9 +380,9 @@ class PretrainingPage(Page):
             self.enough_tip = T["word_pieces_plain"]
         elif pieces and params:
             ratio = pieces / params
-            self.enough.configure(text=T["text_estimate"].format(times=f"{max(RULE / ratio, 0):.1f}") if ratio < RULE
-                                  else "You have about as much text as the rule of thumb asks for")
-            self.enough_tip = T["word_pieces_rule"].format(ratio=f"{ratio:.2f}")
+            headline, verdict = enough_text(ratio)
+            self.enough.configure(text=headline)
+            self.enough_tip = (T["word_pieces_plenty"] if verdict == "plenty" else T["word_pieces_rule"]).format(ratio=ratio_text(ratio))
         else:
             self.enough.configure(text=T["text_unknown"])
             self.enough_tip = T["word_pieces_plain"]
