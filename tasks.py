@@ -28,6 +28,8 @@ def run(*cmd, env=None):
     print("+", " ".join(cmd), flush=True)
     code = subprocess.call(cmd, env={**os.environ, **(env or {})})
     if code:
+        # the CI step's own exit code does not tell a failed test (1) from a native crash (0xc0000005, say); this does
+        print(f"+ exited with {code} ({code & 0xFFFFFFFF:#x})", flush=True)
         sys.exit(code)
 
 
@@ -37,15 +39,18 @@ def test(modules=()):
         window = [m for m in modules if "gui_" in m or "e2e" in m]
         if window:
             sys.exit(f"{window} open windows or train for real: they run in CI only (test:ci, test:ci:e2e).")
-        run(PY, "-m", "unittest", *VERBOSE, *modules, env=UNIT)
+        run(PY, "-X", "faulthandler", "-m", "unittest", *VERBOSE, *modules, env=UNIT)
     else:
-        run(PY, "-m", "unittest", "discover", "-s", "tests", *VERBOSE, env=UNIT)  # test_*.py only, which never open a window
+        # test_*.py only, which never open a window. A native crash prints every thread's Python stack instead of ending silently.
+        run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", *VERBOSE, env=UNIT)
 
 
 def test_ci():
     if not os.environ.get("CI"):
         sys.exit("test:ci opens real windows and runs in CI only. Run `python tasks.py test` locally.")
     run(PY, "-m", "compileall", "-q", ".")  # catches syntax errors in modules no test imports
+    # runners differ in CPU; a crash in a CPU kernel (bf16, say) shows up on some of them only
+    run(PY, "-c", "import platform, torch; print('+ cpu:', platform.processor(), '| torch', torch.__version__, torch.backends.cpu.get_cpu_capability())")
     test()
     # One process per module, as in the app: Panda3D runs in its own process there, never beside Tk. A crash prints every thread's stack.
     for path in sorted(Path(__file__).with_name("tests").glob("gui_*.py")):
