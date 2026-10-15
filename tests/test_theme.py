@@ -51,6 +51,20 @@ class TestTheme(unittest.TestCase):
             self.assertEqual(theme.font(11, mono=True), ("Test", -12))
             self.assertEqual(theme.font(15), ("Test", -15))
 
+    def test_text_boxes_share_the_padded_ui_font_style(self):
+        fake = mock.Mock()
+        fake.actual.return_value = "Test"
+        with mock.patch.object(theme.tkfont, "nametofont", return_value=fake), \
+                mock.patch.object(theme.tk, "Text") as text, mock.patch.object(theme.ttk, "Entry") as entry:
+            theme.text_box("parent", height=3, state="disabled")
+            theme.entry("parent", 14, width=8)
+        kw = text.call_args.kwargs
+        self.assertEqual((kw["padx"], kw["pady"]), theme.TEXT_PAD)
+        self.assertEqual(kw["font"], ("Test", -15))
+        self.assertEqual((kw["highlightthickness"], kw["highlightbackground"], kw["highlightcolor"]), (1, C["border"], C["violet"]))
+        self.assertEqual((kw["height"], kw["state"]), (3, "disabled"))
+        self.assertEqual(entry.call_args.kwargs, dict(font=("Test", -14), width=8))
+
 
 if __name__ == "__main__":
     unittest.main()

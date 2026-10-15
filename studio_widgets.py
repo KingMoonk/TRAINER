@@ -44,6 +44,13 @@ def normalize_scroll_delta(delta):
 
 
 WHEEL_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")  # X11 reports the wheel as buttons 4 and 5
+TOUCHPAD = "<TouchpadScroll>"  # Tk 8.7+ on macOS: a trackpad's two-finger scroll, no longer a <MouseWheel>
+
+
+def touchpad_dy(delta):
+    """The vertical pixels of a <TouchpadScroll> delta: Tk packs x in the high 16 bits and a signed y in the low 16."""
+    low = delta & 0xFFFF
+    return low - 0x10000 if low >= 0x8000 else low
 
 
 def wheel_delta(event):
@@ -65,8 +72,9 @@ def button(parent, text, command, primary=False):
 
 def text_box(parent, height=5, **kwargs):
     return tk.Text(parent, height=height, bg=INPUT, fg=TEXT, insertbackground=ACCENT,
-                   selectbackground="#355473", relief="flat", borderwidth=0, padx=12,
-                   pady=10, font=(FONT, 10), wrap="word", undo=True, **kwargs)
+                   selectbackground="#355473", relief="flat", borderwidth=0, padx=14, pady=12,
+                   highlightthickness=1, highlightbackground=EDGE, highlightcolor=ACCENT,
+                   font="TkTextFont", wrap="word", undo=True, **kwargs)
 
 
 def content(widget):
@@ -130,18 +138,34 @@ class ScrollPage(ttk.Frame):
         scroll.pack(side="right", fill="y")
         for sequence in WHEEL_EVENTS:
             self.bind_all(sequence, self.scroll, add="+")
+        if tk.TkVersion >= 8.7:
+            self.bind_all(TOUCHPAD, self.touch, add="+")
 
-    def scroll(self, event):
-        # The pointer may be over a nested card; text and tables scroll independently.
-        # Tk-internal widgets (a combobox's popdown list) arrive as plain path strings.
+    def under_pointer(self, event):
+        """Whether the event is over this page. The pointer may be over a nested card; text and tables scroll independently.
+        Tk-internal widgets (a combobox's popdown list) arrive as plain path strings."""
         if not isinstance(event.widget, tk.Misc) or event.widget.winfo_class() in {"Text", "Treeview", "TCombobox"}:
-            return
+            return False
         widget = event.widget
         while widget is not None:
             if widget is self:
-                self.canvas.yview_scroll(-normalize_scroll_delta(wheel_delta(event)), "units")
-                return "break"
+                return True
             widget = widget.master
+        return False
+
+    def scroll(self, event):
+        if self.under_pointer(event):
+            self.canvas.yview_scroll(-normalize_scroll_delta(wheel_delta(event)), "units")
+            return "break"
+
+    def touch(self, event):
+        """Two-finger scroll moves the page by the pixels the trackpad reports, anywhere over it."""
+        if not self.under_pointer(event):
+            return
+        height = self.body.winfo_height()
+        if height > 0:
+            self.canvas.yview_moveto(self.canvas.yview()[0] - touchpad_dy(event.delta) / height)
+        return "break"
 
 
 class ExampleEditor(tk.Toplevel):

@@ -13,7 +13,7 @@ from studio_ia.copy import INSIDE3D as T
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI
 from studio_ia.theme import C, GUTTER, tk_label
-from studio_ia.widgets import Card, Kicker, Segmented, button
+from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon, tip
 from studio_scene import SceneModel
 from studio_spec import upgrade
 
@@ -155,13 +155,18 @@ class Inside3DPage(Page):
     def _build(self):
         row = Card(self.body)
         row.pack(fill="x")
-        Kicker(row, T["viewer_label"], bg="panel").pack(anchor="w", pady=(0, 6))
+        head = tk.Frame(row, bg=C["panel"])
+        head.pack(anchor="w", pady=(0, 6))
+        Kicker(head, T["viewer_label"], bg="panel").pack(side="left")
+        info_icon(head, T["controls"]).pack(side="left", padx=(4, 0))
         self.note = tk_label(row, "", 14, "text2", "panel", wraplength=760)
         self.note.pack(anchor="w")
         self.launch = button(row, T["open_viewer"], self.toggle_viewer, primary=True)
         self.launch.pack(anchor="w", pady=(8, 0))
         self.notes_box = tk_label(row, "", 13, "muted", "panel", wraplength=760)
         self.notes_box.pack(anchor="w", pady=(8, 0))
+        self.launch_tip = ""
+        tip(self.launch, lambda: self.launch_tip)
 
         pick = Card(self.body)
         pick.pack(fill="x", pady=(GUTTER, 0))
@@ -205,14 +210,13 @@ class Inside3DPage(Page):
         self.hud_kicker.pack(anchor="w")
         self.hud_title = tk_label(self.hud_card, "", 18, "text", "panel", wraplength=760)
         self.hud_title.pack(anchor="w", pady=(4, 0))
-        self.hud_body = tk_label(self.hud_card, "", 14, "text2", "panel", wraplength=760)
-        self.hud_body.pack(anchor="w", pady=(6, 0))
+        self.hud_text = ""
+        tip(self.hud_title, lambda: self.hud_text)
 
         self.legend_card = Card(self.body)
         self.legend_card.pack(fill="x", pady=(GUTTER, 0))
         self.tip_card = Card(self.body)
         self.tip_card.pack(fill="x", pady=(GUTTER, 0))
-        tk_label(self.body, T["controls"], 13, "muted", wraplength=760).pack(anchor="w", pady=(GUTTER, 0))
         self._paint()
 
     # behaviour --------------------------------------------------------------
@@ -232,22 +236,26 @@ class Inside3DPage(Page):
         for b in self.move_buttons:
             b.configure(state="normal" if view["scene_enabled"] else "disabled")
         self.note.configure(text=view["note"])
-        self.notes_box.configure(text="\n".join(view["notes"]))
+        self.notes_box.configure(text="\n".join(n for n in view["notes"] if n == T["viewer_demo"]))  # the rest is how it works: a tooltip
+        self.launch_tip = "\n\n".join(n for n in view["notes"] if n != T["viewer_demo"])
         sc = self.scene
         self.scale_label.configure(text=sc.scale())
         kicker, title, body = sc.hud()
         self.hud_kicker.configure(text=kicker.upper())
         self.hud_title.configure(text=title)
-        self.hud_body.configure(text=body)
+        self.hud_text = body
         for card in (self.legend_card, self.tip_card):
             for child in card.winfo_children():
                 child.destroy()
-        Kicker(self.legend_card, T["what_seeing"], bg="panel").pack(anchor="w", pady=(0, 6))
-        for name, text in sc.legend():
-            tk_label(self.legend_card, f"{name}: {text}", 13, "text2", "panel", wraplength=760).pack(anchor="w", pady=2)
+        head = tk.Frame(self.legend_card, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, T["what_seeing"], bg="panel").pack(side="left")
+        info_icon(head, "\n\n".join(f"{name}: {text}" for name, text in sc.legend())).pack(side="left", padx=(4, 0))
         kicker, text, link, route = sc.tip()
-        Kicker(self.tip_card, kicker, color="amber", bg="panel").pack(anchor="w")
-        tk_label(self.tip_card, text, 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(4, 6))
+        head = tk.Frame(self.tip_card, bg=C["panel"])
+        head.pack(anchor="w", pady=(0, 6))
+        Kicker(head, kicker, color="amber", bg="panel").pack(side="left")
+        info_icon(head, text).pack(side="left", padx=(4, 0))
         button(self.tip_card, link, lambda: self.navigate(route)).pack(anchor="w")
 
     def toggle_viewer(self):

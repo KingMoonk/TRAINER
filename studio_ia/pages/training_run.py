@@ -7,7 +7,7 @@ import studio_eval
 from studio_ia.copy import TRAINING as T
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, HowItWorks, Kicker, button
+from studio_ia.widgets import BpcPlot, Card, Chip, HowItWorks, Kicker, button, info_icon, tip
 
 STATUS = {"learning": ("Learning", "training"), "flat": ("Flat", "unsaved"), "memorising": ("Memorising", "needs_training")}
 CONTEXT = 256  # pieces per row, matches the Pretraining page
@@ -71,15 +71,13 @@ class TrainingRunPage(Page):
             col.pack(side="left", expand=True, fill="x", anchor="w")
             value = tk_label(col, "–", 28, "text", "panel", font=font(28, mono=True))
             value.pack(anchor="w")
-            name = tk_label(col, label, 12, "muted", "panel")
+            name = tip(tk_label(col, label, 12, "muted", "panel"), T["bits_per_char_note"])
             name.pack(anchor="w")
             self.nums.append((value, name))
         self.chip = Chip(card, "Learning", "training")
         self.chip.pack(anchor="w", pady=(10, 2))
-        tk_label(card, T["bits_per_char_note"], 12, "dim", "panel").pack(anchor="w", pady=(0, 6))
-        self.plot = BpcPlot(card, 700, 280)
-        self.plot.pack(fill="x")
-        tk_label(card, "Error usually drops most in the cool-down, where the learning rate falls to near zero.", 12, "dim", "panel").pack(anchor="w", pady=(4, 0))
+        self.plot = tip(BpcPlot(card, 700, 280), T["cooldown_drop"])
+        self.plot.pack(fill="x", pady=(6, 0))
         legend = tk_label(card, f"{T['training_text']} · {T['every_step']} (faint) · {T['held_back']} (dots)", 12, "muted", "panel")
         legend.pack(anchor="w", pady=(4, 0))
         self.switch = tk.Frame(b, bg=C["blue_bg"], highlightthickness=1, highlightbackground=C["blue"], padx=GUTTER, pady=12)
@@ -128,7 +126,7 @@ class TrainingRunPage(Page):
         parent = next((p for p in s.versions() if v and p.number == v.parent), None) if v else None
         n, pn = (v.number if v else None), (parent.number if parent else None)
         self.h1.configure(text=("Pretraining" if n is None else f"Pretraining · version {n}") + (" catching up" if q.job else ""))
-        self.lead_label.configure(text="Step k of n, the schedule phase and the error so far.")
+        self.set_lead("Step k of n, the schedule phase and the error so far.")
         if v is None:
             change = "No version yet: design one in the Network designer, then train it in Pretraining."
         elif pn is None:
@@ -197,8 +195,10 @@ class TrainingRunPage(Page):
         self._samples_shown = shown
         for child in self.samples.winfo_children():
             child.destroy()
-        Kicker(self.samples, T["what_writes_now"].format(every=f"{every:,}") if every else T["what_writes_now_plain"], bg="panel").pack(anchor="w")
-        tk_label(self.samples, T["always_picks"], 12, "dim", "panel").pack(anchor="w")
+        head = tk.Frame(self.samples, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, T["what_writes_now"].format(every=f"{every:,}") if every else T["what_writes_now_plain"], bg="panel").pack(side="left")
+        info_icon(head, T["always_picks"]).pack(side="left", padx=(4, 0))
         tk_label(self.samples, curve.get("prompt") or T["example_prompt"], 14, "text2", "panel", font=font(14, serif=True)).pack(anchor="w", pady=6)
         for label, text in rows:
             line = tk.Frame(self.samples, bg=C["panel"])

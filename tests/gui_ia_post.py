@@ -8,6 +8,7 @@ from studio_spec import default_spec
 from studio_ia.copy import FEEDBACK as T
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
+from studio_ia.widgets import tips_in
 
 
 def labels(widget):
@@ -41,9 +42,14 @@ class PostTrainingTest(unittest.TestCase):
 
     def test_renders_stage_line_chip_and_gate(self):
         text = labels(self.page)
-        for want in (T["h1"], T["lead"], T["starts_from"], T["at_this_size"], T["click_round"], T["verdict_title"], T["chat_moves"],
+        for want in (T["h1"], T["starts_from"], T["at_this_size"], T["verdict_title"],
                      T["held_back_check"], T["problems_check"], T["until_then"]):
             self.assertIn(want, text)
+        tips = "\n".join(tips_in(self.page))
+        self.assertIn(T["lead"], tips)
+        for want in (T["click_round"], T["chat_moves"], T["judge_note"]):  # explained on hover, not printed
+            self.assertIn(want, tips)
+            self.assertNotIn(want, text)
         for name in ("Practice answers", "Practice with checks", "Learn from a teacher", "Your votes"):
             self.assertIn(name, text)
 
@@ -60,7 +66,7 @@ class PostTrainingTest(unittest.TestCase):
                 "Your votes": T["leash_note"]}
         for name, sentence in want.items():
             self.click(find(self.page, name))
-            self.assertIn(sentence, labels(self.page), name)
+            self.assertIn(sentence, "\n".join(tips_in(self.page)), name)  # the round's explanation is its tooltip
 
     def test_live_events_replace_the_samples(self):
         self.click(find(self.page, "Practice with checks"))

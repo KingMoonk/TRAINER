@@ -10,8 +10,8 @@ from studio_ia.copy import CHAT as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import plain_error
-from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Toggle, _activate, button
+from studio_ia.theme import C, GUTTER, entry, font, text_box, tk_label
+from studio_ia.widgets import Card, Kicker, Toggle, _activate, button, info_icon, tip
 
 A_COLOR, B_COLOR = "violet", "blue"
 TONE = {"better": "violet", "baseline": "muted", "within the spread": "muted", "worse": "coral", "catching up": "coral"}
@@ -166,30 +166,28 @@ class ChatPage(Page):
             f = Card(self.panes_row)
             tag = tk_label(f, "", 13, A_COLOR if i == 0 else B_COLOR, "panel", font=font(13, bold=True))
             tag.pack(anchor="w")
-            text = tk.Text(f, height=7, width=40, wrap="word", bg=C["panel2"], fg=C["text"], relief="flat",
-                           font=font(14, serif=True), highlightthickness=0, state="disabled")
-            text.pack(fill="x", pady=6)
+            text = text_box(f, height=7, width=40, state="disabled")
+            text.tag_configure("placeholder", foreground=C["muted"])
+            text.pack(fill="x", pady=(8, 0))
             self.pane_frames.append(f)
             self.pane_tags.append(tag)
             self.pane_texts.append(text)
-            self.pane_better.append(button(f, T["this_one_better"], lambda k=i: self.better(k)))
-        self.compare_note = tk_label(body, T["picking_reply_desc"], 12, "dim", wraplength=780)
+            self.pane_better.append(tip(button(f, T["this_one_better"], lambda k=i: self.better(k)), T["picking_reply_desc"]))
         self.send_row = tk.Frame(body, bg=C["bg"])
         self.send_row.pack(fill="x", pady=(0, GUTTER))
-        self.entry = tk.Entry(self.send_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(15))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(0, 8))
+        self.entry = entry(self.send_row)
+        self.entry.pack(side="left", fill="both", expand=True, padx=(0, 8))
         self.entry.bind("<Return>", lambda _e: self.send())
         self.send_btn = button(self.send_row, T["send"], self.send, True)
         self.send_btn.pack(side="left")
         teach = tk.Frame(body, bg=C["bg"])
         teach.pack(fill="x", pady=(0, GUTTER))
-        link = tk_label(teach, T["teach_correction"], 14, "violet", cursor="hand2", takefocus=1)
+        link = tip(tk_label(teach, T["teach_correction"], 14, "violet", cursor="hand2", takefocus=1), T["teach_correction_desc"])
         link.pack(anchor="w")
         _activate(link, lambda: self.teach_row.pack(anchor="w", fill="x", pady=4))
-        tk_label(teach, T["teach_correction_desc"], 12, "dim", wraplength=780).pack(anchor="w")
         self.teach_row = tk.Frame(teach, bg=C["bg"])
-        self.correction = tk.Entry(self.teach_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(14))
-        self.correction.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 8))
+        self.correction = entry(self.teach_row, 14)
+        self.correction.pack(side="left", fill="both", expand=True, padx=(0, 8))
         button(self.teach_row, "Save", self.teach).pack(side="left")
         self.whole = Toggle(self.teach_row, "It is a whole new answer (round 1)", False, bg="bg")
         self.whole.pack(side="left", padx=8)
@@ -230,7 +228,6 @@ class ChatPage(Page):
         self.cmp_btn.configure(text=T["back_to_one"] if self.compare else T["compare_btn"])
         for f in self.pane_frames:
             f.pack_forget()
-        self.compare_note.pack_forget()
         keys = (0, 1) if self.compare else (0,)
         for i in keys:
             self.pane_frames[i].pack(side="left", fill="both", expand=True, padx=(0, GUTTER if i == 0 and self.compare else 0))
@@ -243,19 +240,17 @@ class ChatPage(Page):
             self.pane_tags[i].configure(text=tag)
             self.pane_better[i].pack_forget()
             if self.compare:
-                self.pane_better[i].pack(anchor="w")
-            self._set_text(i, self.replies.get(i, T["its_reply"]))
-        if self.compare:
-            self.compare_note.pack(anchor="w", before=self.send_row)
+                self.pane_better[i].pack(anchor="w", pady=(8, 0))
+            self._set_text(i, self.replies.get(i, T["its_reply"]), () if i in self.replies else "placeholder")
         self._verdict(vs)
         self._shelf(vs, best)
         self._score(cur)
 
-    def _set_text(self, i, text):
+    def _set_text(self, i, text, tags=()):
         t = self.pane_texts[i]
         t.configure(state="normal")
         t.delete("1.0", "end")
-        t.insert("1.0", text)
+        t.insert("1.0", text, tags)
         t.configure(state="disabled")
 
     def _verdict(self, vs):
@@ -288,8 +283,10 @@ class ChatPage(Page):
     def _shelf(self, vs, best):
         for w in self.shelf.winfo_children():
             w.destroy()
-        Kicker(self.shelf, T["versions"], bg="panel").pack(anchor="w")
-        tk_label(self.shelf, T["shelf_hint_compare" if self.compare else "shelf_hint_single"], 12, "muted", "panel").pack(anchor="w", pady=(0, 6))
+        head = tk.Frame(self.shelf, bg=C["panel"])
+        head.pack(anchor="w", pady=(0, 6))
+        Kicker(head, T["versions"], bg="panel").pack(side="left")
+        info_icon(head, T["shelf_hint_compare" if self.compare else "shelf_hint_single"]).pack(side="left", padx=(4, 0))
         self.rows = {}
         for num, v in sorted(vs.items()):
             is_a, is_b = num == self.use, self.compare and num == self.b

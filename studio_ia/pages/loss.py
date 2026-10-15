@@ -10,7 +10,7 @@ from studio_ia.copy import LOSS
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Segmented
+from studio_ia.widgets import Card, Kicker, Segmented, info_icon, tip
 
 LN2 = math.log(2)
 UNTRAINED, TRAINED = LOSS["step_0"], LOSS["after_training"]
@@ -67,31 +67,31 @@ class LossPage(Page):
         tk_label(card, f"…{context[-24:]} ?", 16, "text2", "panel").pack(anchor="w")
         table = tk.Frame(card, bg=C["panel"])
         table.pack(fill="x", pady=8)
+        softmax = (f"Softmax over all {V:,} tokens. The target is one-hot: 1 for “{token}”, 0 for everything else. "
+                   "The gradient on each logit is simply p − target.")
+        if data.get("grad_error") is not None:
+            softmax += f"\n\nChecked against the engine's own backward pass: largest difference {data['grad_error']:.1e}."
         for c, text in enumerate((LOSS["token"], LOSS["probability"], "", LOSS["target"], LOSS["gradient"])):
-            tk_label(table, text, 12, "muted", "panel").grid(row=0, column=c, sticky="w", padx=(0, GUTTER))
+            tip(tk_label(table, text, 12, "muted", "panel"), softmax if c in (1, 3, 4) else None).grid(row=0, column=c, sticky="w", padx=(0, GUTTER))
         rows, rest, n_rest = loss_rows(p, target, pieces)
         self.table = []
         for r, (tok, prob, y, g) in enumerate(rows, 1):
             self._row(table, r, show_tok(tok), prob, str(y), ("−" if g < 0 else "+") + fmt_p(abs(g)), y)
         self._row(table, len(rows) + 1, f"all {n_rest:,} others", rest, "0 each", "+p each", 0)
-        tk_label(card, f"Softmax over all {V:,} tokens. The target is one-hot: 1 for “{token}”, 0 for everything else. "
-                       "The gradient on each logit is simply p − target.", 13, "muted", "panel", wraplength=760).pack(anchor="w")
-        if data.get("grad_error") is not None:
-            tk_label(card, f"Checked against the engine's own backward pass: largest difference {data['grad_error']:.1e}.", 12, "dim", "panel").pack(anchor="w", pady=(4, 0))
         ce = Card(self.body)
         ce.pack(fill="x", pady=GUTTER)
         Kicker(ce, LOSS["cross_entropy"], bg="panel").pack(anchor="w")
         tk_label(ce, f"{LOSS['loss_eq'].format(token=token)}{LOSS['loss_eq_end'].format(p=fmt_p(float(p[target])))}", 15, "text", "panel").pack(anchor="w", pady=4)
-        self.loss_label = tk_label(ce, f"{self.loss:.2f} {LOSS['nats']}", 28, "text" if self.trained else "amber", "panel", font=font(28, bold=True))
-        self.loss_label.pack(anchor="w")
         note = ("Falls as the model puts more probability on the target token. Measured by the engine on the trained checkpoint." if self.trained else
                 f"Random weights spread probability almost evenly, about 1 / {V:,} per token, so the loss starts near ln {V:,} = {math.log(V):.2f} (measured here: {self.loss:.2f}).")
-        tk_label(ce, note, 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
+        self.loss_label = tip(tk_label(ce, f"{self.loss:.2f} {LOSS['nats']}", 28, "text" if self.trained else "amber", "panel", font=font(28, bold=True)), note)
+        self.loss_label.pack(anchor="w")
         bpc = Card(self.body)
         bpc.pack(fill="x")
-        Kicker(bpc, LOSS["why_bits"], bg="panel").pack(anchor="w")
-        tk_label(bpc, LOSS["nats_depend"], 13, "text2", "panel", wraplength=760).pack(anchor="w", pady=4)
-        tk_label(bpc, LOSS["bpc_formula"], 13, "text", "panel", font=font(13, mono=True), wraplength=760).pack(anchor="w")
+        head = tk.Frame(bpc, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, LOSS["why_bits"], bg="panel").pack(side="left")
+        info_icon(head, f"{LOSS['nats_depend']}\n\n{LOSS['bpc_formula']}").pack(side="left", padx=(4, 0))
         chars = max(1, len(pieces[target]))
         self.bpc = self.loss / (chars * LN2)
         tk_label(bpc, f"This piece, “{token}”, is {chars} character{'s' * (chars != 1)}: {self.loss:.2f} ÷ ({chars} × {LN2:.3f}) = {self.bpc:.2f} {LOSS['bpc_result']}",

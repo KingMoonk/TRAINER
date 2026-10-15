@@ -12,8 +12,8 @@ from studio_ia.copy import FEEDBACK as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added
-from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Chip, HeatGrid, Kicker, KofN, Segmented, _activate, button
+from studio_ia.theme import C, GUTTER, font, text_box, tk_label
+from studio_ia.widgets import Card, Chip, HeatGrid, Kicker, KofN, Segmented, _activate, button, info_icon, tip
 
 ROUNDS = (("Practice answers", T["round_1"], T["r1_method"], T["r1_lead"], T["answers_now"]),
           ("Practice with checks", T["round_2"], T["r2_method"], T["r2_lead"], T["passed_became"]),
@@ -134,8 +134,7 @@ class PostTrainingPage(Page):
         self._stages(status, notes)
         row = tk.Frame(self.body, bg=C["bg"])
         row.pack(fill="x", pady=GUTTER)
-        Chip(row, T["at_this_size"], "neutral").pack(anchor="w")
-        tk_label(row, T["click_round"], 13, "muted").pack(anchor="w", pady=(6, 0))
+        tip(Chip(row, T["at_this_size"], "neutral"), T["click_round"]).pack(anchor="w")
         self._card(version, status)
         self._gate_card(status)
         self._drawn = live_view(self.selected, self.group, self.heat, self.moved, self.gates)
@@ -209,8 +208,11 @@ class PostTrainingPage(Page):
         name, kicker, method, lead, _verdict = ROUNDS[i]
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
-        Kicker(card, kicker, "violet", "panel").pack(anchor="w")
-        tk_label(card, method, 13, "muted", "panel").pack(anchor="w", pady=(2, 0))
+        self._help = [method]  # the round's explanations, in a tooltip beside its name
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, kicker, "violet", "panel").pack(side="left")
+        info_icon(head, lambda: "\n\n".join(self._help)).pack(side="left", padx=(4, 0))
         tk_label(card, lead, 15, "text2", "panel", wraplength=760).pack(anchor="w", pady=(6, GUTTER))
         [self._r1, self._r2, self._r3, self._r4][i](card)
         actions = tk.Frame(card, bg=C["panel"])
@@ -232,7 +234,7 @@ class PostTrainingPage(Page):
         foot = {0: "Corrections you teach in Chat that need a whole new answer also land here.", 1: "Prompts where all answers pass, or all fail, teach nothing and are skipped. Each rule gets the room its answers need, up to 96 word pieces, so a step takes longer than it would with every answer cut at 32.",
                 2: "Also runs on its own after a night of training on new text: new text can erode how it answers, and a short lesson from the previous best version restores it without losing the new text.",
                 3: f"{count(self.counts.get('pairs'))} pairs rated. 1 in 5 is held back to check the result."}[i]
-        tk_label(card, foot, 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(8, 0))
+        self._help.append(foot)
 
     def _box(self, parent, kicker, text, grow=True):
         box = tk.Frame(parent, bg=C["panel2"], padx=12, pady=10)
@@ -252,7 +254,7 @@ class PostTrainingPage(Page):
             cell.pack(side="left", padx=(0, 2 * GUTTER))
             tk_label(cell, count(self.counts.get(key)), 22, "text", "panel", font=font(22, mono=True)).pack(anchor="w")
             tk_label(cell, label, 12, "muted", "panel").pack(anchor="w")
-        tk_label(card, T["few_thousand"], 13, "muted", "panel", wraplength=760).pack(anchor="w")
+        self._help.append(T["few_thousand"])
 
     def _r2(self, card):
         live = self.group
@@ -282,14 +284,14 @@ class PostTrainingPage(Page):
             passed = f"{sum(1 for _t, sc, _p in answers if sc >= 1)} of {n} passed" if live else T["passed_count"]
             for text in (first, passed, T["nothing_learn"]):
                 tk_label(grey, text, 13, "dim", "panel").pack(side="left", padx=(0, GUTTER))
-        tk_label(card, T["rules_check"], 13, "muted", "panel", wraplength=760).pack(anchor="w")
+        self._help.append(T["rules_check"])
 
     def _r3(self, card):
         live = self.heat
         words, surprise = (live["words"], live["surprise"]) if live else SAMPLE_HEAT
         tk_label(card, T["prompt_label"] + (": " + live["prompt"] if live else ": What is the capital of Australia?"), 12, "muted", "panel").pack(anchor="w")
         tk_label(card, T["answer_shaded"], 12, "muted", "panel").pack(anchor="w", pady=(6, 4))
-        text = tk.Text(card, height=3, wrap="word", bg=C["panel2"], fg=C["text"], font=font(16), bd=0, padx=10, pady=8, highlightthickness=0)
+        text = text_box(card, height=3, size=16)
         top = max(1.0, max(surprise, default=0))
         for n, (w, s) in enumerate(zip(words, surprise)):
             text.tag_configure(f"w{n}", background=HeatGrid._mix(C["panel2"], C["coral"], min(1., s / top)))
@@ -307,11 +309,10 @@ class PostTrainingPage(Page):
             KofN(card, self.moved["k"], self.moved["n"], "words moved toward the teacher").pack(anchor="w", pady=4)
         tk_label(card, T["teacher_label"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 4))
         labels = (T["previous_best"], T["this_model_correction"])
-        Segmented(card, labels, labels[self.teacher], lambda v: self._set("teacher", labels.index(v))).pack(anchor="w")
         earlier = self._previous_version(self.version)
         previous = T["previous_desc"].format(version=checkpoint_name(self.services, earlier).capitalize()) if earlier else T["no_previous"]
-        tk_label(card, (previous, T["correction_desc"])[self.teacher], 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
-        tk_label(card, T["teacher_note"], 13, "dim", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
+        tip(Segmented(card, labels, labels[self.teacher], lambda v: self._set("teacher", labels.index(v))), (previous, T["correction_desc"])[self.teacher]).pack(anchor="w")
+        self._help.append(T["teacher_note"])
 
     def _r4(self, card):
         pair = tk.Frame(card, bg=C["panel"])
@@ -329,12 +330,12 @@ class PostTrainingPage(Page):
             b.pack(anchor="w")
             _activate(b, lambda k=k: self._set("pick", k))
         self._gap(card)
-        tk_label(card, T["for_each_pair"], 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(0, GUTTER))
+        self._help.append(T["for_each_pair"])
         tk_label(card, T["how_far"], 12, "muted", "panel").pack(anchor="w", pady=(0, 4))
         names = [name for name, _beta, _note in LEASH]
         Segmented(card, names, names[self.leash], lambda v: self._set("leash", names.index(v))).pack(anchor="w")
         tk_label(card, f"{LEASH[self.leash][2]}  (β = {LEASH[self.leash][1]})", 13, "text2", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
-        tk_label(card, T["leash_note"], 13, "dim", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
+        self._help.append(T["leash_note"])
 
     def _gap(self, card):
         """Frozen starting copy vs learning copy: how likely your pick and the other answer are. Heights are illustrative."""
@@ -368,7 +369,10 @@ class PostTrainingPage(Page):
             kicker = f"RESULT · ROUND {i + 1}"
         else:
             kicker = f"TRAINING · ROUND {i + 1}" if s == "running" else "WHEN THIS ROUND ENDS"
-        Kicker(card, kicker, "violet", "panel").pack(anchor="w")
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, kicker, "violet", "panel").pack(side="left")
+        info_icon(head, f"{T['chat_moves']}\n\n{T['judge_note']}").pack(side="left", padx=(4, 0))
         if s == "running":
             self._step = tk_label(card, step_line(self.services.queue()), 13, "muted", "panel")
             self._step.pack(anchor="w")
@@ -382,7 +386,6 @@ class PostTrainingPage(Page):
         else:
             verdict = T["will_read"].format(verdict_full=verdict_text)
         tk_label(card, verdict, 17, "blue" if gate else "text2", "panel", wraplength=760).pack(anchor="w", pady=(2, GUTTER))
-        tk_label(card, T["chat_moves"], 13, "muted", "panel").pack(anchor="w")
         checks = gate["checks"] if gate else [{"name": T["held_back_check"], "detail": T["held_back_measured"], "ok": None},
                                               {"name": T["problems_check"], "detail": T["problems_measured"], "ok": None}]
         for c in checks:
@@ -401,7 +404,6 @@ class PostTrainingPage(Page):
             KofN(card, judge[0], judge[1], "prompts preferred by the judge").pack(anchor="w")
         else:
             tk_label(card, T["judge_none"], 14, "text2", "panel").pack(anchor="w")
-        tk_label(card, T["judge_note"], 12, "dim", "panel").pack(anchor="w")
         if gate:
             result = T["result_live"] if gate["ok"] else T["result_kept"]
         else:

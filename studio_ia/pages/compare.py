@@ -10,8 +10,8 @@ from studio_ia.copy import COMPARE as T
 from studio_ia.pages.base import Page
 from studio_ia.pages.builder import text_sets
 from studio_ia.services import Job
-from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, GuessChips, Kicker, Segmented, Toggle, _activate, button
+from studio_ia.theme import C, GUTTER, entry, font, tk_label
+from studio_ia.widgets import BpcPlot, Card, GuessChips, Kicker, Segmented, Toggle, _activate, button, tip
 from studio_spec import default_spec, validate_spec
 from studio_versions import change_text
 
@@ -101,13 +101,13 @@ class ComparePage(Page):
         setup = Card(b)
         setup.pack(fill="x", pady=(0, GUTTER))
         Kicker(setup, T["question"], bg="panel").pack(anchor="w")
-        self.question = tk.Entry(setup, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(15))
-        self.question.pack(fill="x", pady=(4, GUTTER), ipady=6)
+        self.question = entry(setup)
+        self.question.pack(fill="x", pady=(4, GUTTER))
         Kicker(setup, T["hold_equal"], bg="panel").pack(anchor="w")
         self.modes = Segmented(setup, [T[m[1]] for m in MODE_KEYS], T["params_mode"], self.pick_mode)
-        self.modes.pack(anchor="w", pady=(4, 8))
-        self.mode_note = tk_label(setup, "", 13, "muted", "panel", wraplength=720)
-        self.mode_note.pack(anchor="w", pady=(0, GUTTER))
+        self.modes.pack(anchor="w", pady=(4, GUTTER))
+        self.mode_tip = self.seeds_tip = ""
+        tip(self.modes, lambda: self.mode_tip)
         row = tk.Frame(setup, bg=C["panel"])
         row.pack(anchor="w")
         tk_label(row, T["seeds"], 14, "text2", "panel").pack(side="left", padx=(0, GUTTER))
@@ -115,8 +115,8 @@ class ComparePage(Page):
         self.seeds.pack(side="left")
         self.retune = Toggle(setup, T["retune_lr"], True, lambda _v: self.update_plan())
         self.retune.pack(anchor="w", pady=(GUTTER, 4))
-        self.seeds_note = tk_label(setup, "", 13, "muted", "panel", wraplength=720)
-        self.seeds_note.pack(anchor="w")
+        for part in (row, self.retune):
+            tip(part, lambda: self.seeds_tip)
         self.table_card = Card(b)
         self.table_card.pack(fill="x", pady=(0, GUTTER))
         self.table = tk.Frame(self.table_card, bg=C["panel"])
@@ -144,6 +144,7 @@ class ComparePage(Page):
         self.x_axis, self.axis_note = "steps", tk_label(self.curves, "", 13, "amber", "panel", wraplength=720)
         self.axes = Segmented(self.curves, [T[a[1]] for a in AXES], T["axis_steps"], self.pick_axis)
         self.axes.pack(anchor="w", pady=(6, 0))
+        tip(self.axes, T["axis_fair"])
         self.axis_note.pack(anchor="w")
         self.legend = tk.Frame(self.curves, bg=C["panel"])
         self.legend.pack(anchor="w", pady=6)
@@ -235,8 +236,8 @@ class ComparePage(Page):
     def update_plan(self):
         _key, _mode, note, _axis = next(m for m in MODE_KEYS if m[0] == self.mode)
         lr_on = self.retune.value
-        self.mode_note.configure(text=T[note])
-        self.seeds_note.configure(text=T["seeds_note"].format(lr_note=T["lr_note_on" if lr_on else "lr_note_off"]))
+        self.mode_tip = T[note]
+        self.seeds_tip = T["seeds_note"].format(lr_note=T["lr_note_on" if lr_on else "lr_note_off"])
         self.guess_label.configure(text=T["before_runs"])
         try:
             self.plan = ex.plan(self.experiment())
@@ -290,7 +291,7 @@ class ComparePage(Page):
         title = next(a[2] for a in AXES if a[0] == axis)
         self.curves_title.configure(text=T["curves_title"].format(xAxis=T[title]).upper())
         self.axis_note.configure(text=T["axis_fallback"].format(what=T[next(a[1] for a in AXES if a[0] == missing)].lower()) if missing
-                                 else T["axis_fair"] if axis == "steps" else "")
+                                 else "")
         refs = [(k, v) for k, v in ((self.results or {}).get("references") or {}).items()]
         names = {"uniform": "uniform guess", "unigram": "counting word frequencies"}
         for n, points in sorted(curves.items()):
