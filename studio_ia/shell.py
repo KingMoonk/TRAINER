@@ -400,7 +400,7 @@ class Studio(tk.Tk):
     def on_event(self, kind, payload):
         if kind in NEXT_EVENTS:
             self.refresh_next()
-        if kind in ("queue", "job", "blocked"):
+        if kind in ("queue", "job", "blocked", "versions"):  # "versions": also when held-back scores came in and Chat may follow another
             self.refresh_strip()
         elif kind == "train" and not self._strip_pending:  # steps arrive several times a second: redraw the strip once a second
             self._strip_pending = True
