@@ -32,7 +32,7 @@ from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, GuessChips, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon, tip
+from studio_ia.widgets import BpcPlot, Card, Chip, GuessChips, Kicker, Progress, Segmented, StateTray, Toggle, _activate, button, info_icon, tip
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
@@ -45,8 +45,7 @@ PART_TERMS = dict(embedding="embedding", position="position", norm="norm", mixer
 WORD_TERMS = ("bytes", "bpe", "gpt2_bpe", "whole_words")  # GLOSSARY entries behind WORDS
 PROMPT = "The largest planet in our solar system is"
 STEPS, ROWS = 1000, 16  # a catch-up job here; the Pretraining page is where length, rows and data are chosen
-LINKS = (("trace", "trace"), ("head_zoom", "inside_head"), ("value_map", "value_map"), ("loss", "loss"),
-         ("head_lab", "head_lab"), ("inside3d", "3d"), ("compare", "compare_runs"), ("quicktest", "quick_test"))
+LINKS = (("compare", "compare_runs"), ("quicktest", "quick_test"))  # the bottom row; the look-inside pages hang off the parts (PART_LINKS)
 EXPECT = dict(
     more="More blocks: each word gets more rounds of processing, and every training step takes longer. With little data it may memorize rather than learn; watch the test line.",
     fewer="Fewer blocks: smaller and faster. It may not get its error as low.",
@@ -140,7 +139,36 @@ def sizes(spec, v):
     d, t = spec["dims"]["d_model"], spec["dims"]["n_ctx"]
     # the estimate leaves the vocabulary matrices out of compute (Kaplan et al.); a step still pays for the output scores
     return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * VS[v] * d) * t,
-                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t)
+                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t, parts=param_parts(e["rows"]))
+
+
+PARAM_PARTS = (("table", "violet"), ("position", "dim"), ("blocks", "blue"), ("head", "pink"))  # bar order and colour
+
+
+def param_parts(rows):
+    """{table, position, blocks, head}: parameters per part, from studio_estimate's rows. head is the final norm and the word scores."""
+    out = dict.fromkeys((key for key, _ in PARAM_PARTS), 0)
+    for r in rows:
+        key = "blocks" if r["block"] is not None else {"embedding": "table", "position": "position"}.get(r["slot"], "head")
+        out[key] += r["params"]
+    return out
+
+
+def param_bars(a, b, width=300):
+    """([(part, pixels)] now, [(part, pixels)] draft): each design's parts stacked, both drawn to the scale of the larger one."""
+    top = max(sum(a.values()), sum(b.values()), 1)
+    return tuple([(key, round(parts[key] / top * width)) for key, _ in PARAM_PARTS] for parts in (a, b))
+
+
+def param_shares(parts):
+    """[(part, 'word table 12%')] in bar order."""
+    total = sum(parts.values()) or 1
+    return [(key, T["params_share"].format(name=T["params_" + key], share=f"{parts[key] / total:.0%}")) for key, _ in PARAM_PARTS]
+
+
+def param_note(parts):
+    """A sentence when the word table is most of the model, else ""."""
+    return T["params_table_heavy"] if parts["table"] >= .5 * (sum(parts.values()) or 1) else ""
 
 
 def say(x, y, more, less):
@@ -653,7 +681,9 @@ def check_text(old, new, speeds=None):
     if check is None:
         return None
     said = page_said(old, new)
-    text = " ".join(check["lines"] + ([T["guess_page_said"].format(text=said)] if said and said != T["change_something"] else []))
+    question = (getattr(new, "prediction", None) or {}).get("question")
+    text = " ".join(([T["check_question"].format(question=question)] if question else []) + check["lines"]
+                    + ([T["guess_page_said"].format(text=said)] if said and said != T["change_something"] else []))
     return check["state"], T["guess_kicker"].format(n=new.number), text
 
 
@@ -732,14 +762,15 @@ def split_jobs(start, plan, mode, parent_checkpoint, datasets, run_dir, new_id=l
 # ---------------------------------------------------------------------------------------------- lab notebook (#83)
 
 def notebook(versions, speeds=None, facts=None):
-    """One row per version, oldest first: {number, change, effects, guesses, note, state}. effects says what the version did to
+    """One row per version, oldest first: {number, change, effects, guesses, note, state, question}. effects says what the version did to
     held-back error, step time and memory against the version before it; guesses is the stored guess with ✓ or ✗; note says
     when the comparison is not about one change (several changes at once, or the runs also differed in data, steps, learning
     rate or extra training: studio_ia.attribution.run_changes on Services.run_facts). Reads no files: `speeds` and `facts`
     ({number: …}) are what a worker read."""
     speeds, facts, rows, old = speeds or {}, facts or {}, [], None
     for v in versions:
-        row = dict(number=v.number, change=v.change or "", effects="", guesses="", note="", state="neutral")
+        row = dict(number=v.number, change=v.change or "", effects="", guesses="", note="", state="neutral",
+                   question=(getattr(v, "prediction", None) or {}).get("question") or "")
         done = trained(v)
         if old is None or not (old.spec and v.spec):
             row["effects"] = T["notebook_error_only"].format(b=scored(v)) if scored(v) is not None else \
@@ -796,9 +827,118 @@ def notebook_lines(rows):
 
 
 def notebook_line(row):
-    """'Version 3 · more blocks (2 → 4) → error 2.31 → 2.18, steps about 1.4× slower · you guessed lower error ✓'."""
+    """'Version 3 · more blocks (2 → 4) → error 2.31 → 2.18, steps about 1.4× slower · asked “…” · you guessed lower error ✓'."""
     head = f"{T['notebook_version'].format(n=row['number'])} · {row['change']}" if row["change"] else T["notebook_version"].format(n=row["number"])
-    return " · ".join(filter(None, (f"{head} → {row['effects']}", row["guesses"], row["note"])))
+    asked = T["notebook_asked"].format(question=row["question"]) if row.get("question") else ""
+    return " · ".join(filter(None, (f"{head} → {row['effects']}", asked, row["guesses"], row["note"])))
+
+
+# ---------------------------------------------------------------------------------------------- learn the parts (#83)
+
+PART_LINKS = dict(embedding=("trace", "inside3d"), position=("trace", "inside3d"), mixer=("head_zoom", "value_map", "head_lab", "inside3d"),
+                  channel=("inside3d", "trace"), norm=("trace",), final_norm=("trace",), head=("loss", "trace"))  # part -> pages that show it work
+HEAD_PAGES = ("head_zoom", "value_map", "head_lab")  # about attention heads: only for a look-back that has them
+LINK_LABELS = dict(trace="trace", head_zoom="inside_head", value_map="value_map", loss="loss", head_lab="head_lab", inside3d="3d")
+
+
+def example_pieces(v, lists):
+    """The example sentence cut by word list v ([label]), or None while the lists are read or that list is not built."""
+    tok = lists["tokenizers"][v] if lists else None
+    return [label for label, _known in cut.chips(tok, lists["sentence"])] if tok is not None else None
+
+
+def example_text(part, s, short, lists=None):
+    """What part `part` (running module `short`) does to the example sentence under the draft's choices `s`."""
+    d, rows, pieces = s["d"], VS[s["V"]], example_pieces(s["V"], lists)
+    upto = T["up_to"] if s["V"] in (1, 3) else ""  # built from your text: the size is a cap
+    last, before = (pieces[-1].strip() or pieces[-1], len(pieces) - 1) if pieces and len(pieces) > 1 else (None, 0)
+    slot = "norm" if part == "final_norm" else part
+    if slot == "norm" or slot == "mixer" or slot == "channel":
+        if registry.get(slot, short).skip:
+            return T["example_skipped"]
+    if part == "embedding":
+        if pieces:
+            return T["example_table_pieces"].format(sentence=lists["sentence"], count=len(pieces), cs="" if len(pieces) == 1 else "s", pieces=" · ".join(pieces), d=d,
+                                                    upto=upto, rows=f"{rows:,}")
+        return T["example_table"].format(d=d, upto=upto, rows=f"{rows:,}")
+    if part == "position":
+        return T["example_position"].format(t=s["T"])
+    if part == "mixer":
+        heads = s["H"] if "heads" in fields_of("mixer", short) else None
+        if heads:
+            key = "example_mixer_heads_pieces" if last else "example_mixer_heads"
+            return T[key].format(last=last, before=before, s="" if before == 1 else "s", heads=heads, size=d // heads)
+        return T["example_mixer_pieces" if last else "example_mixer"].format(last=last, before=before, s="" if before == 1 else "s",
+                                                                          v="s" if before == 1 else "")
+    if part == "channel":
+        if "d_ff" in fields_of("channel", short):
+            return T["example_channel_room"].format(d=d, room=FF[s["W"]] * d)
+        return T["example_channel"]
+    if slot == "norm":
+        return T["example_norm"].format(d=d)
+    return T["example_head_pieces" if last else "example_head"].format(last=last, d=d, upto=upto, rows=f"{rows:,}")
+
+
+def explain(part, s, block=None, lists=None):
+    """What the side panel says about one part of the draft `s`: {title, what, module, module_text, example, links}. `part` is a
+    PART_LINKS key; `block` is the block a sub-layer was clicked in (None: a model-wide part or the all-blocks choice).
+    `lists` is services.word_lists() (None while it is read). links are [(route, label, block)] to the pages that show it work."""
+    slot = "norm" if part == "final_norm" else part
+    short = block_parts(s, block)[slot] if block is not None and slot in BLOCK_SLOTS else s["M"][slot]
+    title = T["final_norm"] if part == "final_norm" else T["part_" + slot]
+    if block is not None:
+        title = T["explain_in_block"].format(part=title, n=block + 1)
+    what = f"{T['final_norm_tip']}\n\n{part_tip('norm')}" if part == "final_norm" else part_tip(slot)
+    links = [(route, T[LINK_LABELS[route]], block or 0) for route in PART_LINKS[part]
+             if route not in HEAD_PAGES or "heads" in fields_of(slot, short)]
+    return dict(title=title, what=what, module=T["explain_now"].format(name=module_name(slot, short)), module_text=module_tip(slot, short),
+                example=example_text(part, s, short, lists), links=links)
+
+
+EXPERIMENTS = (("heads", "exp_heads"), ("words", "exp_words"), ("depth", "exp_depth"), ("width", "exp_depth"))  # depth and width ask one question
+
+
+def experiment_draft(cur, key):
+    """(choices, "") with the one change that puts question `key` to the current version's choices `cur`, or (None, why not)."""
+    if key == "heads":
+        if not knob_applies(cur, "H"):
+            return None, T["exp_no_heads"]
+        up = [h for h in HEADS if h > cur["H"]]
+        return dict(cur, H=up[0] if up else max(h for h in HEADS if h < cur["H"])), ""
+    if key == "words":
+        return dict(cur, V=1 if cur["V"] == 0 else 0), ""
+    if key == "depth":
+        return resize(cur, cur["L"] + 1 if cur["L"] < 12 else cur["L"] - 1), ""
+    if not knob_applies(cur, "W"):
+        return None, T["exp_no_room"]
+    return dict(cur, W=cur["W"] + 1 if cur["W"] < 2 else cur["W"] - 1), ""
+
+
+def experiment_rows(cur):
+    """[(question, [(key, label, why it cannot be tried or "")])] for the starting-questions card, in EXPERIMENTS order."""
+    out = {}
+    for key, question in EXPERIMENTS:
+        out.setdefault(T[question], []).append((key, T["exp_try_" + key], experiment_draft(cur, key)[1]))
+    return list(out.items())
+
+
+def held_question(experiment, draft):
+    """The question a starting question set up, while the draft is still exactly that one change; else None.
+    `experiment` = (question, the draft it set up) or None."""
+    return experiment[0] if experiment and experiment[1] == draft else None
+
+
+UNLOCK = 3  # trained versions before module menus and per-block choices show by themselves
+ADVANCED = "builder_advanced"  # the remembered Advanced toggle (Services.setting)
+
+
+def trained_count(versions):
+    return sum(trained(v) for v in versions)
+
+
+def advanced_view(versions, setting=None):
+    """Module menus and per-block choices show: as the person set the Advanced toggle, else once UNLOCK versions have trained."""
+    return bool(setting) if setting is not None else trained_count(versions) >= UNLOCK
 
 
 MISSING = {1: "Built from your text: add some in Your data to see these pieces.",
@@ -924,6 +1064,9 @@ class BuilderPage(Page):
         self._split_key = self._split_plan = None  # the split of the draft into one-change versions, kept until the draft changes
         self.speeds, self.notebook_rows, self._notebook_token = {}, None, None  # measured step times and the lab notebook (slow lane)
         self.check_shown, self.notebook_texts = None, []
+        self.explaining, self.explained = None, None  # (part, block or None) the side panel explains, and what it said
+        self.experiment = None  # (question, the draft it set up) from a starting question
+        self.advanced, self.advanced_set = False, None  # module menus and per-block choices shown; the toggle as clicked here
 
     # state ------------------------------------------------------------------
     @property
@@ -1025,6 +1168,7 @@ class BuilderPage(Page):
                 self.lists = lists
                 if self.pieces_box is not None and self.pieces_box.winfo_exists():
                     self._paint_pieces()
+                    self._paint_explain()
         self.quietly(work, apply, lane="slow")
 
     def load_notebook(self):
@@ -1166,6 +1310,41 @@ class BuilderPage(Page):
         got = self.attr_cache.get(key)
         return (None, None) if got is None else ((lambda n, f=dict(zip(key, got[:2])): f[n]), lambda c=got[2]: c)
 
+    def explain_part(self, part, block=None):
+        """Open the side panel on one part (a PART_LINKS key), in block `block` or the all-blocks choice."""
+        self.explaining = (part, block)
+        self._paint_explain()
+
+    def close_explain(self):
+        self.explaining = None
+        self._paint_explain()
+
+    def follow(self, route, block):
+        """Open a look-inside page on the part the panel explains: Inside a head and Value map open at that block's first head."""
+        page = self.navigate(route)
+        if route == "head_zoom" and hasattr(page, "select"):
+            page.select(block, 0)
+        elif route == "value_map" and hasattr(page, "pick"):
+            page.pick(block, 0)
+
+    def try_question(self, key):
+        """A starting question: the draft becomes the current version with that one change, and the question goes with it."""
+        draft, why = experiment_draft(self.cur, key)
+        if self.phase != "edit" or draft is None:
+            self.note = why or T["exp_not_now"]
+            return self._paint_tray()
+        self.draft, self.anchor, self.asking = draft, None, None  # an open guess tray was about the old draft
+        self.experiment = (T[dict(EXPERIMENTS)[key]], copy.deepcopy(draft))
+        self.stage()
+        self._paint_design()
+
+    def set_advanced(self, on):
+        """The Advanced toggle: remembered by services (written on the slow lane), shown at once."""
+        self.advanced_set = on
+        services = self.services
+        self.quietly(lambda: services.set_setting(ADVANCED, on), lambda _none: None, lane="slow")
+        self.render()
+
     def preview_preset(self, key):
         """Show a ready-made design's cost; nothing changes until it is loaded."""
         self.preset_key = key
@@ -1215,7 +1394,7 @@ class BuilderPage(Page):
 
     # actions ----------------------------------------------------------------
     def discard(self):
-        self.draft, self.anchor = dict(self.cur), None
+        self.draft, self.anchor, self.experiment = dict(self.cur), None, None
         self.stage()
         self._paint_design()
 
@@ -1275,9 +1454,11 @@ class BuilderPage(Page):
         if problems := errors(spec):
             self.note = problems[0]
             return self.render()
+        question = held_question(self.experiment, self.draft)
+        prediction = dict(prediction or {}, **({"question": question} if question else {}))
         self.saved = self.services.save_version(spec, ", ".join(self.changes()) or ("first design" if self.base is None else "no change"),
                                                 prediction or None)
-        self.phase, self._staged, self.anchor = "saved", None, None
+        self.phase, self._staged, self.anchor, self.experiment = "saved", None, None, None
         self.services.stage_draft(None)
         self.load_chart()
         self.render()
@@ -1389,6 +1570,9 @@ class BuilderPage(Page):
             child.destroy()
         self.stage()
         self.answer_labels, self.segs = {}, {}
+        versions = self.services.versions()
+        setting = self.advanced_set if self.advanced_set is not None else self.services.setting(ADVANCED)
+        self.advanced = advanced_view(versions, setting)
         self._pill()
         top = tk.Frame(self.body, bg=C["bg"])
         top.pack(fill="x", pady=(0, GUTTER))
@@ -1396,8 +1580,11 @@ class BuilderPage(Page):
         left.pack(side="left", fill="both", expand=True, padx=(0, GUTTER))
         right = tk.Frame(top, bg=C["bg"], width=340)
         right.pack(side="left", fill="y")
+        self._disclosure(left, versions)
         self._tower(left)
+        self._explain(right)
         self._start_from(right)
+        self._experiments(right)
         self._controls(right)
         self._costs()
         self._expect()
@@ -1421,6 +1608,102 @@ class BuilderPage(Page):
         self._paint_costs()
         self._paint_expect()
         self._paint_tray()
+        self._paint_explain()
+        self._paint_experiments()
+
+    def _disclosure(self, parent, versions):
+        """The Advanced toggle, and until it is on how many trained versions are left before the menus show by themselves."""
+        row = tk.Frame(parent, bg=C["bg"])
+        row.pack(fill="x", pady=(0, 8))
+        Toggle(row, T["advanced"], self.advanced, self.set_advanced, bg="bg").pack(side="left")
+        info_icon(row, T["advanced_tip"].format(n=UNLOCK), bg="bg").pack(side="left", padx=(4, 0))
+        left = UNLOCK - trained_count(versions)
+        self.basic_note = T["basic_note"].format(left=left, s="" if left == 1 else "s") if not self.advanced and left > 0 else ""
+        if self.basic_note:
+            tk_label(row, self.basic_note, 12, "muted", "bg", wraplength=420, justify="left").pack(side="left", padx=(12, 0))
+
+    def _explain(self, parent):
+        """The side panel a click on a part opens: what it does, its module, its effect on the example sentence, where to see it."""
+        self.explain_box = Card(parent)
+        self.explain_box.pack(fill="x", pady=(0, 8))
+        self.explained = None
+
+    def _paint_explain(self):
+        box = self.explain_box
+        if box is None or not box.winfo_exists():
+            return
+        for child in box.winfo_children():
+            child.destroy()
+        head = tk.Frame(box, bg=C["panel"])
+        head.pack(fill="x")
+        Kicker(head, T["explain"], bg="panel").pack(side="left")
+        if self.explaining is None:
+            self.explained = None
+            tk_label(box, T["explain_hint"], 12, "muted", "panel", wraplength=300, justify="left").pack(anchor="w", pady=(4, 0))
+            return
+        close = tk_label(head, T["explain_close"], 12, "muted", "panel", cursor="hand2", takefocus=1)
+        close.pack(side="right")
+        _activate(close, self.close_explain)
+        part, block = self.explaining
+        if block is not None and block >= self.draft["L"]:
+            block = self.draft["L"] - 1
+        self.explained = e = explain(part, self.draft, block, self.lists)
+        tk_label(box, e["title"], 15, "text", "panel", font=font(15, bold=True)).pack(anchor="w", pady=(4, 2))
+        tk_label(box, e["what"], 12, "text2", "panel", wraplength=300, justify="left").pack(anchor="w")
+        tip(tk_label(box, e["module"], 13, "text", "panel", font=font(13, bold=True)), e["module_text"]).pack(anchor="w", pady=(6, 0))
+        tk_label(box, e["module_text"], 12, "muted", "panel", wraplength=300, justify="left").pack(anchor="w")
+        Kicker(box, T["explain_example"], bg="panel").pack(anchor="w", pady=(8, 0))
+        tk_label(box, e["example"], 12, "text2", "panel", wraplength=300, justify="left").pack(anchor="w")
+        row = tk.Frame(box, bg=C["panel"])
+        row.pack(anchor="w", pady=(8, 0))
+        tk_label(row, T["explain_see"], 12, "muted", "panel").pack(anchor="w")
+        self.part_links = {}
+        for route, label, at in e["links"]:
+            link = tk_label(row, label + " ›", 13, "violet", "panel", cursor="hand2", takefocus=1)
+            link.pack(anchor="w")
+            self.part_links[route] = link
+            _activate(link, lambda r=route, at=at: self.follow(r, at))
+
+    def _clickable(self, widget, part, block=None):
+        """A tower widget that opens the side panel on `part`."""
+        widget.configure(cursor="hand2", takefocus=1)
+        _activate(widget, lambda: self.explain_part(part, block))
+        return widget
+
+    def _experiments(self, parent):
+        """Starting questions: each sets up a one-change draft from the current version, with the question saved alongside."""
+        card = Card(parent)
+        card.pack(fill="x", pady=(0, 8))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, T["experiments"], bg="panel").pack(side="left")
+        info_icon(head, T["experiments_tip"]).pack(side="left", padx=(4, 0))
+        self.question_links = {}
+        for question, tries in experiment_rows(self.cur):
+            row = tk.Frame(card, bg=C["panel"])
+            row.pack(anchor="w", fill="x", pady=(4, 0))
+            tk_label(row, question, 13, "text", "panel", wraplength=300, justify="left").pack(anchor="w")
+            line = tk.Frame(row, bg=C["panel"])
+            line.pack(anchor="w")
+            for key, label, why in tries:
+                link = tk_label(line, label + " ›", 12, "violet", "panel", cursor="hand2", takefocus=1)
+                link.pack(side="left", padx=(0, 12))
+                link.why = why
+                if why:
+                    tip(link, why)
+                _activate(link, lambda key=key: self.try_question(key))
+                self.question_links[key] = link
+        self.question_label = tk_label(card, "", 12, "amber", "panel", wraplength=300, justify="left")
+
+    def _paint_experiments(self):
+        for link in self.question_links.values():
+            link.configure(fg=C["violet"] if self.phase == "edit" and not link.why else C["muted"])
+        question = held_question(self.experiment, self.draft) if self.phase == "edit" else None
+        self.question_label.configure(text=T["exp_asking"].format(question=question) if question else "")
+        if question:
+            self.question_label.pack(anchor="w", pady=(8, 0))
+        else:
+            self.question_label.pack_forget()
 
     def _pill(self):
         q = self.services.queue()
@@ -1446,8 +1729,8 @@ class BuilderPage(Page):
         self.pickers = []  # (menu button, was label, slot, block index or None) of the model-wide parts
         self._part_row(parent, "head")
         row = self._row(parent)
-        tip(tk_label(row, T["final_norm"], 14, "text", "panel2", font=font(14, bold=True), width=14),
-            f"{T['final_norm_tip']}\n\n{part_tip('norm')}").pack(side="left", padx=12, pady=6)
+        self._clickable(tip(tk_label(row, T["final_norm"], 14, "text", "panel2", font=font(14, bold=True), width=14),
+                            f"{T['final_norm_tip']}\n\n{part_tip('norm')}"), "final_norm").pack(side="left", padx=12, pady=6)
         self.final_norm = tk_label(row, "", 13, "text2", "panel2")
         self.final_norm.pack(side="left")
         tip(self.final_norm, lambda: module_tip("norm", self.draft["M"]["norm"]))
@@ -1495,12 +1778,20 @@ class BuilderPage(Page):
     def _part_row(self, parent, slot):
         """One model-wide part: its name and its module menu."""
         row = self._row(parent)
-        tip(tk_label(row, T["part_" + slot], 14, "text", "panel2", font=font(14, bold=True), width=14), part_tip(slot)).pack(side="left", padx=12, pady=6)
+        self._clickable(tip(tk_label(row, T["part_" + slot], 14, "text", "panel2", font=font(14, bold=True), width=14), part_tip(slot)),
+                        slot).pack(side="left", padx=12, pady=6)
         self.pickers.append((*self._picker(row, slot, lambda: None, "panel2"), slot, None))
 
     def _picker(self, parent, slot, block, bg):
         """(menu button, was label) choosing `slot`'s module; block() says where a pick goes: None = every block, or a block index.
-        Modules that cannot work in this design are listed greyed out with the reason."""
+        Modules that cannot work in this design are listed greyed out with the reason. Until Advanced is on it is a plain label."""
+        if not self.advanced:
+            mb = tk.Label(parent, font=font(13), bg=C[bg], fg=C["text"], disabledforeground=C["muted"], padx=8, pady=3)
+            tip(mb, lambda: module_tip(slot, mb.module))
+            mb.pack(side="left")
+            was = tk_label(parent, "", 12, "muted", bg)
+            was.pack(side="left", padx=(6, 0))
+            return mb, was
         mb = tk.Menubutton(parent, font=font(13), relief="flat", bg=C[bg], fg=C["text"], activebackground=C["panel"], activeforeground=C["text"],
                            disabledforeground=C["muted"], takefocus=1, cursor="hand2", padx=8, pady=3, indicatoron=True,
                            highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
@@ -1547,9 +1838,9 @@ class BuilderPage(Page):
             tip(toggle, T["block_parts_tip"])
             name = tk_label(header, f"Block {i + 1}", 13, width=8)
             name.pack(side="left", padx=4, pady=8)
-            heads = tip(tk_label(header, "", 13, "pink"), glossary_text("heads"))
+            heads = self._clickable(tip(tk_label(header, "", 13, "pink"), glossary_text("heads")), "mixer", i)
             heads.pack(side="left")
-            width = tip(tk.Frame(header, bg=C["blue"], height=8), glossary_text("expansion"))
+            width = self._clickable(tip(tk.Frame(header, bg=C["blue"], height=8), glossary_text("expansion")), "channel", i)
             width.pack(side="left", padx=10)
             parts = tk_label(header, "", 12, "muted")
             parts.pack(side="left")
@@ -1612,10 +1903,11 @@ class BuilderPage(Page):
             detail.pack_forget()
             return
         detail.pack(fill="x", padx=(32, 12), pady=(0, 8))
-        one = self.scope.get(i, False)
-        options = [T["scope_all"], T["scope_one"].format(n=i + 1)]
-        scope = Segmented(detail, options, options[one], lambda opt, i=i: self.set_scope(i, opt != options[0]), bg=bg)
-        scope.pack(anchor="w", pady=(0, 4))
+        if self.advanced:  # per-block choices
+            one = self.scope.get(i, False)
+            options = [T["scope_all"], T["scope_one"].format(n=i + 1)]
+            scope = Segmented(detail, options, options[one], lambda opt, i=i: self.set_scope(i, opt != options[0]), bg=bg)
+            scope.pack(anchor="w", pady=(0, 4))
         cur, dr = self.cur, self.draft
         mine, before = block_parts(dr, i), block_parts(cur, i) if i < cur["L"] else None
         for slot in (None, "channel", "norm", None, "mixer", "norm"):  # None: the add-back
@@ -1625,8 +1917,9 @@ class BuilderPage(Page):
                 tip(tk_label(line, f"⊕ {T['add_back']}", 12, "muted", bg), glossary_text("residual")).pack(side="left")
                 continue
             skipped = registry.get(slot, mine[slot]).skip
-            tip(tk_label(line, T["part_" + slot], 13, "dim" if skipped else "text", bg, width=14), part_tip(slot)).pack(side="left")
-            mb, was = self._picker(line, slot, lambda i=i: i if self.scope.get(i) else None, bg)
+            self._clickable(tip(tk_label(line, T["part_" + slot], 13, "dim" if skipped else "text", bg, width=14), part_tip(slot)),
+                            slot, i).pack(side="left")
+            mb, was = self._picker(line, slot, lambda i=i: i if self.advanced and self.scope.get(i) else None, bg)
             self._paint_picker(mb, was, slot, mine[slot], before and before[slot], bg)
             if (i, slot) in dr["O"]:
                 tk_label(line, T["only_here"], 12, "violet", bg).pack(side="left", padx=(8, 0))
@@ -1740,6 +2033,7 @@ class BuilderPage(Page):
             said = tk_label(row, "", 13, "muted", "panel", width=22)
             said.pack(side="left")
             self.cost_rows.append((name, f, more, less, *drawn, said))
+        self._param_bar(card)
         row = tk.Frame(card, bg=C["panel"])
         row.pack(fill="x", pady=(8, 2))
         tk_label(row, "Can the old weights carry over?", 14, "text", "panel", width=24).pack(side="left")
@@ -1765,6 +2059,42 @@ class BuilderPage(Page):
         self.lr_label.pack(anchor="w", pady=(4, 0))
         self._paint_lr()
         self._ask_compute()
+
+    def _param_bar(self, card):
+        """Where the size goes: the parameters stacked by part, the current version above the draft, to one scale."""
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(fill="x", pady=4)
+        label = tk_label(row, T["params_where"], 14, "text", "panel", width=24)
+        label.pack(side="left")
+        tip(label, T["params_where_tip"])
+        bars = tk.Frame(row, bg=C["panel"])
+        bars.pack(side="left")
+        self.param_segs = []
+        for name in ("now", "new"):
+            line = tk.Frame(bars, bg=C["panel"])
+            line.pack(fill="x")
+            tk_label(line, name, 11, "dim", "panel", width=4).pack(side="left")
+            segs = {key: tk.Frame(line, bg=C[colour], height=7) for key, colour in PARAM_PARTS}
+            for seg in segs.values():
+                seg.pack(side="left", pady=1)
+            self.param_segs.append(segs)
+        legend = tk.Frame(card, bg=C["panel"])
+        legend.pack(anchor="w", padx=(0, 0))
+        self.param_legend = {key: tk_label(legend, "", 12, colour, "panel") for key, colour in PARAM_PARTS}
+        for key, colour in PARAM_PARTS:
+            tk_label(legend, "■", 12, colour, "panel").pack(side="left")
+            self.param_legend[key].pack(side="left", padx=(2, 12))
+        self.param_label = tk_label(card, "", 12, "amber", "panel", wraplength=780, justify="left")
+        self.param_label.pack(anchor="w")
+
+    def _paint_params(self, a, b):
+        for segs, widths in zip(self.param_segs, param_bars(a["parts"], b["parts"])):
+            for key, px in widths:
+                segs[key].configure(width=max(1, px))
+        self.param_texts = param_shares(b["parts"])
+        for key, text in self.param_texts:
+            self.param_legend[key].configure(text=text)
+        self.param_label.configure(text=param_note(b["parts"]))
 
     def _ask_compute(self):
         """The size of your text, counted once per page: known at once when it was counted before, else in the background."""
@@ -1830,6 +2160,7 @@ class BuilderPage(Page):
             now.configure(width=max(2, old_pct * 3))
             new.configure(width=max(2, new_pct * 3), bg=C["violet"] if same else C["amber"])
             said.configure(text=s, fg=C["muted"] if same else C["amber"])
+        self._paint_params(a, b)
         self.warm = warm = warm_outlook(self.cur, self.draft)
         if warm:
             self.warm_none.pack_forget()
@@ -1893,6 +2224,8 @@ class BuilderPage(Page):
             self.chip_texts = self.changes()
             if self.chip_texts:
                 state, kicker, text = "unsaved", T["not_saved"], T["not_saved_text"].format(version=nv)
+                if question := held_question(self.experiment, self.draft):
+                    text = T["exp_asking"].format(question=question) + ". " + text
                 plan = self.split_plan() if len(self.chip_texts) > 1 else []
                 if len(self.chip_texts) > 1 and self.base is not None:
                     text += " " + T["one_change"].format(count=len(self.chip_texts)) + " " + \
@@ -1972,6 +2305,8 @@ class BuilderPage(Page):
         card = Card(self.predict_slot)
         card.pack(fill="x", pady=(0, 8))
         Kicker(card, T["predict"], bg="panel").pack(anchor="w")
+        if question := held_question(self.experiment, self.draft):
+            tk_label(card, T["predict_question"].format(question=question), 14, "text", "panel", wraplength=780).pack(anchor="w", pady=(2, 0))
         tk_label(card, T["predict_text"], 13, "muted", "panel", wraplength=780).pack(anchor="w", pady=(2, 4))
         for i, (title, old, new) in enumerate(steps):
             if title:
@@ -2071,12 +2406,13 @@ class BuilderPage(Page):
             tk_label(box, line, 13, "muted" if quiet else "text", "panel", wraplength=780, justify="left").pack(anchor="w", pady=1)
 
     def _look_inside(self):
-        Kicker(self.body, T["look_inside"]).pack(anchor="w")
+        """Compare runs and Quick test; the look-inside pages are linked from the parts they explain (the side panel)."""
+        Kicker(self.body, T["try_it"]).pack(anchor="w")
         row = tk.Frame(self.body, bg=C["bg"])
         row.pack(anchor="w", pady=6)
         self.links = {}
         for route, key in LINKS:
-            link = tk_label(row, T[key], 14, "violet" if route not in ("compare", "quicktest") else "muted", cursor="hand2", takefocus=1)
+            link = tk_label(row, T[key], 14, "muted", cursor="hand2", takefocus=1)
             link.pack(side="left", padx=(0, 16))
             self.links[route] = link
             _activate(link, lambda r=route: self.navigate(r))
