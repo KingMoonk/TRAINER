@@ -7,7 +7,7 @@ import studio_gate
 from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
-from studio_ia.pages.post_training import blocker, step_line
+from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
 from studio_ia.pages.pretraining import source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import size_text, storage_state, total_hours
 from studio_ia.pages.training_run import history_of, phase_at
@@ -341,6 +341,53 @@ def _problems():
 
     from studio_rules import generate
     return generate("copy", random.Random(1), 6)
+
+
+class PostTrainingLive(unittest.TestCase):
+    """Live events must not rebuild the page for every one of them, nor when the open round shows nothing new."""
+
+    def page(self):
+        page = PostTrainingPage.__new__(PostTrainingPage)  # no window: only the event logic is used
+        page.selected, page.group, page.heat, page.moved, page.live_gate = 1, None, None, None, {}
+        page.gates, page._ticking, page._pending, page._step, page.services = {}, False, False, None, FakeServices()
+        page.timers, page.redraws, page.reloads = [], [], []
+        page.after = lambda ms, fn: page.timers.append((ms, fn))
+        page.refresh = lambda: (page.redraws.append(1), setattr(page, "_drawn", live_view(page.selected, page.group, page.heat, page.moved, {**page.gates, **page.live_gate})))
+        page.reload = lambda: page.reloads.append(1)
+        page._drawn = live_view(1, None, None, None, {})
+        return page
+
+    def test_a_burst_draws_its_first_at_once_and_the_rest_once(self):
+        page = self.page()
+        for n in range(6):
+            page.on_event("train", {"type": "group", "prompt": "p", "rule": "sort", "mean": .5, "answers": [], "n": n})
+        self.assertEqual((len(page.timers), page.redraws), (1, [1]))
+        page.timers[0][1]()
+        self.assertEqual((page.redraws, page.reloads), ([1, 1], []))
+        page.timers[1][1]()  # the burst is over: the lane goes quiet
+        self.assertEqual((len(page.timers), page.redraws), (2, [1, 1]))
+
+    def test_nothing_new_for_the_open_round_does_not_redraw(self):
+        page = self.page()
+        page.on_event("train", {"type": "heat", "prompt": "p", "words": ["a"], "surprise": [.1]})  # round 3's visual; round 2 is open
+        page.timers[0][1]()
+        self.assertEqual(page.redraws, [])
+
+    def test_the_same_group_again_does_not_redraw_but_a_gate_does_at_once(self):
+        page = self.page()
+        group = {"type": "group", "prompt": "p", "rule": "sort", "mean": .5, "answers": []}
+        page.on_event("train", group)
+        page.on_event("train", dict(group))
+        page.timers[0][1]()
+        self.assertEqual(page.redraws, [1])
+        page.on_event("train", {"type": "gate", "round": 2, "ok": True, "checks": []})
+        self.assertEqual(page.redraws, [1, 1])
+
+    def test_queue_job_and_version_events_still_reload(self):
+        page = self.page()
+        for kind in ("queue", "job", "versions"):
+            page.on_event(kind, {})
+        self.assertEqual((len(page.reloads), page.timers), (3, []))
 
 
 if __name__ == "__main__":
