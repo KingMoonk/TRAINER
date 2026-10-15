@@ -148,7 +148,7 @@ def next_start(plan, now):
 
 
 class Runner:
-    def __init__(self, path, handlers, services=None, tick=.05, clock=datetime.now):
+    def __init__(self, path, handlers, services=None, tick=3., clock=datetime.now):
         self.path, self.handlers, self.services, self.tick, self.clock = Path(path), handlers, services, tick, clock
         self.lock = threading.RLock()
         self.subscribers = []
@@ -160,6 +160,9 @@ class Runner:
         self.stopping = False
         self.gate = Gate()
         self.blocked = None
+        self.wake = threading.Event()  # set by anything the runner thread should act on now: a new job, a resume, a plan change, shutdown
+        self._gate_lock = threading.Lock()
+        self._gate_at, self._gate_stale, self._gate_busy = -float("inf"), False, False
         self.pause_event, self.stop_event = threading.Event(), threading.Event()
         self._sync_pause()
         self.closed = threading.Event()
@@ -205,6 +208,7 @@ class Runner:
         with self.lock:
             self.jobs.append(job)
             self._save()
+        self.wake.set()
         self._emit("queue", {"job": job.id})
         return job
 
@@ -223,6 +227,7 @@ class Runner:
                 for slot, j in zip([i for i, j in enumerate(self.jobs) if j.status in QUEUED], order):
                     self.jobs[slot] = j
                 self._save()
+        self.wake.set()
         self._emit("queue", {"job": job_id})
 
     def move_up(self, job_id):
@@ -237,6 +242,7 @@ class Runner:
             if job is not None:
                 job.status = "held" if held else "waiting"
                 self._save()
+        self.wake.set()
         self._emit("queue", {"job": job_id})
 
     def remove(self, job_id):
@@ -247,6 +253,7 @@ class Runner:
             elif job:
                 self.jobs.remove(job)
                 self._save()
+        self.wake.set()
         self._emit("queue", {"job": job_id})
 
     def pause(self):
@@ -261,12 +268,15 @@ class Runner:
             self.user_paused = paused
             self._sync_pause()
             self._save()
+        self.wake.set()
         self._emit("queue", {"paused": paused})
 
     def set_plan(self, plan):
         with self.lock:
             self.plan = Plan(**plan) if isinstance(plan, dict) else plan
+            self._gate_stale = True  # the next _watch reads the gate afresh, whatever its age
             self._save()
+        self.wake.set()
         self._emit("plan", dataclasses.asdict(self.plan))
 
     def checkpoint_now(self, then_stop=False):
@@ -297,7 +307,9 @@ class Runner:
             self.stop_event.set()
 
     def state(self):
-        gate = self.gate if self.thread else self._gate()  # the runner thread keeps the gate current; before it starts, read it fresh
+        gate = self.gate  # the last reading of the runner thread; reading it here would spawn ioreg/pmset on the Tk thread
+        if not self.thread:
+            self._watch_soon()
         with self.lock:
             p = self.progress
             return QueueState(
@@ -312,6 +324,7 @@ class Runner:
     def shutdown(self, timeout=10):
         self.closed.set()
         self.stop_event.set()
+        self.wake.set()
         if self.thread:
             self.thread.join(timeout)
 
@@ -336,19 +349,40 @@ class Runner:
         return Gate(None, None, supported)
 
     def _watch(self):
-        gate = self._gate()
-        if gate != self.gate:
+        """Read the gate at most once per `tick` (it can spawn ioreg and pmset), or at once after the plan changed."""
+        with self._gate_lock:
+            if not self._gate_stale and time.monotonic() - self._gate_at < self.tick:
+                return
+            self._gate_stale = False
+            gate = self._gate()
+            self._gate_at = time.monotonic()
+            if gate == self.gate:
+                return
             self.gate, self.blocked = gate, gate.reason
             self._sync_pause()
-            self._emit("blocked", {"reason": gate.reason, "gate": gate})
+        self._emit("blocked", {"reason": gate.reason, "gate": gate})
+
+    def _watch_soon(self):
+        """Before the runner thread exists, state() asks for a reading on a short-lived thread and shows the last one meanwhile."""
+        if self._gate_busy or (time.monotonic() - self._gate_at < self.tick and not self._gate_stale):
+            return
+        self._gate_busy = True
+
+        def work():
+            try:
+                self._watch()
+            finally:
+                self._gate_busy = False
+        threading.Thread(target=work, daemon=True).start()
 
     def _loop(self):
         while not self.closed.is_set():
+            self.wake.clear()  # before looking: whatever sets it from here on is seen by the next pass
             self._watch()
             with self.lock:
                 job = next((j for j in self.jobs if j.status == "waiting"), None)
             if not job or self.blocked or self.user_paused:
-                time.sleep(self.tick)
+                self.wake.wait(self.tick)
                 continue
             self._run(job)
 
@@ -384,23 +418,30 @@ class Runner:
             self._emit("train", {"job": job.id, **event})
 
         awake = platform_helpers.keep_awake(os.getpid()) if self.plan.keep_awake else None
-        outcome = {}
+        outcome, done = {}, threading.Event()
 
         def work():
-            if short:
-                outcome["error"] = short
-                return
             try:
-                with timed(f"job {getattr(handler, '__name__', job.kind)}"):
-                    handler(job, self.services, emit, self.stop_event, self.pause_event)
-            except Exception as exc:  # noqa: BLE001
-                outcome["error"] = str(exc) or type(exc).__name__
+                if short:
+                    outcome["error"] = short
+                    return
+                try:
+                    with timed(f"job {getattr(handler, '__name__', job.kind)}"):
+                        handler(job, self.services, emit, self.stop_event, self.pause_event)
+                except Exception as exc:  # noqa: BLE001
+                    outcome["error"] = str(exc) or type(exc).__name__
+            finally:
+                done.set()
+                self.wake.set()
         worker = threading.Thread(target=work, daemon=True)
         self._emit("job", {"job": job.id, "status": "running"})
         worker.start()
-        while worker.is_alive():
+        while not done.is_set():
+            self.wake.clear()
             self._watch()
-            worker.join(self.tick)
+            if not done.is_set():
+                self.wake.wait(self.tick)
+        worker.join()
         platform_helpers.release_awake(awake)
         with self.lock:
             job.status = "failed" if "error" in outcome else "stopped" if self.stop_event.is_set() else "done"

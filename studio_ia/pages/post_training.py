@@ -62,6 +62,12 @@ def step_line(q):
     return " · ".join(parts)
 
 
+def live_view(selected, group, heat, moved, gates):
+    """What the live events change on screen for the open round: the same value means the page already shows it."""
+    visual = (group,) if selected == 1 else (heat, moved) if selected == 2 else ()
+    return (selected, visual, gates.get(selected + 1))
+
+
 def count(value):
     return "–" if value is None else f"{value:,}"
 
@@ -89,6 +95,7 @@ class PostTrainingPage(Page):
         self.pick = ""            # round 4 vote
         self.group = self.heat = self.moved = None   # live visuals from the running round
         self.live_gate = {}
+        self._drawn, self._ticking, self._pending, self._step = None, False, False, None   # live_view on screen; in a burst; events since the last draw; the "step k of n" label
 
     # data -------------------------------------------------------------------
     def _version(self):
@@ -131,17 +138,40 @@ class PostTrainingPage(Page):
         tk_label(row, T["click_round"], 13, "muted").pack(anchor="w", pady=(6, 0))
         self._card(version, status)
         self._gate_card(status)
+        self._drawn = live_view(self.selected, self.group, self.heat, self.moved, self.gates)
 
     def on_event(self, kind, payload):
+        """Live visuals arrive in bursts (a group per prompt, every step). The first is drawn at once; the rest of a burst
+        is drawn at most twice a second, and only if the open round shows something new. Rebuilding the page for each one
+        made it flash. A gate comes once per round and is drawn at once."""
         if kind == "train" and isinstance(payload, dict) and payload.get("type") in ("group", "heat", "moved", "gate"):
             t = payload["type"]
             if t == "gate":
                 self.live_gate[payload["round"]] = payload
+                return self._draw()
+            setattr(self, t, payload)
+            if self._ticking:
+                self._pending = True
             else:
-                setattr(self, {"group": "group", "heat": "heat", "moved": "moved"}[t], payload)
-            self.reload()
+                self._draw()
+                self._ticking = True
+                self.after(500, self._tick)
         elif kind in ("queue", "versions", "job"):
             self.reload()
+
+    def _tick(self):
+        self._ticking = False
+        if self._pending:
+            self._pending = False
+            self._draw()
+            self._ticking = True
+            self.after(500, self._tick)
+
+    def _draw(self):
+        if live_view(self.selected, self.group, self.heat, self.moved, {**getattr(self, "gates", {}), **self.live_gate}) != self._drawn:
+            return self.refresh()
+        if self._step is not None:  # nothing new to draw: only the step count moves, in place
+            self._step.configure(text=step_line(self.services.queue()))
 
     # stage line ---------------------------------------------------------------
     def _stages(self, status, notes):
@@ -331,6 +361,7 @@ class PostTrainingPage(Page):
         verdict_text = ROUNDS[i][4]
         s = status[i]
         gate = self.gates.get(i + 1)
+        self._step = None
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         if gate:
@@ -339,7 +370,8 @@ class PostTrainingPage(Page):
             kicker = f"TRAINING · ROUND {i + 1}" if s == "running" else "WHEN THIS ROUND ENDS"
         Kicker(card, kicker, "violet", "panel").pack(anchor="w")
         if s == "running":
-            tk_label(card, step_line(self.services.queue()), 13, "muted", "panel").pack(anchor="w")
+            self._step = tk_label(card, step_line(self.services.queue()), 13, "muted", "panel")
+            self._step.pack(anchor="w")
         tk_label(card, T["verdict_title"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 0))
         if gate:
             verdict = gate.get("verdict") or ("" if i in COUNTED else verdict_text)

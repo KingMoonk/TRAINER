@@ -4,8 +4,10 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from studio_ia.services import FixtureServices
+from studio_ia.services import FixtureServices, WorkspaceServices
 
 
 class ServicesTest(unittest.TestCase):
@@ -75,6 +77,58 @@ class ServicesTest(unittest.TestCase):
         out = self.svc.inspect_forward(None, "hello")
         self.assertEqual(out["logits"].ndim, 3)
         self.assertTrue(self.svc.inspect_logit_lens(None, "hello"))
+
+
+class BandTest(unittest.TestCase):
+    """Scoring the held-back text stays off the Tk thread: ready() says no for it, it is kept on disk, and one scored version needs none."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.svc = FixtureServices(self.tmp.name)
+        self.addCleanup(self.svc.close)
+        self.bands = Path(self.tmp.name) / "data" / "noise_bands.json"
+        self.svc.store._update(1, scorecard={"bpc": 3.})
+        self.svc.store._update(2, scorecard={"bpc": 2.})
+
+    def test_one_scored_version_reads_no_held_back_text(self):
+        self.svc.store._update(2, scorecard={"bpc": None})
+        with mock.patch.object(self.svc, "_heldout", side_effect=AssertionError("parsed")):
+            self.assertEqual(self.svc.best_version().number, 1)
+        self.assertFalse(self.bands.exists())
+
+    def test_a_missing_band_goes_to_the_worker_and_is_kept_on_disk(self):
+        self.assertFalse(self.svc.ready(self.svc.best_version))  # two scored versions, nothing scored yet
+        self.svc.best_version()
+        self.assertTrue(self.bands.exists())
+        self.assertTrue(self.svc.ready(self.svc.best_version))
+        again = WorkspaceServices(self.svc.workspace)  # a new launch
+        self.addCleanup(again.close)
+        with mock.patch("studio_eval.noise_band", side_effect=AssertionError("scored again")):
+            self.assertTrue(again.ready(again.best_version))
+            self.assertEqual(again.best_version().number, self.svc.best_version().number)
+
+    def test_a_changed_checkpoint_or_held_back_file_is_scored_again(self):
+        self.svc.best_version()
+        first = self.svc._band(self.svc.versions()[0].best_checkpoint)
+        heldout = Path(self.tmp.name) / "data" / "heldout.json"
+        heldout.write_text(heldout.read_text(encoding="utf-8") + " ", encoding="utf-8")
+        self.assertFalse(self.svc.ready(lambda: self.svc._band(self.svc.versions()[0].best_checkpoint)))
+        self.assertEqual(self.svc._band(self.svc.versions()[0].best_checkpoint), first)  # same text, same band
+
+    def test_a_cache_hit_does_not_wait_for_a_running_read(self):
+        started, release = threading.Event(), threading.Event()
+        self.svc._cached("fast", lambda: 1)
+        slow = threading.Thread(target=lambda: self.svc._cached("slow", lambda: (started.set(), release.wait(5))))
+        slow.start()
+        self.addCleanup(slow.join)
+        self.addCleanup(release.set)
+        self.assertTrue(started.wait(5))
+        got = []
+        reader = threading.Thread(target=lambda: got.append(self.svc._cached("fast", lambda: 2)))
+        reader.start()
+        reader.join(2)
+        self.assertEqual(got, [1])
 
 
 if __name__ == "__main__":
