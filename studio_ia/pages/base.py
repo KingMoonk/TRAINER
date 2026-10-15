@@ -50,6 +50,10 @@ class Page(ttk.Frame):
         """refresh() after the stored data may have changed. The shell swaps in a version that loads behind its panel."""
         self.refresh()
 
+    def quiet_reload(self):
+        """reload() for data that changed in the background: the shell re-reads it without covering the page."""
+        self.reload()
+
     def slow(self, work, then):
         """then(work()) for a service read that may be long. The shell swaps in a version that keeps the Tk thread free."""
         then(work())

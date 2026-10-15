@@ -68,6 +68,16 @@ class DataPagesTest(unittest.TestCase):
         self.assertEqual(self.fake.calls, [("download_sources", None, "problems", True),
                                            ("download_sources", ["gsm8k_check"], "problems", True)])
 
+    def test_finished_downloads_reload_without_covering_the_page(self):
+        page = self.app.show("your_data")
+        self.app.update()
+        page.on_event("downloads_finished", {"ids": ["gsm8k_check"]})
+        self.app.update()
+        self.assertFalse(self.app.loader.winfo_ismapped())
+        while self.app._quiet:
+            self.app.update()
+        self.assertEqual(self.app.route, "your_data")
+
     def test_review_row_can_be_marked_good(self):
         page = self.app.show("your_data")
         self.app.update()

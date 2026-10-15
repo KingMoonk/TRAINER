@@ -174,6 +174,7 @@ class Studio(tk.Tk):
                 page = Page(self.main, self.services, self.show, title=spec.title, lead=spec.lead, crumb=spec.crumb)
             self.pages[route] = page
             page.slow, page.background, page.reload = self.slow, self.background, lambda: self.show(route)
+            page.quiet_reload = lambda: self._quiet_reload(route)
         page = self.pages[route]
         self._highlight(spec.area)
         self._wanted = route  # a later click wins over a page still loading
@@ -205,9 +206,19 @@ class Studio(tk.Tk):
         self.loader.place_forget()
         page.refresh()
 
+    def _quiet_reload(self, route):
+        """Re-read a page's data on the worker without the loading panel; the page stays usable and redraws when done."""
+        page = self.pages[route]
+
+        def done(_none):
+            if self.route == route:
+                page.refresh()
+        self.quietly(page.preload, done)
+
     # long reads: one worker takes them from a queue; the Tk thread only polls for results ---------------------
     def _build_loader(self):
         self.jobs, self.results, self._waiting, self._wanted, self._loading = queue.Queue(), queue.Queue(), 0, None, set()
+        self._quiet = 0  # jobs from quietly(): on the worker, no panel
         threading.Thread(target=self._work, daemon=True).start()
         self.loader = tk.Frame(self.main, bg=C["bg"])
         box = tk.Frame(self.loader, bg=C["bg"])
@@ -221,13 +232,13 @@ class Studio(tk.Tk):
 
     def _work(self):
         while True:
-            work, then = self.jobs.get()
+            work, then, quiet = self.jobs.get()
             if work is None:
                 return
             try:
-                self.results.put((then, work(), None))
+                self.results.put((then, work(), None, quiet))
             except Exception as error:
-                self.results.put((then, None, error))
+                self.results.put((then, None, error, quiet))
 
     def slow(self, work, then, title="Working"):
         """then(work()) on the Tk thread. work() is service reads only; when one is not cached it runs on the worker
@@ -242,33 +253,49 @@ class Studio(tk.Tk):
         self.load_title.configure(text=title or "Working")
         self.loader.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.loader.lift()
-        if not self._waiting:
+        self._submit(work, then, quiet=False)
+
+    def quietly(self, work, then):
+        """then(work()) with work() on the worker and no loading panel, for a refresh the page can wait for."""
+        self._submit(work, then, quiet=True)
+
+    def _submit(self, work, then, quiet):
+        busy = self._waiting + self._quiet
+        if not busy:
             # Tk objects may only be freed on the Tk thread, and the collector runs on whichever thread allocates:
             # hold it while the worker is busy. ponytail: the queue's own training threads are not covered.
             gc.disable()
-        self.jobs.put((work, then))
-        self._waiting += 1
-        if self._waiting == 1:
+        self.jobs.put((work, then, quiet))
+        if quiet:
+            self._quiet += 1
+        else:
+            self._waiting += 1
+        if not busy:
             self._poll()
 
     def _poll(self):
-        text, fraction = self.services.loading
-        self.load_text.configure(text=text or "Getting things ready")
-        self.load_bar.set(fraction)
-        while self._waiting:
+        if self._waiting:
+            text, fraction = self.services.loading
+            self.load_text.configure(text=text or "Getting things ready")
+            self.load_bar.set(fraction)
+        while self._waiting + self._quiet:
             try:
-                then, value, error = self.results.get_nowait()
+                then, value, error, quiet = self.results.get_nowait()
             except queue.Empty:
                 break
-            self._waiting -= 1
-            if not self._waiting:
+            if quiet:
+                self._quiet -= 1
+            else:
+                self._waiting -= 1
+                if not self._waiting:
+                    self.loader.place_forget()
+            if not self._waiting + self._quiet:
                 gc.enable()
-                self.loader.place_forget()
             if error is None:
                 then(value)
             else:
                 self.report_callback_exception(type(error), error, error.__traceback__)
-        if self._waiting:
+        if self._waiting + self._quiet:
             self.after(60, self._poll)
 
     def on_event(self, kind, payload):
@@ -278,7 +305,7 @@ class Studio(tk.Tk):
             self.pages[self.route].on_event(kind, payload)
 
     def destroy(self):
-        self.jobs.put((None, None))
+        self.jobs.put((None, None, False))
         gc.enable()
         self.unsubscribe()
         close = getattr(self.services, "close", None)

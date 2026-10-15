@@ -1119,6 +1119,7 @@ class WorkspaceServices(Services):
                     self._failed[cid] = str(error) or error.__class__.__name__
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
+            self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
         self._worker = threading.Thread(target=run, daemon=True)
         self._worker.start()
         return True

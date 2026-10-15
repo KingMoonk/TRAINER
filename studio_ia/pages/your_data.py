@@ -247,7 +247,9 @@ class YourDataPage(Page):
             self.notes[payload["id"]] = payload["text"]
             self.paint_collection()
         elif kind in ("download_done", "import_done", "download_failed"):
-            self.reload()
+            self.paint_collection()  # cheap: manifests and the set list only
+        elif kind == "downloads_finished":
+            self.quiet_reload()  # re-counting every row is slow; the page stays usable while it runs
 
     def _row(self):
         return next((r for r in self.summaries[self.kind].rows if r["id"] == self.selected), None)

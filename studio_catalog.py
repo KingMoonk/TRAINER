@@ -18,7 +18,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file, truthy
+from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file, truthy, uid
 
 _log = logging.getLogger(__name__)
 
@@ -843,38 +843,36 @@ def register_download(workspace, result, stop=None, emit=None):
         for old in sorted(workspace.path.parent.glob("workspace.before-catalog-*.json"))[:-3]:
             old.unlink(missing_ok=True)
     if count != result["records"] or stale:
-        staging = dataset_id + ".importing"
+        # One transaction swaps the old rows for the new ones: WAL readers keep seeing the old set until the commit,
+        # and a cancel or failure rolls back to it. No staging copy to rename and one sync instead of one per batch.
         insert = "INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)"
         with workspace._connect() as connection:
+            connection.execute("PRAGMA synchronous=NORMAL")  # WAL stays consistent; a power cut may lose this import only
             try:
-                connection.execute("DELETE FROM records WHERE dataset_id=?", (staging,))
-                connection.commit()
-                count, batch = 0, []
+                connection.execute("DELETE FROM records WHERE dataset_id IN (?,?)", (dataset_id, dataset_id + ".importing"))  # + an older version's staging rows
+                count, batch, stamp = 0, [], now()
                 with path.open(encoding="utf-8") as stream:
                     for line in stream:
                         _cancel(stop)
-                        row = normalize(json.loads(line), dataset_id, source=f"catalog:{catalog_id}")
-                        if row is None:
+                        # records.jsonl was normalized when it was written and its checksum verified above,
+                        # so a row only needs the fields download_dataset stripped: id, dataset and time.
+                        row = json.loads(line)
+                        if not isinstance(row, dict) or not (row.get("text") or row.get("messages")):
                             raise ValueError("A normalized catalogue row became invalid.")
-                        db_row = workspace._db_row(row)
-                        batch.append((db_row[0], staging, *db_row[2:]))
+                        row.update(id=uid("ex"), datasetId=dataset_id, updatedAt=stamp)
+                        batch.append(workspace._db_row(row))
                         count += 1
                         if len(batch) >= 5000:
                             connection.executemany(insert, batch)
-                            connection.commit()
                             batch.clear()
-                        if emit and count % 2000 == 0:
+                        if emit and count % 5000 == 0:
                             emit({"text": f"Indexing {result['name']} · {count:,}/{result['records']:,}", "completed": count, "total": result["records"]})
                 connection.executemany(insert, batch)
                 if count != result["records"]:
                     raise ValueError("Catalogue record count does not match its manifest.")
-                connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
-                connection.execute("UPDATE records SET dataset_id=? WHERE dataset_id=?", (dataset_id, staging))
                 connection.commit()
             except BaseException:
                 connection.rollback()
-                connection.execute("DELETE FROM records WHERE dataset_id=?", (staging,))
-                connection.commit()
                 raise
     metadata = {"id": dataset_id, "name": result["name"], "description": result.get("description", ""),
                 "createdAt": now(), "storage": "sqlite", "recordCount": count, "catalogId": catalog_id,
