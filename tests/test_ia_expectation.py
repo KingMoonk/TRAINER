@@ -14,10 +14,15 @@ def expectation(*args, **kw):
     return both(*args, **kw)[1]
 
 
+def design(s):
+    """The Builder's expectation for the choices `s` made on the starting design."""
+    return B.design_expectation(s, B.write_spec(default_spec(), s))
+
+
 class Tiers(unittest.TestCase):
     def test_default_design_is_letter_patterns(self):
-        c = B.cfg(B.read_spec(default_spec()))
-        text = expectation(B.P(c), "byte", embedding_params=c["V"] * c["d"])
+        c = B.sizes(default_spec(), 0)
+        text = expectation(c["params"], "byte", embedding_params=c["table"])
         self.assertIn(T["letters"], text)
         self.assertIn(T["guide"], text)
         self.assertIn(T["wider_deeper"], text)
@@ -63,7 +68,7 @@ class WordLists(unittest.TestCase):
     def test_gpt2_at_a_small_width_is_all_word_table(self):
         s = dict(B.read_spec(default_spec()), V=2)
         self.assertEqual(s["d"], 64)
-        text = B.design_expectation(s)[1]
+        text = design(s)[1]
         self.assertIn(T["bpe_gpt2"], text)
         self.assertIn(T["table_heavy"], text)
         self.assertIn(T["letters"], text)  # the table is not thinking capacity, so 3 million parameters still read as small
@@ -83,7 +88,7 @@ class WordLists(unittest.TestCase):
         self.assertNotIn(T["custom_pieces"], expectation(5_000_000, "word", tokens_seen=10_000_000))
         self.assertIsNone(table_params("word", 64))
         self.assertEqual(table_params("word", 64, vocab=3000), 3000 * 64)
-        self.assertEqual(B.design_expectation(dict(B.read_spec(default_spec()), V=3))[0].split(":")[0], "Expect")
+        self.assertEqual(design(dict(B.read_spec(default_spec()), V=3))[0].split(":")[0], "Expect")
 
     def test_table_size(self):
         self.assertEqual(table_params("bpe_gpt2", 64), 50257 * 64)
@@ -112,7 +117,7 @@ class Headline(unittest.TestCase):
 class Pages(unittest.TestCase):
     def test_builder_line_follows_the_draft_word_list(self):
         s = B.read_spec(default_spec())
-        lines = [B.design_expectation(dict(s, V=v))[1] for v in range(4)]
+        lines = [design(dict(s, V=v))[1] for v in range(4)]
         self.assertEqual(len(set(lines)), 4)
 
     def test_pretraining_line_names_plain_text_and_waits_for_the_preview(self):

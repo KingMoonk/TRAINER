@@ -40,7 +40,8 @@ class Backend:
     def to_cpu(self, value):
         """A NumPy copy of `value` (a tensor on any device, or anything array-like); never a view of a live tensor."""
         if isinstance(value, torch.Tensor):
-            return value.detach().cpu().numpy().copy()
+            value = value.detach().cpu()
+            return (value.float() if value.dtype == torch.bfloat16 else value).numpy().copy()  # NumPy has no bfloat16
         return np.asarray(value)
 
     def synchronize(self):
