@@ -11,3 +11,4 @@ __pycache__/
 *.spec
 /design/
 /BUILD.md
+/profile.svg

@@ -92,27 +92,35 @@ def make_problem(item, quality="Good"):
 def add_problems(workspace, dataset_id, items, quality="Good"):
     """Store problems (rule + params kept on each example). Returns (added, duplicate)."""
     added = duplicate = 0
-    known = {studio_core.fingerprint(e) for e in workspace.iter_examples(dataset_id)}
+    dataset = workspace._dataset(dataset_id)
+    on_disk = dataset.get("storage") == "sqlite"
+    known = set() if on_disk else {studio_core.fingerprint(e) for e in workspace.iter_examples(dataset_id)}
+    examples = []
     for item in items:
         row = make_problem(item, quality)
         example = studio_core.normalize(row, dataset_id, "synthetic")
-        if example is None or studio_core.fingerprint(example) in known:
+        if example is None:
             duplicate += 1
             continue
-        known.add(studio_core.fingerprint(example))
         example["rule"], example["params"] = row["rule"], row["params"]
-        dataset = workspace._dataset(dataset_id)
-        if dataset.get("storage") == "sqlite":
-            with workspace._connect({dataset_id}) as connection:
-                workspace._insert_rows(connection, [workspace._db_row(example)])
-        else:
-            workspace.state["examples"].append(stamp(example, studio_core.fingerprint(example)))
+        examples.append(example)
+    if on_disk:
+        with workspace._connect({dataset_id}) as connection:  # one transaction; UNIQUE(dataset_id, fingerprint) rejects the duplicates
+            for example in examples:
+                stored = workspace._insert_rows(connection, [workspace._db_row(example)])
+                added, duplicate = added + stored, duplicate + 1 - stored
+            if added:
+                dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+    else:
+        for example in examples:
+            key = studio_core.fingerprint(example)
+            if key in known:
+                duplicate += 1
+                continue
+            known.add(key)
+            workspace.state["examples"].append(stamp(example, key))
             workspace._bump(dataset_id)
-        added += 1
-    if added and workspace._dataset(dataset_id).get("storage") == "sqlite":
-        with workspace._connect() as connection:
-            workspace._dataset(dataset_id)["recordCount"] = connection.execute(
-                "SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+            added += 1
     workspace.save()
     return added, duplicate
 
@@ -315,6 +323,31 @@ def matching(rows, query="", limit=200):
     """The first `limit` rows whose two columns contain `query` (limit None = all)."""
     needle = query.casefold().strip()
     return [r for r in rows if not needle or needle in f"{r['a']} {r['b']}".casefold()][:limit]
+
+
+def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=()):
+    """(rows, next cursor) of one page of `kind` rows read from storage, not from the summary's sample: every row of
+    `sets` ((dataset id, name) in order) whose text holds `query` can be reached. cursor None = the first page; the
+    next cursor is None when nothing follows. `dups` = ids to show as near-duplicates. Disk datasets match in SQL, which
+    folds case for ASCII letters only; others match in Python."""
+    needle = query.strip().casefold()
+    rules = [key for key, label in LABELS.items() if needle in f"{key} {label}".casefold()] if needle and kind == "problems" else []
+    index, after = cursor or (0, 0)
+    found = []  # (set index, position in the set, row)
+    while index < len(sets) and len(found) <= limit:
+        dataset_id, name = sets[index]
+        want = limit + 1 - len(found)
+        if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            examples = workspace.kind_rows(dataset_id, kind, query, after, want, rules)
+        else:
+            examples = [(i, e) for i, e in enumerate(workspace.examples(dataset_id), 1) if i > after and classify(e) == kind and (
+                not needle or rule_of(e) in rules or needle in " ".join(str(e.get(k) or "") for k in ("user", "assistant", "intent", "text")).casefold())][:want]
+        for position, example in examples:
+            a, b = _columns(kind, example, name)
+            found.append((index, position, {"id": example["id"], "a": a, "b": b, "status": _status(kind, example, example["id"] in dups), "dataset": name}))
+        index, after = index + 1, 0
+    more = len(found) > limit
+    return [row for *_, row in found[:limit]], (found[limit - 1][:2] if more else None)
 
 
 def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_ids=None, scanned=None, progress=None):

@@ -52,6 +52,28 @@ class BuilderTest(unittest.TestCase):
         app.update()
         self.assertEqual([(v.number, v.change) for v in fake.versions()], [(1, "first design")])
 
+    def test_nothing_trained_shows_one_line_instead_of_a_chart_and_rows(self):
+        fake = FakeServices()  # nothing saved yet
+        fake.data = self.has_text
+        app = Studio(fake)
+        self.addCleanup(app.destroy)
+        page = app.show("builder")
+        app.update()
+        shown = texts(page)
+        self.assertIsNone(page.plot)
+        self.assertIsNone(page.ask_btn)
+        self.assertEqual(page.no_curve, B.T["no_curve_first"])
+        self.assertEqual(sum(t.startswith("No error curve yet") for t in shown), 1)
+        self.assertIn(B.T["nothing_to_ask_first"], shown)
+        self.assertNotIn(B.T["example_prompt"], shown)
+
+    def test_one_trained_version_answers_and_the_other_says_why_not(self):
+        self.assertIsNone(self.page.plot)  # trained but no run curve on the fake
+        self.assertEqual(sorted(self.page.answer_labels), [1, 2])
+        self.assertEqual(self.page.answer_labels[1].cget("text"), B.T["its_answer_appears"])
+        self.assertEqual(self.page.answer_labels[2].cget("text"), B.T["compare_later"])
+        self.assertIsNotNone(self.page.ask_btn)
+
     def test_edit_marks_not_saved_with_chips(self):
         self.page.edit(L=4, H=8)
         self.app.update()

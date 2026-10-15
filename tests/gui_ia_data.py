@@ -1,11 +1,13 @@
 """Your data and Make extra data on FakeServices: board copy, tabs, review, generate/preview, navigation with a kind."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import time
 import tkinter as tk
 import unittest
 from tkinter import ttk
 
 from studio_ia.copy import MAKEDATA as M
 from studio_ia.copy import YOURDATA as Y
+from studio_ia.pages import your_data
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
 
@@ -35,6 +37,12 @@ class DataPagesTest(unittest.TestCase):
         widget.event_generate("<Button-1>")
         self.app.update()
 
+    def settle(self, seconds=0):
+        """Run the event loop until the worker has delivered everything (and for `seconds` more, for a debounce)."""
+        end = time.monotonic() + seconds
+        while self.app._waiting or self.app._quiet or time.monotonic() < end:
+            self.app.update()
+
     def invoke(self, button):
         button.invoke()
         while self.app._waiting:  # the work runs on the shell's worker; its result arrives through the event loop
@@ -62,6 +70,7 @@ class DataPagesTest(unittest.TestCase):
                                                 "records": "7,473 problems", "state": "not downloaded"}]}
         page = self.app.show("your_data")
         self.click(find(page, Y["problems_tab"]))
+        self.settle()  # the collection is read on the worker
         self.assertIn(Y["problems_collection_desc"], labels(page))
         find(page, Y["download_add_all"], (ttk.Button,)).invoke()
         find(page, Y["download_add"], (ttk.Button,)).invoke()
@@ -80,11 +89,61 @@ class DataPagesTest(unittest.TestCase):
 
     def test_review_row_can_be_marked_good(self):
         page = self.app.show("your_data")
-        self.app.update()
+        self.settle()
         page.table.selection_set("c2")
         self.app.update()
         find(page, Y["mark_good"], (ttk.Button,)).invoke()
         self.assertEqual(next(r["status"] for r in self.fake.data("conversations").rows if r["id"] == "c2"), "Good")
+
+    def test_typing_searches_once_after_the_pause(self):
+        page = self.app.show("your_data")
+        self.settle()
+        self.assertEqual(len(page.table.get_children()), 3)
+        asked, real = [], self.fake.data_page
+        self.fake.data_page = lambda *args: asked.append(args) or real(*args)
+        page.query.set("hello")
+        for _ in range(4):
+            page._typed()
+        self.settle(your_data.SEARCH_DELAY / 1000 + .3)
+        self.assertEqual(asked, [("conversations", "hello", None, your_data.PAGE)])
+        self.assertEqual(page.table.get_children(), ("c2",))
+
+    def test_load_more_adds_the_next_page(self):
+        your_data.PAGE, was = 2, your_data.PAGE
+        self.addCleanup(setattr, your_data, "PAGE", was)
+        page = self.app.show("your_data")
+        self.settle()
+        self.assertEqual(len(page.table.get_children()), 2)
+        self.assertEqual(page.shown.cget("text"), Y["shown"].format(shown=2, count=3))
+        self.assertTrue(page.more_button.winfo_ismapped())
+        self.invoke_quietly(page.more_button)
+        self.assertEqual(page.table.get_children(), ("c1", "c2", "c3"))
+        self.assertFalse(page.more_button.winfo_ismapped())
+
+    def invoke_quietly(self, button):
+        button.invoke()
+        self.settle()
+
+    def test_download_progress_updates_one_status_line_about_once_a_second(self):
+        self.fake._collections = {"problems": [{"id": "gsm8k_check", "name": "GSM8K", "size": "4 MB download",
+                                                "records": "7,473 problems", "state": "downloading"}]}
+        page = self.app.show("your_data")
+        self.click(find(page, Y["problems_tab"]))
+        self.settle()
+        asked, real = [], self.fake.collection
+        self.fake.collection = lambda kind="text": asked.append(kind) or real(kind)
+        page.throttle.interval = .3
+        label = page.status_labels["gsm8k_check"]
+        page.on_event("download", {"id": "gsm8k_check", "text": "Downloading · 1 MB"})
+        page.on_event("download", {"id": "gsm8k_check", "text": "Downloading · 2 MB"})
+        self.assertEqual(label.cget("text"), "Downloading · 1 MB")  # the second one waits for the next tick
+        self.settle(.5)
+        self.assertEqual(label.cget("text"), "Downloading · 2 MB")
+        self.assertIs(page.status_labels["gsm8k_check"], label)  # repainted in place, the rows were not rebuilt
+        self.assertEqual(asked, [])  # and the manifests were not read again
+        page.on_event("download_done", {"id": "gsm8k_check"})
+        self.settle()
+        self.assertEqual(asked, ["problems"])
 
     def test_make_data_cards_preview_and_generate(self):
         page = self.app.show("make_data")
@@ -106,6 +165,7 @@ class DataPagesTest(unittest.TestCase):
 
     def test_edit_button_shows_for_a_selected_row_and_saves(self):
         page = self.app.show("your_data")
+        self.settle()
         self.assertFalse(page.edit_button.winfo_ismapped())
         page.table.selection_set("c1")
         page.table.event_generate("<<TreeviewSelect>>")
