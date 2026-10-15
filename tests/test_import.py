@@ -9,10 +9,12 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import torch
 
 import studio_export as export
 import studio_import as imp
 from studio_modules.tokenizer.bpe_gpt2 import GPT2Tokenizer, bytes_to_unicode
+from studio_model import Tokenizer
 from studio_slots import BOS, EOS, OFFSET
 from studio_ia.services import FakeServices, FixtureServices
 from tests.test_export import engine_logits, gpt2_spec, write_checkpoint
@@ -134,6 +136,128 @@ class Conversion(unittest.TestCase):
         self.assertEqual(export.gpt2_problems(spec), [])
         self.assertEqual((spec["dims"]["d_model"], spec["dims"]["n_layer"], spec["dims"]["n_ctx"]), (768, 12, 1024))
         self.assertEqual(spec["tokenizer"]["id"], "bpe_gpt2")
+
+
+LAYERS, WIDTH, CONTEXT = 2, 32, 32
+
+
+def random_hf_state(tokenizer, seed=3):
+    """A tiny GPT-2 in Hugging Face's own tensor names and layouts (Conv1D weights are [in, out]), written by hand, not by the exporter."""
+    rng = np.random.default_rng(seed)
+    d, pieces = WIDTH, len(tokenizer.encoder)
+
+    def w(*shape, scale=.15):
+        return (rng.standard_normal(shape) * scale).astype(np.float32)
+
+    state = {"transformer.wte.weight": w(pieces, d, scale=.5), "transformer.wpe.weight": w(CONTEXT, d, scale=.2),
+             "transformer.ln_f.weight": 1 + w(d), "transformer.ln_f.bias": w(d)}
+    for i in range(LAYERS):
+        p = f"transformer.h.{i}."
+        state.update({p + "ln_1.weight": 1 + w(d), p + "ln_1.bias": w(d), p + "ln_2.weight": 1 + w(d), p + "ln_2.bias": w(d),
+                      p + "attn.c_attn.weight": w(d, 3 * d), p + "attn.c_attn.bias": w(3 * d),
+                      p + "attn.c_proj.weight": w(d, d), p + "attn.c_proj.bias": w(d),
+                      p + "mlp.c_fc.weight": w(d, 4 * d), p + "mlp.c_fc.bias": w(4 * d),
+                      p + "mlp.c_proj.weight": w(4 * d, d), p + "mlp.c_proj.bias": w(d)})
+    return state
+
+
+def reference_logits(state, ids, tokenizer, heads=HEADS):
+    """GPT-2's forward pass in plain torch, float64, straight from the Hugging Face tensors: tanh GELU, LayerNorm eps 1e-5, tied head.
+    The engine's 7 special ids come first in its vocabulary; they start as GPT-2's end-of-text row (BOS, EOS) and the mean row (the rest)."""
+    t = {key: torch.as_tensor(value, dtype=torch.float64) for key, value in state.items()}
+    wte = t["transformer.wte.weight"]
+    end, mean = wte[tokenizer.encoder["<|endoftext|>"]], wte.mean(0)
+    table = torch.cat([torch.stack([mean, end, end, mean, mean, mean, mean]), wte])   # PAD BOS EOS USER SYSTEM ASSISTANT UNK
+    d, count = WIDTH, len(ids)
+
+    def norm(x, prefix):
+        centred = x - x.mean(-1, keepdim=True)
+        return centred / torch.sqrt((centred ** 2).mean(-1, keepdim=True) + 1e-5) * t[prefix + ".weight"] + t[prefix + ".bias"]
+
+    def gelu(x):
+        return .5 * x * (1 + torch.tanh(np.sqrt(2 / np.pi) * (x + .044715 * x ** 3)))
+
+    x = table[torch.as_tensor(ids)] + t["transformer.wpe.weight"][:count]
+    causal = torch.triu(torch.ones(count, count, dtype=torch.bool), diagonal=1)
+    for i in range(LAYERS):
+        p = f"transformer.h.{i}."
+        qkv = norm(x, p + "ln_1") @ t[p + "attn.c_attn.weight"] + t[p + "attn.c_attn.bias"]
+        q, k, v = (part.reshape(count, heads, d // heads).transpose(0, 1) for part in qkv.split(d, dim=-1))
+        scores = (q @ k.transpose(-1, -2) / np.sqrt(d // heads)).masked_fill(causal, -torch.inf).softmax(-1)
+        x = x + (scores @ v).transpose(0, 1).reshape(count, d) @ t[p + "attn.c_proj.weight"] + t[p + "attn.c_proj.bias"]
+        x = x + gelu(norm(x, p + "ln_2") @ t[p + "mlp.c_fc.weight"] + t[p + "mlp.c_fc.bias"]) @ t[p + "mlp.c_proj.weight"] + t[p + "mlp.c_proj.bias"]
+    return (norm(x, "transformer.ln_f") @ table.T).numpy()
+
+
+class Imported(unittest.TestCase):
+    """A synthetic GPT-2 imported through the real path, checked against a forward pass written out by hand."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.dir = Path(cls.tmp.name)
+        cls.tokenizer = small_bpe()
+        cls.state = random_hf_state(cls.tokenizer)
+        cls.hf, cls.out = cls.dir / "model.safetensors", cls.dir / "imported.npz"
+        export.write_safetensors(cls.hf, cls.state)
+        imp.import_gpt2(cls.hf, cls.out, tokenizer=cls.tokenizer, heads=HEADS)
+        cls.end = OFFSET + cls.tokenizer.encoder["<|endoftext|>"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def local(self, seed=0):
+        from studio_model import LocalModel
+        return LocalModel(self.out, seed=seed, device="cpu")
+
+    def test_it_computes_the_hand_written_reference_on_every_id_including_the_special_ones(self):
+        self.assertEqual(OFFSET, 7)
+        ids = [1, 20, 21, 3, 22, 4, 23, 2, self.end, 5, 6, 0]   # BOS, text, USER, text, ASSISTANT, text, EOS, the real end piece, SYSTEM, UNK, PAD
+        np.testing.assert_allclose(engine_logits(self.out, ids), reference_logits(self.state, ids, self.tokenizer), atol=2e-4)
+
+    def test_bos_eos_and_the_real_end_piece_share_a_row_so_only_eos_may_stop_a_reply(self):
+        from studio_model import complete, unsayable
+        blocked = unsayable(self.tokenizer)
+        self.assertIn(self.end, blocked)
+        self.assertNotIn(EOS, blocked)
+        self.assertEqual(unsayable(Tokenizer("byte")), unsayable(Tokenizer("byte")))
+        self.assertNotIn(self.end, unsayable(Tokenizer("byte")))
+        logits = np.full(self.tokenizer.vocab_size, -50.)
+        logits[[self.end, EOS]] = 10, 9   # the real piece is the likeliest, EOS next: the reply must stop, not print the piece
+        local = self.local()
+        with mock.patch("studio_model.last_logits", lambda *a, **k: torch.as_tensor(logits)):
+            self.assertEqual(complete(local.model, local.tokenizer, "hi"), "")
+            self.assertEqual(local.generate([{"role": "user", "content": "hi"}], temperature=0), "")
+
+    def test_sampling_does_not_count_the_end_of_text_twice(self):
+        logits = np.full(self.tokenizer.vocab_size, -50.)
+        logits[[self.end, EOS, OFFSET + 97]] = 2.   # three equally likely pieces; the real end piece is not one of the choices
+        local, stopped = self.local(seed=7), 0
+        with mock.patch("studio_model.last_logits", lambda *a, **k: torch.as_tensor(logits)):
+            for _ in range(400):
+                reply = local.generate([{"role": "user", "content": "hi"}], max_tokens=1, temperature=1., top_k=0)
+                self.assertNotIn("<|endoftext|>", reply)
+                stopped += reply == ""
+        self.assertAlmostEqual(stopped / 400, .5, delta=.08)   # EOS against "a"; counted twice it would be two in three
+
+    def test_held_back_scoring_shares_the_probability_among_the_real_pieces_only(self):
+        from studio_eval import score_docs
+        text = "hello that tell"
+        pieces = self.tokenizer.encode(text)
+        ids = [1] + pieces
+        logits = reference_logits(self.state, ids[:-1], self.tokenizer)
+        targets = np.array(pieces)
+
+        def nats(columns):
+            kept = logits[:, columns]
+            kept = kept - np.log(np.exp(kept).sum(-1, keepdims=True))
+            return float(-kept[np.arange(len(targets)), targets - columns.start].sum())
+
+        (got, chars), = score_docs(self.local(), [text])
+        self.assertEqual(chars, len(text))
+        self.assertAlmostEqual(got, nats(slice(OFFSET, None)), delta=2e-3)
+        self.assertGreater(abs(nats(slice(0, None)) - got), 1e-3)   # counting the special rows would have scored it differently
 
 
 class FakeResponse:

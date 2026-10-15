@@ -869,14 +869,24 @@ def last_logits(model, window, sliding, cache):
     return model.forward(np.array([window[cache["n"]:]], dtype=np.int64), cache=cache)[0, -1]
 
 
+def unsayable(tokenizer):
+    """Ids the model is never allowed to say: the markers (PAD, BOS and the role tokens, UNK) and, for GPT-2's word list, its real
+    `<|endoftext|>` piece. An imported GPT-2 ties BOS, EOS and that piece to one table row, so all three get the same logit; EOS
+    is the one stop token, and the real piece is blocked so the end of text is not counted twice or printed as literal text."""
+    ids = [PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]
+    end = tokenizer.encoder.get("<|endoftext|>") if tokenizer.kind == "bpe_gpt2" else None
+    return ids if end is None else ids + [OFFSET + end]
+
+
 def complete(model, tokenizer, prompt, max_tokens=48):
     """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
     tokens, result = [BOS] + tokenizer.encode(prompt), []
     cache = {"n": 0} if model.can_cache else None
+    blocked = unsayable(tokenizer)
     with torch.no_grad():
         for _ in range(max_tokens):
             logits = model.backend.to_cpu(last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)).astype(np.float64)
-            logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
+            logits[blocked] = -np.inf
             token = int(logits.argmax())
             if token == EOS:
                 break
@@ -921,13 +931,14 @@ class LocalModel:
                 cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
             return cut
 
+        blocked = unsayable(self.tokenizer)
         cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
             # Transfer only the final vocabulary vector for seeded CPU sampling.
             logits = self.model.backend.to_cpu(last_logits(self.model, window(), len(tokens) > context, cache)).astype(np.float64)
-            logits[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
+            logits[blocked] = -np.inf
             if temperature <= 0:
                 token = int(logits.argmax())
             else:

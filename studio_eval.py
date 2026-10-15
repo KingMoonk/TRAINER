@@ -15,14 +15,14 @@ import numpy as np
 import torch
 
 from studio_catalog import CHOICE_ASK
-from studio_slots import BOS, PAD, UNK
+from studio_slots import BOS, OFFSET, PAD, UNK
 
 LN2 = math.log(2)
 SCORE_WINDOWS = 512  # windows gathered before a scoring pass
 SCORE_ELEMENTS = 4_000_000  # most float64 logits (batch x window x vocabulary) one scoring pass holds
 SHOTS = (0, 1, 4)  # worked examples in front of each few-shot question: none, one, a few
 CHOICE_LINE = re.compile(r"([A-J])\) (.+)")
-SCORE_METHOD = "stride-half-1"  # how score_docs reads a document; scores stored under another value are stale
+SCORE_METHOD = "stride-half-2"  # how score_docs reads a document; scores stored under another value are stale
 MIN_DOCS = 20  # fewest held-back documents paired_gain will judge on; a percentile bootstrap over fewer undercovers
 BOOTSTRAP_ELEMENTS = 2_000_000  # most resampled indices one bootstrap pass holds
 
@@ -61,7 +61,9 @@ def score_docs(model, docs):
     model is a checkpoint path or a LocalModel. A document is read in overlapping windows (score_windows): each window
     after the first scores only its new half, with the half before it as context, so no piece is scored cold except the
     first window's. Windows from many documents run through the model together, right-padded to the longest in the
-    batch; every mixer is causal, so the padding never reaches a real position.
+    batch; every mixer is causal, so the padding never reaches a real position. The probability is shared among the real
+    pieces only: a document is never made of PAD, BOS, EOS or role tokens, and an imported GPT-2 gives BOS and EOS the same row
+    as its end-of-text piece, so counting them would charge every position for the same piece three times.
     """
     from studio_model import LocalModel
     local = model if isinstance(model, LocalModel) else LocalModel(model, device="cpu")
@@ -79,7 +81,9 @@ def score_docs(model, docs):
             x, y = np.full((2, len(batch), lengths.max()), PAD, dtype=np.int64)
             for row, (_, inputs, targets, _) in enumerate(batch):
                 x[row, :len(inputs)], y[row, :len(targets)] = inputs, targets
-            logp = torch.log_softmax(local.model.forward(x).double(), dim=-1).gather(-1, torch.as_tensor(y)[..., None])[..., 0].cpu().numpy()
+            logits = local.model.forward(x).double()
+            logits[..., :OFFSET] = -torch.inf
+            logp = torch.log_softmax(logits, dim=-1).gather(-1, torch.as_tensor(y)[..., None])[..., 0].cpu().numpy()
             position = np.arange(x.shape[1])[None, :]
             real = (position < lengths[:, None]) & (position >= skips[:, None])
             unknown = real & (y == UNK)
