@@ -60,6 +60,16 @@ class SlowReads(unittest.TestCase):
             self.addCleanup(after.close)
             self.assertEqual((after.data("text").count, scan.call_count), (31, 1))
 
+    def test_next_step_asks_for_text_without_summarising_the_store(self):
+        with mock.patch.object(dk, "scan", wraps=dk.scan) as scan:
+            self.assertTrue(self.svc.has_text())
+            self.assertTrue(self.svc.ready(self.svc.next_step))  # nothing long to wait for at launch
+            self.svc.next_step()
+            self.assertEqual((scan.call_count, "summaries" in self.svc._data), (0, False))
+        empty = WorkspaceServices(Workspace(tempfile.mkdtemp()))
+        self.addCleanup(empty.close)
+        self.assertFalse(empty.has_text())
+
     def test_scan_reports_what_it_reads(self):
         notes = []
         dk.scan(self.ws, progress=lambda text, fraction: notes.append((text, fraction)))

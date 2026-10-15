@@ -224,12 +224,15 @@ class Services:
         return after or "Starts now"
 
     def next_step(self):
-        """The single "what next" answer (studio_ia.next_step.NextStep) from this workspace's data, versions and queue.
-        Reads the text summary, so a cold workspace makes it a long read: the shell asks from its worker."""
+        """The single "what next" answer (studio_ia.next_step.NextStep) from this workspace's data, versions and queue."""
         from studio_ia.next_step import next_step
         q = self.queue()
         first = next((j for j in q.up_next if getattr(j, "status", "waiting") != "held"), None)
-        return next_step(self.data("text").count > 0, self.versions(), q, self.queue_outlook(first))
+        return next_step(self.has_text(), self.versions(), q, self.queue_outlook(first))
+
+    def has_text(self):
+        """Whether any text has been added. The sidebar asks at launch, so a store that has not been summarised yet must not be read."""
+        return self.data("text").count > 0
 
     def next_step_if_ready(self):
         """next_step() when it will not keep the Tk thread waiting (ready()), else None: a page's empty state keeps its own words."""
@@ -1301,6 +1304,10 @@ class WorkspaceServices(Services):
         import studio_data_kinds as dk
         full = self._summaries()[kind]
         return replace(full, rows=dk.matching(full.rows, query))
+
+    def has_text(self):
+        """One indexed look at the first text row of each dataset, not the whole-store summary (a cold one reads every dataset)."""
+        return any(next(self.workspace.iter_kind(d["id"], "text"), None) is not None for d in list(self.workspace.state["datasets"]))
 
     _OWN_SETS = {"text": "Your files", "conversations": "Your conversations", "problems": "Your problems"}
     _DRAFT_SETS = {"conversations": "Rewritten conversations", "text": "Generated prose"}
