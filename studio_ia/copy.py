@@ -922,3 +922,22 @@ MACHINE_STRIP = {
     "link_queue": "link to Queue",
     "format": "{now} · {what} · {eta} · {next} · Chat: {chat_version} · {queue_link}",
 }
+
+EXPECTATION = {
+    "guide": "A rough guide, not a promise:",
+    "letters": "Letter patterns: common short words and word-shaped nonsense.",
+    "words": "Real words, loose grammar; short phrases hang together.",
+    "words_text": "Real words, loose grammar; short phrases hang together, given tens of MB of text.",
+    "sentences": "Simple coherent sentences (children’s-story level).",
+    "sentences_text": "Simple coherent sentences (children’s-story level), given tens to hundreds of MB of simple text and hours of training.",
+    "move_up": "To move up: {changes}.",
+    "wider_deeper": "a wider and deeper design",
+    "more_text": "more text",
+    "custom_pieces": "custom word pieces",
+    "chat_scale": "Answers that hold a conversation need hundreds of millions of parameters and billions of word pieces; this app teaches the same steps at laptop scale.",
+    "byte": "Letters (bytes) spell every word out letter by letter, so a small model mostly learns spelling-shaped output and its context covers fewer words.",
+    "bpe_custom": "Custom word pieces come out as whole common words, so the same context covers about 3 to 4 times more text; the word list costs parameters (list size × width).",
+    "bpe_gpt2": "GPT-2 word pieces give the same benefit, but the list has about 50,000 entries.",
+    "table_heavy": "More than half of the parameters sit in the word table rather than in the blocks that do the thinking, so only the rest counts toward what it can learn.",
+    "continues": "Plain-text training makes it continue text rather than answer; Post-training round 1 teaches it to answer.",
+}

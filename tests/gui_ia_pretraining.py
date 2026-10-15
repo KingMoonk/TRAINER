@@ -5,7 +5,9 @@ import unittest
 import tkinter as tk
 from tkinter import ttk
 
+from studio_data_kinds import DataSummary
 from studio_spec import default_spec
+from studio_ia.copy import EXPECTATION
 from studio_ia.services import FakeServices, Job, QueueState, Version
 from studio_ia.shell import Studio
 
@@ -18,7 +20,7 @@ def texts(widget):
 class PretrainingTest(unittest.TestCase):
     def setUp(self):
         self.fake = FakeServices()
-        self.fake.data = lambda kind: {"kind": kind, "count": 3, "sets": [{"id": "d1", "name": "Short stories", "count": 3}]}
+        self.fake.data = lambda kind, query="": DataSummary(kind, 3, sets=[{"id": "d1", "name": "Short stories", "count": 3}])
         self.fake._versions = [Version(4, spec=default_spec(), best_checkpoint="v4.npz", status="trained"),
                                Version(5, change="6 blocks (was 4)", parent=4, spec=default_spec(), status="saved")]
         try:
@@ -35,6 +37,8 @@ class PretrainingTest(unittest.TestCase):
         self.assertIn("2.00 word pieces per parameter", t)  # 2,000,000 pieces / 1,000,000 params
         self.assertIn("rule of thumb", t)
         self.assertIn("about 10.0× more text", t)
+        self.assertIn(EXPECTATION["letters"], t)  # 2,000,000 pieces over two passes is little text
+        self.assertIn(EXPECTATION["continues"], t)
         self.assertGreater(len(page.grid.find_all()), 100)  # cells of the real first rows
 
     def test_collection_buttons_call_the_services(self):

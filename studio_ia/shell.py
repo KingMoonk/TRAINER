@@ -1,7 +1,6 @@
 """Studio window: sidebar (four areas + machine strip) and the page router."""
 from __future__ import annotations
 
-import gc
 import queue
 import threading
 import tkinter as tk
@@ -12,6 +11,7 @@ from tkinter import ttk
 from studio_timing import timed
 from studio_ux import format_duration
 from studio_ia import services as services_module
+from studio_ia import threads
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, SIDEBAR_W, apply, font, tk_label
 from studio_ia.widgets import Progress, _activate
@@ -103,6 +103,8 @@ class Studio(tk.Tk):
                            ("loss", loss.LossPage), ("head_lab", head_lab.HeadLabPage)):
             self.register(route, cls)
         self.unsubscribe = self.services.subscribe(self.on_event)
+        threads.attach()
+        self._settle()
         self.services.start_queue()  # jobs saved as waiting by the last session start again
         with timed("shell.refresh_strip"):
             self.refresh_strip()
@@ -143,6 +145,8 @@ class Studio(tk.Tk):
         self.strip_next = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self.strip_chat = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self._strip_pending = False
+        self._strip_version, self._strip_loaded = None, False  # the version the chat line names, once it has been read
+        self._strip_loading, self._strip_again = False, False  # a read of it is on the worker; another was asked for meanwhile
         self._strip_resume = False  # the chat line is the "Resume" link only while the queue is paused by the user and idle
         for seq in ("<Button-1>", "<Return>", "<space>"):
             self.strip_chat.bind(seq, self._strip_chat_click)
@@ -214,19 +218,52 @@ class Studio(tk.Tk):
         return "\n".join(w.cget("text") for w in (self.strip_now, self.strip_next, self.strip_chat))
 
     def refresh_strip(self):
+        """Repaint the strip now from the queue; the version the chat line names is read where it is cheap (scored bands are
+        kept), and otherwise on the worker, the line keeping its last text until it arrives."""
+        def work():
+            try:
+                return self.services.best_version() or self.services.current_version()
+            except NotImplementedError:
+                return None
+        if self.services.ready(work):
+            self._strip_version, self._strip_loaded = work(), True
+        elif self._strip_loading:
+            self._strip_again = True
+        else:
+            self._strip_loading = True
+
+            def load():
+                try:
+                    return work(), None
+                except Exception as error:  # noqa: BLE001 - reported on the Tk thread below
+                    return None, error
+
+            def done(result):
+                version, error = result
+                self._strip_loading = False
+                if error is None:
+                    self._strip_version, self._strip_loaded = version, True
+                again, self._strip_again = self._strip_again, False
+                if again:
+                    self.refresh_strip()
+                else:
+                    self._paint_strip()
+                if error is not None:
+                    self.report_callback_exception(type(error), error, error.__traceback__)
+            self.quietly(load, done)
+        self._paint_strip()
+
+    def _paint_strip(self):
         q = self.services.queue()
-        try:
-            v = self.services.best_version() or self.services.current_version()
-        except NotImplementedError:
-            v = None
-        now, queued, chat, resume = strip_lines(q, v)
+        now, queued, chat, resume = strip_lines(q, self._strip_version)
         self.strip_now.configure(text=now)
         if q.job is None:
             self.strip_bar.set(None)
         else:
             self.strip_bar.set(q.step / q.total if q.total else None)
         self.strip_next.configure(text=queued)
-        self.strip_chat.configure(text=chat, fg=C["violet"] if resume else C["muted"], cursor="hand2" if resume else "", takefocus=int(resume))
+        if self._strip_loaded or resume:
+            self.strip_chat.configure(text=chat, fg=C["violet"] if resume else C["muted"], cursor="hand2" if resume else "", takefocus=int(resume))
         self._strip_resume = resume
 
     def _strip_tick(self):
@@ -326,6 +363,8 @@ class Studio(tk.Tk):
         while True:
             work, then, quiet = self.jobs.get()
             if work is None:
+                if then:  # the shell was destroyed mid-job: its hold is released once that job has finished
+                    threads.done()
                 return
             try:
                 self.results.put((then, work(), None, quiet))
@@ -354,9 +393,7 @@ class Studio(tk.Tk):
     def _submit(self, work, then, quiet):
         busy = self._waiting + self._quiet
         if not busy:
-            # Tk objects may only be freed on the Tk thread, and the collector runs on whichever thread allocates:
-            # hold it while the worker is busy. ponytail: the queue's own training threads are not covered.
-            gc.disable()
+            threads.hold()  # Tk objects may only be freed on the Tk thread: see studio_ia/threads.py
         self.jobs.put((work, then, quiet))
         if quiet:
             self._quiet += 1
@@ -382,13 +419,17 @@ class Studio(tk.Tk):
                 if not self._waiting:
                     self.loader.place_forget()
             if not self._waiting + self._quiet:
-                gc.enable()
+                threads.release()
             if error is None:
                 then(value)
             else:
                 self.report_callback_exception(type(error), error, error.__traceback__)
         if self._waiting + self._quiet:
             self.after(60, self._poll)
+
+    def _settle(self):
+        threads.settle()  # page and download threads that finished give the collector back, here on the Tk thread
+        self._settle_id = self.after(250, self._settle)
 
     def on_event(self, kind, payload):
         if kind in NEXT_EVENTS:
@@ -402,8 +443,9 @@ class Studio(tk.Tk):
             self.pages[self.route].on_event(kind, payload)
 
     def destroy(self):
-        self.jobs.put((None, None, False))
-        gc.enable()
+        self.jobs.put((None, bool(self._waiting + self._quiet), False))
+        threads.detach()
+        self.after_cancel(self._settle_id)
         self.unsubscribe()
         close = getattr(self.services, "close", None)
         if close:

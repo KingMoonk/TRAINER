@@ -54,7 +54,7 @@ class QueueTests(unittest.TestCase):
                          "checkpoint_now": self.fake.cooldown}
 
     def runner(self, plan=ANY, **kw):
-        r = Runner(self.path, self.handlers, tick=.01, **kw)
+        r = Runner(self.path, self.handlers, **{"tick": .01, **kw})
         r.set_plan(plan)
         self.addCleanup(r.shutdown)
         return r
@@ -232,6 +232,57 @@ class QueueTests(unittest.TestCase):
             idle["s"] = 120.
             self.assertTrue(wait(lambda: self.fake.steps > frozen + 3))
             self.fake.gate.set()
+
+    def test_gate_is_read_once_per_tick_not_per_pass(self):
+        reads = []
+
+        def idle():
+            reads.append(1)
+            return 120.
+        with mock.patch.object(studio_queue, "idle_seconds", idle):
+            r = Runner(self.path, self.handlers, tick=.3)
+            r.set_plan(Plan(hours="any", idle_only=True, pause_on_battery=False))
+            self.addCleanup(r.shutdown)
+            r.enqueue(self.job("long", "pretrain"))
+            r.start()
+            self.assertTrue(wait(lambda: self.fake.steps > 3))
+            time.sleep(.5)
+            self.assertLessEqual(len(reads), 4)  # the old 50 ms poll made this about 20 in the same time
+            self.fake.gate.set()
+
+    def test_enqueue_and_resume_wake_the_runner_at_once(self):
+        r = self.runner(tick=30)  # no polling to fall back on within the test
+        r.start()
+        time.sleep(.05)
+        r.enqueue(self.job("a"))
+        self.assertTrue(wait(lambda: self.fake.ran == ["a"], 2))
+        r.pause()
+        r.enqueue(self.job("b"))
+        time.sleep(.1)
+        self.assertEqual(self.fake.ran, ["a"])
+        r.resume()
+        self.assertTrue(wait(lambda: self.fake.ran == ["a", "b"], 2))
+
+    def test_plan_change_rereads_the_gate_at_once(self):
+        r = self.runner(Plan(hours="set", start_hour=22, end_hour=7, idle_only=False, pause_on_battery=False),
+                        clock=lambda: datetime(2026, 1, 1, 12), tick=30)
+        r.enqueue(self.job("a"))
+        r.start()
+        self.assertTrue(wait(lambda: r.state().blocked == "outside hours", 2))
+        r.set_plan(ANY)
+        self.assertTrue(wait(lambda: self.fake.ran == ["a"], 2))
+
+    def test_state_never_reads_the_gate_on_the_calling_thread(self):
+        caller, seen = threading.get_ident(), []
+        with mock.patch.object(studio_queue, "idle_seconds", lambda: seen.append(threading.get_ident()) or 120.):
+            r = Runner(self.path, self.handlers)
+            r.set_plan(Plan(hours="any", idle_only=True, pause_on_battery=False))
+            r.state()  # not started: a short-lived thread reads it
+            self.assertTrue(wait(lambda: seen))
+            r.start()
+            self.addCleanup(r.shutdown)
+            r.state()
+        self.assertNotIn(caller, seen)
 
     def test_checkpoint_now_keeps_main_running(self):
         r = self.runner()

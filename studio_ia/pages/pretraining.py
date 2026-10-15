@@ -6,6 +6,7 @@ import tkinter as tk
 import uuid
 
 from studio_ia.copy import PRETRAINING as T
+from studio_ia.expectation import expectation, table_params
 from studio_ia.pages.base import Page, Throttle
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -88,6 +89,17 @@ def ratio_text(ratio):
     return f"about {round(ratio, -digits):,.0f}"
 
 
+def version_expectation(spec, preview, passes):
+    """What to expect from this version after `passes` passes over the chosen text; "" until the size preview is known."""
+    params = (preview or {}).get("params")
+    if not spec or not params:
+        return ""
+    tokenizer = spec["tokenizer"]["id"]
+    pieces = preview.get("pieces")
+    return expectation(params, tokenizer, pieces * passes if pieces else None, "text",
+                       table_params(tokenizer, spec["dims"]["d_model"], preview.get("vocab")))
+
+
 def sets_of(summary):
     return (summary["sets"] if isinstance(summary, dict) else summary.sets) or []
 
@@ -134,6 +146,8 @@ class PretrainingPage(Page):
         self.enough.pack(anchor="w")
         self.enough_note = tk_label(card, "", 13, "muted", "panel", wraplength=720)
         self.enough_note.pack(anchor="w", pady=(4, 0))
+        self.expect_line = tk_label(card, "", 13, "text2", "panel", wraplength=720)
+        self.expect_line.pack(anchor="w", pady=(8, 0))
         # batches
         card = self._card(T["batches"], T["batches_desc"])
         tk_label(card, T["rebuilt_auto"], 12, "dim", "panel").pack(anchor="w")
@@ -373,6 +387,7 @@ class PretrainingPage(Page):
         else:
             self.enough.configure(text=T["text_unknown"])
             self.enough_note.configure(text=T["word_pieces_plain"])
+        self.expect_line.configure(text=version_expectation(getattr(self, "v", None) and self.v.spec, p, LENGTHS[self.length.value]))
         steps, tps = self.steps(), p.get("tokens_per_second")
         if steps and tps:
             self.steps_line.configure(text=T["steps_time"].format(steps=f"{steps:,}", minutes=f"{max(1, round(steps * per_step / tps / 60)):,}"))

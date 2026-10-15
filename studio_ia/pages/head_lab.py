@@ -1,14 +1,13 @@
 """Head lab: heads as tiles on prepared text, rank them by importance, switch some off, test their attention patterns."""
 from __future__ import annotations
 
-import gc
-import threading
 import tkinter as tk
 from pathlib import Path
 
 import numpy as np
 
 import studio_inspect
+from studio_ia import threads
 from studio_ia.copy import HEAD_LAB
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, current, prompt_text, show_tok
@@ -47,7 +46,6 @@ class HeadLabPage(Page):
     title = HEAD_LAB["h1"]
     lead = HEAD_LAB["lead"]
     crumb = (*LI, "Head lab")
-    _workers = 0  # worker threads running; the collector stays off while any is
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
@@ -294,19 +292,12 @@ class HeadLabPage(Page):
 
         def run():
             box["value"] = fn()
-        # Tk objects may only be freed on the Tk thread and the collector runs on whichever thread allocates: hold it.
-        HeadLabPage._workers += 1
-        gc.disable()
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
+        thread = threads.start(run)
 
         def poll():
             if thread.is_alive() and self.winfo_exists():
                 self.after(60, poll)
                 return
-            HeadLabPage._workers -= 1
-            if not HeadLabPage._workers:
-                gc.enable()
             if token == self._token and self.winfo_exists():
                 done(box["value"])
         self.after(60, poll)

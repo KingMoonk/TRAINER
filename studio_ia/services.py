@@ -739,6 +739,7 @@ class FakeServices(Services):
 import json  # noqa: E402
 import math  # noqa: E402
 import threading  # noqa: E402
+from studio_ia import threads  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -800,6 +801,10 @@ class _Cold(BaseException):
     """Raised inside ready(): the read asked for is not cached. Not an Exception, so no page's own handler swallows it."""
 
 
+class _Slow(_Cold):
+    """A _Cold that is long however small the store is (scoring a checkpoint, parsing the held-back text): ready() says no."""
+
+
 class WorkspaceServices(Services):
     """Every Services method over the real modules. Queue events fire on the runner thread and hop to Tk via emit."""
 
@@ -816,12 +821,12 @@ class WorkspaceServices(Services):
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS, services=self)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
-        self._models, self._cache = {}, {}
+        self._models, self._cache, self._making = {}, {}, {}
         self._lock = threading.RLock()
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
         workspace.progress = self.note
         if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-            threading.Thread(target=workspace.ensure_schema, daemon=True).start()
+            threads.start(workspace.ensure_schema)
 
     def close(self):
         if getattr(self, "_viz", None) is not None:
@@ -903,16 +908,14 @@ class WorkspaceServices(Services):
     def best_version(self):
         """The version Chat follows: a later version takes over only when its held-back error is below the noise band of
         the one it replaces (studio_gate.moves_chat), so a difference inside the noise never moves Chat."""
-        import studio_eval
         import studio_gate
-        rows, docs, best = self._rows(), self._heldout(), None
+        rows, best = self._rows(), None
         for row in rows:
             bpc = row.get("scorecard", {}).get("bpc")
             if not row.get("best_checkpoint") or not isinstance(bpc, (int, float)):
                 continue
-            ckpt = best and self._abs(best["best_checkpoint"])
-            # ponytail: the band is one scoring pass over the held-back text on the caller's thread, cached per checkpoint
-            band = self._cached(("band", ckpt), lambda: studio_eval.noise_band(ckpt, docs)) if best and docs else None
+            # the band of the version being replaced: with one scored version there is nothing to compare, so no held-back text is read
+            band = self._band(self._abs(best["best_checkpoint"])) if best else None
             if studio_gate.moves_chat(bpc, best and best["scorecard"]["bpc"], band):
                 best = row
         if best is None:  # nothing scored yet: the newest version that has a checkpoint
@@ -1043,6 +1046,8 @@ class WorkspaceServices(Services):
         try:
             work()
             return True
+        except _Slow:
+            return False
         except _Cold:  # a small store is read in milliseconds, in place; a large one goes to the worker
             state = self.workspace.state
             return len(state["examples"]) + sum(d.get("recordCount") or 0 for d in state["datasets"]) <= 5000
@@ -1120,7 +1125,7 @@ class WorkspaceServices(Services):
             estimated = total > chars
             pieces = round(counted * total / max(1, chars)) if estimated else counted
             return {"pieces": pieces if sample else None, "estimated": estimated,
-                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
+                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         key = self._preview_key(v, dataset_ids, rows)
         store = self._previews()
@@ -1396,8 +1401,7 @@ class WorkspaceServices(Services):
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
             self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
-        self._worker = threading.Thread(target=run, daemon=True)
-        self._worker.start()
+        self._worker = threads.start(run)
         return True
 
     def download_sources(self, ids=None, kind="text", install=False):
@@ -1515,6 +1519,8 @@ class WorkspaceServices(Services):
         if stamp is None:
             return []
         if getattr(self, "_heldout_hit", (None,))[0] != stamp:
+            if getattr(self._probe, "on", False):
+                raise _Slow
             path = self.root / "data" / "heldout.json"
             self._heldout_hit = (stamp, [_doc(r) for r in json.loads(path.read_text(encoding="utf-8"))])
         return self._heldout_hit[1]
@@ -1526,10 +1532,58 @@ class WorkspaceServices(Services):
         return Tokenizer.restore(load_checkpoint(ckpt)["tokenizer"])
 
     def _cached(self, key, make):
+        """make() once per key. A hit never waits (the Tk thread reads these); a miss is long, so ready() answers no for it and
+        only a worker gets here. Misses of different keys run at once; two for the same key run make() once."""
+        if key in self._cache:
+            return self._cache[key]
+        if getattr(self._probe, "on", False):
+            raise _Slow
         with self._lock:
+            making = self._making.setdefault(key, threading.Lock())
+        with making:
             if key not in self._cache:
                 self._cache[key] = make()
             return self._cache[key]
+
+    def _band(self, ckpt):
+        """(low, high) noise band of a checkpoint's held-back error, or None without held-back text. Kept in data/noise_bands.json
+        per checkpoint file and held-back stamp, so a new launch scores nothing it already scored."""
+        import studio_eval
+        stamp = self._heldout_stamp()
+        if stamp is None:
+            return None
+        try:
+            s = Path(ckpt).stat()
+            file = [s.st_mtime_ns, s.st_size]
+        except OSError:
+            file = None  # the scoring below says what is wrong with it
+        name = str(Path(ckpt).relative_to(self.root)) if Path(ckpt).is_relative_to(self.root) else str(ckpt)
+        key = json.dumps([name, file, stamp])
+        store = self._bands()
+        if key in store:
+            return tuple(store[key])
+
+        def make():
+            docs = self._heldout()
+            if not docs:
+                return None
+            band = studio_eval.noise_band(ckpt, docs)
+            with self._lock:
+                for old in [k for k in store if json.loads(k)[0] == name]:  # an older state of the same checkpoint is dead weight
+                    del store[old]
+                store[key] = list(band)
+                self._save_json("noise_bands.json", store)
+            return band
+        return self._cached(("band", key), make)
+
+    def _bands(self):
+        if getattr(self, "_band_store", None) is None:
+            try:
+                loaded = self._json("noise_bands.json", {})
+            except (OSError, ValueError):
+                loaded = {}
+            self._band_store = loaded if isinstance(loaded, dict) else {}
+        return self._band_store
 
     @timed("services.references")
     def references(self, version):
@@ -1549,7 +1603,7 @@ class WorkspaceServices(Services):
             if score is None and best and best.best_checkpoint:
                 score = self._cached(("bpc", best.best_checkpoint), lambda: studio_eval.bits_per_char(best.best_checkpoint, docs))
             return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
-                    "noise_band": self._cached(("band", v.best_checkpoint), lambda: studio_eval.noise_band(v.best_checkpoint, docs)),
+                    "noise_band": self._band(v.best_checkpoint),
                     "best_so_far_bpc": score}
         key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
                self._heldout_stamp())

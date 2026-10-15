@@ -13,7 +13,9 @@ from pathlib import Path
 from studio_spec import config_from_spec, default_spec, validate_spec
 from studio_versions import _facts, spec_diff
 from studio_warmstart import NOTES
+from studio_ia import threads
 from studio_ia.copy import BUILDER as T
+from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -149,6 +151,12 @@ def last_blocks_change(versions):
     return None
 
 
+def design_expectation(s):
+    """The rough-guide paragraph for the choices in `s`: what a design this size and word list can be expected to write."""
+    c = cfg(s)
+    return expectation(P(c), TOKENIZERS[s["V"]], embedding_params=c["V"] * c["d"])
+
+
 def expectations(cur, draft, versions=()):
     a, b, out = cur, draft, []
     if b["L"] > a["L"]:
@@ -262,8 +270,10 @@ class BuilderPage(Page):
         self.tray = self.chips = self.costs = self.expect = None
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
+        self.guide_text = ""
         self.old_curve = self.new_curve = self.refs = None
         self.plot_args, self.plot = {}, None
+        self._chart_token = None
         self.answers, self.answer_q, self.answer_stop, self.answer_labels, self.workers = {}, queue.Queue(), threading.Event(), {}, []
         self.pill_bar = self.pill_label = None
         self._curve_at = 0.
@@ -326,14 +336,30 @@ class BuilderPage(Page):
         self.job_id, self.phase = (job.id, phase) if job else (None, "saved")
 
     def load_chart(self):
-        """Curves and reference lines from the real run files; nothing invented when there are none."""
-        self.old_curve = self.curve_of(self.base)
-        self.new_curve = self.curve_of(self.version(self.n + 1)) if self.phase != "edit" else None
-        try:
-            self.refs = self.services.references(self.base) if self.base and self.base.best_checkpoint else None
-        except (OSError, ValueError, KeyError, StopIteration):
-            self.refs = None
-        self.plot_args = chart_args(self.old_curve, self.new_curve, self.refs)
+        """Curves and reference lines from the real run files; nothing invented when there are none. Scoring the held-back text
+        can take a while the first time: that read runs on the shell's worker and the page redraws when it arrives."""
+        base = self.base
+        newer = self.version(self.n + 1) if self.phase != "edit" else None
+        self._chart_token = token = object()  # a later load_chart supersedes one still on the worker
+
+        def work():
+            try:
+                refs = self.services.references(base) if base and base.best_checkpoint else None
+            except (OSError, ValueError, KeyError, StopIteration):
+                refs = None
+            return self.curve_of(base), self.curve_of(newer), refs
+
+        def apply(chart, late):
+            if self._chart_token is not token:
+                return
+            self.old_curve, self.new_curve, self.refs = chart
+            self.plot_args = chart_args(self.old_curve, self.new_curve, self.refs)
+            if late:
+                self.render()
+        if self.services.ready(work):
+            apply(work(), False)
+        else:
+            self.quietly(work, lambda chart: apply(chart, True))
 
     def curve_of(self, version):
         runs = getattr(version, "runs", None) or ([str(Path(version.best_checkpoint).parent)] if version and version.best_checkpoint else [])
@@ -487,8 +513,7 @@ class BuilderPage(Page):
             v = self.version(number)
             if v and v.best_checkpoint:
                 self.answers[number] = ""
-                self.workers.append(threading.Thread(target=self._reply, args=(v, stop), daemon=True))
-                self.workers[-1].start()
+                self.workers.append(threads.start(self._reply, v, stop))
         self.render()
         self._pump()
 
@@ -664,6 +689,8 @@ class BuilderPage(Page):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_expect"], bg="panel").pack(anchor="w")
+        self.guide_text = design_expectation(self.draft)
+        tk_label(card, self.guide_text, 14, "text", "panel", wraplength=780).pack(anchor="w", pady=(2, 6))
         self.expect_texts = self.expectations()
         for x in self.expect_texts:
             tk_label(card, x, 14, "text2", "panel", wraplength=780).pack(anchor="w", pady=2)
