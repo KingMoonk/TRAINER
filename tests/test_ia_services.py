@@ -55,6 +55,17 @@ class ServicesTest(unittest.TestCase):
     def test_data(self):
         self.assertEqual(self.svc.data("problems").count, 10)
 
+    def test_export_version_writes_the_best_checkpoint_and_refuses_what_it_cannot_write(self):
+        number = self.svc.best_version().number
+        with tempfile.TemporaryDirectory() as out:
+            report = self.svc.export_version(number, "hf", str(Path(out) / "model"))
+            self.assertTrue((Path(out) / "model" / "model.safetensors").exists())
+            self.assertIn("config.json", report["files"])
+            with self.assertRaises(ValueError):   # the fixture's design is not GPT-2's
+                self.svc.export_version(number, "gguf", str(Path(out) / "model.gguf"))
+            with self.assertRaises(ValueError):
+                self.svc.export_version(number, "onnx", str(Path(out) / "x"))
+
     def test_chat(self):
         start = time.time()
         text = self.svc.chat(None, [{"role": "user", "content": "Hi"}], lambda _t: None, threading.Event())
