@@ -1346,7 +1346,8 @@ class WorkspaceServices(Services):
         texts, _ = dk.text_sample(self.workspace, ids, RANGE_CHARS, exclude=set(self._heldout()))
         if not texts:
             raise ValueError("There is no plain text to try it on. Add some in Your data.")
-        return studio_compute.lr_range_test(spec, [{"text": t} for t in texts], stop=stop)
+        # the processor only: this runs on a worker thread while Tk runs, where a GPU probe or Metal work crashes the app on macOS
+        return studio_compute.lr_range_test(spec, [{"text": t} for t in texts], stop=stop, config={"device": "cpu"})
 
     def _gpt2(self):
         """GPT-2's list, downloaded once into data/gpt2 as training with it would; None when it cannot be fetched."""

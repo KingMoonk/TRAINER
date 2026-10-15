@@ -63,6 +63,7 @@ SWEEP_BATCH = 8
 SMOOTH = .9  # weight of the running loss average
 DIVERGED = 4.  # a smoothed loss this many times the best one so far ends the sweep early (the fastai default)
 SAFETY = 10.  # the suggestion is this many times lower than the steepest point
+SKIP_START, SKIP_END = 10, 5  # points left out of the slope reading: the smoothed start is noisy, the end is near divergence (fastai)
 
 
 def smooth(losses, beta=SMOOTH):
@@ -85,7 +86,8 @@ def suggest(rates, losses):
         return None, None
     smoothed = smooth(losses)
     slopes = [smoothed[i + 1] - smoothed[i] for i in range(len(smoothed) - 1)]
-    steepest = min(range(len(slopes)), key=slopes.__getitem__)
+    lo, hi = (SKIP_START, len(slopes) - SKIP_END) if len(slopes) > SKIP_START + SKIP_END + 2 else (0, len(slopes))
+    steepest = min(range(lo, hi), key=slopes.__getitem__)
     if slopes[steepest] >= 0:
         return None, None
     # the slope between points i and i+1 belongs to the rate that gets there
@@ -103,7 +105,8 @@ def lr_range_test(spec, examples, steps=SWEEP_STEPS, lr_min=1e-6, lr_max=None, b
     The sweep ends early when the loss diverges (4x the best smoothed loss) or goes non-finite. `stop` is a threading.Event
     checked every step. emit gets {"type": "lr_range", "step", "total", "lr", "loss"}.
 
-    Returns {"rates", "losses", "smoothed", "suggestion", "steepest" (index), "diverged", "cancelled", "lr_min", "lr_max"}."""
+    Returns {"rates", "losses", "smoothed", "suggestion", "steepest" (index), "diverged", "failed_at" (the rate that diverged, or
+    None), "cancelled", "lr_min", "lr_max"}."""
     import studio_model as sm
     from studio_spec import config_from_spec, module_of
 
@@ -115,7 +118,7 @@ def lr_range_test(spec, examples, steps=SWEEP_STEPS, lr_min=1e-6, lr_max=None, b
     lr_max = lr_max or sm._learning_rate_limit(sm.effective_spec(cfg))
     if not 0 < lr_min < lr_max:
         raise ValueError("The lowest rate must be above zero and below the highest.")
-    result = dict(rates=[], losses=[], smoothed=[], suggestion=None, steepest=None, diverged=False, cancelled=False, lr_min=lr_min, lr_max=lr_max)
+    result = dict(rates=[], losses=[], smoothed=[], suggestion=None, steepest=None, diverged=False, failed_at=None, cancelled=False, lr_min=lr_min, lr_max=lr_max)
     tokenizer_module, tokenizer_cfg = module_of("tokenizer", sm.effective_spec(cfg)["tokenizer"])
     rows = [dict(e) for e in examples]
     tokenizer = tokenizer_module.fit(tokenizer_cfg, rows)
@@ -136,12 +139,12 @@ def lr_range_test(spec, examples, steps=SWEEP_STEPS, lr_min=1e-6, lr_max=None, b
         x, y = sm.batch_arrays([samples[rng.randrange(len(samples))] for _ in range(batch_size)])
         loss = model.loss_and_backward(x, y)
         if not math.isfinite(loss):
-            result["diverged"] = True
+            result["diverged"], result["failed_at"] = True, rate
             break
         try:
             optimizer.update(model, rate)
         except ValueError:  # a non-finite gradient
-            result["diverged"] = True
+            result["diverged"], result["failed_at"] = True, rate
             break
         result["rates"].append(rate)
         result["losses"].append(loss)
@@ -149,7 +152,7 @@ def lr_range_test(spec, examples, steps=SWEEP_STEPS, lr_min=1e-6, lr_max=None, b
         emit({"type": "lr_range", "step": step + 1, "total": steps, "lr": rate, "loss": loss})
         best = min(best, result["smoothed"][-1])
         if result["smoothed"][-1] > DIVERGED * best:
-            result["diverged"] = True
+            result["diverged"], result["failed_at"] = True, rate
             break
     if not result["cancelled"]:
         result["suggestion"], result["steepest"] = suggest(result["rates"], result["losses"])

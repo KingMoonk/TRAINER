@@ -104,6 +104,12 @@ class Suggest(unittest.TestCase):
         self.assertAlmostEqual(rate, rates[index] / 10)
         self.assertTrue(55 <= index <= 75)
 
+    def test_a_noisy_dip_at_the_start_is_not_read_as_the_steepest_fall(self):
+        rates, losses = self.curve()
+        losses[2] -= 3.  # one bad batch while the rate is still tiny
+        _, index = sc.suggest(rates, losses)
+        self.assertTrue(55 <= index <= 75)
+
     def test_no_fall_gives_no_suggestion(self):
         rates = [1e-6 * 10 ** (i * 6 / 99) for i in range(50)]
         self.assertEqual(sc.suggest(rates, [3. + i * .01 for i in range(50)]), (None, None))
@@ -141,6 +147,18 @@ class RangeTest(unittest.TestCase):
         self.assertLess(len(r["rates"]), sc.SWEEP_STEPS)
         self.assertTrue(math.isfinite(r["suggestion"]))
         self.assertLess(r["suggestion"], r["rates"][-1])  # a tenth of the steepest point, well before the blow-up
+        self.assertGreaterEqual(r["failed_at"], r["rates"][-1])  # the rate that blew up: the last one tried, never an earlier one
+
+    def test_the_studio_runs_it_on_the_processor(self):
+        from unittest import mock
+        from studio_ia.services import WorkspaceServices
+        svc = WorkspaceServices.__new__(WorkspaceServices)  # only the text sample is needed
+        svc.workspace = mock.Mock(state={"datasets": [{"id": "a"}]})
+        svc._heldout = lambda: []
+        with mock.patch("studio_data_kinds.text_sample", return_value=(["some text"], None)), \
+                mock.patch.object(sc, "lr_range_test", return_value={}) as run:
+            svc.lr_range_test(tiny_spec())
+        self.assertEqual(run.call_args.kwargs["config"], {"device": "cpu"})  # never a GPU probe or Metal work off the Tk thread
 
     def test_stopping_cancels_the_test(self):
         stop = threading.Event()
@@ -176,12 +194,12 @@ class CostPanel(unittest.TestCase):
         self.assertEqual(B.compute_lines(1_000_000, 256, 4, {}), [(B.T["compute_none"], False)])
         self.assertEqual(B.compute_lines(1_000_000, 256, 4, {"pieces": None}), [(B.T["compute_none"], False)])
 
-    def test_under_trained_design_says_so_and_is_flagged(self):
+    def test_a_design_far_too_big_for_the_text_says_so_and_is_flagged(self):
         lines = B.compute_lines(10_000_000, 256, 4, {"pieces": 1_000_000, "tokens_per_second": 5000.})
         text, bad = lines[0]
         self.assertIn("supports about 50.0K parameters at 20 word pieces each", text)
         self.assertIn("this design has 10.0M", text)
-        self.assertIn("under-trained", text)
+        self.assertIn("a smaller design or more text", text)  # the remedy is size or text, not training longer
         self.assertTrue(bad)
         self.assertTrue(lines[-1][1])  # and the repeat warning
         self.assertIn("200 times", lines[-1][0])
@@ -201,6 +219,13 @@ class CostPanel(unittest.TestCase):
         self.assertIn("repeated", lines[0][0])
         self.assertNotIn("under-trained", lines[0][0])
         self.assertIn("4.0 passes", lines[1][0])
+
+    def test_a_design_between_one_and_four_passes_says_the_text_is_reread(self):
+        lines = B.compute_lines(300_000, 256, 2, {"pieces": 2_000_000, "tokens_per_second": 10_000.})  # one pass supports 100K
+        self.assertIn("reads your text about 3.0 times", lines[0][0])
+        self.assertNotIn("enough text", lines[0][0])
+        self.assertFalse(lines[0][1])
+        self.assertEqual(len(lines), 2)  # within 4 passes: no repeat warning
 
     def test_without_a_measured_speed_the_time_model_is_used(self):
         lines = B.compute_lines(100_000, 256, 2, {"pieces": 100_000_000})
@@ -224,10 +249,16 @@ class CostPanel(unittest.TestCase):
         self.assertIn("Stopped", B.lr_text(dict(result, cancelled=True)))
         self.assertIn("could not run: Boom", B.lr_text({"error": "Boom"}))
 
+    def test_a_sweep_that_blew_up_before_falling_says_so_at_the_failing_rate(self):
+        early = dict(rates=[], losses=[], suggestion=None, steepest=None, diverged=True, failed_at=1e-6, cancelled=False)
+        self.assertEqual(B.lr_text(early), B.T["lr_blew_up_early"].format(rate="1e-06"))
+        result = dict(FakeServices().lr_range_test(tiny_spec()), diverged=True, failed_at=.25)
+        self.assertIn("blew up past 0.25", B.lr_text(result, .0006))
+
     def test_every_new_sentence_exists(self):
-        for key in ("compute_supports", "compute_under", "compute_enough", "compute_roomy", "compute_repeats", "compute_steps", "compute_time",
+        for key in ("compute_supports", "compute_under", "compute_enough", "compute_reread", "compute_roomy", "compute_repeats", "compute_steps", "compute_time",
                     "compute_repeat", "compute_recount", "compute_counting", "compute_none", "compute_tip", "lr_find", "lr_stop", "lr_tip",
-                    "lr_running", "lr_result", "lr_blew_up", "lr_flat", "lr_stopped", "lr_failed"):
+                    "lr_running", "lr_result", "lr_blew_up", "lr_blew_up_early", "lr_flat", "lr_stopped", "lr_failed"):
             self.assertIn(key, B.T)
 
 

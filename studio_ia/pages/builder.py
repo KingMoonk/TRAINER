@@ -397,6 +397,7 @@ def compute_lines(params, context, layers, preview, gpu=""):
     speed = preview.get("tokens_per_second") or throughput(ROWS, context, params, layers, gpu or "cpu")
     p = plan(params, pieces, tokens_per_second=speed, batch_tokens=ROWS * context)
     tail = (T["compute_under"] if p["under_trained"] else T["compute_repeats"] if p["over_repeated"]
+            else T["compute_reread"].format(times=f"{p['epochs_for_optimal']:.1f}", most=MAX_EPOCHS) if params > p["data_params"]
             else T["compute_roomy"] if p["data_params"] >= 4 * params else T["compute_enough"])
     about = "about " if preview.get("estimated") else ""
     lines = [(T["compute_supports"].format(supported=about + amount(p["data_params"]), rule=TOKENS_PER_PARAM, params=amount(params)) + tail,
@@ -417,12 +418,13 @@ def lr_text(result, current=None):
         return T["lr_failed"].format(error=result["error"])
     if result.get("cancelled"):
         return T["lr_stopped"]
+    failed = result.get("failed_at") or (result["rates"][-1] if result.get("rates") else None)
     if not result.get("suggestion"):
-        return T["lr_flat"]
+        return T["lr_blew_up_early"].format(rate=f"{failed:.2g}") if result.get("diverged") and failed else T["lr_flat"]
     text = T["lr_result"].format(rate=f"{result['suggestion']:.2g}", steepest=f"{result['rates'][result['steepest']]:.2g}",
                                  current=f"{current:.2g}" if current else "its own default")
     if result.get("diverged"):
-        text += " " + T["lr_blew_up"].format(rate=f"{result['rates'][-1]:.2g}")
+        text += " " + T["lr_blew_up"].format(rate=f"{failed:.2g}")
     return text
 
 
@@ -1349,7 +1351,8 @@ class BuilderPage(Page):
         running = self.lr_stop is not None
         current = ((self.lr_for or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
         self.lr_button.configure(text=T["lr_stop"] if running else T["lr_find"])
-        self.lr_label.configure(text=T["lr_running"] if running else lr_text(self.lr_result, current))
+        stale = self.lr_for != (self.draft_spec or self.base_spec())  # the draft changed since the test ran
+        self.lr_label.configure(text=T["lr_running"] if running else "" if stale else lr_text(self.lr_result, current))
 
     def _paint_costs(self):
         a = sizes(self.base_spec(), self.cur["V"])
