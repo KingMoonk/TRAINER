@@ -32,16 +32,9 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       # software OpenGL (Mesa on Windows) so the 3D viewer tests run without a GPU
       - uses: pyvista/setup-headless-display-action@c103a2ff45650d38cb71684b5dc6cdfeb9442c79  # v5.1.0
-      # catches syntax errors in modules no test imports
-      - run: python -m compileall -q .
-      - run: python -m ruff check .
-      # only test_gpu should skip here (no CUDA); -v lists every test so a skip is visible in the log
-      - run: python -m unittest discover -s tests -v
-      # tests that open windows live in gui_*.py so a plain local discover never launches them
-      - run: python -m unittest discover -s tests -p "gui_*.py" -v
-      # real training run on a committed sample (about 1 s of compute)
-      - run: python -m unittest tests.e2e_train -v
-        timeout-minutes: 5
+      # compileall, ruff, unit tests, window tests (gui_*.py) and the real training run, in that order; see tasks.py
+      - run: python tasks.py test:ci:e2e
+        timeout-minutes: 12
 
   secrets:
     runs-on: ubuntu-latest

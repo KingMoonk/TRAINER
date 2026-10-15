@@ -732,7 +732,7 @@ from studio_ia import threads  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-SUMMARY_FORMAT = 3  # data/summaries.json layout; 3: one entry per dataset, each with its rev; 2: whole workspace, text characters counted once. A saved summary of another format is rebuilt
+SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
@@ -1038,7 +1038,7 @@ class WorkspaceServices(Services):
             self._probe.on = False
 
     def _stamp(self):
-        """Size and time of the files the stored data lives in: says whether data/summaries.json still describes them."""
+        """Size and time of the files the stored data lives in: says whether data/summaries.sqlite still describes them."""
         db = self.workspace.db_path
 
         def stat(path):
@@ -1050,21 +1050,16 @@ class WorkspaceServices(Services):
         return [stat(self.workspace.path), stat(db), stat(db.with_name(db.name + "-wal"))]
 
     def _summaries(self):
-        """{kind: DataSummary with every sample row, "example": the first training conversation}. Kept per dataset in
-        data/summaries.json beside each dataset's `rev`, so a change to one dataset reads that dataset only and a launch
-        reads nothing the file still describes."""
+        """{kind: DataSummary with the first page of sample rows, "example": the first training conversation, "takes": what
+        a search reads}. Kept per dataset in data/summaries.sqlite beside each dataset's `rev`, so a change to one dataset
+        reads that dataset only and a launch reads nothing the file still describes."""
         import studio_data_kinds as dk
-        from studio_core import atomic_json
 
         def make():
-            path, stamp = self.root / "data" / "summaries.json", self._stamp()
-            cached, unchanged = {}, False
-            try:
-                saved = json.loads(path.read_text(encoding="utf-8"))
-                if saved.get("format") == SUMMARY_FORMAT:  # any other layout is stale: rebuilt once
-                    cached, unchanged = saved["datasets"], saved["stamp"] == stamp
-            except (OSError, ValueError, KeyError, TypeError, AttributeError):
-                pass
+            stamp = self._stamp()
+            cache = self._summary_cache()
+            cached, saved, view = cache.load()
+            unchanged = saved == stamp
             datasets = list(self.workspace.state["datasets"])
             # The files differ from what the summary was made of, yet no dataset's rev moved: an older app wrote them without
             # counting, so nothing can be trusted.
@@ -1074,14 +1069,18 @@ class WorkspaceServices(Services):
                 entries, reread = dk.refresh(self.workspace, cached, rescan_all=rescan_all, progress=self.note)
             except (KeyError, TypeError, IndexError, AttributeError):  # an entry that does not have the shape this version writes
                 entries, reread = dk.refresh(self.workspace, {}, progress=self.note)
-            out, example = dk.assemble(datasets, entries)
-            out["example"] = example
             if reread or set(entries) != set(cached):
                 self.note("Saving the summary")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_json(path, {"format": SUMMARY_FORMAT, "stamp": stamp, "datasets": entries})
+                view = cache.save(datasets, entries, stamp)
+                (self.root / "data" / "summaries.json").unlink(missing_ok=True)  # the layout before 4: one large file
+            out, example = dk.assemble(datasets, entries, view)
+            out["example"], out["takes"] = example, view["takes"]
             return out
         return self._fresh("summaries", make)
+
+    def _summary_cache(self):
+        from studio_data_cache import SummaryCache
+        return SummaryCache(self.root / "data" / "summaries.sqlite", SUMMARY_FORMAT)
 
     def pretrain_preview(self, dataset_ids, rows=16):
         import studio_estimate
@@ -1302,9 +1301,12 @@ class WorkspaceServices(Services):
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
-        import studio_data_kinds as dk
-        full = self._summaries()[kind]
-        return replace(full, rows=dk.matching(full.rows, query))
+        summaries = self._summaries()
+        full = summaries[kind]
+        if not query.strip():
+            return replace(full, rows=list(full.rows))
+        names = {d["id"]: d["name"] for d in self.workspace.state["datasets"]}
+        return replace(full, rows=self._summary_cache().search(kind, query, summaries["takes"][kind], names))
 
     def has_text(self):
         """One indexed look at the first text row of each dataset, not the whole-store summary (a cold one reads every dataset)."""
