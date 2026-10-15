@@ -836,8 +836,9 @@ class WorkspaceServices(Services):
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS, services=self)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
-        self._models, self._cache, self._making = {}, {}, {}
+        self._models, self._cache = {}, {}
         self._lock = threading.RLock()
+        self._made = {}  # cache key -> the lock held while it is being made
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
         workspace.progress = self.note
         if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
@@ -1045,15 +1046,24 @@ class WorkspaceServices(Services):
         held = set(self._heldout())
         return [e for e in rows if e["text"] not in held]
 
+    def _once(self, key):
+        """The lock held while one cache entry is made: other entries are not held up, and an entry both shell lanes ask for is made once."""
+        with self._lock:
+            return self._made.setdefault(key, threading.Lock())
+
     def _fresh(self, key, make):
-        """make() once per state of the stored data (Workspace.revision). No lock: the shell's one worker does the
-        long reads in turn, and the Tk thread asks ready() first, so it only ever picks up a finished result."""
+        """make() once per state of the stored data (Workspace.revision). The Tk thread asks ready() first, so it only ever
+        picks up a finished result; a lane that asks while the other makes the same entry waits and takes it."""
         revision = self.workspace.revision
         hit = self._data.get(key)
         if hit is None or hit[0] != revision:
             if getattr(self._probe, "on", False):
                 raise _Cold
-            hit = self._data[key] = (revision, make())
+            with self._once(key):
+                revision = self.workspace.revision
+                hit = self._data.get(key)
+                if hit is None or hit[0] != revision:
+                    hit = self._data[key] = (revision, make())
         return hit[1]
 
     def ready(self, work):
@@ -1553,9 +1563,7 @@ class WorkspaceServices(Services):
             return self._cache[key]
         if getattr(self._probe, "on", False):
             raise _Slow
-        with self._lock:
-            making = self._making.setdefault(key, threading.Lock())
-        with making:
+        with self._once(key):
             if key not in self._cache:
                 self._cache[key] = make()
             return self._cache[key]

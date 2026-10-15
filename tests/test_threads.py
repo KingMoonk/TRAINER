@@ -3,6 +3,7 @@ import gc
 import re
 import threading
 import unittest
+import weakref
 from pathlib import Path
 
 from studio_ia import threads
@@ -63,6 +64,35 @@ class ThreadsTest(unittest.TestCase):
         threads.release()
         self.assertTrue(gc.isenabled())
 
+    def test_lane_holds_until_its_results_are_taken(self):
+        lane = threads.Lane()
+        self.addCleanup(lane.stop)
+        lane.submit(lambda: 1, "a")
+        self.assertFalse(gc.isenabled())
+        out = []
+        while not out:
+            out = lane.finished()
+        self.assertEqual(out, [("a", 1, None)])
+        self.assertTrue(gc.isenabled())
+
+    def test_lane_stopped_while_busy_keeps_its_hold_until_the_job_ends(self):
+        """The app is destroyed mid-job: the lane's hold must outlive it, or the job could collect a dead app's Tk objects."""
+        go, ended = threading.Event(), threading.Event()
+        lane = threads.Lane()
+        lane.submit(lambda: (go.wait(), ended.set()))
+        lane.stop()
+        threads.detach()
+        self.assertFalse(gc.isenabled())
+        go.set()
+        ended.wait()
+        threads.attach()
+        for _ in range(200):  # the worker reaches the stop right after the job
+            threads.settle()
+            if gc.isenabled():
+                break
+            threading.Event().wait(0.005)
+        self.assertTrue(gc.isenabled())
+
     def test_settle_waits_until_a_done_thread_has_ended(self):
         """Its frames can still hold a dead app's pages: collecting before they go would leave those pages to another thread."""
         go = threading.Event()
@@ -80,6 +110,25 @@ class ThreadsTest(unittest.TestCase):
         t.join()
         threads.settle()
         self.assertTrue(gc.isenabled())
+
+    def test_idle_lane_keeps_nothing_of_its_last_job(self):
+        class Page:
+            pass
+        lane = threads.Lane()
+        self.addCleanup(lane.stop)
+        page = Page()
+        gone = weakref.ref(page)
+        lane.submit(lambda: None, page)
+        del page
+        out = []
+        while not out:
+            out = lane.finished()
+        del out
+        for _ in range(200):  # the worker drops its last reference right after handing the result over
+            if gone() is None:
+                break
+            threading.Event().wait(0.005)
+        self.assertIsNone(gone())
 
     def test_events_from_a_worker_never_touch_tk(self):
         """A worker's emit only queues: the Tk thread delivers it in pump(), so a destroyed app is never called from a worker."""
@@ -105,7 +154,7 @@ class ThreadsTest(unittest.TestCase):
 
     def test_no_bare_thread_starts(self):
         """A thread started outside threads.start() can free Tk objects off the Tk thread: crashes CI at random."""
-        allowed = {"studio_ia/threads.py", "studio_ia/shell.py"}  # shell: its one long-lived worker holds per job
+        allowed = {"studio_ia/threads.py"}
         bare = [p.relative_to(ROOT).as_posix() for p in (ROOT / "studio_ia").rglob("*.py")
                 if p.relative_to(ROOT).as_posix() not in allowed and re.search(r"threading\.Thread\(", p.read_text(encoding="utf-8"))]
         self.assertEqual(bare, [], "start these with studio_ia.threads.start")
