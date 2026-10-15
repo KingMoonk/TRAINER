@@ -3,6 +3,7 @@ import gc
 import re
 import threading
 import unittest
+import weakref
 from pathlib import Path
 
 from studio_ia import threads
@@ -91,6 +92,43 @@ class ThreadsTest(unittest.TestCase):
                 break
             threading.Event().wait(0.005)
         self.assertTrue(gc.isenabled())
+
+    def test_settle_waits_until_a_done_thread_has_ended(self):
+        """Its frames can still hold a dead app's pages: collecting before they go would leave those pages to another thread."""
+        go = threading.Event()
+
+        def run():
+            threads.hold()
+            threads.done()
+            go.wait()
+
+        t = threading.Thread(target=run)
+        t.start()
+        threads.settle()
+        self.assertFalse(gc.isenabled())
+        go.set()
+        t.join()
+        threads.settle()
+        self.assertTrue(gc.isenabled())
+
+    def test_idle_lane_keeps_nothing_of_its_last_job(self):
+        class Page:
+            pass
+        lane = threads.Lane()
+        self.addCleanup(lane.stop)
+        page = Page()
+        gone = weakref.ref(page)
+        lane.submit(lambda: None, page)
+        del page
+        out = []
+        while not out:
+            out = lane.finished()
+        del out
+        for _ in range(200):  # the worker drops its last reference right after handing the result over
+            if gone() is None:
+                break
+            threading.Event().wait(0.005)
+        self.assertIsNone(gone())
 
     def test_no_bare_thread_starts(self):
         """A thread started outside threads.start() can free Tk objects off the Tk thread: crashes CI at random."""

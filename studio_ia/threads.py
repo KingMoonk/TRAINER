@@ -77,9 +77,12 @@ def done():
 
 
 def settle():
-    """Tk thread: release the hold of every thread that has finished. Cheap enough to call every few hundred ms."""
+    """Tk thread: release the hold of every thread that has ended. Cheap enough to call every few hundred ms. A thread that
+    called done() still runs until its frames are gone, and they can be the last thing keeping a dead app's pages alive: if
+    the collection ran first, those pages would become garbage later and be collected on whatever thread came next."""
     with _lock:
-        finished, _done[:] = list(_done), []
+        finished = [t for t in _done if not t.is_alive()]
+        _done[:] = [t for t in _done if t.is_alive()]
     for _ in finished:
         release()
 
@@ -103,9 +106,12 @@ class Lane:
                 return
             work, tag = job
             try:
-                self._done.put((tag, work(), None))
+                result = (tag, work(), None)
             except Exception as error:
-                self._done.put((tag, None, error))
+                result = (tag, None, error)
+            del job, work, tag  # an idle lane keeps nothing of its last job: its callbacks hold pages, which only the Tk thread may free
+            self._done.put(result)
+            del result
 
     def submit(self, work, tag=None):
         if not self.pending:
