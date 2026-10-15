@@ -78,8 +78,7 @@ class Honest(unittest.TestCase):
 class Handlers(unittest.TestCase):
     def run_job(self, job):
         with tempfile.TemporaryDirectory() as tmp:
-            services = SimpleNamespace(workspace=SimpleNamespace(run_dir=tmp), examples=lambda p: [{'text': f'doc {i} ' + 'one two three ' * 8} for i in range(6)])
-            runner = Runner(Path(tmp) / 'queue.json', HANDLERS, services, tick=.02)
+            runner = Runner(Path(tmp) / 'data' / 'queue.json', HANDLERS, tick=.02)  # each job runs in a worker process
             runner.set_plan(Plan(hours='any', idle_only=False, pause_on_battery=False))
             runner.start()
             seen = []
@@ -105,9 +104,11 @@ class Handlers(unittest.TestCase):
         v['block']['channel']['config']['d_ff'] = 32
         exp = ExperimentSpec(spec(), [v], seeds=2, steps=5, lr_retune=False)
         from dataclasses import asdict
-        job, seen = self.run_job(Job('compare', 'cmp', params={'experiment': asdict(exp), 'config': CFG}))
+        docs = [{'text': f'doc {i} ' + 'one two three ' * 8} for i in range(6)]
+        job, seen = self.run_job(Job('compare', 'cmp', params={'experiment': asdict(exp), 'config': CFG, 'examples': docs}))
         self.assertEqual((job.status, job.error), ('done', ''))
         self.assertEqual(len(job.params['result']['variants']), 2)
+        self.assertTrue(job.params['output_dir'].endswith(f'compare_{job.id}'))
         self.assertTrue(any(p.get('type') == 'compare' for k, p in seen if k == 'train'))
 
 

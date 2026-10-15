@@ -99,12 +99,16 @@ class NoCheckpointTest(unittest.TestCase):
             services.chat(3, [], lambda text: None, None)
 
     def test_a_round_without_a_checkpoint_raises_it_too(self):
+        import studio_jobs
         import studio_rl
         services = mock.Mock()
         services.current_version.return_value = Version(2)
-        with self.assertRaises(NoCheckpoint) as caught:
-            studio_rl.run_round(1, Job("post_round", params={}), services, None, None, None)
+        services.root, services.workspace.run_dir = "w", "w/runs"
+        with self.assertRaises(NoCheckpoint) as caught:  # in the app, before a worker starts: the queued job fails with this sentence
+            studio_jobs.prepare(Job("post_round", params={}), services)
         self.assertIn("Version 2 has not trained yet", str(caught.exception))
+        with self.assertRaises(NoCheckpoint):  # and a round started without one says the same
+            studio_rl.run_round(1, Job("post_round", params={"version": 2}), services, None, None, None)
 
 
 class AnsweringVersionTest(unittest.TestCase):
@@ -119,15 +123,19 @@ class AnsweringVersionTest(unittest.TestCase):
         self.assertEqual(answering_version([1, 2, 3], 2, None), 2)
 
 
+def note_ran(job, context, emit, stop, pause):
+    with open(Path(context.root) / "ran.txt", "a") as f:
+        f.write(job.label + "\n")
+
+
 class DiskCheckTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.ran = []
 
     def runner(self):
-        r = Runner(self.root / "data" / "queue.json", {"quicktest": lambda job, *a: self.ran.append(job.label)}, tick=.01)
+        r = Runner(self.root / "data" / "queue.json", {"quicktest": note_ran}, tick=.01)
         r.set_plan(ANY)
         self.addCleanup(r.shutdown)
         return r
@@ -137,21 +145,25 @@ class DiskCheckTest(unittest.TestCase):
         job = r.enqueue(Job("quicktest", "a"))
         with mock.patch.object(studio_queue.shutil, "disk_usage", return_value=Usage(10 ** 12, 0, free)):
             r.start()
-            end = time.time() + 5
+            end = time.time() + 20
             while job.status in ("waiting", "running") and time.time() < end:
                 time.sleep(.01)
         return job
 
+    def ran(self):
+        path = self.root / "ran.txt"
+        return path.read_text().splitlines() if path.exists() else []
+
     def test_a_full_disk_fails_the_job_with_a_sentence_and_never_starts_it(self):
         job = self.finish(free=200 * 2 ** 20)
         self.assertEqual(job.status, "failed")
-        self.assertEqual(self.ran, [])
+        self.assertEqual(self.ran(), [])
         self.assertIn("Not enough disk space for this run: 200 MB free, about 2.0 GB needed.", job.error)
         self.assertIn("Resources › Storage", job.error)
 
     def test_enough_room_runs_the_job(self):
         job = self.finish(free=50 * 2 ** 30)
-        self.assertEqual((job.status, self.ran), ("done", ["a"]))
+        self.assertEqual((job.status, self.ran()), ("done", ["a"]))
 
     def test_need_is_three_times_the_largest_checkpoint_but_at_least_the_floor(self):
         self.assertEqual(studio_queue.disk_need(self.root), studio_queue.MIN_FREE)

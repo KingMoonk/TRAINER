@@ -30,7 +30,7 @@ jobs:
         timeout-minutes: 10
       - run: python -m unittest tests.test_module_packaging -v
       # studio_brain3d is only ever launched by name (the 3D viewer), so the import scan cannot see it
-      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_passive --hidden-import studio_passive_watch
+      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_passive --hidden-import studio_passive_watch --hidden-import studio_worker
       # the frozen executable must be able to run a module by name: that is how it starts the passive trainer, the watchdog and the 3D viewer
       - name: Smoke test (macOS)
         if: matrix.name == 'macos'

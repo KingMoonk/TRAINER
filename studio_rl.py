@@ -328,8 +328,8 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
 VERDICTS = {1: "Answers now look like answers.", 2: "Answers that passed the check became more likely than ones that failed."}
 
 
-def _rows(job, services, key, kind):
-    return job.params[key] if key in job.params else services.post_rows(kind)
+def _rows(job, context, key, kind):
+    return job.params[key] if key in job.params else context.post_rows(kind)
 
 
 def _doc(row):
@@ -356,27 +356,42 @@ def skipped_round(probe, checkpoint):
             "before": None, "after": None, "band": None, "checkpoint": str(checkpoint), "groups": 0, "taught": 0, "probe": probe}
 
 
-def run_round(number, job, services, emit, stop, pause):
-    """Run round 1-4 from job.params, measure before/after, apply the gate and emit {"type": "gate", ...}."""
+def resolve(number, job, services):
+    """App side, before the round's worker starts: the checkpoint it starts from (the current version's) and, for round 3, the
+    teacher (the best version's). Both read the version records, which live in the app."""
+    p = job.params
+    if not p.get("checkpoint"):
+        current = services.current_version()
+        p["checkpoint"] = str(current.best_checkpoint) if getattr(current, "best_checkpoint", None) else None
+        if not p["checkpoint"]:
+            from studio_versions import NoCheckpoint
+            raise NoCheckpoint(getattr(current, "number", None))
+    if number == 3 and p.get("teacher_choice") != "correction" and not p.get("correction") and not p.get("teacher"):
+        teacher = getattr(services.best_version(), "best_checkpoint", None)
+        p["teacher"] = str(teacher) if teacher else None
+
+
+def run_round(number, job, context, emit, stop, pause):
+    """Run round 1-4 from job.params (resolve() has filled in the checkpoint and teacher), measure before/after, apply the gate
+    and emit {"type": "gate", ...}. The result is left in job.params["result"]; the app records it when the job ends."""
     import studio_gate
     import studio_rlhf
     p = job.params
-    checkpoint = p.get("checkpoint") or getattr(services.current_version(), "best_checkpoint", None)
+    checkpoint = p.get("checkpoint")
     if not checkpoint:
         from studio_versions import NoCheckpoint
-        raise NoCheckpoint(getattr(services.current_version(), "number", None))
-    out = Path(p.get("output_dir") or Path(services.workspace.run_dir) / f"queue_{job.id}")
+        raise NoCheckpoint(p.get("version"))
+    out = Path(p.get("output_dir") or Path(context.run_dir) / f"queue_{job.id}")
     job.params["output_dir"] = str(out)
     if number == 2:   # a model that solves nothing writes all-fail groups, which give no gradient: say so instead of running
-        problems = _rows(job, services, "problems", "problems")
+        problems = _rows(job, context, "problems", "problems")
         probe = pass_at_k(checkpoint, problems, seed=p.get("seed", 7))
         if probe["problems"] and not probe["solved"]:
             result = skipped_round(probe, checkpoint)
             emit({"type": "gate", **result})
-            if getattr(services, "record_round", None):
-                services.record_round(number, p.get("version"), result)
+            job.params["result"] = result
             return {"round": number, "ok": False, "checkpoint": checkpoint}
-    docs, held = _rows(job, services, "heldout_docs", "heldout_docs"), _rows(job, services, "heldout_problems", "heldout_problems")
+    docs, held = _rows(job, context, "heldout_docs", "heldout_docs"), _rows(job, context, "heldout_problems", "heldout_problems")
     before = measure(checkpoint, docs, held)
     import studio_eval
     band = studio_eval.noise_band(checkpoint, [_doc(d) for d in docs]) if docs else None
@@ -384,7 +399,7 @@ def run_round(number, job, services, emit, stop, pause):
     verdict = VERDICTS.get(number, "")
     if number == 1:   # the version's own settings carry on, LoRA included: a LoRA version stays LoRA unless the job says {"config": {"lora": None}}
         cfg = {**load_checkpoint(checkpoint)["config"], "objective": "assistant", **kw, **p.get("config", {})}
-        record = train(cfg, _rows(job, services, "conversations", "conversations"), out, emit=emit, stop=stop, pause=pause, init_from=checkpoint)
+        record = train(cfg, _rows(job, context, "conversations", "conversations"), out, emit=emit, stop=stop, pause=pause, init_from=checkpoint)
     elif number == 2:
         record = practice_with_checks(checkpoint, problems, out, group=p.get("group", 6), emit=emit, stop=stop, pause=pause, **kw)
         if (record.get("last_mean") or 0) < (record.get("first_mean") or 0):
@@ -394,14 +409,14 @@ def run_round(number, job, services, emit, stop, pause):
     elif number == 3:
         if p.get("teacher_choice") == "correction":   # the same model with each saved correction in front of it
             teacher = Teacher(checkpoint)
-            prompts = _rows(job, services, "corrections", "corrections")
+            prompts = _rows(job, context, "corrections", "corrections")
         else:
-            teacher = privileged(checkpoint, p["correction"]) if p.get("correction") else p.get("teacher") or getattr(services.best_version(), "best_checkpoint", None)
-            prompts = p["prompts"] if "prompts" in p else studio_rlhf.prompts_from(_rows(job, services, "conversations", "conversations"))
+            teacher = privileged(checkpoint, p["correction"]) if p.get("correction") else p.get("teacher")
+            prompts = p["prompts"] if "prompts" in p else studio_rlhf.prompts_from(_rows(job, context, "conversations", "conversations"))
         record = learn_from_teacher(checkpoint, prompts, teacher, out, emit=emit, stop=stop, pause=pause, **kw)
         verdict = f"Its answers moved toward the teacher's at {record['moved']} of {record['words']} words."
     elif number == 4:
-        pairs = [r for r in _rows(job, services, "pairs", "pairs") if r.get("source") == "human"]  # the judge model's picks never count
+        pairs = [r for r in _rows(job, context, "pairs", "pairs") if r.get("source") == "human"]  # the judge model's picks never count
         record = studio_rlhf.dpo_train(checkpoint, pairs, out, {"validation": .2, **({"beta": p["beta"]} if "beta" in p else {}), **kw},
                                        emit=emit, stop=stop, pause=pause)
         n, final = record.get("validation_pairs", 0), record.get("final_validation")
@@ -415,6 +430,5 @@ def run_round(number, job, services, emit, stop, pause):
     if number == 2:   # groups that taught something: the share of reward groups with any spread
         result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe)
     emit({"type": "gate", **result})
-    if getattr(services, "record_round", None):   # the real services keep the result and move Chat only when ok
-        services.record_round(number, p.get("version"), result)
+    job.params["result"] = result   # the app keeps it and moves Chat only when ok (WorkspaceServices.record_round)
     return {"round": number, "ok": ok, "checkpoint": candidate}

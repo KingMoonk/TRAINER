@@ -529,6 +529,62 @@ class Job(unittest.TestCase):
             imp.run_import("nope", "cache", "run")
 
 
+# Import jobs run in a worker process (studio_worker), where a patch made in the test does not reach: these handlers make
+# the fake download there, and talk to the test through files in the workspace ("started" when the download begins,
+# "release" to let it end).
+
+def _signal(context, name):
+    (Path(context.root) / name).write_text("yes")
+
+
+def _released(context, stop=None, timeout=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline and not (Path(context.root) / "release").exists() and not (stop and stop.is_set()):
+        time.sleep(.02)
+
+
+def _import_with(fetch, job, context, emit, stop, pause):
+    import studio_jobs
+    with mock.patch("studio_import.fetch_gpt2", fetch):
+        return studio_jobs.import_pretrained(job, context, emit, stop, pause)
+
+
+def import_converts(job, context, emit, stop, pause):
+    folder = Path(context.root) / "hf"
+    folder.mkdir()
+    tokenizer, _, _, hf, _ = hf_file(folder)
+    with mock.patch("studio_modules.tokenizer.bpe_gpt2.load_assets", return_value=tokenizer), mock.patch.dict(imp.HEADS, {32: HEADS}):
+        return _import_with(lambda *a, **k: hf, job, context, emit, stop, pause)
+
+
+def import_fails(job, context, emit, stop, pause):
+    def failing(*args, **kwargs):
+        raise ValueError("Could not download GPT-2.")
+    return _import_with(failing, job, context, emit, stop, pause)
+
+
+def import_waits_for_stop(job, context, emit, stop, pause):
+    def waits(dest, progress=None, stop=None, **kwargs):
+        _signal(context, "started")
+        stop.wait(30)
+    return _import_with(waits, job, context, emit, stop, pause)
+
+
+def import_fails_once_released(job, context, emit, stop, pause):
+    def failing(*args, **kwargs):
+        _signal(context, "started")
+        _released(context)
+        raise ValueError("Could not download GPT-2.")
+    return _import_with(failing, job, context, emit, stop, pause)
+
+
+def import_slow(job, context, emit, stop, pause):
+    def slow(dest, progress=None, stop=None, **kwargs):
+        _signal(context, "started")
+        _released(context, stop)
+    return _import_with(slow, job, context, emit, stop, pause)
+
+
 class Services(unittest.TestCase):
     def test_the_fake_services_save_a_gpt2_version(self):
         svc = FakeServices()
@@ -537,36 +593,34 @@ class Services(unittest.TestCase):
         self.assertEqual(version.spec["tokenizer"]["id"], "bpe_gpt2")
 
     def test_the_queue_downloads_converts_and_the_version_ends_up_trained(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tokenizer, _, _, hf, _ = hf_file(tmp)
-            svc = FixtureServices(str(Path(tmp) / "workspace"))
-            self.addCleanup(svc.close)
-            before = len(svc.versions())
-            with mock.patch("studio_import.fetch_gpt2", return_value=hf), \
-                    mock.patch("studio_modules.tokenizer.bpe_gpt2.load_assets", return_value=tokenizer), \
-                    mock.patch.dict(imp.HEADS, {32: HEADS}):
-                version = svc.import_pretrained("gpt2")
-                self.assertEqual(len(svc.versions()), before + 1)
-                deadline = time.time() + 60
-                while time.time() < deadline and svc.store.get(version.number)["status"] not in ("trained", "saved"):
-                    time.sleep(.1)
-            row = svc.store.get(version.number)
-            self.assertEqual(row["status"], "trained")
-            self.assertTrue(Path(row["best_checkpoint"]).exists())
-            self.assertEqual(Path(row["best_checkpoint"]).name, "last.npz")
+        svc = self.import_with(import_converts)
+        before = len(svc.versions())
+        version = svc.import_pretrained("gpt2")
+        self.assertEqual(len(svc.versions()), before + 1)
+        deadline = time.time() + 60
+        while time.time() < deadline and svc.store.get(version.number)["status"] not in ("trained", "saved"):
+            time.sleep(.1)
+        row = svc.store.get(version.number)
+        self.assertEqual(row["status"], "trained")
+        self.assertTrue(Path(row["best_checkpoint"]).exists())
+        self.assertEqual(Path(row["best_checkpoint"]).name, "last.npz")
 
-    def import_with(self, fetch):
-        """Workspace services whose GPT-2 download is `fetch`. Cleanups run last-in first-out: the services close first,
-        then their folder is removed (Windows cannot remove a folder a running job still has files open in), and the fake
-        download is undone last, so a job the closing runner starts can never reach the real one."""
-        patch = mock.patch("studio_import.fetch_gpt2", fetch)
-        patch.start()
-        self.addCleanup(patch.stop)
+    def import_with(self, handler):
+        """Workspace services whose import job is `handler` (one of the fakes above, so no job ever reaches the real download).
+        Cleanups run last-in first-out: the services close first, then their folder is removed (Windows cannot remove a folder a
+        running job still has files open in)."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         svc = FixtureServices(str(Path(tmp.name) / "workspace"))
         self.addCleanup(svc.close)
+        svc.runner.handlers = {**svc.runner.handlers, "import_pretrained": handler}
         return svc
+
+    def seen(self, svc, name):
+        return (Path(svc.root) / name).exists()
+
+    def release(self, svc):
+        (Path(svc.root) / "release").write_text("yes")
 
     def wait_for(self, condition):
         deadline = time.time() + 30
@@ -575,9 +629,7 @@ class Services(unittest.TestCase):
         self.assertTrue(condition())
 
     def test_a_failed_download_removes_the_empty_version(self):
-        def failing(*args, **kwargs):
-            raise ValueError("Could not download GPT-2.")
-        svc = self.import_with(failing)
+        svc = self.import_with(import_fails)
         before = len(svc.versions())
         svc.import_pretrained("gpt2")
         self.wait_for(lambda: svc.runner.jobs and svc.runner.jobs[-1].status == "failed")
@@ -585,29 +637,16 @@ class Services(unittest.TestCase):
         self.assertEqual(len(svc.versions()), before)
 
     def test_a_stopped_import_removes_the_empty_version(self):
-        started = threading.Event()
-
-        def waits(dest, progress=None, stop=None, **kwargs):
-            started.set()
-            stop.wait(30)
-            return None
-        svc = self.import_with(waits)
+        svc = self.import_with(import_waits_for_stop)
         before = len(svc.versions())
         svc.import_pretrained("gpt2")
-        self.assertTrue(started.wait(30))
+        self.wait_for(lambda: self.seen(svc, "started"))
         self.assertEqual(len(svc.versions()), before + 1)   # listed at once, as the copy says
         svc.remove(svc.runner.jobs[-1].id)                  # stops the running job
         self.wait_for(lambda: len(svc.versions()) == before)
 
     def test_removing_an_import_that_is_still_waiting_removes_the_empty_version(self):
-        release, started = threading.Event(), threading.Event()
-
-        def waits(dest, progress=None, stop=None, **kwargs):
-            started.set()
-            release.wait(30)
-            raise ValueError("Could not download GPT-2.")
-        svc = self.import_with(waits)
-        self.addCleanup(release.set)
+        svc = self.import_with(import_fails_once_released)
         svc.runner.pause()  # the import waits in Up next and never starts
         before = len(svc.versions())
         version = svc.import_pretrained("gpt2")
@@ -615,10 +654,10 @@ class Services(unittest.TestCase):
         self.assertEqual((job.status, svc.store.get(version.number)["status"]), ("waiting", "queued"))
         svc.remove(job.id)
         self.assertEqual(len(svc.versions()), before)
-        self.assertFalse(started.is_set())
+        self.assertFalse(self.seen(svc, "started"))
 
     def test_removing_a_waiting_import_marks_an_older_empty_version(self):
-        svc = self.import_with(lambda *args, **kwargs: None)
+        svc = self.import_with(import_fails)
         svc.runner.pause()
         version = svc.import_pretrained("gpt2")
         later = svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
@@ -629,16 +668,12 @@ class Services(unittest.TestCase):
         self.assertEqual(svc.store.get(later.number)["change"], "A later design")
 
     def test_an_older_empty_version_is_marked_because_numbers_cannot_be_reused(self):
-        release = threading.Event()
-
-        def failing(*args, **kwargs):
-            release.wait(30)
-            raise ValueError("Could not download GPT-2.")
-        svc = self.import_with(failing)
+        svc = self.import_with(import_fails_once_released)
         version = svc.import_pretrained("gpt2")
         later = svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
-        release.set()
-        self.wait_for(lambda: svc.store.get(version.number)["status"] == "saved")
+        self.release(svc)
+        self.wait_for(lambda: "no weights" in svc.store.get(version.number)["change"])  # marked saved first, then described
+        self.assertEqual(svc.store.get(version.number)["status"], "saved")
         kept = svc.store.get(version.number)
         self.assertIn("no weights", kept["change"])
         self.assertIn("did not finish", kept["change"])
@@ -646,18 +681,10 @@ class Services(unittest.TestCase):
         self.assertEqual(len(svc.versions()), later.number)
 
     def test_a_second_import_is_refused_while_one_is_waiting_or_running(self):
-        release, started = threading.Event(), threading.Event()
-
-        def slow(dest, progress=None, stop=None, **kwargs):
-            started.set()
-            deadline = time.time() + 30
-            while not (release.is_set() or stop.is_set()) and time.time() < deadline:
-                release.wait(.05)
-            return None
-        svc = self.import_with(slow)
-        self.addCleanup(release.set)
+        svc = self.import_with(import_slow)
+        self.addCleanup(self.release, svc)
         svc.import_pretrained("gpt2")
-        self.assertTrue(started.wait(30))   # running, not just waiting, so the runner is busy with it when the test ends
+        self.wait_for(lambda: self.seen(svc, "started"))   # running, not just waiting, so the runner is busy with it when the test ends
         count = len(svc.versions())
         with self.assertRaises(ValueError) as caught:
             svc.import_pretrained("gpt2")

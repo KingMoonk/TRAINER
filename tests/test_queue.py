@@ -13,7 +13,7 @@ from studio_queue import PASSIVE, Job, Plan, Runner
 ANY = Plan(hours="any", idle_only=False, pause_on_battery=False)
 
 
-def wait(condition, timeout=5):
+def wait(condition, timeout=20):  # each job starts a worker process, which takes a moment
     end = time.time() + timeout
     while time.time() < end:
         if condition():
@@ -22,27 +22,63 @@ def wait(condition, timeout=5):
     return False
 
 
-class Fake:
-    """Handlers that log what ran; a 'gate' event holds a job open until the test releases it."""
-    def __init__(self):
-        self.ran, self.gate, self.started = [], threading.Event(), threading.Event()
-        self.steps = 0
+# Handlers run in a worker process, so they are module-level functions that talk to the test through files in the context's root.
+def _note(context, line):
+    with open(Path(context.root) / "ran.txt", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
-    def job(self, job, services, emit, stop, pause):
-        self.ran.append(job.label)
-        self.started.set()
-        while not (self.gate.is_set() or stop.is_set()):
-            while pause.is_set() and not stop.is_set():
-                time.sleep(.005)
-            self.steps += 1
-            emit({"type": "metric", "step": self.steps, "total": 1000, "lr": .001})
+
+def long_job(job, context, emit, stop, pause):
+    """Emits a step every 5 ms until the test creates the 'gate' file or the job is stopped."""
+    _note(context, job.label)
+    steps = 0
+    while not ((Path(context.root) / "gate").exists() or stop.is_set()):
+        while pause.is_set() and not stop.is_set():
             time.sleep(.005)
+        steps += 1
+        emit({"type": "metric", "step": steps, "total": 1000, "lr": .001})
+        time.sleep(.005)
 
-    def quick(self, job, services, emit, stop, pause):
-        self.ran.append(job.label)
 
-    def cooldown(self, job, services, emit, stop, pause):
-        self.ran.append("cooldown of " + job.params["parent"])
+def quick(job, context, emit, stop, pause):
+    _note(context, job.label)
+
+
+def cooldown(job, context, emit, stop, pause):
+    _note(context, "cooldown of " + job.params["parent"])
+
+
+def note_cap(job, context, emit, stop, pause):
+    _note(context, f"cap {job.params['max_batch_size']}")
+
+
+def boom(job, context, emit, stop, pause):
+    raise ValueError("nope")
+
+
+class Gate:
+    def __init__(self, path):
+        self.path = path
+
+    def set(self):
+        self.path.touch()
+
+
+class Fake:
+    """What the handlers did: the labels they logged, and the last step the long job emitted (seen through the runner's events)."""
+    def __init__(self, root):
+        self.root, self.gate, self.steps = root, Gate(root / "gate"), 0
+
+    @property
+    def ran(self):
+        try:
+            return (self.root / "ran.txt").read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return []
+
+    def listen(self, kind, payload):
+        if kind == "train" and payload.get("type") == "metric":
+            self.steps = payload["step"]
 
 
 class QueueTests(unittest.TestCase):
@@ -50,13 +86,13 @@ class QueueTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "data" / "queue.json"
-        self.fake = Fake()
-        self.handlers = {"pretrain": self.fake.job, "quicktest": self.fake.quick, "restore_answers": self.fake.quick,
-                         "checkpoint_now": self.fake.cooldown}
+        self.fake = Fake(Path(self.tmp.name))
+        self.handlers = {"pretrain": long_job, "quicktest": quick, "restore_answers": quick, "checkpoint_now": cooldown}
 
     def runner(self, plan=ANY, **kw):
         r = Runner(self.path, self.handlers, **{"tick": .01, **kw})
         r.set_plan(plan)
+        r.subscribe(self.fake.listen)
         self.addCleanup(r.shutdown)
         return r
 
@@ -77,8 +113,9 @@ class QueueTests(unittest.TestCase):
         r.enqueue(self.job("long", "pretrain"))
         r.enqueue(self.job("next"))
         r.start()
-        self.assertTrue(self.fake.started.wait(5))
+        self.assertTrue(wait(lambda: self.fake.ran == ["long"]))
         r.shutdown()
+        self.assertEqual(r.jobs[0].status, "waiting")  # the worker stopped in time; the job goes back to the front
         again = Runner(self.path, self.handlers, tick=.01)
         self.assertEqual([j.label for j in again.state().up_next], ["long", "next"])
         self.assertEqual(again.plan, ANY)
@@ -278,6 +315,7 @@ class QueueTests(unittest.TestCase):
         with mock.patch.object(studio_queue, "idle_seconds", idle):
             r = Runner(self.path, self.handlers, tick=.3)
             r.set_plan(Plan(hours="any", idle_only=True, pause_on_battery=False))
+            r.subscribe(self.fake.listen)
             self.addCleanup(r.shutdown)
             r.enqueue(self.job("long", "pretrain"))
             r.start()
@@ -291,13 +329,14 @@ class QueueTests(unittest.TestCase):
         r.start()
         time.sleep(.05)
         r.enqueue(self.job("a"))
-        self.assertTrue(wait(lambda: self.fake.ran == ["a"], 2))
+        self.assertTrue(wait(lambda: self.fake.ran == ["a"], 10))
+        self.assertTrue(wait(lambda: r.state().job is None, 10))  # the end of a worker wakes the runner too
         r.pause()
         r.enqueue(self.job("b"))
         time.sleep(.1)
         self.assertEqual(self.fake.ran, ["a"])
         r.resume()
-        self.assertTrue(wait(lambda: self.fake.ran == ["a", "b"], 2))
+        self.assertTrue(wait(lambda: self.fake.ran == ["a", "b"], 10))
 
     def test_plan_change_rereads_the_gate_at_once(self):
         r = self.runner(Plan(hours="set", start_hour=22, end_hour=7, idle_only=False, pause_on_battery=False),
@@ -306,7 +345,7 @@ class QueueTests(unittest.TestCase):
         r.start()
         self.assertTrue(wait(lambda: r.state().blocked == "outside hours", 2))
         r.set_plan(ANY)
-        self.assertTrue(wait(lambda: self.fake.ran == ["a"], 2))
+        self.assertTrue(wait(lambda: self.fake.ran == ["a"], 10))
 
     def test_state_never_reads_the_gate_on_the_calling_thread(self):
         caller, seen = threading.get_ident(), []
@@ -355,17 +394,14 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(done.params, {"round": 3, "teacher": "best.npz", "max_batch_size": done.params["max_batch_size"]})
 
     def test_memory_cap_is_handed_to_jobs(self):
-        seen = []
-        self.handlers["quicktest"] = lambda job, *a: seen.append(job.params["max_batch_size"])
+        self.handlers["quicktest"] = note_cap
         r = self.runner(Plan(hours="any", idle_only=False, pause_on_battery=False, memory="half"))
         r.enqueue(self.job("a"))
         r.start()
-        self.assertTrue(wait(lambda: seen))
-        self.assertEqual(seen[0], studio_queue.batch_cap(r.plan))
+        self.assertTrue(wait(lambda: self.fake.ran))
+        self.assertEqual(self.fake.ran, [f"cap {studio_queue.batch_cap(r.plan)}"])
 
     def test_failed_job_does_not_block_queue(self):
-        def boom(job, *a):
-            raise ValueError("nope")
         self.handlers["compare"] = boom
         r = self.runner()
         bad = r.enqueue(self.job("bad", "compare"))

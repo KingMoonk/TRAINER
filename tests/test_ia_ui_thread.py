@@ -177,12 +177,13 @@ class ThreadBudget(unittest.TestCase):
             studio_backend.cap_threads()
         cap.assert_called_once_with(7)
 
-    def test_every_job_handler_caps_before_it_starts(self):
-        calls = []
-        with mock.patch.object(studio_backend, "cap_threads", side_effect=lambda: calls.append("cap")):
-            handler = studio_jobs._capped(lambda *a, **k: calls.append("run") or "out")
-            self.assertEqual((handler(1, 2), calls), ("out", ["cap", "run"]))
-        self.assertTrue(all(getattr(h, "__wrapped__", None) for h in studio_jobs.HANDLERS.values()))
+    def test_every_job_runs_in_a_worker_with_a_core_left_for_the_window(self):
+        import studio_worker
+        for kind, handler in studio_jobs.HANDLERS.items():  # no wrapper: the worker finds each handler by its module and name
+            self.assertEqual(studio_worker.handler_ref(handler)["module"], "studio_jobs")
+            self.assertIs(getattr(studio_jobs, studio_worker.handler_ref(handler)["name"]), handler)
+        with mock.patch("os.cpu_count", return_value=8):
+            self.assertEqual(studio_worker.thread_env({})["OMP_NUM_THREADS"], "7")  # the worker starts with torch capped
 
 
 class TkThreadReads(Bound):
