@@ -106,12 +106,10 @@ class Studio(tk.Tk):
         self.services.start_queue()  # jobs saved as waiting by the last session start again
         with timed("shell.refresh_strip"):
             self.refresh_strip()
-        with timed("shell.refresh_next"):
-            self.refresh_next()
+        self.refresh_next()
         with timed("shell.show_builder"):
             self.show("builder")
-        with timed("shell.refresh_downloads"):
-            self.quietly(self.services.refresh_downloads, lambda _rebuilt: None)  # downloads an older app converted get rebuilt once
+        self.quietly(self.services.refresh_downloads, lambda _rebuilt: None)  # downloads an older app converted get rebuilt once
 
     # sidebar ----------------------------------------------------------------
     def _build_sidebar(self):

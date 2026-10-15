@@ -224,6 +224,7 @@ class Services:
             return (f"{after}; the queue opens {when}{plan}" if after else f"Starts {when}{plan}") if when else f"Waiting: {reason}"
         return after or "Starts now"
 
+    @timed("services.next_step")
     def next_step(self):
         """The single "what next" answer (studio_ia.next_step.NextStep) from this workspace's data, versions and queue."""
         from studio_ia.next_step import next_step
@@ -942,6 +943,7 @@ class WorkspaceServices(Services):
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
 
+    @timed("services.refresh_downloads")
     def refresh_downloads(self):
         import studio_catalog as cat
         rebuilt = cat.refresh_downloads(self.workspace)
