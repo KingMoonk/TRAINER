@@ -571,10 +571,10 @@ class BuilderPage(Page):
         tk_label(parent, T["look_back_heads_gloss"], 12, "pink").pack(anchor="w", pady=(8, 0))
         tk_label(parent, T["thinking_room_gloss"], 12, "blue").pack(anchor="w")
 
-    def _seg(self, parent, options, was, key, values):
+    def _seg(self, parent, options, was, key, values, bg="panel"):
         label, value = dict(zip(values, options)), dict(zip(options, values))
-        seg = Segmented(parent, options, label.get(self.draft[key]), lambda opt: self.edit(**{key: value[opt]}))
-        seg.pack(anchor="w", pady=4)
+        seg = Segmented(parent, options, label.get(self.draft[key]), lambda opt: self.edit(**{key: value[opt]}), bg=bg)
+        seg.pack(anchor="w", padx=12 if bg == "panel2" else 0, pady=4)
         # ponytail: Tk borders cannot be dashed, so the old choice gets a violet outline and a "was" in its label.
         if was != self.draft[key] and was in label:
             old = seg.buttons[label[was]]
