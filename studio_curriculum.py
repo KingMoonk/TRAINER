@@ -6,6 +6,17 @@ starts from the previous stage's best weights. After each stage the checkpoint i
 examples of that stage AND every earlier stage, so forgetting is measured, not guessed.
 The plan state lives in <state_dir>/<plan_id>.json and is rewritten after every stage, so a stopped or
 crashed plan continues with resume_plan().
+
+Where the science points:
+- Facts come from pretraining, not from fine-tuning. A model learns what it knows from reading a lot of text; fine-tuning on
+  facts it has not seen mostly teaches it to answer confidently anyway, which raises hallucination (Gekhman et al. 2024).
+  So plain reading text (encyclopedia articles, and the passages of reading sets like SQuAD and SciQ) joins the first stage,
+  trained on every token. The last "knowledge" stage only holds the question-answer items, answer-only: it teaches the
+  format of answering from a passage or a list of options, not new facts.
+- One learning-rate curve for the whole plan (warmup once, one decay over all steps, each stage taking its slice) rather than
+  a fresh warmup and decay per stage, which re-heats the weights and promotes forgetting.
+- Replay of earlier stages' rows is on by default (DEFAULT_REPLAY), the standard defence against forgetting.
+- mixed_plan() is the alternative to strict stages: every dataset trained at once, sampled by weight.
 """
 from __future__ import annotations
 
@@ -14,18 +25,19 @@ import inspect
 import json
 import math
 import random
+import re
 import threading
 from pathlib import Path
 
 from studio_catalog import CATALOG
-from studio_core import atomic_json, messages_of, now, uid
+from studio_core import atomic_json, messages_of, normalize, now, uid
 from studio_model import train, validate_config
 from studio_planning import build_training_set
 from studio_spec import is_model_spec
 
 STAGE_ORDER = ("language", "instructions", "code", "reasoning", "conversation", "knowledge")
 STAGE_TITLES = {"language": "Plain language", "instructions": "Short instructions", "code": "Code",
-                "reasoning": "Reasoning and math", "conversation": "Conversations", "knowledge": "Knowledge and reading"}
+                "reasoning": "Reasoning and math", "conversation": "Conversations", "knowledge": "Reading questions", "mixture": "Weighted mixture"}
 # Used when a registered dataset has no catalog stage field.
 FALLBACK_STAGE = {"dolly15k": "instructions", "alpaca_cleaned": "instructions", "no_robots": "instructions",
                   "wizard143k": "instructions", "codealpaca20k": "code", "mbpp": "code", "gsm8k": "reasoning",
@@ -33,10 +45,15 @@ FALLBACK_STAGE = {"dolly15k": "instructions", "alpaca_cleaned": "instructions", 
                   "squad2": "knowledge", "arc_easy": "knowledge", "arc_challenge": "knowledge", "sciq": "knowledge",
                   "tinystories": "language", "tinystories_valid": "language", "wikitext2": "language"}
 LONG_SOURCES = {"squad2": 1024}  # catalog id -> smallest context that holds its long passages
-STAGE_DEFAULTS = {  # base steps, learning rate, record cap, training objective
-    "language": (600, 2e-3, 20000, "all"), "instructions": (600, 1e-3, 20000, "assistant"),
+# Question sets that carry their source text in the prompt. Their passages (not the questions) join the language stage.
+PASSAGE_SOURCES = frozenset({"squad2", "sciq"})
+PASSAGE_SHARE = 0.25  # most of the language stage that reading-set passages may fill, so they never crowd out plain text
+STAGE_DEFAULTS = {  # base steps, peak learning rate (per-stage plans only), record cap, training objective
+    "language": (1200, 2e-3, 20000, "all"), "instructions": (600, 1e-3, 20000, "assistant"),
     "code": (400, 8e-4, 10000, "assistant"), "reasoning": (400, 8e-4, 10000, "assistant"),
     "conversation": (400, 6e-4, 10000, "assistant"), "knowledge": (300, 5e-4, 5000, "assistant")}
+PEAK_LEARNING_RATE = STAGE_DEFAULTS["language"][1]  # the one peak a shared schedule uses unless the base config sets its own
+MIXED_RECORD_CAP = 50000
 DEFAULT_CONTEXT = 256
 DEFAULT_REPLAY = 0.15
 DONE_STATES = {"completed", "skipped"}
@@ -77,12 +94,9 @@ def dataset_records(workspace, dataset):
     return int(workspace.count(dataset["id"]))  # SELECT COUNT for disk datasets; no audit DataFrame
 
 
-def default_plan(workspace, base_config=None, context=None, replay=0.0, dataset_ids=None, name="Train on everything"):
-    """An ordered plan with one stage per dataset group. Long-passage sources are skipped below their context size."""
-    base_config = dict(base_config or {})
-    context = int(context or base_config.get("context") or DEFAULT_CONTEXT)
-    batch = max(1, int(base_config.get("batch_size", 4)))
-    groups, warnings = {stage: [] for stage in STAGE_ORDER}, []
+def _usable(workspace, base_config, context, dataset_ids):
+    """Each trainable dataset as (dataset, records, stage, trains_questions, gives_passages), plus warnings for the rest."""
+    members, warnings = [], []
     for dataset in workspace.state["datasets"]:
         if dataset_ids is not None and dataset["id"] not in dataset_ids:
             continue
@@ -99,24 +113,108 @@ def default_plan(workspace, base_config=None, context=None, replay=0.0, dataset_
         if records <= 0:
             continue
         cid = catalog_id_of(dataset)
+        questions = True
         if cid in LONG_SOURCES and context < LONG_SOURCES[cid]:
-            warnings.append(f"Skipped {dataset.get('name', cid)}: its passages need a context of at least {LONG_SOURCES[cid]}, "
-                            f"but this plan uses {context}. Raise the context to include it.")
-            continue
-        groups[stage].append((dataset, records))
+            questions = False
+            if cid in PASSAGE_SOURCES:
+                warnings.append(f"{label}: its questions need a context of at least {LONG_SOURCES[cid]}, but this plan uses {context}. "
+                                "Only its passages join pretraining; raise the context to train on the questions too.")
+            else:
+                warnings.append(f"Skipped {dataset.get('name', cid)}: its passages need a context of at least {LONG_SOURCES[cid]}, "
+                                f"but this plan uses {context}. Raise the context to include it.")
+                continue
+        members.append((dataset, records, stage, questions, cid in PASSAGE_SOURCES))
+    return members, warnings
+
+
+def _peak_rate(base_config, learning_rate):
+    return float(learning_rate or base_config.get("learning_rate") or PEAK_LEARNING_RATE)
+
+
+def default_plan(workspace, base_config=None, context=None, replay=DEFAULT_REPLAY, dataset_ids=None, name="Train on everything",
+                 learning_rate=None):
+    """An ordered plan with one stage per dataset group, on one learning-rate schedule (see the module docstring).
+
+    The language stage also takes the passages of reading sets in the knowledge group (squad2, sciq), as plain text with
+    full-text loss; those sets' questions stay in the later answer-only stage. Long-passage sources are skipped below
+    their context size, except that their passages still join pretraining.
+    """
+    base_config = dict(base_config or {})
+    context = int(context or base_config.get("context") or DEFAULT_CONTEXT)
+    batch = max(1, int(base_config.get("batch_size", 4)))
+    peak = _peak_rate(base_config, learning_rate)
+    members, warnings = _usable(workspace, base_config, context, dataset_ids)
+    groups = {stage: [] for stage in STAGE_ORDER}
+    passages = []
+    for dataset, records, stage, questions, gives_passages in members:
+        if questions:
+            groups[stage].append((dataset, records))
+        if gives_passages and stage == "knowledge":
+            passages.append((dataset, records))
     stages = []
     for stage in STAGE_ORDER:
-        members = groups[stage]
-        if not members:
+        chosen = groups[stage] + (passages if stage == "language" else [])
+        if not chosen:
             continue
-        total = sum(records for _, records in members)
-        base_steps, rate, cap, objective = STAGE_DEFAULTS[stage]
+        total = sum(records for _, records in chosen)
+        base_steps, _, cap, objective = STAGE_DEFAULTS[stage]
         steps = max(10, min(base_steps, math.ceil(total * 3 / batch)))
-        stages.append({"name": STAGE_TITLES[stage], "kind": stage, "dataset_ids": [d["id"] for d, _ in members],
-                       "steps": steps, "max_records": int(max(1, min(total, cap, max(200, steps * batch * 2)))),
-                       "learning_rate": rate, "context": context, "objective": objective,
+        row = {"name": STAGE_TITLES[stage], "kind": stage, "dataset_ids": [d["id"] for d, _ in chosen],
+               "steps": steps, "max_records": int(max(1, min(total, cap, max(200, steps * batch * 2)))),
+               "learning_rate": peak, "context": context, "objective": objective, "eval_records": 100, "status": "pending"}
+        if stage == "language" and passages:
+            row["passage_ids"] = [d["id"] for d, _ in passages]
+        stages.append(row)
+    return {"name": name, "context": context, "tokenizer": "byte", "replay": float(replay), "schedule": "shared",
+            "learning_rate": peak, "stages": stages, "warnings": warnings}
+
+
+def mixture_weights(records, weights=None):
+    """Sampling shares for a weighted mixture, summing to 1: each dataset's share of the square root of its size.
+
+    Square-root sizing is the middle road GPT-3 style mixes take: proportional to size would let one huge dataset drown the
+    small ones, equal shares would repeat a small dataset many times over. `weights` ({dataset id: share}) sets a dataset's
+    share by hand; the ones left out keep their square-root share. All are then rescaled to sum to 1.
+    """
+    roots = {key: math.sqrt(max(0, int(count))) for key, count in records.items()}
+    total = sum(roots.values()) or 1.
+    shares = {key: roots[key] / total for key in roots}
+    for key, value in (weights or {}).items():
+        if key in shares:
+            shares[key] = float(value)
+    if any(not math.isfinite(v) or v < 0 for v in shares.values()) or not sum(shares.values()):
+        raise ValueError("Dataset weights must be finite, nonnegative numbers, and at least one above zero.")
+    total = sum(shares.values())
+    return {key: value / total for key, value in shares.items()}
+
+
+def mixed_plan(workspace, base_config=None, context=None, replay=0.0, dataset_ids=None, name="Weighted mixture",
+               weights=None, steps=None, learning_rate=None):
+    """A one-stage plan that trains on every dataset at once, sampled by weight, instead of strict stages.
+
+    Weights default to mixture_weights() (square root of dataset size) and are sampled by record count, so a dataset with
+    weight .3 supplies about 30% of the training rows. Rows are trained as they come: plain text on every token, question
+    items on the answer only. Steps default to the total the staged plan would use (capped at about 3 passes over the data).
+    No replay by default: with one stage there is nothing earlier to forget.
+    """
+    base_config = dict(base_config or {})
+    context = int(context or base_config.get("context") or DEFAULT_CONTEXT)
+    batch = max(1, int(base_config.get("batch_size", 4)))
+    members, warnings = _usable(workspace, base_config, context, dataset_ids)
+    members = [m for m in members if m[3]]  # a mixture trains each dataset as it is; passages-only sources have nothing to add
+    records = {dataset["id"]: count for dataset, count, *_ in members}
+    stages = []
+    if records:
+        shares = mixture_weights(records, weights)
+        total = sum(records.values())
+        base_steps = sum(STAGE_DEFAULTS[kind][0] for kind in {m[2] for m in members})
+        steps = int(steps) if steps else max(10, min(base_steps, math.ceil(total * 3 / batch)))
+        stages.append({"name": STAGE_TITLES["mixture"], "kind": "mixture", "dataset_ids": list(records), "weights": shares,
+                       "balance": "records", "steps": steps, "max_records": int(max(1, min(total, MIXED_RECORD_CAP, max(200, steps * batch * 2)))),
+                       "learning_rate": _peak_rate(base_config, learning_rate), "context": context, "objective": "assistant",
                        "eval_records": 100, "status": "pending"})
-    return {"name": name, "context": context, "tokenizer": "byte", "replay": float(replay), "stages": stages, "warnings": warnings}
+    return {"name": name, "context": context, "tokenizer": "byte", "replay": float(replay), "schedule": "shared",
+            "learning_rate": _peak_rate(base_config, learning_rate), "stages": stages, "warnings": warnings}
 
 
 def validate_plan(workspace, plan, base_config=None):
@@ -139,15 +237,29 @@ def validate_plan(workspace, plan, base_config=None):
             raise ValueError(f"Stage {index} uses a dataset that no longer exists: {missing[0]}")
         for key in ids:
             need = LONG_SOURCES.get(catalog_id_of(known[key]))
-            if need and context < need:
+            if need and context < need and key not in (stage.get("passage_ids") or []):
                 warnings.append(f"Stage {index}: {known[key].get('name', key)} has long passages (needs context >= {need}); "
                                 f"at {context} they are cut into windows and compute is partly wasted.")
         if int(stage.get("steps", 0)) < 1 or int(stage.get("max_records", 0)) < 1:
             raise ValueError(f"Stage {index} needs at least 1 step and 1 record.")
-        validate_config(_stage_config({"base_config": base_config or {}, "context": context}, stage, index - 1))
+        weights = stage.get("weights")
+        if weights:
+            if any(key not in ids for key in weights):
+                raise ValueError(f"Stage {index} weights a dataset that is not in the stage.")
+            mixture_weights({key: 1 for key in ids}, weights)  # raises for negative, non-finite or all-zero weights
+        shared = {"schedule": plan.get("schedule"), "learning_rate": plan.get("learning_rate"), "stages": stages}
+        validate_config(_stage_config({"base_config": base_config or {}, "context": context, **shared}, stage, index - 1))
     if not 0 <= float(plan.get("replay", 0)) <= 0.5:
         raise ValueError("Replay must be between 0 and 0.5 (a fraction of the stage's records).")
     return warnings
+
+
+def _schedule_window(state, index):
+    """(steps before this stage, steps in the whole plan) when the plan shares one learning-rate schedule, else None."""
+    if state.get("schedule") != "shared":
+        return None
+    steps = [int(stage["steps"]) for stage in state["stages"]]
+    return sum(steps[:index]), sum(steps)
 
 
 def _stage_config(state, stage, index):
@@ -168,9 +280,11 @@ def _stage_config(state, stage, index):
             spec["embedding"]["context"] = context
     cfg["architecture"] = spec
     steps = int(stage["steps"])
-    cfg.update(tokenizer="byte", context=context, steps=steps, learning_rate=float(stage["learning_rate"]),
+    window = _schedule_window(state, index)
+    rate = float((state.get("learning_rate") if window else None) or stage["learning_rate"])
+    cfg.update(tokenizer="byte", context=context, steps=steps, learning_rate=rate,
                objective=stage.get("objective", "assistant"), name=f"{state.get('name', 'Curriculum')} · stage {index + 1} {stage.get('name', '')}".strip())
-    cfg["warmup"] = min(int(cfg.get("warmup", 20)), steps // 10)
+    cfg["warmup"] = min(int(cfg.get("warmup", 20)), (window[1] if window else steps) // 10)
     cfg["eval_every"] = max(1, min(25, steps // 4))
     return cfg
 
@@ -220,14 +334,60 @@ def _fresh_dir(root, base):
     return path
 
 
-def _build(workspace, ids, count, seed, emit, stop, balance="tokens"):
+def _build(workspace, ids, count, seed, emit, stop, balance="tokens", weights=None):
     kwargs = dict(max_records=int(count), seed=int(seed), stop=stop, emit=emit)
+    if weights:
+        kwargs["weights"] = weights
     try:
         if balance and "balance" in inspect.signature(build_training_set).parameters:
             kwargs["balance"] = balance
     except (TypeError, ValueError):
         pass
     return build_training_set(workspace, list(ids), **kwargs)["examples"]
+
+
+_PASSAGE = re.compile(r"(?:Passage|Background):\n(.+?)\n\nQuestion: ", re.S)
+
+
+def _passage_of(row):
+    """The source text inside a reading question's prompt (SQuAD "Passage:", SciQ "Background:"), else None."""
+    prompt = next((m.get("content", "") for m in messages_of(row) if m.get("role") == "user"), "")
+    found = None if row.get("text") else _PASSAGE.search(prompt)
+    return found.group(1).strip() if found else None
+
+
+def _passage_rows(rows, count):
+    """Up to `count` distinct passages from reading-question rows, as plain text rows (trained on every token)."""
+    seen, passages = set(), []
+    for row in rows:
+        passage = _passage_of(row)
+        key = " ".join(passage.casefold().split()) if passage else ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        extra = {name: row[name] for name in ("groupId", "license") if row.get(name)}
+        passages.append(normalize({"text": passage, "intent": "reading_passage", "quality": "Good", **extra}, dataset_id=row.get("datasetId", "")))
+        if len(passages) >= count:
+            break
+    return passages
+
+
+def _stage_rows(workspace, stage, count, seed, emit, stop):
+    """About `count` rows a stage draws on: its datasets (by weight when it has weights), plus the passages of its reading sets.
+
+    A dataset in stage["passage_ids"] gives only its passages as plain text, never its questions. Passages fill at most
+    PASSAGE_SHARE of the stage when it also has plain datasets, and all of it when it has none.
+    """
+    passage_ids = set(stage.get("passage_ids") or [])
+    plain = [key for key in stage["dataset_ids"] if key not in passage_ids]
+    rows = []
+    if passage_ids:
+        want = math.ceil(count * PASSAGE_SHARE) if plain else count
+        rows = _passage_rows(_build(workspace, sorted(passage_ids), want * 3, seed, emit, stop), want)
+    if plain:
+        rows += _build(workspace, plain, max(1, count - len(rows)), seed, emit, stop, stage.get("balance", "tokens"), stage.get("weights"))
+    random.Random(seed).shuffle(rows)
+    return rows
 
 
 def _write_jsonl(path, rows):
@@ -272,33 +432,38 @@ def _prompt_key(row):
     return " ".join(str(text).casefold().split())
 
 
+def _row_keys(row):
+    """Keys a held-out row blocks: its prompt, and the passage in it, so a held-out question's passage is not trained on either."""
+    passage = _passage_of(row)
+    return {key for key in (_prompt_key(row), " ".join(passage.casefold().split()) if passage else "") if key}
+
+
 def _held_out(workspace, state, eval_dir, seed, emit, stop):
     """Sample each stage's held-out file once, before any training; return the plan-wide prompt-key registry.
 
-    Every stage's training rows are filtered against this registry, so no held-out prompt is trained on
-    in any stage, even when stages share a dataset or one dataset contains another's questions.
+    Every stage's training rows are filtered against this registry, so no held-out prompt (or the passage inside one)
+    is trained on in any stage, even when stages share a dataset or one dataset contains another's questions.
     """
     stages = state["stages"]
     paths = [eval_dir / f"stage{j + 1}.jsonl" for j in range(len(stages))]
-    registry = {_prompt_key(row) for path in paths for row in _read_jsonl(path)}
+    registry = {key for path in paths for row in _read_jsonl(path) for key in _row_keys(row)}
     missing = [j for j, stage in enumerate(stages) if not paths[j].is_file() and stage["status"] not in DONE_STATES]
     if missing:  # rows an earlier attempt already trained on cannot be held out any more
-        trained = {_prompt_key(row) for stage in stages for run_dir in stage.get("run_dirs") or []
-                   for row in _read_jsonl(Path(run_dir) / "dataset.jsonl")}
+        trained = {key for stage in stages for run_dir in stage.get("run_dirs") or []
+                   for row in _read_jsonl(Path(run_dir) / "dataset.jsonl") for key in _row_keys(row)}
     for j in missing:
         want = int(stages[j].get("eval_records", 100))
         rows = []
-        for row in _build(workspace, stages[j]["dataset_ids"], max(1, want * 3), seed + 7919 + j, emit, stop):
-            key = _prompt_key(row)
-            if len(rows) < want and key and key not in registry and key not in trained:
+        for row in _stage_rows(workspace, stages[j], max(1, want * 3), seed + 7919 + j, emit, stop):
+            keys = _row_keys(row)
+            if len(rows) < want and keys and not keys & registry and not keys & trained:
                 rows.append(row)
-                registry.add(key)
+                registry |= keys
         _write_jsonl(paths[j], rows)
         if not rows:
             text = f"Stage {j + 1} ({stages[j].get('name', '')}) has no held-out rows; forgetting is not measured for it."
             state.setdefault("warnings", []).append(text)
             emit({"type": "info", "text": "Warning: " + text})
-    registry.discard("")
     return registry
 
 
@@ -345,7 +510,7 @@ def run_plan(workspace, plan, base_config=None, emit=None, stop=None, pause=None
     directory = state_directory(workspace, state_dir)
     state = {"id": plan_id, "name": plan.get("name", "Curriculum"), "created": now(), "updated": now(), "status": "pending",
              "context": int(plan.get("context") or DEFAULT_CONTEXT), "tokenizer": "byte", "replay": float(plan.get("replay", 0)),
-             "base_config": base_config, "init_from": str(init_from) if init_from else None,
+             "schedule": plan.get("schedule"), "learning_rate": plan.get("learning_rate"), "base_config": base_config, "init_from": str(init_from) if init_from else None,
              "run_root": str(Path(run_root) if run_root else workspace.run_dir), "state_dir": str(directory),
              "register_arch_id": register_arch_id, "warnings": list(plan.get("warnings", [])) + warnings,
              "stages": [], "eval_table": [], "forgetting": []}
@@ -390,7 +555,7 @@ def _execute(workspace, state, emit, stop, pause):
         raise
 
     def unseen(rows):
-        return [row for row in rows if _prompt_key(row) not in registry]
+        return [row for row in rows if not _row_keys(row) & registry]
 
     from studio_rlhf import evaluate_checkpoint
     for index, stage in enumerate(stages):
@@ -418,7 +583,7 @@ def _execute(workspace, state, emit, stop, pause):
                     cap = int(stage["max_records"])
                     # Held-out rows are filtered out, so training is capped at total - held-out, never the whole stage.
                     request = max(1, min(total, cap + int(stage.get("eval_records", 100))))
-                    examples = unseen(_build(workspace, stage["dataset_ids"], request, seed + index, emit, stop))[:cap]
+                    examples = unseen(_stage_rows(workspace, stage, request, seed + index, emit, stop))[:cap]
                     replay = []
                     if state["replay"] > 0 and index:
                         replay = unseen(_replay_rows(stages[:index], int(state["replay"] * len(examples)), seed + index))
@@ -431,8 +596,9 @@ def _execute(workspace, state, emit, stop, pause):
                 stage["run_dir"] = str(run_dir)
                 stage["run_dirs"].append(str(run_dir))
                 _save(state, emit, index)
+                window = _schedule_window(state, index)  # one learning-rate curve over the plan: this stage runs its slice of it
                 record = train(cfg, examples, run_dir, emit, stop, pause, resume=resume_from,
-                               init_from=None if resume_from else previous)
+                               init_from=None if resume_from else previous, **({"schedule_window": window} if window else {}))
                 stage.update(steps_done=record.get("step", 0), loss=record.get("loss"), val_loss=record.get("val_loss"),
                              best_loss=record.get("best_loss"), seconds=(stage.get("seconds") or 0) + (record.get("duration_seconds") or 0),
                              checkpoint=_checkpoint(run_dir))

@@ -347,6 +347,11 @@ class Services:
         of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
         raise NotImplementedError
 
+    def lr_range_test(self, spec, stop=None):
+        """studio_compute.lr_range_test for `spec` on a slice of the chosen text: a throwaway copy trained for about a hundred
+        steps while the learning rate rises. Slow: call it off the Tk thread. `stop` (a threading.Event) ends it early."""
+        raise NotImplementedError
+
     # data (S5) / evaluation (S4) / chat ------------------------------------
     def data(self, kind, query=""):
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
@@ -476,7 +481,9 @@ class Services:
 
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
-        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}}}; missing keys are fine."""
+        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}},
+        "overlap": {"text" | "problems": {"checked", "left_out", "note"}}}; missing keys are fine. overlap counts the held-back items
+        left out because a 13-gram of them also appears in training (studio_decontam)."""
         raise NotImplementedError
 
     def post_rows(self, kind):
@@ -653,6 +660,12 @@ class FakeServices(Services):
     def word_lists(self):
         from studio_ia import pieces
         return pieces.word_lists([r["b"] for r in self._rows()["text"]])  # no GPT-2 list: nothing is downloaded here
+
+    def lr_range_test(self, spec, stop=None):
+        rates = [1e-6 * 10 ** (i * 6 / 99) for i in range(100)]
+        losses = [5.5 - 2.5 * min(1., max(0., (i - 30) / 50)) for i in range(100)]
+        return dict(rates=rates, losses=losses, smoothed=losses, suggestion=rates[70] / 10, steepest=70, diverged=False, cancelled=False,
+                    lr_min=1e-6, lr_max=1.)
 
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
@@ -863,6 +876,7 @@ VERSION_JOBS = ("pretrain", "import_pretrained")  # queue jobs that carry a vers
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
+RANGE_CHARS = 400_000  # characters of the chosen text the learning-rate test trains on: a hundred small steps never read more
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
 FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
@@ -1236,11 +1250,14 @@ class WorkspaceServices(Services):
     def examples(self, params):
         """Plain-text rows of params["datasets"] (default: every set) without the held-back documents. data/heldout.json is
         fixed the first time (exact duplicates removed, seeded split) and then kept, so every version is scored on the same text."""
+        import studio_decontam
         import studio_eval
         rows = self._text_rows(params.get("datasets"))
         path = self.root / "data" / "heldout.json"
         if not path.exists() and len(rows) > 1:  # ponytail: later sets never join the held-back text; delete the file to re-split
-            _, held = studio_eval.heldout_split([e["text"] for e in rows], params.get("heldout_fraction", .05))
+            train, held = studio_eval.heldout_split([e["text"] for e in rows], params.get("heldout_fraction", .05))
+            held, report = studio_decontam.exclude_overlap(held, studio_decontam.Index().add_all(train))  # a held-back text that shares a 13-gram with training is not scored
+            self._note_overlap("text", report)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
         held = set(self._heldout())
@@ -1372,6 +1389,16 @@ class WorkspaceServices(Services):
             texts, _ = dk.text_sample(self.workspace, ids, pieces.SAMPLE_CHARS, exclude=set(self._heldout()))
             return pieces.word_lists(texts, self._cached("gpt2", self._gpt2))
         return self._fresh("word_lists", make)
+
+    def lr_range_test(self, spec, stop=None):
+        import studio_compute
+        import studio_data_kinds as dk
+        ids = [d["id"] for d in self.workspace.state["datasets"]]
+        texts, _ = dk.text_sample(self.workspace, ids, RANGE_CHARS, exclude=set(self._heldout()))
+        if not texts:
+            raise ValueError("There is no plain text to try it on. Add some in Your data.")
+        # the processor only: this runs on a worker thread while Tk runs, where a GPU probe or Metal work crashes the app on macOS
+        return studio_compute.lr_range_test(spec, [{"text": t} for t in texts], stop=stop, config={"device": "cpu"})
 
     def _gpt2(self):
         """GPT-2's list, downloaded once into data/gpt2 as training with it would; None when it cannot be fetched."""
@@ -1507,7 +1534,27 @@ class WorkspaceServices(Services):
         return {"rounds": rounds, "gates": {int(n): g for n, g in done.items()},
                 "counts": {"conversations": convs.count, "corrections": len(self._json("corrections.json", [])),
                            "problems": self.data("problems").count, "pairs": len(self._human_pairs())},
+                "overlap": self._json("overlap.json", {}),
                 "example": self._summaries()["example"]}
+
+    def _note_overlap(self, name, report):
+        """Keep how many held-back items were left out for sharing a 13-gram with training (data/overlap.json, read by post_training)."""
+        saved = self._json("overlap.json", {})
+        if saved.get(name) != report.as_dict():
+            self._save_json("overlap.json", {**saved, name: report.as_dict()})
+
+    def _train_index(self):
+        """The 13-grams of everything training reads: pretraining text and the conversations and problems that are not held back."""
+        def make():
+            import studio_data_kinds as dk
+            import studio_decontam
+            held, index = set(self._heldout()), studio_decontam.Index()
+            for d in self.workspace.state["datasets"]:
+                for e in self.workspace.iter_examples(d["id"]):
+                    if not dk.is_draft(e) and not (e["text"] in held if dk.classify(e) == "text" else dk.stamp(e)["holdout"]):
+                        index.add(_doc(e))
+            return index
+        return self._fresh("train_index", make)
 
     def post_rows(self, kind):
         import studio_data_kinds as dk
@@ -1530,6 +1577,10 @@ class WorkspaceServices(Services):
                 rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
             out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
                        if want == "problems" else e for e in rows)
+        if held:  # a held-back problem whose text also appears in training would be answered from memory: leave it out and say how many
+            import studio_decontam
+            out, report = studio_decontam.exclude_overlap(out, self._train_index(), lambda row: row["prompt"])
+            self._note_overlap("problems", report)
         return out
 
     def teach_correction(self, version, messages, correction, whole_answer=False):
