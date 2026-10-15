@@ -74,11 +74,14 @@ class Builder(unittest.TestCase):
     def test_last_change_comes_from_history_never_a_guess(self):
         s2, s4 = B.write_spec(default_spec(), choices(L=2)), B.write_spec(default_spec(), choices(L=4))
         vs = [Version(1, spec=s2, scorecard={"bpc": 3.0}), Version(2, spec=s4, scorecard={"bpc": 2.5})]
-        self.assertEqual(B.last_blocks_change(vs), (2, 4, 1, 2, "0.50"))
-        self.assertEqual(B.last_blocks_change([Version(1, spec=s2), Version(2, spec=s4)])[4], None)
+        last = B.last_blocks_change(vs)
+        self.assertEqual(last[:4], (2, 4, 1, 2))
+        self.assertAlmostEqual(last[4]["change"], -0.5)
+        self.assertIsNone(B.last_blocks_change([Version(1, spec=s2), Version(2, spec=s4)])[4]["change"])
         self.assertIsNone(B.last_blocks_change(vs[:1]))
         out = B.expectations(choices(L=4), choices(L=6), vs)
-        self.assertTrue(any("Last time blocks changed (2 → 4, version 1 → 2), error moved by 0.50" in t for t in out))
+        self.assertTrue(any("Last time blocks changed (2 → 4, version 1 → 2): error fell 0.50 bits per character (lower is better)" in t
+                            for t in out))
         self.assertEqual(B.expectations(choices(), choices()), [B.T["change_something"]])
 
     def test_chart_continues_from_the_old_end_and_never_invents(self):

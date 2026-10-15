@@ -139,6 +139,21 @@ BUILDER = {
     "lr_failed": "The test could not run: {error}",
 }
 
+ATTRIBUTION = {  # what the last change in blocks did, for Build your model (studio_ia.attribution)
+    "head": "Last time blocks changed ({a} → {b}, version {v_from} → {v_to}): ",
+    "fell": "error fell {n} bits per character (lower is better)",
+    "rose": "error rose {n} bits per character (lower is better)",
+    "flat": "error did not move",
+    "no_score": "one of them has no held-back score yet.",
+    "clean": "{move}. Only the blocks differed, so this is the effect of the change (one run each, so a small move could be luck).",
+    "unfair": "{move}. That is not a fair comparison: {why}.",
+    "also": "also changed: {names}",
+    "unchecked": "could not check: {names}",
+    "compare": "in a matched Compare run of {seeds}, {move}.",
+    "checking": "{move}; checking what else changed…",
+    "inside": " That is within the spread across seeds, so it could be luck.",
+}
+
 CHAT = {
     "h1": "Chat",
     "lead": "Talk to any trained version. Compare two to see what a change really did.",

@@ -23,6 +23,7 @@ from studio_validate import errors, validate
 from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia import pieces as cut
+from studio_ia.attribution import attribute, blocks_change_text
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
@@ -453,17 +454,28 @@ def preset_draft(spec):
     return dict(s), (validate_spec(spec), s)
 
 
-def last_blocks_change(versions):
-    """(from, to, v_from, v_to, bpc_moved|None) for the latest block-count change in the history, else None.
-    The size of the move is measured from the two versions' held-back scores, or None when either is missing."""
+def blocks_change_pair(versions):
+    """(older, newer, blocks before, blocks after) for the latest block-count change in the history, else None. Reads no files."""
     vs = [v for v in versions if v.spec]
     for i in range(len(vs) - 1, 0, -1):
         a, b = _facts(vs[i - 1].spec)["blocks"], _facts(vs[i].spec)["blocks"]
         if a != b:
-            x, y = vs[i - 1].scorecard.get("bpc"), vs[i].scorecard.get("bpc")
-            moved = f"{abs(y - x):.2f}" if isinstance(x, (int, float)) and isinstance(y, (int, float)) else None
-            return a, b, vs[i - 1].number, vs[i].number, moved
+            return vs[i - 1], vs[i], a, b
     return None
+
+
+def last_blocks_change(versions, facts=None, compares=None):
+    """(from, to, v_from, v_to, attribution) for the latest block-count change in the history, else None. The attribution
+    (studio_ia.attribution) has the signed move in held-back error and what else differed. `facts(number)` and `compares()`
+    give the runs' facts and the saved Compare runs (Services.run_facts and Services.compare_runs, which read files: the page
+    gathers them on a worker). With no `facts` they are not known yet, and the attribution says it is still checking."""
+    pair = blocks_change_pair(versions)
+    if pair is None:
+        return None
+    old, new, a, b = pair
+    known = facts is not None
+    return a, b, old.number, new.number, attribute(old, new, facts(old.number) if known else None, facts(new.number) if known else None,
+                                                   compares() if compares else ())
 
 
 def design_expectation(s, spec):
@@ -472,16 +484,15 @@ def design_expectation(s, spec):
     return expectation(c["params"], TOKENIZERS[s["V"]], embedding_params=c["table"])
 
 
-def expectations(cur, draft, versions=(), issues=()):
+def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
     """What to expect from each change, then the advice (`issues`, from new_issues) the new design gets."""
     a, b, out = cur, draft, []
     if b["L"] > a["L"]:
         out.append(EXPECT["more"])
     if b["L"] < a["L"]:
         out.append(EXPECT["fewer"])
-    if b["L"] != a["L"] and (last := last_blocks_change(versions)):
-        out.append(f"Last time blocks changed ({last[0]} → {last[1]}, version {last[2]} → {last[3]}), "
-                   + (f"error moved by {last[4]} bits per character." if last[4] else "but one of them has no held-back score yet."))
+    if b["L"] != a["L"] and (last := last_blocks_change(versions, facts, compares)):
+        out.append(blocks_change_text(*last))
     if b["H"] != a["H"]:
         out.append(EXPECT["heads"].format(how="more, narrower" if b["H"] > a["H"] else "fewer, wider"))
     if b["W"] > a["W"]:
@@ -602,6 +613,8 @@ class BuilderPage(Page):
         self.guide_text = self.guide_details = self.hover_text = ""
         self.old_curve = self.new_curve = self.refs = None
         self.lists = None  # services.word_lists(), read on the slow lane
+        self.attr_cache, self.attr_fresh, self.attr_busy = {}, set(), set()  # run facts and Compare runs per pair of versions
+        self.painting_expect = False
         self.plot_args, self.plot = {}, None
         self._chart_token = None
         self.answers, self.answer_q, self.answer_stop, self.answer_labels, self.workers = {}, queue.Queue(), threading.Event(), {}, []
@@ -656,6 +669,7 @@ class BuilderPage(Page):
             elif staged is None and self._staged is not None:  # discarded from Quick test
                 self.draft, self.anchor = dict(self.cur), None
             self._staged = staged
+        self.attr_fresh.clear()  # read the run files again (they may have changed); the last result shows meanwhile
         self.load_chart()
         self.render()
         self.load_lists()
@@ -789,12 +803,40 @@ class BuilderPage(Page):
             return NO_PARENT.format(n=self.n)
         return NOTES[warm_kind(self.cur, self.draft)]
 
-    def last_blocks_change(self):
-        return last_blocks_change(self.services.versions())
-
     def expectations(self):
         issues = new_issues(self.base_spec(), self.draft_spec) if self.draft_spec else ()
-        return expectations(self.cur, self.draft, self.services.versions(), issues)
+        versions = self.services.versions()
+        facts, compares = self.attribution_inputs(versions) if self.draft["L"] != self.cur["L"] else (None, None)
+        return expectations(self.cur, self.draft, versions, issues, facts, compares)
+
+    def attribution_inputs(self, versions):
+        """(facts, compares) for "last time blocks changed", from what a worker already read, else (None, None). The run
+        files (the first read hashes the whole data file) and the Compare runs are read on the slow lane, once per pair of
+        versions until something changes, and the line is painted again when they arrive."""
+        pair = blocks_change_pair(versions)
+        if pair is None:
+            return None, None
+        key = (pair[0].number, pair[1].number)
+        if key not in self.attr_fresh and key not in self.attr_busy:
+            self.attr_busy.add(key)
+            services = self.services
+
+            def work():  # no widgets here
+                try:
+                    return key, services.run_facts(key[0]), services.run_facts(key[1]), services.compare_runs()
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                    return key, {}, {}, []
+
+            def apply(value):
+                self.attr_busy.discard(key)
+                self.attr_fresh.add(key)
+                self.attr_cache[key] = value[1:]
+                label = getattr(self, "guide_label", None)
+                if not self.painting_expect and label is not None and label.winfo_exists():
+                    self._paint_expect()
+            self.quietly(work, apply, lane="slow")
+        got = self.attr_cache.get(key)
+        return (None, None) if got is None else ((lambda n, f=dict(zip(key, got[:2])): f[n]), lambda c=got[2]: c)
 
     def preview_preset(self, key):
         """Show a ready-made design's cost; nothing changes until it is loaded."""
@@ -1396,7 +1438,11 @@ class BuilderPage(Page):
 
     def _paint_expect(self):
         self.guide_text, self.guide_details = design_expectation(self.draft, self.draft_spec or self.base_spec())
-        self.expect_texts = self.expectations()
+        self.painting_expect = True
+        try:
+            self.expect_texts = self.expectations()
+        finally:
+            self.painting_expect = False
         self.hover_text = "\n\n".join([self.guide_details, *self.expect_texts])  # the card itself is one line
         self.guide_label.configure(text=self.guide_text)
 
