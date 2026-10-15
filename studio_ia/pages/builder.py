@@ -12,6 +12,7 @@ from pathlib import Path
 
 import studio_registry as registry
 from studio_estimate import estimate
+from studio_glossary import MODULE_TERMS, glossary_text
 from studio_slots import BLOCK_SLOTS
 from studio_spec import block_at, config_from_spec, default_spec, set_block, validate_spec
 from studio_validate import errors, validate
@@ -32,6 +33,8 @@ WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
 WIDTHS = ("Narrow", "Normal", "Wide")
 HEADS = (1, 4, 8)
 PART_SLOTS = ("embedding", "position", "head")  # the model-wide parts the tower shows; every block has BLOCK_SLOTS
+PART_TERMS = dict(embedding="embedding", position="position", norm="norm", mixer="token_mixer", channel="mlp", head="output_head")
+WORD_TERMS = ("bytes", "bpe", "gpt2_bpe", "whole_words")  # GLOSSARY entries behind WORDS
 PROMPT = "The largest planet in our solar system is"
 STEPS, ROWS = 1000, 16  # a catch-up job here; the Pretraining page is where length, rows and data are chosen
 LINKS = (("trace", "trace"), ("head_zoom", "inside_head"), ("value_map", "value_map"), ("loss", "loss"),
@@ -58,6 +61,15 @@ NO_CURVE = "No error curve yet: version {n} has not trained on this computer. It
 
 def module_name(slot, short):
     return registry.get(slot, short).name
+
+
+def module_tip(slot, short):
+    """Hover help for a module: what it is and why you would pick it (studio_glossary), then the registry's exact description."""
+    return f"{glossary_text(MODULE_TERMS[slot][short])}\n\n{registry.get(slot, short).blurb}"
+
+
+def part_tip(slot):
+    return glossary_text(PART_TERMS[slot])
 
 
 def fields_of(slot, short):
@@ -747,9 +759,11 @@ class BuilderPage(Page):
         self.pickers = []  # (menu button, was label, slot, block index or None) of the model-wide parts
         self._part_row(parent, "head")
         row = self._row(parent)
-        tip(tk_label(row, T["final_norm"], 14, "text", "panel2", font=font(14, bold=True), width=14), T["final_norm_tip"]).pack(side="left", padx=12, pady=6)
+        tip(tk_label(row, T["final_norm"], 14, "text", "panel2", font=font(14, bold=True), width=14),
+            f"{T['final_norm_tip']}\n\n{part_tip('norm')}").pack(side="left", padx=12, pady=6)
         self.final_norm = tk_label(row, "", 13, "text2", "panel2")
         self.final_norm.pack(side="left")
+        tip(self.final_norm, lambda: module_tip("norm", self.draft["M"]["norm"]))
         tk_label(row, f"  {T['same_as_blocks']}", 12, "muted", "panel2").pack(side="left")
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
         self.block_box = tk.Frame(parent, bg=C["bg"])
@@ -757,7 +771,7 @@ class BuilderPage(Page):
         self.block_rows = []  # (row, name, heads, width, tag, header, toggle, parts, detail) per block, block 1 first; drawn top-down
         step = tk.Frame(parent, bg=C["bg"])
         step.pack(anchor="w", pady=8)
-        tip(tk_label(step, f"{T['blocks']}  ", 14, "text", "bg"), T["blocks_desc"]).pack(side="left")
+        tip(tk_label(step, f"{T['blocks']}  ", 14, "text", "bg"), f"{T['blocks_desc']}\n\n{glossary_text('block')}").pack(side="left")
         self.minus = button(step, "−", lambda: self.edit(**resize(self.draft, max(1, self.draft["L"] - 1))))
         self.plus = button(step, "+", lambda: self.edit(**resize(self.draft, min(12, self.draft["L"] + 1))))
         self.minus.pack(side="left")
@@ -776,10 +790,12 @@ class BuilderPage(Page):
         text.pack(fill="x")
         head = tk.Frame(text, bg=C["panel2"])
         head.pack(fill="x", padx=12, pady=(8, 0))
-        tk_label(head, T["your_text_title"], 14, "text", "panel2", font=font(14, bold=True)).pack(side="left")
+        tip(tk_label(head, T["your_text_title"], 14, "text", "panel2", font=font(14, bold=True)), glossary_text("tokenizer")).pack(side="left")
         self.pieces_count = tk_label(head, "", 12, "muted", "panel2")
         self.pieces_count.pack(side="left")
         self._seg(text, list(WORDS), "V", (0, 1, 2, 3), "panel2")
+        for option, term in zip(WORDS, WORD_TERMS):
+            tip(self.segs["V"][0].buttons[option], glossary_text(term))
         self.pieces_box = tk.Frame(text, bg=C["panel2"])
         self.pieces_box.pack(anchor="w", fill="x", padx=12, pady=(0, 8))
         self.pieces_shown = None
@@ -792,7 +808,7 @@ class BuilderPage(Page):
     def _part_row(self, parent, slot):
         """One model-wide part: its name and its module menu."""
         row = self._row(parent)
-        tip(tk_label(row, T["part_" + slot], 14, "text", "panel2", font=font(14, bold=True), width=14), T[f"part_{slot}_tip"]).pack(side="left", padx=12, pady=6)
+        tip(tk_label(row, T["part_" + slot], 14, "text", "panel2", font=font(14, bold=True), width=14), part_tip(slot)).pack(side="left", padx=12, pady=6)
         self.pickers.append((*self._picker(row, slot, lambda: None, "panel2"), slot, None))
 
     def _picker(self, parent, slot, block, bg):
@@ -814,7 +830,7 @@ class BuilderPage(Page):
         mb.configure(menu=menu)
         for seq in ("<space>", "<Return>"):
             mb.bind(seq, lambda _e: menu.tk_popup(mb.winfo_rootx(), mb.winfo_rooty() + mb.winfo_height()) if self.phase == "edit" else None)
-        tip(mb, lambda: (lambda m: f"{m.name}: {m.blurb}")(registry.get(slot, mb.module)))
+        tip(mb, lambda: module_tip(slot, mb.module))
         mb.pack(side="left")
         was = tk_label(parent, "", 12, "muted", bg)
         was.pack(side="left", padx=(6, 0))
@@ -844,12 +860,13 @@ class BuilderPage(Page):
             tip(toggle, T["block_parts_tip"])
             name = tk_label(header, f"Block {i + 1}", 13, width=8)
             name.pack(side="left", padx=4, pady=8)
-            heads = tk_label(header, "", 13, "pink")
+            heads = tip(tk_label(header, "", 13, "pink"), glossary_text("heads"))
             heads.pack(side="left")
-            width = tk.Frame(header, bg=C["blue"], height=8)
+            width = tip(tk.Frame(header, bg=C["blue"], height=8), glossary_text("expansion"))
             width.pack(side="left", padx=10)
             parts = tk_label(header, "", 12, "muted")
             parts.pack(side="left")
+            tip(parts, lambda i=i: "\n\n".join(module_tip(slot, block_parts(self.draft, i)[slot]) for slot in ("mixer", "channel")))
             tag = tk_label(header, "", 12, "amber")
             tag.pack(side="right", padx=8)
             detail = tk.Frame(row)
@@ -914,10 +931,10 @@ class BuilderPage(Page):
             line = tk.Frame(detail, bg=C[bg])
             line.pack(fill="x", pady=1)
             if slot is None:
-                tip(tk_label(line, f"⊕ {T['add_back']}", 12, "muted", bg), T["add_back_tip"]).pack(side="left")
+                tip(tk_label(line, f"⊕ {T['add_back']}", 12, "muted", bg), glossary_text("residual")).pack(side="left")
                 continue
             skipped = registry.get(slot, mine[slot]).skip
-            tip(tk_label(line, T["part_" + slot], 13, "dim" if skipped else "text", bg, width=14), T[f"part_{slot}_tip"]).pack(side="left")
+            tip(tk_label(line, T["part_" + slot], 13, "dim" if skipped else "text", bg, width=14), part_tip(slot)).pack(side="left")
             mb, was = self._picker(line, slot, lambda i=i: i if self.scope.get(i) else None, bg)
             self._paint_picker(mb, was, slot, mine[slot], before and before[slot], bg)
             if (i, slot) in dr["O"]:
@@ -944,8 +961,8 @@ class BuilderPage(Page):
     def _controls(self, parent):
         self.knob_notes = {}
         for name, hint, color, opts, key, values in (
-                ("Look-back heads", T["look_back_heads_tip"], "pink", [str(h) for h in HEADS], "H", HEADS),
-                ("Thinking room", T["thinking_room_tip"], "blue", list(WIDTHS), "W", (0, 1, 2))):
+                ("Look-back heads", f"{T['look_back_heads_tip']}\n\n{glossary_text('heads')}", "pink", [str(h) for h in HEADS], "H", HEADS),
+                ("Thinking room", f"{T['thinking_room_tip']}\n\n{glossary_text('expansion')}", "blue", list(WIDTHS), "W", (0, 1, 2))):
             card = Card(parent)
             card.pack(fill="x", pady=(0, 8))
             head = tk.Frame(card, bg=C["panel"])
@@ -966,7 +983,10 @@ class BuilderPage(Page):
                                     (T["memory_while_training"], "memory", T["cost_more"], T["cost_less"])):
             row = tk.Frame(card, bg=C["panel"])
             row.pack(fill="x", pady=4)
-            tk_label(row, name, 14, "text", "panel", width=24).pack(side="left")
+            label = tk_label(row, name, 14, "text", "panel", width=24)
+            label.pack(side="left")
+            if term := {"params": "parameters", "time": "step"}.get(f):
+                tip(label, glossary_text(term))
             bars = tk.Frame(row, bg=C["panel"])
             bars.pack(side="left", fill="x", expand=True)
             drawn = []

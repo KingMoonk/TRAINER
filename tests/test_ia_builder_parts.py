@@ -2,6 +2,7 @@
 import unittest
 
 import studio_registry as registry
+from studio_glossary import GLOSSARY, MODULE_TERMS
 from studio_ia.expectation import expectation
 from studio_ia.pages import builder as B
 from studio_spec import block_at, default_spec, validate_spec
@@ -158,6 +159,25 @@ class Costs(unittest.TestCase):
         c = B.sizes(spec, 0)
         self.assertEqual(B.design_expectation(s, spec), expectation(c["params"], "byte", embedding_params=c["table"]))
         self.assertGreater(c["params"], B.sizes(base(), 0)["params"])
+
+
+class Tooltips(unittest.TestCase):
+    def test_every_module_the_builder_can_show_has_plain_words(self):
+        for slot in ("embedding", "position", "norm", "mixer", "channel", "head"):
+            self.assertEqual(set(MODULE_TERMS[slot]), {m.short for m in registry.for_slot(slot)}, slot)
+            for module in registry.for_slot(slot):
+                text = B.module_tip(slot, module.short)
+                term, explanation = GLOSSARY[MODULE_TERMS[slot][module.short]]
+                self.assertTrue(term and explanation, (slot, module.short))
+                self.assertIn(explanation, text)
+                self.assertIn(module.blurb, text)
+
+    def test_every_part_word_list_and_knob_has_plain_words(self):
+        for slot in B.PART_TERMS:
+            self.assertTrue(B.part_tip(slot).strip(), slot)
+        self.assertEqual(len(B.WORD_TERMS), len(B.WORDS))
+        for key in (*B.WORD_TERMS, "heads", "expansion", "residual", "block", "tokenizer", "parameters", "step"):
+            self.assertTrue(GLOSSARY[key][1].strip(), key)
 
 
 if __name__ == "__main__":
