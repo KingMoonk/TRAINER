@@ -1,8 +1,9 @@
 """Start from a pretrained open model: download OpenAI's GPT-2 (124M) and turn it into an ordinary studio checkpoint.
 
 Window-free and dependency-free (urllib, hashlib, numpy). The result is a normal `.npz` checkpoint with the GPT-2 design, so it is
-a version like any other: chat with it, evaluate it, fine-tune it (a post-training round, a curriculum stage, or LoRA through
-`train.run.lora`), export it again.
+a version like any other: continue text with it, evaluate it, fine-tune it (a post-training round, a curriculum stage, or LoRA
+through `train.run.lora`) and export it again. It is a base model: it continues text but does not answer as a chat until it is
+fine-tuned, because it has never seen the USER and ASSISTANT tokens.
 
 This reverses studio_export's mapping (Hugging Face `GPT2LMHeadModel` names to the engine's, see `gpt2_names`). Both sides keep a
 linear layer as (in, out) applied as `x @ W + b` (GPT-2's Conv1D layout), the fused qkv is the same [q | k | v], and the engine's GELU
@@ -13,14 +14,19 @@ vocabulary at +7, so GPT-2's 50,257 pieces become ids 7..50263 and the table has
 BOS and EOS copy GPT-2's own `<|endoftext|>` row (GPT-2 was trained with that one token both ending a document and starting the next,
 which is what the engine's BOS and EOS do), and PAD, USER, ASSISTANT, SYSTEM and UNK start as the mean of all 50,257 real rows, the usual
 neutral initialization for a token the model never saw. The head is tied to the table, so these rows also set those tokens' output
-scores. Chat and sampling never choose PAD/USER/SYSTEM/ASSISTANT/UNK, so only fine-tuning ever moves them.
+scores. Chat and sampling never choose PAD/BOS/USER/SYSTEM/ASSISTANT/UNK, nor GPT-2's own `<|endoftext|>` piece (it has the same row as
+EOS, the one token that ends a reply), and held-back scoring leaves the 7 rows out, so only fine-tuning ever moves them.
 
 A file written by studio_export (which already has the 7 rows in front) is read as it is.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
+import http.client
 import json
+import re
+import shutil
 import struct
 import time
 import urllib.error
@@ -49,38 +55,79 @@ IGNORED = (".attn.bias", ".attn.masked_bias")      # older files carry the causa
 
 # --- download ------------------------------------------------------------------------------------------------
 
-def _sha256(path):
+def _sha256(path, stop=None):
+    """The file's sha256, or None when `stop` was set while it was being read (hashing 548 MB takes seconds)."""
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(CHUNK), b""):
+            if stop is not None and stop.is_set():
+                return None
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _verified(path, size, sha256, stop):
+    """True when the file is `size` bytes with the right checksum, False when not, None when stopped while checking."""
+    if Path(path).stat().st_size != size:
+        return False
+    digest = _sha256(path, stop)
+    return None if digest is None else digest == sha256
+
+
+def _range_start(response):
+    """Where a 206 response says its bytes begin (from Content-Range: bytes START-END/TOTAL), or None when it does not say."""
+    headers = getattr(response, "headers", None)
+    match = re.match(r"bytes (\d+)-", (headers.get("Content-Range") if headers is not None else None) or "")
+    return int(match.group(1)) if match else None
 
 
 def fetch_gpt2(dest, progress=None, stop=None, url=GPT2_URL, size=GPT2_SIZE, sha256=GPT2_SHA256):
     """Download GPT-2's model.safetensors to `dest` (about 548 MB) and return the path, or None when `stop` was set first.
 
     The bytes go to `<dest>.part` and are renamed to `dest` only once the size and the sha256 match, so `dest` is always whole.
-    A `.part` left by an interrupted download is continued with an HTTP Range request. progress(done_bytes, total_bytes).
+    A `.part` left by an interrupted download is continued with an HTTP Range request; when the server cannot continue it (416, or
+    bytes that start somewhere else) the download starts again from zero. progress(done_bytes, total_bytes).
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
-        if dest.stat().st_size == size and _sha256(dest) == sha256:
+        good = _verified(dest, size, sha256, stop)
+        if good is None:
+            return None
+        if good:
             return dest
         dest.unlink()
     part = dest.with_name(dest.name + ".part")
     have = part.stat().st_size if part.exists() else 0
-    if have > size:
+    if have >= size:   # a leftover that is already whole is finished as it is; a longer or wrong one is thrown away
+        good = have == size and _verified(part, size, sha256, stop)
+        if good is None:
+            return None
+        if good:
+            replace_file(part, dest)
+            return dest
         part.unlink()
         have = 0
     try:
-        if have < size:
+        while True:
             request = urllib.request.Request(url, headers={"User-Agent": "groundwork-studio"})
             if have:
                 request.add_header("Range", f"bytes={have}-")
-            with urllib.request.urlopen(request, timeout=30) as response:
-                resumed = have > 0 and getattr(response, "status", 200) == 206
+            try:
+                response = urllib.request.urlopen(request, timeout=30)
+            except urllib.error.HTTPError as error:
+                if error.code == 416 and have:   # the server has nothing at that offset: the leftover is stale
+                    part.unlink(missing_ok=True)
+                    have = 0
+                    continue
+                raise
+            with response:
+                status = getattr(response, "status", 200)
+                if have and status == 206 and _range_start(response) != have:   # bytes from somewhere else would corrupt the file
+                    part.unlink(missing_ok=True)
+                    have = 0
+                    continue
+                resumed = have > 0 and status == 206
                 with part.open("ab" if resumed else "wb") as stream:
                     done = have if resumed else 0
                     while True:
@@ -93,13 +140,23 @@ def fetch_gpt2(dest, progress=None, stop=None, url=GPT2_URL, size=GPT2_SIZE, sha
                         done += len(chunk)
                         if progress:
                             progress(done, size)
-    except (OSError, urllib.error.URLError) as error:
+            break
+    except OSError as error:
+        if error.errno == errno.ENOSPC:
+            raise ValueError(f"There is not enough free disk space for GPT-2 (it needs about {size / 1e9:.1f} GB). Free some space and "
+                             "try again; what arrived is kept and the download continues from there.") from error
         raise ValueError("Could not download GPT-2. Check the internet connection and try again; what arrived is kept and the download "
                          f"continues from there. ({error})") from error
+    except http.client.HTTPException as error:   # a connection cut mid-reply (IncompleteRead) is not an OSError
+        raise ValueError("Could not download GPT-2. The connection was cut off; try again and the download continues from where it "
+                         f"stopped. ({error})") from error
     got = part.stat().st_size
     if got != size:
         raise ValueError(f"The GPT-2 download stopped early ({got:,} of {size:,} bytes). Try again; it continues from where it stopped.")
-    if _sha256(part) != sha256:
+    digest = _sha256(part, stop)
+    if digest is None:
+        return None
+    if digest != sha256:
         part.unlink()
         raise ValueError("The downloaded GPT-2 file did not match its published checksum, so it was thrown away. Try again.")
     replace_file(part, dest)
@@ -108,8 +165,9 @@ def fetch_gpt2(dest, progress=None, stop=None, url=GPT2_URL, size=GPT2_SIZE, sha
 
 # --- reading and converting ----------------------------------------------------------------------------------
 
-def read_tensors(path):
-    """{name: float32 array} of a .safetensors file, read one tensor at a time (the file is never held whole in memory)."""
+def read_tensors(path, stop=None):
+    """{name: float32 array} of a .safetensors file, read one tensor at a time (the file is never held whole in memory).
+    Returns None when `stop` was set part way."""
     path = Path(path)
     with path.open("rb") as stream:
         (length,) = struct.unpack("<Q", stream.read(8))
@@ -119,6 +177,8 @@ def read_tensors(path):
         for name, entry in header.items():
             if name == "__metadata__":
                 continue
+            if stop is not None and stop.is_set():
+                return None
             dtype = DTYPES.get(entry["dtype"])
             if dtype is None:
                 raise ValueError(f"Tensor {name} is stored as {entry['dtype']}, which this import cannot read (F32, F16 and F64 only).")
@@ -129,10 +189,21 @@ def read_tensors(path):
     return out
 
 
-def gpt2_spec(d_model=768, n_layer=12, n_ctx=1024, heads=12, d_ff=3072, name=None):
-    """The ModelSpec of OpenAI's GPT-2 (default: the 124M model) with its own 50,257-piece word list."""
+FINE_TUNE_LR = 3e-5        # peak learning rate for fine-tuning every weight of a pretrained model (the scratch default, 1e-3, would wreck it)
+FINE_TUNE_LORA_LR = 1e-4   # and for LoRA, whose small new adapters can take a larger step because the pretrained weights are frozen
+
+
+def gpt2_spec(d_model=768, n_layer=12, n_ctx=1024, heads=12, d_ff=3072, name=None, lora=None):
+    """The ModelSpec of OpenAI's GPT-2 (default: the 124M model) with its own 50,257-piece word list.
+
+    It is meant to be fine-tuned, so its learning rate is a fine-tuning one: FINE_TUNE_LR, or FINE_TUNE_LORA_LR when `lora` (a
+    settings dict, {} for the defaults) says the spec trains LoRA adapters instead.
+    """
     spec = studio_spec.default_spec()
     spec["name"] = name or "GPT-2 (124M)"
+    spec["train"]["optimizer"]["config"]["lr"] = FINE_TUNE_LORA_LR if lora is not None else FINE_TUNE_LR
+    if lora is not None:
+        spec["train"]["run"] = {"lora": lora}
     spec["dims"].update(d_model=d_model, n_layer=n_layer, n_ctx=n_ctx, dropout=.1)
     spec["tokenizer"] = {"id": "bpe_gpt2"}
     spec["block"]["mixer"] = {"id": "attention", "config": {"heads": heads}}
@@ -184,18 +255,22 @@ def token_table(table, tokenizer):
     return out
 
 
-def import_gpt2(safetensors_path, out_checkpoint, tokenizer=None, heads=None, name=None, source=None):
+def import_gpt2(safetensors_path, out_checkpoint, tokenizer=None, heads=None, name=None, source=None, stop=None):
     """Read a Hugging Face GPT-2 `model.safetensors` and write a studio checkpoint (.npz) with the matching design. Returns a report dict.
 
     tokenizer: GPT-2's word list (default: the one the app downloads on first use). heads: the attention head count, which the file
-    does not record (default: from the width, 12 for GPT-2 small).
+    does not record (default: from the width, 12 for GPT-2 small). Returns None, writing nothing, when `stop` is set first.
     """
     import studio_model
     from studio_compile import CompiledModel
     if tokenizer is None:
         from studio_modules.tokenizer.bpe_gpt2 import GPT2Config, load_assets
         tokenizer = load_assets(GPT2Config())
-    weights, n_layer, _ = engine_weights(read_tensors(safetensors_path), tokenizer)
+    tensors = read_tensors(safetensors_path, stop)
+    if tensors is None:
+        return None
+    weights, n_layer, _ = engine_weights(tensors, tokenizer)
+    del tensors
     d_model, n_ctx, d_ff = weights["token"].shape[1], weights["position"].shape[0], weights["block0.f1.w"].shape[1]
     heads = heads or HEADS.get(d_model)
     if not heads:
@@ -205,7 +280,10 @@ def import_gpt2(safetensors_path, out_checkpoint, tokenizer=None, heads=None, na
     model = CompiledModel(spec, tokenizer.vocab_size, device="cpu")
     model.load_weights(weights)   # every name and shape must match the design, and every value must be finite
     del model
-    cfg = studio_model.validate_config(dict(studio_model.DEFAULT_CONFIG, architecture=spec, name=spec["name"]))
+    if stop is not None and stop.is_set():
+        return None
+    # The spec alone: values passed beside it would win over the spec's own learning rate, warmup and LoRA settings.
+    cfg = studio_model.validate_config({"architecture": spec, "name": spec["name"]})
     metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "step": 0, "best": None, "optimizer_steps": 0,
                 "history": [], "config": cfg, "tokenizer": tokenizer.serialize(), "device": "cpu",
                 "imported_from": source or str(Path(safetensors_path).name)}
@@ -246,7 +324,10 @@ def run_import(model, cache_dir, out_dir, emit=None, stop=None):
     emit({"type": "progress", "phase": "Converting to a studio checkpoint", "step": total, "total": total})
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    report = import_gpt2(path, out / "last.npz", source=info["source"])
+    report = import_gpt2(path, out / "last.npz", source=info["source"], stop=stop)
+    if report is None:   # stopped during the conversion: nothing was written
+        shutil.rmtree(out, ignore_errors=True)
+        return None
     record = {"name": info["title"], "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S"), "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
               "status": "completed", "step": 0, "steps": 0, "parameters": report["parameters"], "vocabulary": report["vocabulary"],
               "imported_from": info["source"], "revision": GPT2_REVISION, "backend": "torch", "device": "cpu"}

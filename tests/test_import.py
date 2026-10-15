@@ -1,10 +1,13 @@
 """Import (studio_import): a Hugging Face GPT-2 file becomes a studio checkpoint that computes the same function; the download is safe."""
+import errno
 import hashlib
+import http.client
 import json
 import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -130,6 +133,26 @@ class Conversion(unittest.TestCase):
         out = self.dir / "bare.npz"
         imp.import_gpt2(path, out, tokenizer=self.tokenizer, heads=HEADS)
         np.testing.assert_allclose(engine_logits(out, IDS), engine_logits(self.source, IDS), atol=1e-4)
+
+    def test_the_checkpoint_carries_a_fine_tuning_learning_rate_not_the_scratch_default(self):
+        from studio_model import load_checkpoint
+        config = load_checkpoint(self.out)["config"]
+        self.assertEqual(config["learning_rate"], imp.FINE_TUNE_LR)
+        self.assertEqual(config["architecture"]["train"]["optimizer"]["config"]["lr"], imp.FINE_TUNE_LR)
+        self.assertLessEqual(config["learning_rate"], 1e-4)
+        self.assertEqual(config["warmup"], 20)
+        self.assertIsNone(config["lora"])
+
+    def test_a_lora_design_takes_a_larger_step_because_only_the_adapters_move(self):
+        from studio_model import validate_config
+        plain, tuned = imp.gpt2_spec(), imp.gpt2_spec(lora={"rank": 4})
+        self.assertEqual(plain["train"]["optimizer"]["config"]["lr"], imp.FINE_TUNE_LR)
+        self.assertEqual(tuned["train"]["optimizer"]["config"]["lr"], imp.FINE_TUNE_LORA_LR)
+        self.assertLess(imp.FINE_TUNE_LR, imp.FINE_TUNE_LORA_LR)
+        self.assertLessEqual(imp.FINE_TUNE_LORA_LR, 1e-4)
+        config = validate_config({"architecture": tuned})
+        self.assertEqual((config["learning_rate"], config["lora"]["rank"]), (imp.FINE_TUNE_LORA_LR, 4))
+        self.assertIsNone(plain["train"].get("run", {}).get("lora"))
 
     def test_gpt2_small_is_a_valid_design_of_about_124_million_parameters(self):
         spec = imp.gpt2_spec()
@@ -261,8 +284,8 @@ class Imported(unittest.TestCase):
 
 
 class FakeResponse:
-    def __init__(self, data, status=200):
-        self.data, self.status, self.at = data, status, 0
+    def __init__(self, data, status=200, headers=None):
+        self.data, self.status, self.headers, self.at = data, status, headers or {}, 0
 
     def read(self, n=-1):
         chunk = self.data[self.at:self.at + (n if n and n > 0 else len(self.data))]
@@ -290,11 +313,30 @@ class Download(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def serve(self, data=PAYLOAD, status=200):
+    def serve(self, data=PAYLOAD, status=200, headers=None):
         def urlopen(request, timeout=None):
             self.requests.append(request)
-            return FakeResponse(data, status)
+            return FakeResponse(data, status, headers)
         return mock.patch("urllib.request.urlopen", urlopen)
+
+    def serve_each(self, *replies):
+        """A server whose n-th reply is replies[n]: a FakeResponse, or an exception to raise."""
+        queue = list(replies)
+
+        def urlopen(request, timeout=None):
+            self.requests.append(request)
+            reply = queue.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        return mock.patch("urllib.request.urlopen", urlopen)
+
+    def refused(self, code):
+        return urllib.error.HTTPError(self.args["url"], code, "refused", {}, None)
+
+    def partial(self, start):
+        end = len(PAYLOAD) - 1
+        return FakeResponse(PAYLOAD[start:], 206, {"Content-Range": f"bytes {start}-{end}/{len(PAYLOAD)}"})
 
     def test_a_good_download_is_written_whole_and_atomically(self):
         seen = []
@@ -323,11 +365,87 @@ class Download(unittest.TestCase):
     def test_an_interrupted_download_resumes_with_a_range_request(self):
         self.dest.parent.mkdir(parents=True)
         self.part.write_bytes(PAYLOAD[:3000])
-        with self.serve(PAYLOAD[3000:], status=206):
+        with self.serve_each(self.partial(3000)):
             imp.fetch_gpt2(self.dest, **self.args)
         self.assertEqual(self.requests[0].get_header("Range"), "bytes=3000-")
         self.assertEqual(self.dest.read_bytes(), PAYLOAD)
         self.assertFalse(self.part.exists())
+
+    def test_a_leftover_the_server_cannot_continue_starts_over_cleanly(self):
+        self.dest.parent.mkdir(parents=True)
+        self.part.write_bytes(PAYLOAD[:3000])
+        with self.serve_each(self.refused(416), FakeResponse(PAYLOAD)):   # 416: no bytes at that offset
+            imp.fetch_gpt2(self.dest, **self.args)
+        self.assertEqual([r.get_header("Range") for r in self.requests], ["bytes=3000-", None])
+        self.assertEqual(self.dest.read_bytes(), PAYLOAD)
+
+    def test_a_416_with_nothing_to_continue_is_an_error_not_a_loop(self):
+        with self.serve_each(self.refused(416)):
+            with self.assertRaises(ValueError):
+                imp.fetch_gpt2(self.dest, **self.args)
+        self.assertEqual(len(self.requests), 1)
+
+    def test_bytes_that_start_at_the_wrong_place_are_not_glued_on(self):
+        self.dest.parent.mkdir(parents=True)
+        self.part.write_bytes(PAYLOAD[:3000])
+        with self.serve_each(self.partial(0), FakeResponse(PAYLOAD)):   # the 206 starts at 0, not 3000
+            imp.fetch_gpt2(self.dest, **self.args)
+        self.assertEqual([r.get_header("Range") for r in self.requests], ["bytes=3000-", None])
+        self.assertEqual(self.dest.read_bytes(), PAYLOAD)
+        self.dest.unlink()
+        self.part.write_bytes(PAYLOAD[:3000])
+        with self.serve_each(FakeResponse(PAYLOAD[3000:], 206), FakeResponse(PAYLOAD)):   # no Content-Range at all
+            imp.fetch_gpt2(self.dest, **self.args)
+        self.assertEqual(self.dest.read_bytes(), PAYLOAD)
+
+    def test_a_whole_leftover_is_kept_and_a_wrong_or_longer_one_is_thrown_away(self):
+        self.dest.parent.mkdir(parents=True)
+        self.part.write_bytes(PAYLOAD)
+        with self.serve():
+            imp.fetch_gpt2(self.dest, **self.args)
+        self.assertEqual(self.requests, [])   # already whole and right: finished without asking
+        self.assertEqual(self.dest.read_bytes(), PAYLOAD)
+        self.dest.unlink()
+        for stale in (b"x" * len(PAYLOAD), PAYLOAD + b"more"):
+            self.part.write_bytes(stale)
+            with self.serve():
+                imp.fetch_gpt2(self.dest, **self.args)
+            self.assertEqual(self.requests[-1].get_header("Range"), None)
+            self.assertEqual(self.dest.read_bytes(), PAYLOAD)
+            self.dest.unlink()
+
+    def test_a_full_disk_says_so(self):
+        class Full(FakeResponse):
+            def read(self, n=-1):
+                raise OSError(errno.ENOSPC, "No space left on device")
+        with self.serve_each(Full(PAYLOAD)):
+            with self.assertRaises(ValueError) as caught:
+                imp.fetch_gpt2(self.dest, **self.args)
+        self.assertIn("free disk space", str(caught.exception))
+
+    def test_a_connection_cut_mid_reply_is_plain_words(self):
+        class Cut(FakeResponse):
+            def read(self, n=-1):
+                raise http.client.IncompleteRead(b"abc", 100)
+        with self.serve_each(Cut(PAYLOAD)):
+            with self.assertRaises(ValueError) as caught:
+                imp.fetch_gpt2(self.dest, **self.args)
+        self.assertIn("connection", str(caught.exception))
+
+    def test_stopping_while_the_file_is_checked_returns_nothing_and_keeps_it(self):
+        stop = threading.Event()
+        stop.set()
+        self.dest.parent.mkdir(parents=True)
+        self.dest.write_bytes(PAYLOAD)
+        with self.serve():
+            self.assertIsNone(imp.fetch_gpt2(self.dest, stop=stop, **self.args))
+        self.assertEqual(self.dest.read_bytes(), PAYLOAD)   # it was fine; stopping must not delete it
+        self.dest.unlink()
+        self.part.write_bytes(PAYLOAD)
+        with self.serve():
+            self.assertIsNone(imp.fetch_gpt2(self.dest, stop=stop, **self.args))
+        self.assertTrue(self.part.exists())
+        self.assertEqual(self.requests, [])
 
     def test_a_server_that_ignores_the_range_starts_over(self):
         self.dest.parent.mkdir(parents=True)
@@ -390,6 +508,21 @@ class Job(unittest.TestCase):
             with mock.patch("studio_import.fetch_gpt2", return_value=None):
                 self.assertIsNone(imp.run_import("gpt2", Path(tmp) / "cache", Path(tmp) / "run"))
             self.assertFalse((Path(tmp) / "run" / "last.npz").exists())
+
+    def test_stopping_during_the_conversion_writes_nothing(self):
+        stop = threading.Event()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            tokenizer, _, _, hf, _ = hf_file(tmp)
+
+            def fetched(*args, **kwargs):
+                stop.set()   # the stop arrives after the download, while the file is being converted
+                return hf
+            with mock.patch("studio_import.fetch_gpt2", fetched), \
+                    mock.patch("studio_modules.tokenizer.bpe_gpt2.load_assets", return_value=tokenizer), \
+                    mock.patch.dict(imp.HEADS, {32: HEADS}):
+                self.assertIsNone(imp.run_import("gpt2", tmp / "cache", tmp / "run", stop=stop))
+            self.assertFalse((tmp / "run").exists())
 
     def test_an_unknown_model_is_refused(self):
         with self.assertRaises(ValueError):
