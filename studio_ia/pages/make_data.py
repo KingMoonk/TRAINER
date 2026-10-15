@@ -82,8 +82,9 @@ class MakeDataPage(Page):
                       tk_label(box, card["safe"], 13, card["safe_color"], "panel", wraplength=250)]
             for w in labels:
                 w.pack(fill="x", pady=2)
-            for w in (box, *labels):
-                _activate(w, lambda i=i: self.pick(i))
+            _activate(box, lambda i=i: self.pick(i))
+            for w in labels:
+                w.bind("<Button-1>", lambda _e, i=i: self.pick(i))
             self.cards.append((box, labels))
         Kicker(body, T["kicker"]).pack(fill="x", pady=(GUTTER, 4))
         self.example = tk_label(body, "", 14, "text", "panel", font=font(14, mono=True), padx=GUTTER, pady=10)

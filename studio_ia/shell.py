@@ -13,7 +13,7 @@ from studio_ux import format_duration
 from studio_ia import services as services_module
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, SIDEBAR_W, apply, font, tk_label
-from studio_ia.widgets import Progress
+from studio_ia.widgets import Progress, _activate
 
 Route = namedtuple("Route", "area title lead crumb")
 
@@ -127,10 +127,9 @@ class Studio(tk.Tk):
             inner.pack(side="left", fill="x", expand=True, padx=(GUTTER - 3, GUTTER), pady=10)
             title = tk_label(inner, name, 15, "text", "panel", font=font(15, bold=True))
             title.pack(fill="x")
-            for w in (row, stripe, inner, title):
+            _activate(row, lambda k=key: self.show(AREA_HOME[k]))
+            for w in (stripe, inner, title):
                 w.bind("<Button-1>", lambda _e, k=key: self.show(AREA_HOME[k]))
-            for seq in ("<Return>", "<space>"):
-                row.bind(seq, lambda _e, k=key: self.show(AREA_HOME[k]))
             self._area_rows[key] = (row, stripe, inner, title)
         # machine strip
         tk.Frame(side, bg=C["border2"], height=1).pack(side="bottom", fill="x")

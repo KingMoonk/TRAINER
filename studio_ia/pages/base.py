@@ -5,6 +5,7 @@ from tkinter import ttk
 
 from studio_widgets import ScrollPage
 from studio_ia.theme import C, GUTTER, tk_label
+from studio_ia.widgets import _activate
 
 
 class Page(ttk.Frame):
@@ -31,8 +32,7 @@ class Page(ttk.Frame):
         if self.crumb:
             link = tk_label(self.header, "‹ " + " / ".join(self.crumb), 13, "muted", cursor="hand2", takefocus=1)
             link.pack(anchor="w", pady=(0, GUTTER // 2))
-            for seq in ("<Button-1>", "<Return>", "<space>"):
-                link.bind(seq, lambda _e: self.navigate("builder"))
+            _activate(link, lambda: self.navigate("builder"))
         self.h1 = ttk.Label(self.header, text=self.title, style="H1.TLabel")
         self.h1.pack(anchor="w")
         self.lead_label = ttk.Label(self.header, text=self.lead, style="Lead.TLabel", wraplength=760, justify="left")
