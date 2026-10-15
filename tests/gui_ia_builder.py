@@ -96,6 +96,20 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(self.page.tray_kicker, B.T["no_changes"])
         self.assertIsNone(self.fake.draft_spec())
 
+    def test_a_setting_change_repaints_in_place(self):
+        tray, blocks = self.page.tray, self.page.blocks_label
+        self.page.edit(L=3, H=8)
+        self.app.update()
+        self.assertIs(self.page.tray, tray)  # not rebuilt: rebuilding the page on each click flashed it
+        self.assertTrue(tray.winfo_exists() and blocks.winfo_exists())
+        self.assertEqual(blocks.cget("text"), "3")
+        self.assertEqual([r[2].cget("text") for r in self.page.block_rows], ["●" * 8] * 3)
+        seg = self.page.segs["H"][0]
+        self.assertEqual((seg.value, seg.buttons["4"].cget("text")), ("8", "4 · was"))
+        self.page.discard()
+        self.assertEqual(len(self.page.block_rows), 2)
+        self.assertEqual(seg.buttons["4"].cget("text"), "4")
+
     def test_save_shows_warm_start_sentence(self):
         self.page.edit(L=4)
         self.page.save()
