@@ -5,6 +5,7 @@ import unittest
 import tkinter as tk
 from tkinter import ttk
 
+from studio_data_kinds import DataSummary
 from studio_ia.copy import COMPARE as T
 from studio_ia.copy import QUICKTEST as T_QT
 from studio_ia.services import FakeServices
@@ -25,7 +26,7 @@ class CompareGui(unittest.TestCase):
         except tk.TclError as error:
             self.skipTest(f"no display: {error}")
         self.addCleanup(self.app.destroy)
-        self.fake.data = lambda kind: {"kind": kind, "count": 1, "sets": [{"id": "d1", "name": "books", "count": 1}]}
+        self.fake.data = lambda kind, query="": DataSummary(kind, 1, sets=[{"id": "d1", "name": "books", "count": 1}])
 
     def variant(self, page, ff=32):
         v = copy.deepcopy(page.base)
@@ -71,7 +72,7 @@ class CompareGui(unittest.TestCase):
         self.assertEqual(page.problem.cget("text"), "")
 
     def test_no_text_means_no_compare_job(self):
-        self.fake.data = lambda kind: {"kind": kind, "count": 0, "sets": []}
+        self.fake.data = lambda kind, query="": DataSummary(kind)
         page = self.app.show("compare")
         page.add_variant(spec=self.variant(page))
         page.guess.pick(T["better"])
@@ -158,7 +159,7 @@ class CompareGui(unittest.TestCase):
         page = self.app.show("quicktest")
         self.assertIn("more blocks (2 → 3)", texts(page.chip_row))
         page.guess.pick("Same")
-        self.fake.data = lambda kind: {"kind": kind, "count": 0, "sets": []}
+        self.fake.data = lambda kind, query="": DataSummary(kind)
         page.data.pick(T_QT["slice_your_data"])
         page.start()
         self.assertEqual(self.fake.queue().up_next, [])
