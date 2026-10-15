@@ -178,6 +178,27 @@ class Compare(unittest.TestCase):
         self.assertEqual(lines[2][1], C["amber"])
         self.assertEqual(plot_series({"series": [{"points": [(0, 1), (1, 1)], "color": "#123456"}]})[0][1:], ("#123456", 2, None))
 
+    def test_no_curve_gets_one_note_for_every_state(self):
+        self.assertEqual(B.curve_note(0, "edit"), B.T["no_curve_first"])
+        self.assertEqual(B.curve_note(0, "saved"), B.T["no_curve_waiting"])
+        self.assertEqual(B.curve_note(0, "queued"), B.T["no_curve_waiting"])
+        self.assertEqual(B.curve_note(0, "training"), B.T["no_curve_starting"])
+        self.assertEqual(B.curve_note(2, "training"), B.T["no_curve_starting"])
+        for phase in ("edit", "saved", "queued"):
+            self.assertEqual(B.curve_note(2, phase), B.NO_CURVE.format(n=2))
+
+    def test_answering_card_lists_only_versions_that_exist_and_can_say_why_not(self):
+        rows = B.answer_rows
+        for phase in ("edit", "saved", "queued", "training"):
+            self.assertEqual(rows(0, set(), phase), [])  # nothing saved or trained: no rows, no button
+            self.assertEqual(rows(1, set(), phase), [])  # saved but untrained: nothing to compare yet
+        self.assertEqual(rows(1, {1}, "edit"), [(1, ""), (2, B.T["compare_later"])])
+        self.assertEqual(rows(1, {1}, "saved"), [(1, ""), (2, B.T["not_trained"])])
+        self.assertEqual(rows(1, {1, 2}, "saved"), [(1, ""), (2, "")])
+        self.assertEqual(rows(1, {2}, "training"), [(1, B.T["not_trained"]), (2, "")])
+        self.assertEqual(rows(0, {1}, "training"), [(1, "")])  # no "version 0" row
+        self.assertNotIn("no version yet", [B.version_name(k) for k, _ in rows(0, {1}, "queued")])
+
     def test_the_designer_hands_its_draft_over_through_services(self):
         fake = FakeServices()
         self.assertIsNone(fake.draft_spec())
