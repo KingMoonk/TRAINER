@@ -23,24 +23,28 @@ INSPECTED = ("attn.scores", "attn.logits", "attn.pattern")  # the intermediates 
 
 def fused_attention(ctx, q, k, v, scale, position, heads):
     """PyTorch's fused kernel, or None when this call must take the exact path (see causal_softmax_attention)."""
-    length = q.shape[-2]
-    if k.shape[-2] != length or any(ctx.wants(name) for name in INSPECTED):
-        return None   # a KV-cache offset, or an inspection page is listening for the scores, logits or pattern
+    length, keys = q.shape[-2], k.shape[-2]
+    decode = keys != length   # with a KV cache: one new query, which may read every cached key, so nothing is masked
+    if (decode and length != 1) or any(ctx.wants(name) for name in INSPECTED):
+        return None   # several queries after a KV-cache offset, or an inspection page is listening for the scores, logits or pattern
     p = ctx.dropout if ctx.training else 0.
     if p and ctx.device not in ("cpu", "cuda"):
         return None   # the fused kernel has no dropout on Apple GPUs
-    bias = position.score_bias(length, heads)
+    if decode:
+        bias = position.score_bias_rows(ctx.offset, ctx.offset + 1, keys, heads) if hasattr(position, "score_bias_rows") else position.score_bias(keys, heads)
+    else:
+        bias = position.score_bias(length, heads)
     mask = None
     if bias is not None:
-        if q.dtype in HALF or torch.is_autocast_enabled(q.device.type):
+        if q.dtype in HALF or torch.is_autocast_enabled(q.device.type) or (decode and bias.shape[-2] != 1):
             return None   # a bias such as ALiBi's reaches hundreds and loses its meaning in half precision; the exact path adds it in float32
-        mask = (bias + torch.zeros_like(bias).masked_fill(ctx.mask(length), -torch.inf))[None]
+        mask = (bias if decode else bias + torch.zeros_like(bias).masked_fill(ctx.mask(length), -torch.inf))[None]
     seed = ctx.attention_seed(q.device) if p else 0
     cuda = [q.device.index if q.device.index is not None else torch.cuda.current_device()] if q.device.type == "cuda" else []
     with torch.random.fork_rng(devices=cuda, enabled=bool(p), device_type=q.device.type):
         if p:
             torch.manual_seed(seed)
-        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p, is_causal=mask is None, scale=scale)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p, is_causal=mask is None and not decode, scale=scale)
     return out
 
 
@@ -72,7 +76,9 @@ def cached(ctx, k, v):
     if ctx.cache is not None:
         if ctx.block in ctx.cache:
             k, v = torch.cat((ctx.cache[ctx.block][0], k), dim=-2), torch.cat((ctx.cache[ctx.block][1], v), dim=-2)
-        ctx.cache[ctx.block] = (k, v)
+            ctx.cache[ctx.block] = (k, v)
+        else:
+            ctx.cache[ctx.block] = (k.clone(), v.clone())  # k and v are views of the q/k/v projection; keep only their own bytes
     return k, v
 
 
