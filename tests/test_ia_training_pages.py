@@ -260,6 +260,30 @@ class WorkspaceRows(unittest.TestCase):
         self.prob = self.ws.create_dataset("problems")
         add_problems(self.ws, self.prob, _problems())
 
+    def test_waiting_jobs_from_an_earlier_session_start_again(self):
+        from unittest import mock
+        import studio_queue
+        with mock.patch.object(studio_queue.Runner, "start") as start:
+            self.svc.start_queue()
+            start.assert_not_called()  # nothing waiting: the first enqueue starts it
+            self.svc.runner.jobs.append(studio_queue.Job("quicktest", "left over", status="held"))
+            self.svc.start_queue()
+            start.assert_not_called()  # held jobs do not count
+            self.svc.runner.jobs.append(studio_queue.Job("quicktest", "left over"))
+            self.svc.start_queue()
+            start.assert_called_once()
+
+    def test_preview_is_cached_on_disk_and_never_computed_by_the_cached_read(self):
+        self.svc.save_version(default_spec(), "first design")
+        self.assertIsNone(self.svc.cached_preview([self.text], rows=6))  # unknown yet: no work done to find out
+        preview = self.svc.pretrain_preview([self.text], rows=6)
+        self.assertGreater(preview["pieces"], 0)
+        again = WorkspaceServices(Workspace(self.tmp.name))  # a new session, as after a restart
+        self.addCleanup(again.close)
+        self.assertEqual(again.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
+        self.ws.add(self.text, [{"text": "a new story changes the stored data"}])
+        self.assertIsNone(self.svc.cached_preview([self.text], rows=6))
+
     def test_held_back_text_is_fixed_and_never_trained_on(self):
         train = self.svc.examples({"datasets": [self.text], "heldout_fraction": .2})
         held = set(self.svc._heldout())

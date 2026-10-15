@@ -15,6 +15,7 @@ from studio_core import atomic_json
 
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
+QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 SAMPLE_MB = 64  # ponytail: flat per-sample memory guess for the batch cap; jobs may override with params["sample_mb"]
 
 
@@ -37,7 +38,7 @@ class Job:
     label: str = ""
     note: str = ""
     params: dict = field(default_factory=dict)
-    status: str = "waiting"         # waiting | running | done | failed | stopped
+    status: str = "waiting"         # waiting | held | running | done | failed | stopped
     eta_s: float | None = None
     created_at: float = field(default_factory=time.time)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
@@ -115,8 +116,8 @@ class Runner:
                 job.status = "waiting"
 
     def _save(self):
-        done = [j for j in self.jobs if j.status not in ("waiting", "running")][-50:]
-        live = [j for j in self.jobs if j.status in ("waiting", "running")]
+        done = [j for j in self.jobs if j.status not in ("waiting", "running", "held")][-50:]
+        live = [j for j in self.jobs if j.status in ("waiting", "running", "held")]
         self.jobs = done + live
         atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "jobs": [dataclasses.asdict(j) for j in self.jobs]})
 
@@ -143,13 +144,34 @@ class Runner:
         self._emit("queue", {"job": job.id})
         return job
 
+    def _queued(self):
+        return [j for j in self.jobs if j.status in QUEUED]
+
+    def move(self, job_id, index):
+        """Put a waiting (or held) job at `index` among the queued jobs; 0 runs it next."""
+        with self.lock:
+            queued = self._queued()
+            job = next((j for j in queued if j.id == job_id), None)
+            if job is not None:
+                others = [j for j in queued if j is not job]
+                index = max(0, min(int(index), len(others)))
+                order = others[:index] + [job] + others[index:]
+                for slot, j in zip([i for i, j in enumerate(self.jobs) if j.status in QUEUED], order):
+                    self.jobs[slot] = j
+                self._save()
+        self._emit("queue", {"job": job_id})
+
     def move_up(self, job_id):
         with self.lock:
-            queued = [j for j in self.jobs if j.status == "waiting"]
-            i = next((i for i, j in enumerate(queued) if j.id == job_id), 0)
-            if i:
-                a, b = self.jobs.index(queued[i - 1]), self.jobs.index(queued[i])
-                self.jobs[a], self.jobs[b] = self.jobs[b], self.jobs[a]
+            i = next((i for i, j in enumerate(self._queued()) if j.id == job_id), 0)
+        self.move(job_id, max(0, i - 1))
+
+    def hold(self, job_id, held=True):
+        """A held job keeps its place but is skipped until released; the jobs after it run meanwhile."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id), None)
+            if job is not None:
+                job.status = "held" if held else "waiting"
                 self._save()
         self._emit("queue", {"job": job_id})
 
@@ -210,7 +232,7 @@ class Runner:
             return QueueState(
                 job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=self.blocked, stopping=self.stopping,
-                up_next=[j for j in self.jobs if j.status == "waiting"], plan=dataclasses.asdict(self.plan))
+                up_next=self._queued(), plan=dataclasses.asdict(self.plan))
 
     def start(self):
         self.thread = threading.Thread(target=self._loop, daemon=True)

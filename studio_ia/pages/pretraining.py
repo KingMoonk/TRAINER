@@ -194,9 +194,9 @@ class PretrainingPage(Page):
 
     # state ---------------------------------------------------------------
     def preload(self):
+        """Only the set list: the size preview is read after the page shows (see _ask_preview), so opening never waits."""
         for s in sets_of(self.services.data("text")):
             self.use.setdefault(s["id"], True)
-        self._preview()
 
     def refresh(self):
         v = self.version()
@@ -227,10 +227,32 @@ class PretrainingPage(Page):
         k = len(self.chosen())
         self.data_card_status = f"{k} {'source' if k == 1 else 'sources'} selected" if k else "nothing selected"
         self.data_line.configure(text=self.data_card_status)
-        self.preview = self._preview()
+        self._ask_preview()
         self.update_numbers()
         self.paint_modes(v, parent)
         self.paint_collection()
+
+    def _ask_preview(self):
+        """Use the preview if it is already known; otherwise show "estimating" and work it out in the background (it
+        samples the chosen text and builds a word list: seconds, longer while a run trains)."""
+        ids = tuple(self.chosen())
+        try:
+            known = self.services.cached_preview(list(ids), rows=6) if ids else {}
+        except NotImplementedError:
+            known = {}
+        self.estimating = known is None
+        self.preview = known or {}
+        if self.estimating and getattr(self, "_asked", None) != ids:
+            self._asked = ids
+            self.quietly(lambda: self.services.pretrain_preview(list(ids), rows=6), lambda p: self._got_preview(ids, p))
+
+    def _got_preview(self, ids, preview):
+        self._asked = None
+        if ids != tuple(self.chosen()) or not self.winfo_exists():
+            return  # the choice changed meanwhile; that choice asked for its own preview
+        self.preview, self.estimating = preview or {}, False
+        self.update_numbers()
+        self.paint_modes(self.v, self.parent_v)
 
     def paint_collection(self):
         try:
@@ -270,16 +292,7 @@ class PretrainingPage(Page):
 
     def toggle(self, dataset_id):
         self.use[dataset_id] = not self.use.get(dataset_id)
-        self.reload()
-
-    def _preview(self):
-        ids = self.chosen()
-        if not ids:
-            return {}
-        try:
-            return self.services.pretrain_preview(ids, rows=6)
-        except NotImplementedError:
-            return {}
+        self.refresh()  # the set list is cached; a new preview comes in the background
 
     def update_numbers(self):
         p = self.preview
@@ -289,7 +302,11 @@ class PretrainingPage(Page):
         about = "about " if p.get("estimated") else ""
         self.per_step.configure(text=T["per_step_pieces"].format(pieces=f"{per_step:,}", passes=f"{about}{max(1, round(pieces / per_step)):,}")
                                 if pieces else T["per_step_only"].format(pieces=f"{per_step:,}"))
-        if pieces and params:
+        if getattr(self, "estimating", False):
+            self.per_step.configure(text=T["per_step_only"].format(pieces=f"{per_step:,}"))
+            self.enough.configure(text=T["estimating"])
+            self.enough_note.configure(text=T["word_pieces_plain"])
+        elif pieces and params:
             ratio = pieces / params
             self.enough.configure(text=T["text_estimate"].format(times=f"{max(RULE / ratio, 0):.1f}") if ratio < RULE
                                   else "You have about as much text as the rule of thumb asks for")
@@ -301,7 +318,8 @@ class PretrainingPage(Page):
         if steps and tps:
             self.steps_line.configure(text=T["steps_time"].format(steps=f"{steps:,}", minutes=f"{max(1, round(steps * per_step / tps / 60)):,}"))
         else:
-            self.steps_line.configure(text=T["steps_only"].format(steps=f"{steps:,}") if steps else T["steps_none"])
+            self.steps_line.configure(text=T["steps_only"].format(steps=f"{steps:,}") if steps
+                                      else T["steps_estimating"] if getattr(self, "estimating", False) else T["steps_none"])
         lr = ((getattr(self, "v", None) and self.v.spec or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
         self.lr_line.configure(text=f"{T['learning_rate']} {T['lr_auto']}" + (" " + T["lr_info"].format(lr=f"{lr:.2g}") if lr else ""))
         self.draw_rows()

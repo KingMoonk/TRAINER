@@ -113,6 +113,21 @@ class QueueTests(unittest.TestCase):
         self.assertEqual([j.label for j in r.state().up_next], ["a", "b"])
         self.assertEqual([j.label for j in Runner(self.path, self.handlers).jobs], ["a", "b"])
 
+    def test_move_to_any_place_and_hold_skips_until_released(self):
+        r = self.runner()
+        a, b, c = (r.enqueue(self.job(n)) for n in "abc")
+        r.move(c.id, 0)
+        self.assertEqual([j.label for j in r.state().up_next], ["c", "a", "b"])
+        r.move(c.id, 9)  # past the end: last
+        self.assertEqual([j.label for j in r.state().up_next], ["a", "b", "c"])
+        r.hold(a.id)
+        self.assertEqual([(j.label, j.status) for j in Runner(self.path, self.handlers).jobs][0], ("a", "held"))  # kept across restart
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.ran == ["b", "c"]))
+        self.assertEqual([j.label for j in r.state().up_next], ["a"])  # still listed, still in place
+        r.hold(a.id, False)
+        self.assertTrue(wait(lambda: self.fake.ran == ["b", "c", "a"]))
+
     def test_hour_window_blocks_start(self):
         plan = Plan(hours="set", start_hour=22, end_hour=7, idle_only=False, pause_on_battery=False)
         noon = lambda: datetime(2026, 1, 1, 12)  # noqa: E731

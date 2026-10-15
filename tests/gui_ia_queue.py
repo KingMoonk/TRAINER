@@ -34,5 +34,50 @@ class StorageCardTest(unittest.TestCase):
         self.assertEqual(self.fake.cleaned, (30, False))
 
 
+class UpNextTest(unittest.TestCase):
+    def setUp(self):
+        from studio_ia.services import Job
+        self.fake = FakeServices()
+        for n in "abc":
+            self.fake.enqueue(Job(n, "quicktest", f"job {n}"))
+        try:
+            self.app = Studio(self.fake)
+        except tk.TclError as error:
+            self.skipTest(f"no display: {error}")
+        self.addCleanup(self.app.destroy)
+        self.page = self.app.show("queue")
+        self.app.update()
+
+    def order(self):
+        return [(j.label, j.status) for j in self.fake.queue().up_next]
+
+    def press(self, row, label):
+        from tkinter import ttk
+        button = next(w for w in self.page._rows[row].winfo_children() if isinstance(w, ttk.Button) and w.cget("text") == label)
+        button.invoke()
+        self.app.update()
+
+    def test_each_item_can_be_reordered_held_and_removed(self):
+        self.press(2, "Run next")
+        self.assertEqual(self.order(), [("job c", "waiting"), ("job a", "waiting"), ("job b", "waiting")])
+        self.press(0, "▼")
+        self.assertEqual([x for x, _ in self.order()], ["job a", "job c", "job b"])
+        self.press(1, "Hold")
+        self.assertEqual(self.order()[1], ("job c", "held"))
+        self.press(1, "Release")
+        self.assertEqual(self.order()[1], ("job c", "waiting"))
+        self.press(2, "Remove")
+        self.assertEqual([x for x, _ in self.order()], ["job a", "job c"])
+
+    def test_drag_moves_a_row(self):
+        rows = self.page._rows
+        self.page._drag_start(0)
+        last = rows[-1]
+        drop = type("E", (), {"y_root": last.winfo_rooty() + last.winfo_height()})()
+        self.page._drag_drop(self.fake.queue().up_next[0].id, drop)
+        self.app.update()
+        self.assertEqual([j.label for j in self.fake.queue().up_next], ["job b", "job c", "job a"])
+
+
 if __name__ == "__main__":
     unittest.main()

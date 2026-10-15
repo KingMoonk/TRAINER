@@ -6,7 +6,7 @@ from tkinter import ttk
 
 from studio_ia.copy import QUEUE as T
 from studio_ia.pages.base import Page
-from studio_ia.theme import GUTTER, tk_label
+from studio_ia.theme import C, GUTTER, tk_label
 from studio_ia.widgets import Toggle
 
 HOURS = (("any", "Any time"), ("nights", "Nights only"), ("set", "Set hours"))
@@ -118,6 +118,7 @@ class QueuePage(Page):
         row.pack(anchor="w", pady=4)
         self._button(row, "Resume" if s.paused else "Pause", self._call("resume" if s.paused else "pause"), style="Primary.TButton").pack(side="left")
         self._button(row, "Make a checkpoint now", self._call("checkpoint_now")).pack(side="left", padx=GUTTER)
+        self._button(row, "Stop", self._call("remove", s.job.id)).pack(side="left")
         tk_label(card, "“Make a checkpoint now” branches off a short cool-down and keeps the main run going. "
                  "Pausing keeps everything; the run resumes exactly where it stopped.", 13, "dim", wraplength=720).pack(anchor="w")
 
@@ -143,19 +144,63 @@ class QueuePage(Page):
             tk_label(card, "Nothing waiting. When the current job ends, the computer keeps improving the current version in its steady phase, "
                      "within the plan below.", 14, "text2", wraplength=720).pack(anchor="w")
             return
-        for n, job in enumerate(s.up_next, 1):
-            row = ttk.Frame(card)
-            row.pack(fill="x", pady=4)
-            tk_label(row, str(n), 15, "violet").pack(side="left", padx=(0, GUTTER))
-            text = ttk.Frame(row)
+        tk_label(card, "Drag ⠿ to reorder. A held job keeps its place and is skipped until you release it.", 12, "muted").pack(anchor="w", pady=(0, 4))
+        self._rows = []
+        last = len(s.up_next) - 1
+        for n, job in enumerate(s.up_next):
+            held = getattr(job, "status", "waiting") == "held"
+            row = tk.Frame(card, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=8, pady=6)
+            row.pack(fill="x", pady=3)
+            grip = tk_label(row, "⠿", 18, "muted", "panel", cursor="fleur")
+            grip.pack(side="left", padx=(0, 8))
+            tk_label(row, str(n + 1), 15, "muted" if held else "violet", "panel").pack(side="left", padx=(0, GUTTER))
+            text = tk.Frame(row, bg=C["panel"])
             text.pack(side="left", fill="x", expand=True)
-            tk_label(text, job.label or job.kind, 15).pack(anchor="w")
+            tk_label(text, (job.label or job.kind) + (" · on hold" if held else ""), 15, "muted" if held else "text", "panel").pack(anchor="w")
             if job.note:
-                tk_label(text, job.note, 13, "muted", wraplength=520).pack(anchor="w")
-            tk_label(row, minutes(job.eta_s), 13, "muted").pack(side="left", padx=GUTTER)
-            if n > 1:
-                self._button(row, "Move up", self._call("move_up", job.id)).pack(side="left")
-            self._button(row, "Remove", self._call("remove", job.id)).pack(side="left", padx=(8, 0))
+                tk_label(text, job.note, 13, "muted", "panel", wraplength=480).pack(anchor="w")
+            if job.eta_s is not None:
+                tk_label(row, minutes(job.eta_s), 13, "muted", "panel").pack(side="left", padx=GUTTER)
+            buttons = (("▲", "move", (job.id, n - 1), n > 0), ("▼", "move", (job.id, n + 1), n < last),
+                       ("Run next", "move", (job.id, 0), n > 0), ("Release" if held else "Hold", "hold", (job.id, not held), True),
+                       ("Remove", "remove", (job.id,), True))
+            for label, method, args, enabled in buttons:
+                b = self._button(row, label, self._call(method, *args), width=len(label) + 2 if len(label) > 1 else 3)
+                b.pack(side="left", padx=2)
+                if not enabled:
+                    b.state(["disabled"])
+            for w in (grip,):
+                w.bind("<ButtonPress-1>", lambda e, i=n: self._drag_start(i))
+                w.bind("<B1-Motion>", self._drag_motion)
+                w.bind("<ButtonRelease-1>", lambda e, j=job.id: self._drag_drop(j, e))
+            self._rows.append(row)
+
+    # drag to reorder ----------------------------------------------------------------
+    def _drag_start(self, index):
+        self._dragging = index
+        self._rows[index].configure(highlightbackground=C["violet"], highlightthickness=2)
+
+    def _drop_index(self, y_root):
+        """Row the pointer is over (by vertical position), clamped to the list."""
+        for i, row in enumerate(self._rows):
+            if y_root < row.winfo_rooty() + row.winfo_height() / 2:
+                return i if i <= self._dragging else i - 1
+        return len(self._rows) - 1
+
+    def _drag_motion(self, event):
+        target = self._drop_index(event.y_root)
+        for i, row in enumerate(self._rows):
+            on = i == target and i != self._dragging
+            row.configure(highlightbackground=C["violet"] if on or i == self._dragging else C["border"],
+                          highlightthickness=2 if on or i == self._dragging else 1)
+
+    def _drag_drop(self, job_id, event):
+        target, start = self._drop_index(event.y_root), self._dragging
+        self._dragging = None
+        if target != start:
+            self.services.move(job_id, target)  # the queue event repaints the list
+        else:
+            self.refresh()
 
     def _plan(self, plan):
         card = self._card("WHEN IT MAY TRAIN")

@@ -637,6 +637,8 @@ PRETRAINING = {
     "enough_text": "ENOUGH TEXT?",
     "text_estimate": "This model could use about {times}× more text than you have",
     "text_unknown": "Choose some text to see whether it is enough for this model",
+    "estimating": "Estimating how much text you have…",
+    "steps_estimating": "Estimating steps and time…",
     "word_pieces_plain": "A common rule of thumb for the best use of compute is about 20 word pieces per parameter. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
     "word_pieces_rule": "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
     "text_only": "Plain text only. Conversations such as Dolly 15K and Alpaca belong to",

@@ -138,6 +138,17 @@ class Services:
     def move_up(self, job_id):
         raise NotImplementedError
 
+    def start_queue(self):
+        """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
+
+    def move(self, job_id, index):
+        """Put a waiting job at `index` in Up next (0 = runs next)."""
+        raise NotImplementedError
+
+    def hold(self, job_id, held=True):
+        """Hold a waiting job (it keeps its place and is skipped) or release it."""
+        raise NotImplementedError
+
     def remove(self, job_id):
         raise NotImplementedError
 
@@ -168,6 +179,10 @@ class Services:
         version's parameter count, first_rows = first `rows` rows of token groups, each a list of example numbers
         with -1 where an example ends."""
         raise NotImplementedError
+
+    def cached_preview(self, dataset_ids, rows=16):
+        """pretrain_preview's answer if already known without work, else None. The default always knows it."""
+        return self.pretrain_preview(dataset_ids, rows)
 
     # data (S5) / evaluation (S4) / chat ------------------------------------
     def data(self, kind, query=""):
@@ -372,6 +387,20 @@ class FakeServices(Services):
         i = next((k for k, j in enumerate(q) if j.id == job_id), 0)
         if i:
             q[i - 1], q[i] = q[i], q[i - 1]
+        self.emit("queue", self._queue)
+
+    def move(self, job_id, index):
+        q = self._queue.up_next
+        job = next((j for j in q if j.id == job_id), None)
+        if job is not None:
+            q.remove(job)
+            q.insert(max(0, min(index, len(q))), job)
+        self.emit("queue", self._queue)
+
+    def hold(self, job_id, held=True):
+        for j in self._queue.up_next:
+            if j.id == job_id:
+                j.status = "held" if held else "waiting"
         self.emit("queue", self._queue)
 
     def storage(self, days=None, data=False):
@@ -591,6 +620,7 @@ from pathlib import Path  # noqa: E402
 
 SUMMARY_FORMAT = 2  # data/summaries.json layout; 2: text characters counted once. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
+PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
 
@@ -789,8 +819,19 @@ class WorkspaceServices(Services):
             self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
 
+    def start_queue(self):
+        """Start the runner when jobs are waiting from an earlier session; otherwise the first enqueue starts it."""
+        if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
+            self.runner.start()
+
     def move_up(self, job_id):
         self.runner.move_up(job_id)
+
+    def move(self, job_id, index):
+        self.runner.move(job_id, index)
+
+    def hold(self, job_id, held=True):
+        self.runner.hold(job_id, held)
 
     def storage(self, days=None, data=False):
         import studio_cleanup
@@ -931,16 +972,50 @@ class WorkspaceServices(Services):
             return {"pieces": pieces if sample else None, "estimated": estimated,
                     "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
-        heldout = self.root / "data" / "heldout.json"
-        key = ("preview", tuple(dataset_ids), rows, json.dumps(v.spec, sort_keys=True, default=str),
-               heldout.stat().st_mtime_ns if heldout.exists() else None)
-        preview = self._fresh(key, make)
-        speed = None
+        key = self._preview_key(v, dataset_ids, rows)
+        store = self._previews()
+        if key not in store:
+            preview = make()
+            from studio_core import atomic_json
+            with self._lock:
+                store[key] = preview
+                while len(store) > PREVIEWS_KEPT:
+                    store.pop(next(iter(store)))
+                atomic_json(self.root / "data" / "previews.json", store)
+        return {**store[key], "tokens_per_second": self._speed(read_metrics)}
+
+    def cached_preview(self, dataset_ids, rows=16):
+        """pretrain_preview's answer when it is already known (this session or data/previews.json), else None. Never
+        computes, so the page can open at once and ask for the rest in the background."""
+        from studio_model import read_metrics
+        v = self.current_version()
+        if v is None or not v.spec:
+            return {}
+        hit = self._previews().get(self._preview_key(v, dataset_ids, rows))
+        return None if hit is None else {**hit, "tokens_per_second": self._speed(read_metrics)}
+
+    def _preview_key(self, version, dataset_ids, rows):
+        """Same chosen sets, design and stored data (records, held-back text) -> same preview."""
+        return json.dumps([sorted(dataset_ids), rows, version.spec, self._stamp(), self._heldout_stamp()], sort_keys=True, default=str)
+
+    def _previews(self):
+        if getattr(self, "_preview_store", None) is None:
+            path = self.root / "data" / "previews.json"
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError):
+                loaded = {}
+            self._preview_store = loaded if isinstance(loaded, dict) else {}
+        return self._preview_store
+
+    def _speed(self, read_metrics):
+        """Pieces per second of the newest run that logged one (for the time estimate)."""
         for ver in reversed(self.versions()):
             for run in reversed(ver.runs):
                 got = [r["tokens_per_second"] for r in read_metrics(Path(run) / "metrics.jsonl") if r.get("tokens_per_second")]
-                speed = speed or (got[-1] if got else None)
-        return {**preview, "tokens_per_second": speed}
+                if got:
+                    return got[-1]
+        return None
 
     # job results -> versions
     def _to(self, number, status):

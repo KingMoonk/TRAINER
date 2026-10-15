@@ -81,6 +81,7 @@ class Studio(tk.Tk):
                            ("loss", loss.LossPage), ("head_lab", head_lab.HeadLabPage)):
             self.register(route, cls)
         self.unsubscribe = self.services.subscribe(self.on_event)
+        self.services.start_queue()  # jobs saved as waiting by the last session start again
         self.refresh_strip()
         self.show("builder")
 
@@ -175,6 +176,7 @@ class Studio(tk.Tk):
             self.pages[route] = page
             page.slow, page.background, page.reload = self.slow, self.background, lambda: self.show(route)
             page.quiet_reload = lambda: self._quiet_reload(route)
+            page.quietly = self.quietly
         page = self.pages[route]
         self._highlight(spec.area)
         self._wanted = route  # a later click wins over a page still loading
