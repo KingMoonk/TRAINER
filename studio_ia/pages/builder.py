@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import os
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -11,10 +12,13 @@ import uuid
 from pathlib import Path
 
 import studio_registry as registry
+from studio_arch import model_spec_presets
+from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM, plan, throughput
 from studio_estimate import estimate
 from studio_glossary import MODULE_TERMS, glossary_text
 from studio_slots import BLOCK_SLOTS
 from studio_spec import block_at, config_from_spec, default_spec, set_block, validate_spec
+from studio_ux import step_seconds
 from studio_validate import errors, validate
 from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
@@ -229,6 +233,8 @@ def change_chips(old_spec, new_spec, cur, draft):
     """The not-saved chips: spec_diff's sentences, with its catch-all replaced by the parts that changed."""
     plain = spec_diff(old_spec, new_spec)
     out = [c for c in plain if c != OTHER_PARTS] + part_changes(cur, draft)
+    if recipe_of(validate_spec(old_spec)) != recipe_of(new_spec):
+        out.append(T["recipe_change"].format(recipe=recipe_text(new_spec)))
     return out or plain
 
 
@@ -266,15 +272,185 @@ def warm_outlook(cur, draft):
     return dict(kind=kind, carries=kind != "scratch", preserving=kind == "same", chip=chip, state=state, text=NOTES[kind])
 
 
+def ram_bytes():
+    """Physical memory of this computer, or None when the OS does not say."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
 def fits(c, ram=None):
     """True/False: weights, gradients, optimizer state and activations for 16 rows fit in physical memory; None if unknown.
     `c` is a sizes() dict."""
+    ram = ram or ram_bytes()
     if ram is None:
-        try:
-            ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-        except (ValueError, OSError, AttributeError):
-            return None
+        return None
     return c["memory"] + ROWS * c["activations"] <= ram
+
+
+# ---------------------------------------------------------------------------------------------- ready-made designs
+
+PRESETS = (("starter", "starter_model"), ("tiny_llama_style", "llama_model"), ("gpt2_small_style", "gpt2_model"),
+           ("gpt3_small_style", "gpt3_model"), ("gpt3_medium_style", "gpt3_model"))  # studio_arch key, GLOSSARY entry
+SLOW_STEP = 30  # seconds per step past which a design is called very slow
+
+
+def gpt2_words_ready():
+    """True when GPT-2's word list is already on this computer (nothing is downloaded to find out)."""
+    from studio_modules.tokenizer.bpe_gpt2 import GPT2Config, asset_paths
+    return all(path.exists() for path in asset_paths(GPT2Config()))
+
+
+def preset_specs(gpt2_words=False):
+    """[(key, spec)] of studio_arch's presets in PRESETS order (Tiny Llama only when its modules are registered).
+    With gpt2_words the GPT-2 and GPT-3 designs read text with GPT-2's word list, as the originals did."""
+    presets = model_spec_presets()
+    out = []
+    for key, _term in PRESETS:
+        if key not in presets:
+            continue
+        spec = presets[key]
+        if gpt2_words and key.startswith("gpt"):
+            spec = validate_spec(dict(spec, tokenizer={"id": "bpe_gpt2"}, name=spec["name"].replace("byte tokenizer", "GPT-2 word list")))
+        out.append((key, spec))
+    return out
+
+
+def gpu_kind():
+    """"cuda" or "mps" when this process already found a GPU, else "". It only reads an earlier check: importing torch or
+    running a Metal/CUDA calculation from the Builder (on a worker thread, while Tk runs) crashes the app on macOS."""
+    backend = sys.modules.get("studio_backend")
+    if backend is None or not backend.gpu_status.cache_info().currsize:
+        return ""
+    status = backend.gpu_status()
+    return status["kind"] if status["available"] else ""
+
+
+def preset_term(key):
+    return dict(PRESETS)[key]
+
+
+def amount(n):
+    """1.4 GB, 86.8M style: one decimal, the unit a person reads."""
+    for size, unit in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if n >= size:
+            return f"{n / size:.1f}{unit}"
+    return str(round(n))
+
+
+def gigabytes(n):
+    return f"{n / 1e9:.1f} GB" if n >= 1e8 else f"{n / 1e6:.0f} MB"
+
+
+def duration(seconds):
+    """'about 5 minutes': a rough time, in the largest unit that keeps it a readable number."""
+    if seconds < 1:
+        return "under a second"
+    for size, unit, limit in ((1, "seconds", 90), (60, "minutes", 5400), (3600, "hours", 172800), (86400, "days", float("inf"))):
+        if seconds < limit:
+            return f"about {seconds / size:.0f} {unit}"
+
+
+def preset_cost(spec, ram=None, gpu=None):
+    """What a design costs before it is loaded: {params, need, fits, rows, step, slow, lines}. `lines` are the card's sentences:
+    size, whether it fits this computer (and at how many rows per step it would), and how long a step takes.
+    ram: bytes (None = ask the OS); gpu: "cuda"/"mps" when training will use one, "" or None for the processor alone."""
+    s = read_spec(spec)
+    c = sizes(spec, s["V"])
+    ram = ram or ram_bytes()
+    need = c["memory"] + ROWS * c["activations"]
+    ok = None if ram is None else need <= ram
+    rows = ROWS if ok or ram is None else max(0, int((ram - c["memory"]) // max(1, c["activations"])))
+    step = step_seconds({"batch_size": ROWS, "context": s["T"], "layers": s["L"]}, c["params"], gpu or "cpu")
+    lines = [T["preset_size"].format(params=amount(c["params"]), memory=gigabytes(c["memory"]))]
+    if ram is None:
+        lines.append(T["preset_fit_unknown"])
+    elif ok:
+        lines.append(T["preset_fits"].format(need=gigabytes(need), rows=ROWS, ram=gigabytes(ram)))
+    elif rows:
+        lines.append(T["preset_fits_fewer"].format(rows=ROWS, need=gigabytes(need), ram=gigabytes(ram), fit=rows))
+    else:
+        lines.append(T["preset_no_fit"].format(need=gigabytes(c["memory"] + c["activations"]), ram=gigabytes(ram)))
+    lines.append(T["preset_speed_gpu" if gpu else "preset_speed_cpu"].format(step=duration(step)))
+    if step > SLOW_STEP:
+        lines[-1] += " " + T["preset_slow"].format(steps=STEPS, total=duration(step * STEPS))
+    return dict(params=c["params"], need=need, fits=ok, rows=rows, step=step, slow=step > SLOW_STEP, lines=lines)
+
+
+def passes_text(passes):
+    """"one pass", "under one pass" or "2.5 passes": how many times a run reads the text."""
+    if passes < .95:
+        return "under one pass"
+    return "one pass" if passes <= 1.05 else f"{passes:.1f} passes" if passes < 10 else f"{passes:.0f} passes"
+
+
+def compute_lines(params, context, layers, preview, gpu=""):
+    """[(sentence, bad)] for the cost panel: how much text a design of `params` parameters needs, against the word pieces
+    `preview` (services.pretrain_preview; None while it is being counted) found, and how long a run of ROWS rows should be.
+    Speed is the newest run's measured one, else studio_compute.throughput (the Pretraining page's time model)."""
+    if preview is None:
+        return [(T["compute_counting"], False)]
+    pieces = preview.get("pieces")
+    if not pieces:
+        return [(T["compute_none"], False)]
+    speed = preview.get("tokens_per_second") or throughput(ROWS, context, params, layers, gpu or "cpu")
+    p = plan(params, pieces, tokens_per_second=speed, batch_tokens=ROWS * context)
+    tail = (T["compute_under"] if p["under_trained"] else T["compute_repeats"] if p["over_repeated"]
+            else T["compute_reread"].format(times=f"{p['epochs_for_optimal']:.1f}", most=MAX_EPOCHS) if params > p["data_params"]
+            else T["compute_roomy"] if p["data_params"] >= 4 * params else T["compute_enough"])
+    about = "about " if preview.get("estimated") else ""
+    lines = [(T["compute_supports"].format(supported=about + amount(p["data_params"]), rule=TOKENS_PER_PARAM, params=amount(params)) + tail,
+              p["under_trained"]),
+             (T["compute_steps"].format(steps=p["steps"], rows=ROWS, passes=passes_text(p["epochs"]))
+              + T["compute_time"].format(time=duration(p["seconds_needed"])), False)]
+    if p["over_repeated"]:
+        lines.append((T["compute_repeat"].format(rule=TOKENS_PER_PARAM, times=f"{p['epochs_for_optimal']:.0f}", most=MAX_EPOCHS), True))
+    return lines
+
+
+def lr_text(result, current=None):
+    """The sentence under "Find a learning rate" for a finished (or failed or stopped) range test; "" before one has run.
+    `current` is the rate the design trains with now."""
+    if not result:
+        return ""
+    if result.get("error"):
+        return T["lr_failed"].format(error=result["error"])
+    if result.get("cancelled"):
+        return T["lr_stopped"]
+    failed = result.get("failed_at") or (result["rates"][-1] if result.get("rates") else None)
+    if not result.get("suggestion"):
+        return T["lr_blew_up_early"].format(rate=f"{failed:.2g}") if result.get("diverged") and failed else T["lr_flat"]
+    text = T["lr_result"].format(rate=f"{result['suggestion']:.2g}", steepest=f"{result['rates'][result['steepest']]:.2g}",
+                                 current=f"{current:.2g}" if current else "its own default")
+    if result.get("diverged"):
+        text += " " + T["lr_blew_up"].format(rate=f"{failed:.2g}")
+    return text
+
+
+def recipe_text(spec):
+    """The optimizer and schedule a spec carries, in one line: "AdamW · learning rate 0.0006 · β2 0.95 · … · cosine to 10%"."""
+    optimizer, schedule = spec["train"]["optimizer"], spec["train"]["schedule"]
+    parts = [registry.get("optimizer", optimizer["id"]).name]
+    for key, label in (("lr", "learning rate"), ("beta1", "β1"), ("beta2", "β2"), ("weight_decay", "weight decay")):
+        if key in optimizer["config"]:
+            parts.append(f"{label} {optimizer['config'][key]:g}")
+    sched = registry.get("schedule", schedule["id"]).name
+    if "min_lr" in schedule["config"]:
+        sched += f" to {schedule['config']['min_lr']:.0%}"
+    return " · ".join(parts + [sched])
+
+
+def recipe_of(spec):
+    """The parts of the training recipe a design carries (not the run settings the Pretraining page chooses)."""
+    return {slot: spec["train"][slot] for slot in ("objective", "optimizer", "schedule", "init")}
+
+
+def preset_draft(spec):
+    """(draft choices, anchor) that load `spec` into the Builder. The draft is written onto the preset itself, so what the picture
+    has no control for (width, reading window, the training recipe) comes with it, and the old version stays the comparison."""
+    s = read_spec(spec)
+    return dict(s), (validate_spec(spec), s)
 
 
 def last_blocks_change(versions):
@@ -433,6 +609,10 @@ class BuilderPage(Page):
         self._curve_at = 0.
         self.open, self.scope = set(), {}  # blocks shown with their parts; blocks whose picks apply to them only
         self.draft_spec = None
+        self.presets = preset_specs(gpt2_words_ready())
+        self.compute_preview, self._asking = None, False  # services.pretrain_preview: the size of your text, None until counted
+        self.lr_stop, self.lr_result, self.lr_for = None, None, None  # the learning-rate test: running (its stop event), its answer, the design it ran on
+        self.preset_key = None  # the ready-made design being looked at
 
     # state ------------------------------------------------------------------
     @property
@@ -616,6 +796,19 @@ class BuilderPage(Page):
         issues = new_issues(self.base_spec(), self.draft_spec) if self.draft_spec else ()
         return expectations(self.cur, self.draft, self.services.versions(), issues)
 
+    def preview_preset(self, key):
+        """Show a ready-made design's cost; nothing changes until it is loaded."""
+        self.preset_key = key
+        self._paint_preset()
+
+    def use_preset(self):
+        """Load the design being looked at into the draft: an ordinary unsaved change against the current version."""
+        spec = dict(self.presets).get(self.preset_key)
+        if self.phase == "edit" and spec:
+            self.draft, self.anchor = preset_draft(spec)
+            self.stage()
+            self._paint_design()
+
     def pick(self, slot, short, block=None):
         """Module `short` for `slot`: in every block, or in block `block` only."""
         self.edit(**choose(self.draft, slot, short, block))
@@ -746,6 +939,7 @@ class BuilderPage(Page):
         right = tk.Frame(top, bg=C["bg"], width=340)
         right.pack(side="left", fill="y")
         self._tower(left)
+        self._start_from(right)
         self._controls(right)
         self._costs()
         self._expect()
@@ -996,6 +1190,51 @@ class BuilderPage(Page):
         for opt, b in seg.buttons.items():
             b.configure(highlightbackground=C["violet"] if opt == was else C["border"], text=f"{opt} · saved" if opt == was else opt)
 
+    def _start_from(self, parent):
+        """Pick a ready-made design, read what it costs on this computer and its recipe, then load it into the draft."""
+        card = Card(parent)
+        card.pack(fill="x", pady=(0, 8))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, T["start_from"], bg="panel").pack(side="left")
+        info_icon(head, T["start_from_tip"]).pack(side="left", padx=(4, 0))
+        mb = tk.Menubutton(card, font=font(13), relief="flat", bg=C["panel"], fg=C["text"], activebackground=C["panel2"], activeforeground=C["text"],
+                           disabledforeground=C["muted"], takefocus=1, cursor="hand2", padx=8, pady=3, indicatoron=True,
+                           highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
+        menu = tk.Menu(mb, tearoff=0, font=font(13), bg=C["panel"], fg=C["text"], activebackground=C["violet"], activeforeground=C["bg"])
+        for key, spec in self.presets:
+            menu.add_command(label=spec["name"], command=lambda key=key: self.preview_preset(key))
+        mb.configure(menu=menu)
+        for seq in ("<space>", "<Return>"):
+            mb.bind(seq, lambda _e: menu.tk_popup(mb.winfo_rootx(), mb.winfo_rooty() + mb.winfo_height()) if self.phase == "edit" else None)
+        tip(mb, lambda: glossary_text(preset_term(self.preset_key)) if self.preset_key else T["start_from_tip"])
+        mb.pack(anchor="w", pady=(4, 0))
+        self.preset_mb = mb
+        self.preset_about = tk_label(card, "", 12, "text2", "panel", wraplength=300)
+        tip(self.preset_about, lambda: glossary_text(preset_term(self.preset_key)) if self.preset_key else "")
+        self.preset_lines = [tk_label(card, "", 12, "muted", "panel", wraplength=300) for _ in range(4)]  # size, fit, speed, recipe
+        self.preset_btn = button(card, T["preset_load"], self.use_preset)
+        self._paint_preset()
+
+    def _paint_preset(self):
+        spec = dict(self.presets).get(self.preset_key)
+        self.preset_mb.configure(text=spec["name"] if spec else T["start_from_pick"], state="normal" if self.phase == "edit" else "disabled")
+        widgets = (self.preset_about, *self.preset_lines, self.preset_btn)
+        for w in widgets:
+            w.pack_forget()
+        if not spec:
+            return
+        cost = self.preset_cost = preset_cost(spec, gpu=gpu_kind())
+        self.preset_about.configure(text=T["preset_" + self.preset_key])
+        texts = [*cost["lines"], T["preset_recipe"].format(recipe=recipe_text(spec))]
+        for label, text, bad in zip(self.preset_lines, texts, (False, cost["fits"] is False, cost["slow"], False)):
+            label.configure(text=text, fg=C["amber"] if bad else C["muted"])
+        self.preset_btn.state(["!disabled"] if self.phase == "edit" else ["disabled"])
+        self.preset_about.pack(anchor="w", pady=(6, 2))
+        for label in self.preset_lines:
+            label.pack(anchor="w", pady=1)
+        self.preset_btn.pack(anchor="w", pady=(6, 0))
+
     def _controls(self, parent):
         self.knob_notes = {}
         for name, hint, color, opts, key, values in (
@@ -1048,6 +1287,72 @@ class BuilderPage(Page):
         self.fits_label = tk_label(self.fits_row, "", 12, "muted", "panel")
         self.fits_label.pack(side="left")
         info_icon(self.fits_row, lambda: self.fits_text).pack(side="left", padx=(4, 0))
+        self.compute_labels = [tk_label(card, "", 12, "muted", "panel", wraplength=780) for _ in range(3)]
+        for label in self.compute_labels:
+            label.pack(anchor="w", pady=(6, 0))
+        self.compute_tip = T["compute_tip"].format(rule=TOKENS_PER_PARAM, most=MAX_EPOCHS)
+        tip(self.compute_labels[0], lambda: self.compute_tip)
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(anchor="w", pady=(8, 0))
+        self.lr_button = button(row, T["lr_find"], self.find_lr)
+        self.lr_button.pack(side="left")
+        info_icon(row, T["lr_tip"]).pack(side="left", padx=(4, 0))
+        self.lr_label = tk_label(card, "", 12, "muted", "panel", wraplength=780)
+        self.lr_label.pack(anchor="w", pady=(4, 0))
+        self._paint_lr()
+        self._ask_compute()
+
+    def _ask_compute(self):
+        """The size of your text, counted once per page: known at once when it was counted before, else in the background."""
+        known = self.services.cached_preview([])
+        if known is not None or self.compute_preview is not None:
+            self.compute_preview = known if known is not None else self.compute_preview
+        elif not self._asking:
+            self._asking = True
+            self.quietly(lambda: self.services.pretrain_preview([]), self._got_compute, lane="slow")
+
+    def _got_compute(self, preview):
+        self._asking, self.compute_preview = False, preview or {}
+        if self.winfo_exists() and self.compute_labels[0].winfo_exists():
+            self._paint_compute()
+
+    def _paint_compute(self):
+        spec = self.draft_spec or self.base_spec()
+        if self.word_changed():
+            lines = [(T["compute_recount"], False)]
+        else:
+            lines = compute_lines(sizes(spec, self.draft["V"])["params"], spec["dims"]["n_ctx"], spec["dims"]["n_layer"],
+                                  self.compute_preview, gpu_kind())
+        for label, (text, bad) in zip(self.compute_labels, lines + [("", False)] * len(self.compute_labels)):
+            label.configure(text=text, fg=C["amber"] if bad else C["muted"])
+
+    def find_lr(self):
+        """Run the learning-rate range test on the draft in the background; pressed again while it runs, it stops."""
+        if self.lr_stop is not None:
+            self.lr_stop.set()
+            return
+        spec, stop = self.draft_spec or self.base_spec(), threading.Event()
+        self.lr_stop, self.lr_result, self.lr_for = stop, None, spec
+
+        def work():
+            try:
+                return self.services.lr_range_test(spec, stop)
+            except Exception as error:  # say it under the button; the button comes back
+                return {"error": plain_error(error)}
+
+        def done(result):
+            self.lr_stop, self.lr_result = None, result
+            if self.winfo_exists() and self.lr_label.winfo_exists():
+                self._paint_lr()
+        self._paint_lr()
+        self.quietly(work, done, lane="slow")
+
+    def _paint_lr(self):
+        running = self.lr_stop is not None
+        current = ((self.lr_for or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
+        self.lr_button.configure(text=T["lr_stop"] if running else T["lr_find"])
+        stale = self.lr_for != (self.draft_spec or self.base_spec())  # the draft changed since the test ran
+        self.lr_label.configure(text=T["lr_running"] if running else "" if stale else lr_text(self.lr_result, current))
 
     def _paint_costs(self):
         a = sizes(self.base_spec(), self.cur["V"])
@@ -1077,6 +1382,7 @@ class BuilderPage(Page):
         verdict = T["training_memory_fits"] if ok is None else ("fits" if ok else "doesn't fit")
         self.fits_text = f"{T['training_memory']} {verdict} {T['training_memory_desc']}"
         self.fits_label.configure(text=f"{T['training_memory']} {verdict}")
+        self._paint_compute()
 
     def _expect(self):
         card = Card(self.body)

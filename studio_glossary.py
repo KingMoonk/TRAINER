@@ -139,6 +139,22 @@ GLOSSARY = {
     "pairs_per_step": ("Pairs per step", "How many preference pairs the model studies before each adjustment."),
     "creativity_ab": ("Reply creativity", "Two replies are written with different temperatures (adventurousness) so you have something to compare."),
     "prompt_count": ("Prompts per round", "How many different prompts are used in each round of automated improvement."),
+    # ---- the models the Builder's ready-made designs copy
+    "starter_model": ("Starter design", "This studio's own small default, not a copy of a published model: 2 blocks of 64 numbers per word. Small enough to train on any laptop in minutes, so you can watch it learn."),
+    "llama_model": ("Llama", "Meta's open language models (Touvron et al. 2023). Llama swapped GPT's parts for newer ones: RMSNorm instead of LayerNorm, rotary positions (RoPE), a SwiGLU thinking room and, from Llama 2 on, look-back heads that share their keys and values (grouped-query attention). This design uses those parts at a tiny size. It has the shape only, none of Llama's trained weights."),
+    "gpt2_model": ("GPT-2", "OpenAI's 2019 language model (Radford et al.). The smallest GPT-2 had 124 million parameters: 12 blocks of 768 numbers per word, 12 look-back heads, a 1,024-token reading window and a 50,257-entry word list, trained on about 40 GB of web pages. This design copies its shape, not its trained weights."),
+    "gpt3_model": ("GPT-3", "OpenAI's 2020 family of language models (Brown et al.), from 125 million to 175 billion parameters. GPT-3 Small (125M) is GPT-2 small's shape with a 2,048-token reading window; GPT-3 Medium (350M) has 24 blocks of 1,024. All were trained on 300 billion tokens with AdamW (β2 0.95, weight decay 0.1) and a cosine schedule. This design copies the shape and that recipe, not the trained weights."),
+}
+
+# every module the registry offers (studio_registry.for_slot), by slot, -> its GLOSSARY entry
+MODULE_TERMS = {
+    "embedding": {"learned": "embedding", "factorized": "factorized_embedding"},
+    "position": {"learned": "learned_position", "sinusoidal": "sinusoidal", "rope": "rope", "alibi": "alibi", "none": "nope"},
+    "norm": {"layernorm": "layernorm", "rmsnorm": "rmsnorm", "none": "no_norm"},
+    "mixer": {"attention": "attention", "gqa": "gqa", "linear": "linear_attention", "ssm": "ssm", "gru": "gru", "lstm": "lstm",
+              "conv": "conv", "none": "no_mixer"},
+    "channel": {"mlp_gelu": "mlp_gelu", "swiglu": "swiglu", "moe": "moe", "none": "no_channel"},
+    "head": {"tied": "tied_head", "untied": "untied_head"},
 }
 
 # every module the registry offers (studio_registry.for_slot), by slot, -> its GLOSSARY entry

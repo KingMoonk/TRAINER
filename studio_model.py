@@ -5,7 +5,7 @@ The transformer, tokenizer, checkpoint format and sampler are this repository's 
 Data-pipeline config keys (stable API, also used by the curriculum trainer):
   tokenizer  "byte" | "character"   - byte is the default: 263 tokens, no unknown characters, so every
                                        dataset shares one vocabulary and the embedding stays tiny.
-  context    32..1024                - tokens per window (default 256 so most chat turns fit prompt + answer).
+  context    32..2048                - tokens per window (default 256 so most chat turns fit prompt + answer).
   windowing  "anchored" | "sequential"
       anchored   - one window per assistant answer (long answers continue in further windows), each
                    left-filled with as much of the preceding conversation as fits, so an answer is always
@@ -94,7 +94,7 @@ def validate_config(config):
         if "dropout" not in config:
             cfg["dropout"] = embedding["dropout"]
     model_spec_given = is_model_spec(spec)
-    structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 1024), ("expansion", 1, 8)]
+    structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 2048), ("expansion", 1, 8)]
     for key, low, high in structural + [("batch_size", 1, 128), ("accumulation", 1, 64),
                                         ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647), ("sample_every", 0, 100000)]:
         cfg[key] = int(cfg[key])

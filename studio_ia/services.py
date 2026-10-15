@@ -335,6 +335,11 @@ class Services:
         of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
         raise NotImplementedError
 
+    def lr_range_test(self, spec, stop=None):
+        """studio_compute.lr_range_test for `spec` on a slice of the chosen text: a throwaway copy trained for about a hundred
+        steps while the learning rate rises. Slow: call it off the Tk thread. `stop` (a threading.Event) ends it early."""
+        raise NotImplementedError
+
     # data (S5) / evaluation (S4) / chat ------------------------------------
     def data(self, kind, query=""):
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
@@ -455,6 +460,11 @@ class Services:
 
     def verdict(self, a, b):
         """Training saved between versions a and b (numbers): studio_eval.training_saved result dict."""
+        raise NotImplementedError
+
+    def few_shot(self, version):
+        """Lettered problems answered with 0, 1 and a few worked examples in the prompt and no training: studio_eval.few_shot_table's
+        dict plus "tasks" and "held_back" (False when no held-back choice problem exists and training ones are asked). Slow."""
         raise NotImplementedError
 
     def post_training(self, version) -> dict:
@@ -628,6 +638,12 @@ class FakeServices(Services):
         from studio_ia import pieces
         return pieces.word_lists([r["b"] for r in self._rows()["text"]])  # no GPT-2 list: nothing is downloaded here
 
+    def lr_range_test(self, spec, stop=None):
+        rates = [1e-6 * 10 ** (i * 6 / 99) for i in range(100)]
+        losses = [5.5 - 2.5 * min(1., max(0., (i - 30) / 50)) for i in range(100)]
+        return dict(rates=rates, losses=losses, smoothed=losses, suggestion=rates[70] / 10, steepest=70, diverged=False, cancelled=False,
+                    lr_min=1e-6, lr_max=1.)
+
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
@@ -765,6 +781,11 @@ class FakeServices(Services):
         from studio_eval import training_saved
         return training_saved([], [])
 
+    def few_shot(self, version):
+        return {"items": 40, "tasks": 2, "held_back": True, "chance": .3,
+                "rows": [{"shots": 0, "used": 0, "correct": 11, "accuracy": .275}, {"shots": 1, "used": 1, "correct": 13, "accuracy": .325},
+                         {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
+
     def post_training(self, version):
         return {"rounds": {}, "counts": {}, "gates": {}}
 
@@ -830,8 +851,10 @@ from pathlib import Path  # noqa: E402
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
+RANGE_CHARS = 400_000  # characters of the chosen text the learning-rate test trains on: a hundred small steps never read more
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
+FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
 
 LN2 = math.log(2)
 
@@ -1316,6 +1339,16 @@ class WorkspaceServices(Services):
             return pieces.word_lists(texts, self._cached("gpt2", self._gpt2))
         return self._fresh("word_lists", make)
 
+    def lr_range_test(self, spec, stop=None):
+        import studio_compute
+        import studio_data_kinds as dk
+        ids = [d["id"] for d in self.workspace.state["datasets"]]
+        texts, _ = dk.text_sample(self.workspace, ids, RANGE_CHARS, exclude=set(self._heldout()))
+        if not texts:
+            raise ValueError("There is no plain text to try it on. Add some in Your data.")
+        # the processor only: this runs on a worker thread while Tk runs, where a GPU probe or Metal work crashes the app on macOS
+        return studio_compute.lr_range_test(spec, [{"text": t} for t in texts], stop=stop, config={"device": "cpu"})
+
     def _gpt2(self):
         """GPT-2's list, downloaded once into data/gpt2 as training with it would; None when it cannot be fetched."""
         from studio_modules.tokenizer import bpe_gpt2
@@ -1505,6 +1538,21 @@ class WorkspaceServices(Services):
             if not done:
                 return {"percent": None, "comparable": False, "reason": f"Version {number} has no finished run to read."}
         return studio_eval.training_saved(pn, po, sn, so)
+
+    def few_shot(self, version):
+        """A seeded sample of the held-back lettered problems, asked of the version's best checkpoint; worked examples come from
+        every choice problem of the same task. Cached per checkpoint file and state of the stored data."""
+        import random
+        import studio_eval
+        ckpt = self._checkpoint(version)
+
+        def make():
+            held = [i for i in map(studio_eval.choice_item, self.post_rows("heldout_problems")) if i]
+            pool = [i for i in map(studio_eval.choice_item, self.post_rows("problems")) if i]
+            asked = held or pool  # ponytail: no held-back choice problem yet, so training ones are asked (flagged held_back False)
+            asked = random.Random(0).sample(asked, min(FEW_SHOT_ITEMS, len(asked)))
+            return {**studio_eval.few_shot(ckpt, asked, pool=held + pool), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
+        return self._cached(("few_shot", ckpt, Path(ckpt).stat().st_mtime_ns, self.workspace.revision), make)
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
