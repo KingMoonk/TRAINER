@@ -97,7 +97,8 @@ class PageLogic(unittest.TestCase):
         self.assertIn("earlier version", blocker(2, {}, 0, False))
         self.assertIn("correction", blocker(2, {}, 1, True))
         self.assertEqual(step_line(QueueState(step=5, total=20, eta_s=600)), "step 5 of 20 · about 10 min left")
-        self.assertEqual(step_line(QueueState()), "step [N] of [N] · about [N] min left")
+        self.assertEqual(step_line(QueueState()), "starting")
+        self.assertEqual(step_line(QueueState(step=40, total=1200, eta_s=600)), "step 40 of 1,200 · about 10 min left")
 
     def test_chat_follows_best_unless_picked(self):
         self.assertEqual(answering_version([1, 2, 3], 2, None), 2)

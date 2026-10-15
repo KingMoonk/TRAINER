@@ -33,7 +33,7 @@ ROUTES = {
     "head_lab": Route("designer", "Head lab", "Where does each attention head look, and how much does the model rely on it? Switch heads off and watch the answer change.", (*LI, "Head lab")),
     "inside3d": Route("designer", "Inside the network", "Build the model from the inside and watch it train, from a window of positions down to single weights.", (*LI, "3D")),
     "pretraining": Route("pretraining", "Pretraining", "Feed it text. It learns by predicting the next word, over and over.", ()),
-    "training_run": Route("pretraining", "Pretraining · version [N]", "Step k of n, the schedule phase and the error so far.", ()),
+    "training_run": Route("pretraining", "Pretraining", "Step k of n, the schedule phase and the error so far.", ()),
     "your_data": Route("pretraining", "Your data", "Three kinds, because each one trains a different stage.", ()),
     "make_data": Route("pretraining", "Make extra data", "Optional. Generate more, then keep what passes review.", ()),
     "post_training": Route("post", "Post-training", "Four rounds, always in this order. Same design throughout; only the weights shift.", ()),
@@ -138,7 +138,7 @@ class Studio(tk.Tk):
             state = "paused" if q.paused else (q.phase or "training")
             self.strip_now.configure(text=f"{q.job.label or q.job.kind} · {state}")
             self.strip_bar.set(q.step / q.total if q.total else None)
-            left = format_duration(q.eta_s) + " left · " if q.eta_s is not None else "[N] min left · "
+            left = format_duration(q.eta_s) + " left · " if q.eta_s is not None else ""
         self.strip_next.configure(text=f"{left}{waiting} queued")
         try:
             v = self.services.best_version() or self.services.current_version()

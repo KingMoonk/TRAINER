@@ -901,10 +901,16 @@ class WorkspaceServices(Services):
             self.note("Building the word list")
             module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
             tok = module.fit(cfg, [{"text": d} for d in docs])
-            small = sum(map(len, docs)) <= 5_000_000  # larger text: the size stays [N] rather than a guess
+            total = sum(map(len, docs))
             self.note("Counting word pieces")
-            encoded = [tok.encode(d) for d in docs] if small else []
-            return {"pieces": sum(map(len, encoded)) + len(docs) if small else None,
+            # Up to 5M characters are counted exactly; larger text is counted on an evenly spread sample of documents
+            # and scaled by characters, so the size is an estimate ("estimated": True) rather than missing.
+            stride = 1 if total <= 5_000_000 else max(1, round(total / 5_000_000))
+            sample = docs[::stride]
+            encoded = [tok.encode(d) for d in sample]
+            counted, chars = sum(map(len, encoded)) + len(sample), sum(map(len, sample))
+            pieces = counted if stride == 1 else round(counted * total / max(1, chars))
+            return {"pieces": pieces if docs else None, "estimated": stride > 1,
                     "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         heldout = self.root / "data" / "heldout.json"

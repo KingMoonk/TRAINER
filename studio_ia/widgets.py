@@ -115,7 +115,7 @@ class KofN(tk.Label):
 
     def set(self, k, n, label=None):
         self.label = self.label if label is None else label
-        head = "[N] of [N]" if k is None or n is None else f"{k} of {n}"
+        head = "not counted yet ·" if k is None or n is None else f"{k} of {n}"
         self.configure(text=f"{head} {self.label}".strip())
 
 
@@ -225,7 +225,7 @@ class BpcPlot(tk.Canvas):
         lr=[(x, lr)], phases=[(start, end, name)], band=None, series=[{points, color, width, dash}])
     `series` adds lines of their own colour and optional dash pattern, e.g. one per seed or a dashed held-back curve.
     Reference lines above the data range go in the strip above the break; `band` = (lo, hi) shades the noise band.
-    With no data it shows `[N]`."""
+    With no data it says so."""
 
     PHASE = {"warm-up": "amber", "steady": "violet", "cool-down": "blue"}
     M = dict(l=56, r=16, t=14, b=22)
@@ -247,7 +247,7 @@ class BpcPlot(tk.Canvas):
         pts = [p for k in ("steps", "smooth", "heldout") for p in d.get(k) or []]
         pts += [p for s in d.get("series") or [] for p in s["points"]]
         if not pts:
-            self.create_text(w / 2, h / 2, text="[N]", fill=C["dim"], font=font(22, mono=True))
+            self.create_text(w / 2, h / 2, text="No points yet: the curve appears once training logs its first steps.", fill=C["dim"], font=font(13))
             return
         total = d.get("total") or max(p[0] for p in pts) or 1
         ys = [p[1] for p in pts]

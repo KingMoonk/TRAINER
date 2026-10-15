@@ -139,13 +139,13 @@ def fits(c, ram=None):
 
 def last_blocks_change(versions):
     """(from, to, v_from, v_to, bpc_moved|None) for the latest block-count change in the history, else None.
-    The size of the move is measured from the two versions' held-back scores, or [N] when either is missing."""
+    The size of the move is measured from the two versions' held-back scores, or None when either is missing."""
     vs = [v for v in versions if v.spec]
     for i in range(len(vs) - 1, 0, -1):
         a, b = _facts(vs[i - 1].spec)["blocks"], _facts(vs[i].spec)["blocks"]
         if a != b:
             x, y = vs[i - 1].scorecard.get("bpc"), vs[i].scorecard.get("bpc")
-            moved = f"{abs(y - x):.2f}" if isinstance(x, (int, float)) and isinstance(y, (int, float)) else "[N]"
+            moved = f"{abs(y - x):.2f}" if isinstance(x, (int, float)) and isinstance(y, (int, float)) else None
             return a, b, vs[i - 1].number, vs[i].number, moved
     return None
 
@@ -157,7 +157,8 @@ def expectations(cur, draft, versions=()):
     if b["L"] < a["L"]:
         out.append(EXPECT["fewer"])
     if b["L"] != a["L"] and (last := last_blocks_change(versions)):
-        out.append(f"Last time blocks changed ({last[0]} → {last[1]}, version {last[2]} → {last[3]}), error moved by {last[4]} bits per character.")
+        out.append(f"Last time blocks changed ({last[0]} → {last[1]}, version {last[2]} → {last[3]}), "
+                   + (f"error moved by {last[4]} bits per character." if last[4] else "but one of them has no held-back score yet."))
     if b["H"] != a["H"]:
         out.append(EXPECT["heads"].format(how="more, narrower" if b["H"] > a["H"] else "fewer, wider"))
     if b["W"] > a["W"]:
@@ -701,7 +702,7 @@ class BuilderPage(Page):
             if self.new_curve:
                 tk_label(legend, f"faint line: {self.nv}, continuing from version {self.n}'s end", 12, "amber", "panel").pack(side="left")
         else:
-            self.no_curve = NO_CURVE.format(n=self.n or "[N]")
+            self.no_curve = NO_CURVE.format(n=self.n) if self.n else "No error curve yet: save a design and train it in Pretraining."
             tk_label(legend, self.no_curve, 12, "muted", "panel").pack(side="left")
         Kicker(card, T["when_answering"], bg="panel").pack(anchor="w", pady=(8, 0))
         tk_label(card, T["example_prompt"], 14, "text", "panel", font=font(14, serif=True)).pack(anchor="w")

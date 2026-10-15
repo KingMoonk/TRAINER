@@ -16,16 +16,15 @@ from studio_ia.widgets import Card, Chip, HeatGrid, Kicker, KofN, Segmented, _ac
 
 ROUNDS = (("Practice answers", T["round_1"], T["r1_method"], T["r1_lead"], T["answers_now"]),
           ("Practice with checks", T["round_2"], T["r2_method"], T["r2_lead"], T["passed_became"]),
-          ("Learn from a teacher", T["round_3"], T["r3_method"], T["r3_lead"], T["moved_toward"]),
-          ("Your votes", T["round_4"], T["r4_method"], T["r4_lead"], T["widened_gap"]))
+          ("Learn from a teacher", T["round_3"], T["r3_method"], T["r3_lead"], T["moved_toward_what"]),
+          ("Your votes", T["round_4"], T["r4_method"], T["r4_lead"], T["widened_gap_what"]))
+COUNTED = (2, 3)  # rounds whose verdict is a count, known only once the round has run
 STATUS = {"done": "done", "running": "running", "queued": "in the queue", "idle": "not started"}
 LEASH = (("Close", .5, T["close_note"]), ("Medium", .1, T["medium_note"]), ("Far", .02, T["far_note"]))  # label, beta, note
 SAMPLE_GROUP = ("Sort these letters: d b a c", "sort", [("a b c d", 1.), ("a b d c", 0.), ("a b c d", 1.), ("a c b d", 0.), ("a b c d", 1.), ("d c b a", 0.)])
 SAMPLE_HEAT = (["The", "capital", "of", "Australia", "is", "Sydney", ",", "which", "is", "on", "the", "coast"],
                [0, 0, 0, .1, 0, .95, .3, .2, .1, .1, 0, .4])
 ADD = "Add to the queue"
-STEP_LINE = "step [N] of [N] · about [N] min left"
-JUDGE = "Judge preferred it on [k] of [n] prompts"
 
 
 def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
@@ -44,13 +43,26 @@ def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
 
 
 def step_line(q):
-    """'step k of n · about m min left' from the running queue state; [N] where unknown."""
-    left = "[N]" if q.eta_s is None else str(max(1, round(q.eta_s / 60)))
-    return f"step {q.step if q.total else '[N]'} of {q.total or '[N]'} · about {left} min left"
+    """'step k of n · about m min left' from the running queue state; only the parts that are known."""
+    parts = [f"step {q.step:,} of {q.total:,}" if q.total else "starting"]
+    if q.eta_s is not None:
+        parts.append(f"about {max(1, round(q.eta_s / 60))} min left")
+    return " · ".join(parts)
 
 
 def count(value):
-    return "[N]" if value is None else str(value)
+    return "–" if value is None else f"{value:,}"
+
+
+def checkpoint_name(services, version):
+    """'version 4 · checkpoint at step 1,200' (the parts that are known), or 'its current checkpoint'."""
+    if version is None:
+        return "its current checkpoint"
+    try:
+        step = services.checkpoint_step(version)
+    except NotImplementedError:
+        step = None
+    return f"version {version.number}" + (f" · checkpoint at step {step:,}" if step else "")
 
 
 class PostTrainingPage(Page):
@@ -87,7 +99,7 @@ class PostTrainingPage(Page):
             child.destroy()
         version = self._version()
         state = self._state(version)
-        self.version_no = version.number if version else "[N]"
+        self.version, self.version_no = version, version.number if version else None
         rounds, self.counts = state.get("rounds", {}), state.get("counts", {})
         self.gates = {**state.get("gates", {}), **self.live_gate}
         self.example = state.get("example", {})
@@ -184,8 +196,8 @@ class PostTrainingPage(Page):
     def _r1(self, card):
         pair = tk.Frame(card, bg=C["panel"])
         pair.pack(fill="x")
-        self._box(pair, T["prompt_scored"], self.example.get("prompt", "[A prompt from a conversation]"))
-        self._box(pair, T["answer_learns"], self.example.get("answer", "[The answer from the same conversation]"))
+        self._box(pair, T["prompt_scored"], self.example.get("prompt") or "No conversations yet: add some in Your data.")
+        self._box(pair, T["answer_learns"], self.example.get("answer") or "The answer from the same conversation appears here.")
         nums = tk.Frame(card, bg=C["panel"])
         nums.pack(fill="x", pady=(GUTTER, 6))
         for key, label in (("conversations", T["conversations_label"]), ("corrections", T["corrections_label"]), ("problems", T["problems_label"])):
@@ -228,7 +240,7 @@ class PostTrainingPage(Page):
     def _r3(self, card):
         live = self.heat
         words, surprise = (live["words"], live["surprise"]) if live else SAMPLE_HEAT
-        tk_label(card, T["prompt_label"] + (": " + live["prompt"] if live else ": [A prompt]"), 12, "muted", "panel").pack(anchor="w")
+        tk_label(card, T["prompt_label"] + (": " + live["prompt"] if live else ": What is the capital of Australia?"), 12, "muted", "panel").pack(anchor="w")
         tk_label(card, T["answer_shaded"], 12, "muted", "panel").pack(anchor="w", pady=(6, 4))
         text = tk.Text(card, height=3, wrap="word", bg=C["panel2"], fg=C["text"], font=font(16), bd=0, padx=10, pady=8, highlightthickness=0)
         top = max(1.0, max(surprise, default=0))
@@ -249,7 +261,9 @@ class PostTrainingPage(Page):
         tk_label(card, T["teacher_label"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 4))
         labels = (T["previous_best"], T["this_model_correction"])
         Segmented(card, labels, labels[self.teacher], lambda v: self._set("teacher", labels.index(v))).pack(anchor="w")
-        tk_label(card, (T["previous_desc"], T["correction_desc"])[self.teacher], 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
+        earlier = self._previous_version(self.version)
+        previous = T["previous_desc"].format(version=checkpoint_name(self.services, earlier).capitalize()) if earlier else T["no_previous"]
+        tk_label(card, (previous, T["correction_desc"])[self.teacher], 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
         tk_label(card, T["teacher_note"], 13, "dim", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
 
     def _r4(self, card):
@@ -260,8 +274,8 @@ class PostTrainingPage(Page):
             box = tk.Frame(pair, bg=C["panel2"], padx=12, pady=10, highlightthickness=2 if on else 1,
                            highlightbackground=C["violet"] if on else C["border"])
             box.pack(side="left", fill="both", expand=True, padx=(0, 8))
-            tk_label(box, f"checkpoint [N] · answer {k}", 12, "muted", "panel2").pack(anchor="w")
-            tk_label(box, f"[Answer {k}]", 15, "text", "panel2").pack(anchor="w", pady=4)
+            tk_label(box, f"answer {k}", 12, "muted", "panel2").pack(anchor="w")
+            tk_label(box, f"Answer {k} to the same prompt", 15, "text", "panel2").pack(anchor="w", pady=4)
             b = tk.Label(box, text=f"Picked: {k} is better" if on else f"{k} is better", font=font(14, bold=True), padx=12, pady=8, takefocus=1,
                          cursor="hand2", bg=C["violet"] if on else C["panel2"], fg=C["bg"] if on else C["violet"],
                          highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
@@ -311,7 +325,9 @@ class PostTrainingPage(Page):
             tk_label(card, step_line(self.services.queue()), 13, "muted", "panel").pack(anchor="w")
         tk_label(card, T["verdict_title"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 0))
         if gate:
-            verdict = gate.get("verdict") or verdict_text
+            verdict = gate.get("verdict") or ("" if i in COUNTED else verdict_text)
+        elif i in COUNTED:
+            verdict = (T["so_far_count"] if s == "running" else T["will_count"]).format(what=verdict_text)
         elif s == "running":
             verdict = T["so_far"].format(verdict_start=verdict_text[0].lower() + verdict_text[1:]) + " (on training prompts; held-back check at the end)"
         else:
@@ -335,18 +351,22 @@ class PostTrainingPage(Page):
         if judge:
             KofN(card, judge[0], judge[1], "prompts preferred by the judge").pack(anchor="w")
         else:
-            tk_label(card, JUDGE, 14, "text2", "panel").pack(anchor="w")
+            tk_label(card, T["judge_none"], 14, "text2", "panel").pack(anchor="w")
         tk_label(card, T["judge_note"], 12, "dim", "panel").pack(anchor="w")
         if gate:
             result = T["result_live"] if gate["ok"] else T["result_kept"]
         else:
             result = T["chat_keeps"] if s == "running" else T["until_then"]
-        tk_label(card, result.replace("version 4", f"version {self.version_no}"), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(GUTTER, 0))
+        tk_label(card, result.format(checkpoint=checkpoint_name(self.services, self.version)), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(GUTTER, 0))
 
     # actions ----------------------------------------------------------------------
-    def _previous_best(self, version):
+    def _previous_version(self, version):
         earlier = [v for v in self.services.versions() if version and v.number < version.number and v.best_checkpoint]
-        return earlier[-1].best_checkpoint if earlier else None
+        return earlier[-1] if earlier else None
+
+    def _previous_best(self, version):
+        earlier = self._previous_version(version)
+        return earlier.best_checkpoint if earlier else None
 
     def _enqueue(self, version, i):
         name = ROUNDS[i][0]

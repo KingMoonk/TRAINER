@@ -19,7 +19,7 @@ TOGGLES = (("idle_only", "Only when I’m not using the computer", "Pauses withi
 
 
 def minutes(seconds):
-    return "about [N] min" if seconds is None else f"about {max(1, round(seconds / 60))} min"
+    return "" if seconds is None else f"about {max(1, round(seconds / 60))} min"
 
 
 CHOICES = {"Older than 1 day": (1, False), "Older than 7 days": (7, False), "Older than 30 days": (30, False), "Older than 90 days": (90, False), "All history": (None, False)}
@@ -85,8 +85,9 @@ class QueuePage(Page):
         tk_label(card, f"{s.job.label or s.job.kind} · {state}", 15).pack(anchor="w")
         lr = "auto" if s.lr is None else f"auto ({s.lr:.2g})"
         phase = s.phase or self._phase(s)
-        tk_label(card, f"step {s.step if s.total else '[N]'} of {s.total or '[N]'} · schedule: {phase or '[N]'} · learning rate: {lr} · "
-                 f"{minutes(s.eta_s)} left", 13, "muted").pack(anchor="w", pady=4)
+        parts = [f"step {s.step:,} of {s.total:,}" if s.total else "starting", f"schedule: {phase}" if phase else "",
+                 f"learning rate: {lr}", f"{minutes(s.eta_s)} left" if s.eta_s is not None else ""]
+        tk_label(card, " · ".join(p for p in parts if p), 13, "muted").pack(anchor="w", pady=4)
         bar = ttk.Progressbar(card, maximum=max(1, s.total), value=s.step)
         bar.pack(fill="x", pady=4)
         row = ttk.Frame(card)
@@ -108,7 +109,10 @@ class QueuePage(Page):
     def _up_next(self, s):
         card = self._card("UP NEXT · IN ORDER")
         hours = total_hours(s)
-        tk_label(card, "all done in about " + ("[N]" if hours is None else f"{hours:.1f}") + " h at the current plan", 13, "muted").pack(anchor="w")
+        if hours is not None:
+            tk_label(card, f"all done in about {hours:.1f} h at the current plan", 13, "muted").pack(anchor="w")
+        elif s.up_next:
+            tk_label(card, "the finish time shows once each waiting job has a time estimate", 13, "muted").pack(anchor="w")
         if not s.up_next:
             tk_label(card, "Nothing waiting. When the current job ends, the computer keeps improving the current version in its steady phase, "
                      "within the plan below.", 14, "text2", wraplength=720).pack(anchor="w")

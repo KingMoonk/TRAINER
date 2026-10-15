@@ -74,9 +74,13 @@ class HeadLabPage(Page):
         for child in self.body.winfo_children():
             child.destroy()
         version = current(self.services)
-        n = f"{version.number}" if version else "[N]"
-        ckpt = Path(version.best_checkpoint).name if version and version.best_checkpoint else "[N]"
-        tk_label(self.body, HEAD_LAB["checkpoint"].format(version=n, checkpoint=ckpt), 13, "muted", wraplength=760).pack(anchor="w")
+        if version and version.best_checkpoint:
+            step = self.services.checkpoint_step(version)
+            ckpt = f"at step {step:,}" if step else Path(version.best_checkpoint).name
+            intro = HEAD_LAB["checkpoint"].format(version=version.number, checkpoint=ckpt)
+        else:
+            intro = HEAD_LAB["no_checkpoint"]
+        tk_label(self.body, intro, 13, "muted", wraplength=760).pack(anchor="w")
         top = tk.Frame(self.body, bg=C["bg"])
         top.pack(fill="x", pady=(GUTTER, 4))
         Kicker(top, f"{self.n_heads} HEADS · CLICK ONE").pack(side="left")

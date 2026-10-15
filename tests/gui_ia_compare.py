@@ -74,7 +74,7 @@ class CompareGui(unittest.TestCase):
         page.add_variant(spec=spec)
         self.app.update()
         self.assertTrue(any(t.startswith("block.channel.config.d_ff:") for t in texts(page.table)))
-        self.assertIn("[N] · spread [N]", texts(page.table))  # no results yet: honest placeholders
+        self.assertIn("–", texts(page.table))  # no results yet: a dash, not a made-up number
         page.reopen(1)
         self.assertEqual(self.fake.draft_spec(), spec)
         self.assertEqual(self.app.route, "builder")

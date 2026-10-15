@@ -141,7 +141,8 @@ class PretrainingPage(Page):
         self.length.pack(anchor="w", pady=4)
         self.steps_line = tk_label(card, "", 13, "muted", "panel")
         self.steps_line.pack(anchor="w")
-        tk_label(card, f"{T['learning_rate']} {T['lr_auto']} {T['lr_info']}", 13, "text2", "panel").pack(anchor="w", pady=(8, 0))
+        self.lr_line = tk_label(card, "", 13, "text2", "panel")
+        self.lr_line.pack(anchor="w", pady=(8, 0))
         tk_label(card, f"{T['schedule_label']} {T['schedule_value']} {T['schedule_note']}", 13, "text2", "panel").pack(anchor="w")
         tk_label(card, T["schedule_desc"], 12, "dim", "panel", wraplength=720).pack(anchor="w", pady=(2, 10))
         self.add_btn = button(card, T["add_queue"], self.add_to_queue, primary=True)
@@ -201,7 +202,7 @@ class PretrainingPage(Page):
         v = self.version()
         parent = self.parent(v)
         self.v, self.parent_v = v, parent
-        n = v.number if v else "[N]"
+        n = v.number if v else None
         self.model_line.configure(text=f"Version {n} · from the Network designer" if v else "No design saved yet")
         for child in self.tiles.winfo_children():
             child.destroy()
@@ -285,19 +286,24 @@ class PretrainingPage(Page):
         pieces, params, ctx = p.get("pieces"), p.get("params"), p.get("context", 256)
         per_step = self.rows_n() * ctx
         self.step_line.configure(text=T["one_step"].format(rows=self.rows_n()).replace("256", str(ctx)))
-        passes = f"{max(1, round(pieces / per_step)):,}" if pieces else "[N]"
-        self.per_step.configure(text=T["per_step_pieces"].format(pieces=f"{per_step:,}").replace("[N]", passes))
+        about = "about " if p.get("estimated") else ""
+        self.per_step.configure(text=T["per_step_pieces"].format(pieces=f"{per_step:,}", passes=f"{about}{max(1, round(pieces / per_step)):,}")
+                                if pieces else T["per_step_only"].format(pieces=f"{per_step:,}"))
         if pieces and params:
             ratio = pieces / params
-            self.enough.configure(text=T["text_estimate"].replace("[N]", f"{max(RULE / ratio, 0):.1f}") if ratio < RULE
+            self.enough.configure(text=T["text_estimate"].format(times=f"{max(RULE / ratio, 0):.1f}") if ratio < RULE
                                   else "You have about as much text as the rule of thumb asks for")
-            self.enough_note.configure(text=T["word_pieces_rule"].replace("[N]", f"{ratio:.2f}", 1))
+            self.enough_note.configure(text=T["word_pieces_rule"].format(ratio=f"{ratio:.2f}"))
         else:
-            self.enough.configure(text=T["text_estimate"])
-            self.enough_note.configure(text=T["word_pieces_rule"])
+            self.enough.configure(text=T["text_unknown"])
+            self.enough_note.configure(text=T["word_pieces_plain"])
         steps, tps = self.steps(), p.get("tokens_per_second")
-        minutes = f"{max(1, round(steps * per_step / tps / 60)):,}" if steps and tps else "[N]"
-        self.steps_line.configure(text=T["steps_time"].replace("[N]", f"{steps:,}" if steps else "[N]", 1).replace("[N]", minutes, 1))
+        if steps and tps:
+            self.steps_line.configure(text=T["steps_time"].format(steps=f"{steps:,}", minutes=f"{max(1, round(steps * per_step / tps / 60)):,}"))
+        else:
+            self.steps_line.configure(text=T["steps_only"].format(steps=f"{steps:,}") if steps else T["steps_none"])
+        lr = ((getattr(self, "v", None) and self.v.spec or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
+        self.lr_line.configure(text=f"{T['learning_rate']} {T['lr_auto']}" + (" " + T["lr_info"].format(lr=f"{lr:.2g}") if lr else ""))
         self.draw_rows()
 
     def draw_rows(self):
@@ -312,22 +318,25 @@ class PretrainingPage(Page):
                 c.create_rectangle(x, r * (cell + 6), x + cell, r * (cell + 6) + cell, width=0,
                                    fill=END if d < 0 else PALETTE[d % len(PALETTE)])
         if not rows:
-            c.create_text(0, 10, text="[N]", anchor="w", fill=C["dim"], font=font(14, mono=True))
+            c.create_text(0, 10, text="Choose some text to see how it is cut into rows.", anchor="w", fill=C["dim"], font=font(12))
 
     def paint_modes(self, v, parent):
         self.mode = forced_mode(v, parent, self.mode)
         ok = can_continue(v, parent)
-        pn = parent.number if parent else "[N]"
-        texts = {"catch_up": (f"Continue from version {pn}", "Recommended. Keeps what version %s learned; parts that are new in version %s start empty, so the curve starts at version %s’s level." % (pn, v.number if v else "[N]", pn)),
+        pn = parent.number if parent else None
+        vn = f"version {v.number}" if v else "this version"
+        texts = {"catch_up": (f"Continue from version {pn}" if pn else "Continue from an earlier version",
+                              f"Recommended. Keeps what version {pn} learned; parts that are new in {vn} start empty, so the curve starts at version {pn}’s level."
+                              if pn else "Keeps what an earlier trained version learned. There is none yet."),
                  "from_scratch": ("Start from scratch", "New random weights. Only required when the word list changes. Slower to reach the same error.")}
         for key, (box, title, sub) in self.mode_boxes.items():
             on, blocked = self.mode == key, key == "catch_up" and not ok
             title.configure(text=texts[key][0])
             why = "The word list changed" if word_list_changed(v, parent) else "There is no trained earlier version to continue from"
-            sub.configure(text="%s, so version %s must start from scratch." % (why, v.number if v else "[N]") if blocked else texts[key][1])
+            sub.configure(text=f"{why}, so {vn} must start from scratch." if blocked else texts[key][1])
             box.configure(highlightbackground=C["violet"] if on else C["border"], highlightthickness=2 if on else 1)
         self.need.configure(text=f"version {v.number} needs catch-up training" if v else "")
-        self.footer.configure(text=T["queue_note"].replace("version 4", f"version {pn}").replace("version 5", f"version {v.number if v else '[N]'}"))
+        self.footer.configure(text=T["queue_note"].format(parent=f"version {pn}" if pn else "its current version", version=vn))
         self.add_btn.state(["!disabled" if v and self.chosen() and self.steps() else "disabled"])
 
     def pick_mode(self, key):

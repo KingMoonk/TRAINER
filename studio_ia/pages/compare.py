@@ -53,9 +53,9 @@ def million(n):
 
 
 def final_cell(s):
-    """'mean · spread x' (or one seed) and, under it, speed and peak memory; [N] before results."""
+    """'mean · spread x' (or one seed) and, under it, speed and peak memory; a dash before results."""
     if not s:
-        return T["error_spread"]
+        return "–"
     head = f"{s['mean']:.3f} · spread {s['spread']:.3f}" if len(s["bpc"]) > 1 else f"{s['mean']:.3f} · one seed"
     return f"{head}\n{s['pieces_per_s']:,.0f} pieces/s · {s['peak_mb']:.0f} MB peak"
 
@@ -63,7 +63,7 @@ def final_cell(s):
 def delta_cell(s):
     """Difference from the base; it counts only when larger than the spread across seeds."""
     if not s:
-        return "[N]"
+        return "–"
     if s["delta"] is None:
         return "—"
     note = {True: "inside the spread", False: "beyond the spread", None: "one seed: no spread"}[s["inside_spread"]]

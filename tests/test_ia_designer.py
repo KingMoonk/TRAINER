@@ -72,7 +72,7 @@ class Builder(unittest.TestCase):
         s2, s4 = B.write_spec(default_spec(), choices(L=2)), B.write_spec(default_spec(), choices(L=4))
         vs = [Version(1, spec=s2, scorecard={"bpc": 3.0}), Version(2, spec=s4, scorecard={"bpc": 2.5})]
         self.assertEqual(B.last_blocks_change(vs), (2, 4, 1, 2, "0.50"))
-        self.assertEqual(B.last_blocks_change([Version(1, spec=s2), Version(2, spec=s4)])[4], "[N]")
+        self.assertEqual(B.last_blocks_change([Version(1, spec=s2), Version(2, spec=s4)])[4], None)
         self.assertIsNone(B.last_blocks_change(vs[:1]))
         out = B.expectations(choices(L=4), choices(L=6), vs)
         self.assertTrue(any("Last time blocks changed (2 → 4, version 1 → 2), error moved by 0.50" in t for t in out))
@@ -140,14 +140,14 @@ class QuickTest(unittest.TestCase):
 
 class Compare(unittest.TestCase):
     def test_cells_show_spread_and_only_clear_differences(self):
-        self.assertEqual(K.final_cell(None), "[N] · spread [N]")
+        self.assertEqual(K.final_cell(None), "–")
         row = {"bpc": [3.0, 3.1], "mean": 3.05, "spread": .1, "pieces_per_s": 1200., "peak_mb": 80., "delta": .02, "inside_spread": True}
         self.assertEqual(K.final_cell(row), "3.050 · spread 0.100\n1,200 pieces/s · 80 MB peak")
         self.assertEqual(K.final_cell(dict(row, bpc=[3.0])), "3.050 · one seed\n1,200 pieces/s · 80 MB peak")
         self.assertEqual(K.delta_cell(row), "+0.020 · inside the spread")
         self.assertEqual(K.delta_cell(dict(row, delta=-.5, inside_spread=False)), "-0.500 · beyond the spread")
         self.assertEqual(K.delta_cell(dict(row, inside_spread=None)), "+0.020 · one seed: no spread")
-        self.assertEqual(K.delta_cell(None), "[N]")
+        self.assertEqual(K.delta_cell(None), "–")
 
     def test_guess_is_shown_next_to_the_result(self):
         beyond = {"delta": -.5, "inside_spread": False}

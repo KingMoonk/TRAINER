@@ -59,7 +59,7 @@ class ShellTest(unittest.TestCase):
         toggle = w.Toggle(f, "x")
         toggle.flip()
         kofn = w.KofN(f, None, None, "passed")
-        self.assertEqual(kofn.cget("text"), "[N] of [N] passed")
+        self.assertEqual(kofn.cget("text"), "not counted yet · passed")
         w.HowItWorks(f).toggle()
         w.StateTray(f, "live", "live", "text")
         w.Chip(f, "x", "training")

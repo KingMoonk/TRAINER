@@ -25,10 +25,11 @@ def score_rows(v):
         k = s.get(key)
         return T["val_kofn"] if not k else f"{k[0]} of {k[1]}"
     bpc, size, speed = s.get("bpc"), s.get("params_m"), s.get("pieces_per_s")
+    known = [f"{size}M" if size is not None else "", f"{speed} pieces/s" if speed is not None else ""]
     return [(T["error_held_back"], T["val_bpc"] if bpc is None else f"{bpc:.2f} bits/char"),
             (T["answers_prompts"], "yes" if s.get("answers") in (True, "yes") else "not yet"),
             (T["checked_problems"], kn("problems")), (T["judge_preferred"], kn("judge")),
-            (T["size_speed"], T["val_size_speed"] if size is None or speed is None else f"{size}M · {speed} pieces/s")]
+            (T["size_speed"], " · ".join(k for k in known if k) or T["val_size_speed"])]
 
 
 def answering_version(numbers, best, picked, follows=True, current=None):
@@ -261,7 +262,7 @@ class ChatPage(Page):
         self.rows = {}
         for num, v in sorted(vs.items()):
             is_a, is_b = num == self.use, self.compare and num == self.b
-            chip = "catching up" if v.status == "training" else v.verdict or ("baseline" if v.parent is None else "[N]")
+            chip = "catching up" if v.status == "training" else v.verdict or ("baseline" if v.parent is None else "not compared yet")
             slot = ("left reply" if self.compare else "answering now") if is_a else "right reply" if is_b else \
                 "best on held-back text" if num == best else \
                 "still training · answers from its best checkpoint so far" if v.status == "training" else ""
@@ -278,7 +279,12 @@ class ChatPage(Page):
                 w.bind("<Button-1>", lambda _e, n=num: self.pick(n))
             row.bind("<Return>", lambda _e, n=num: self.pick(n))
             self.rows[num] = row
-        tk_label(self.shelf, T["checkpoints"], 12, "dim", "panel").pack(anchor="w", pady=(6, 0))
+        steps = []
+        for num, v in sorted(vs.items()):
+            step = self.services.checkpoint_step(v) if v.best_checkpoint else None
+            if step:
+                steps.append(f"{name(v).lower()} at step {step:,}")
+        tk_label(self.shelf, T["checkpoints"].format(checkpoints=" · ".join(steps) or "none saved yet"), 12, "dim", "panel").pack(anchor="w", pady=(6, 0))
 
     def _score(self, cur):
         for w in self.score_card.winfo_children():
