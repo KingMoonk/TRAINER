@@ -87,6 +87,11 @@ def plan_phrase(plan):
     return ""
 
 
+def if_added(outlook):
+    """A queue_outlook() for a job not yet added, as the line beside its "Add to the queue" button: "If you add it: starts now"."""
+    return f"If you add it: {outlook[:1].lower()}{outlook[1:]}"
+
+
 class Services:
     """Synchronous façade; long work runs through the queue. Subclasses override; scopes add methods, never rename."""
 
