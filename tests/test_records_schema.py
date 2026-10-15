@@ -81,7 +81,7 @@ class Migration(unittest.TestCase):
         self.assertFalse(self.ws.schema_pending())
         self.check_columns()
         indexes = {row[0] for row in stored(self.ws.db_path, "SELECT name FROM sqlite_master WHERE type='index'")}
-        self.assertTrue({"records_pick", "records_dataset"} <= indexes)
+        self.assertTrue({"records_pick", "records_dataset", "records_stats"} <= indexes)
         self.assertEqual(list(self.ws.iter_examples(self.ds)), self.rows)  # nothing about a row changes for its readers
         self.assertEqual(self.ws.get_example(self.rows[3]["id"]), self.rows[3])
 
@@ -111,8 +111,9 @@ class Migration(unittest.TestCase):
         reopened.progress = lambda text, fraction: later.append(fraction)
         with patch.object(studio_core, "MIGRATE_BATCH", 50):
             reopened.ensure_schema()
-        self.assertEqual(later[-1], 1.0)
-        self.assertEqual(len(later), (len(self.rows) - 100 + 49) // 50)  # only the rest was read
+        fractions = [f for f in later if f is not None]  # the last note, "Indexing", has no fraction
+        self.assertEqual(fractions[-1], 1.0)
+        self.assertEqual(len(fractions), (len(self.rows) - 100 + 49) // 50)  # only the rest was read
         self.assertEqual(stored(self.ws.db_path, "PRAGMA user_version"), [(studio_core.SCHEMA_VERSION,)])
         self.check_columns()
 

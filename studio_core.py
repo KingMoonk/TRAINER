@@ -14,14 +14,17 @@ import tempfile
 import time
 import threading
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import orjson
 import pandas as pd
 
-SCHEMA_VERSION = 2   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns)
+SCHEMA_VERSION = 3   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns), 2 = before the kind_stats index
 MIGRATE_BATCH = 5000
+INSERT_BATCH = 5000
 _COLUMNS = "id,dataset_id,fingerprint,payload,user,assistant,intent,quality,characters,kind,holdout"
 _READ = "payload,user,assistant"  # what _row_to_example needs
 _CREATE_RECORDS = """CREATE TABLE IF NOT EXISTS records (
@@ -31,6 +34,7 @@ _CREATE_RECORDS = """CREATE TABLE IF NOT EXISTS records (
     kind TEXT, holdout INTEGER,
     UNIQUE(dataset_id, fingerprint))"""
 _PICK_INDEX = "CREATE INDEX IF NOT EXISTS records_pick ON records(kind, holdout, quality, dataset_id)"
+_STATS_INDEX = "CREATE INDEX IF NOT EXISTS records_stats ON records(dataset_id, kind, quality, characters, holdout)"  # kind_stats and review_count read this alone
 
 
 def _root():
@@ -70,14 +74,124 @@ def atomic_json(path, value):
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     temporary = Path(name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(value, ensure_ascii=False, indent=2))
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(orjson.dumps(value, option=_JSON))
             stream.flush()
             os.fsync(stream.fileno())  # a renamed file must not come back empty after a power loss
         replace_file(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+_JSON = orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY  # stdlib's indent=2, int keys and numpy scalars as before
+
+
+def read_json(path):
+    return orjson.loads(Path(path).read_bytes())
+
+
+# Files a run is still writing (metrics.jsonl, samples.jsonl) are polled every refresh. Each is parsed once: a later read
+# stats it, and if it grew parses only the new bytes. Keyed on size and mtime, reset when the file shrank or was replaced.
+_TAILS = OrderedDict()
+_TAILS_KEPT = 256
+_TAILS_LOCK = threading.Lock()  # the shell's workers read the same runs at once
+_CHECK = 64  # bytes before the saved offset that must still match, or the file was replaced by a longer one
+
+
+def _jsonl_row(line):
+    try:
+        row = orjson.loads(line)
+    except orjson.JSONDecodeError:
+        try:
+            row = json.loads(line)  # a diverged run logs NaN, which json reads and orjson refuses
+        except ValueError:
+            return None
+    return row if isinstance(row, dict) else None
+
+
+def _remember(key, entry):  # call with _TAILS_LOCK held
+    _TAILS[key] = entry
+    _TAILS.move_to_end(key)
+    while len(_TAILS) > _TAILS_KEPT:
+        _TAILS.popitem(last=False)
+
+
+def _jsonl_rows(data):
+    return [row for row in map(_jsonl_row, filter(bytes.strip, data.split(b"\n"))) if row is not None]
+
+
+def jsonl_rows(path):
+    """The rows of a JSONL file a run appends to. Lines that do not parse (a crash or a write in progress) are skipped."""
+    key = str(path)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        with _TAILS_LOCK:
+            _TAILS.pop(key, None)
+        return []
+    with _TAILS_LOCK:
+        seen = _TAILS.get(key)
+        if seen and (seen["size"], seen["mtime"]) == (stat.st_size, stat.st_mtime_ns):
+            _TAILS.move_to_end(key)
+            return seen["rows"] + seen["last"]
+        try:
+            with open(path, "rb") as stream:
+                if seen and stat.st_size >= seen["offset"]:
+                    stream.seek(max(0, seen["offset"] - _CHECK))
+                    if stream.read(min(_CHECK, seen["offset"])) != seen["check"]:
+                        seen = None
+                else:
+                    seen = None
+                if seen is None:
+                    stream.seek(0)
+                data = stream.read()
+        except OSError:
+            _TAILS.pop(key, None)
+            return []
+        base = seen or {"offset": 0, "rows": [], "check": b""}
+        whole = data[:data.rfind(b"\n") + 1]  # the unfinished last line waits for its newline
+        rows = base["rows"] + _jsonl_rows(whole)
+        offset = base["offset"] + len(whole)
+        check = (base["check"] + whole)[-_CHECK:]
+        # a last line that parses is a row even without its newline; it is kept apart so the offset stays on a line start
+        last = _jsonl_rows(data[len(whole):])
+        _remember(key, {"size": stat.st_size, "mtime": stat.st_mtime_ns, "offset": offset, "rows": rows, "check": check, "last": last})
+        return rows + last
+
+
+def jsonl_tail(path, count):
+    """The last `count` rows of a JSONL file whose lines can be long (samples.jsonl), reading only its end."""
+    key = (str(path), count)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return []
+    with _TAILS_LOCK:
+        seen = _TAILS.get(key)
+        if seen and (seen["size"], seen["mtime"]) == (stat.st_size, stat.st_mtime_ns):
+            _TAILS.move_to_end(key)
+            return list(seen["rows"])
+        try:
+            with open(path, "rb") as stream:
+                size, chunk = stream.seek(0, 2), 1 << 16
+                while True:
+                    start = max(0, size - chunk)
+                    stream.seek(start)
+                    data = stream.read(size - start)
+                    if start:
+                        data = data[data.find(b"\n") + 1:]  # the first line is probably cut
+                    if start and data.count(b"\n") <= count:
+                        chunk *= 2  # not enough whole lines yet; do not parse until there are
+                        continue
+                    rows = _jsonl_rows(data)
+                    if len(rows) >= count or not start:
+                        break
+                    chunk *= 2
+        except OSError:
+            return []
+        _remember(key, {"size": stat.st_size, "mtime": stat.st_mtime_ns, "rows": rows[-count:]})
+        return rows[-count:]
 
 
 def replace_file(source, target, attempts=40):
@@ -294,9 +408,9 @@ class Workspace:
         """A connection that commits on exit. `touched` is the set of dataset ids this block writes to (the block may add to it
         while it runs): their revs go up when it changes anything. Without it a write bumps every disk dataset, which is safe, not cheap."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.db_path, timeout=30)
+        connection = sqlite3.connect(self.db_path, timeout=30)  # one connection per call, so none is ever used by two threads; a busy database is waited for up to 30 s
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")  # per connection; in WAL a power cut can lose the last commits but never corrupts
             if connection.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
                 self._migrate(connection)
         except BaseException:
@@ -336,6 +450,7 @@ class Workspace:
         with self._migrate_lock:
             if connection.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
                 return  # another thread did it while this one waited
+            connection.execute("PRAGMA journal_mode=WAL")  # kept in the file, so it is set here once; readers then never block the writer
             connection.execute(_CREATE_RECORDS)  # a no-op on an older table: its columns are added below
             connection.execute("CREATE INDEX IF NOT EXISTS records_dataset ON records(dataset_id)")
             columns = {row[1] for row in connection.execute("PRAGMA table_info(records)")}
@@ -363,6 +478,9 @@ class Workspace:
                 if self.progress:
                     self.progress(f"Updating your stored data ({done:,} of {total:,})", done / max(total, done))
             connection.execute(_PICK_INDEX)
+            if self.progress:
+                self.progress("Indexing your stored data", None)
+            connection.execute(_STATS_INDEX)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
 
@@ -473,9 +591,21 @@ class Workspace:
         else:
             yield from (e for e in self.examples(dataset_id) if dk.classify(e) == kind)
 
+    def kind_rows(self, dataset_id, kind, query="", after=0, limit=200, rules=()):
+        """[(rowid, example)] of one disk dataset: up to `limit` rows of `kind` after rowid `after`, in storage order, whose user,
+        assistant or intent hold `query` (SQLite folds case for ASCII letters only) or whose stored rule is one of `rules`."""
+        where, parameters = self._where(dataset_id, query)
+        if query.strip() and rules:
+            where = f"({where} OR dataset_id=? AND ({' OR '.join(['payload LIKE ?'] * len(rules))}))"
+            parameters = parameters + [dataset_id] + [f'%"rule": "{rule}"%' for rule in rules]
+        with self._connect() as connection:
+            cursor = connection.execute(f"SELECT rowid,{_READ} FROM records WHERE {where} AND kind=? AND rowid>? ORDER BY rowid LIMIT ?",
+                                        parameters + [kind, after, limit])
+            return [(row[0], self._row_to_example(row[1:])) for row in cursor]
+
     def kind_stats(self, dataset_id):
-        """{kind: (records, characters, held back)} of one disk dataset from one GROUP BY on the kind column; None when some
-        row has no kind yet (then the caller reads the rows)."""
+        """{kind: (records, characters, held back)} of one disk dataset from one GROUP BY on the kind column (read from the records_stats
+        index, not the rows); None when some row has no kind yet (then the caller reads the rows)."""
         with self._connect() as connection:
             groups = connection.execute("SELECT kind,COUNT(*),COALESCE(SUM(characters),0),COALESCE(SUM(holdout),0) "
                                         "FROM records WHERE dataset_id=? GROUP BY kind", (dataset_id,)).fetchall()
@@ -496,19 +626,27 @@ class Workspace:
                     found[dataset_id].append(self._row_to_example(row))
         return found
 
-    def sample(self, dataset_id, limit=20000, seed=42, reviewed_only=False):
-        """Uniform deterministic sampling with O(limit) record memory, including disk datasets."""
+    def review_count(self, dataset_id):
+        """How many examples of one dataset are still marked Review."""
+        if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            with self._connect() as connection:
+                return connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=? AND quality='Review'", (dataset_id,)).fetchone()[0]
+        return sum(1 for e in self.examples(dataset_id) if e.get("quality") == "Review")
+
+    def sample(self, dataset_id, limit=20000, seed=42, reviewed_only=False, kind=None):
+        """Uniform deterministic sampling with O(limit) record memory, including disk datasets. `kind` keeps one kind of example."""
         limit = max(0, int(limit))
         if not limit:
             return []
         rng = random.Random(seed)
         if (self._dataset(dataset_id) or {}).get("storage") != "sqlite":
-            rows = [e for e in self.examples(dataset_id) if not reviewed_only or e.get("quality") == "Good"]
+            import studio_data_kinds as dk
+            rows = [e for e in self.examples(dataset_id) if (not reviewed_only or e.get("quality") == "Good") and (kind is None or dk.classify(e) == kind)]
             return rng.sample(rows, min(limit, len(rows)))
         chosen = []
         with self._connect() as connection:
-            suffix = " AND quality='Good'" if reviewed_only else ""
-            for index, (rowid,) in enumerate(connection.execute("SELECT rowid FROM records WHERE dataset_id=?" + suffix + " ORDER BY rowid", (dataset_id,))):
+            suffix = (" AND quality='Good'" if reviewed_only else "") + (" AND kind=?" if kind else "")
+            for index, (rowid,) in enumerate(connection.execute("SELECT rowid FROM records WHERE dataset_id=?" + suffix + " ORDER BY rowid", (dataset_id, *([kind] if kind else [])))):
                 if index < limit:
                     chosen.append(rowid)
                 else:
@@ -533,7 +671,7 @@ class Workspace:
             row = connection.execute(f"SELECT {_READ} FROM records WHERE id=?", (example_id,)).fetchone()
             return self._row_to_example(row) if row else None
 
-    def update_example(self, example):
+    def update_example(self, example, save=True):
         old = self.get_example(example.get("id"))
         if old is None:
             raise ValueError("Example no longer exists.")
@@ -556,7 +694,8 @@ class Workspace:
             old.clear()
             old.update(dk.stamp(value, fingerprint(value)))
             self._bump(dataset_id)
-        self.save()
+        if save:
+            self.save()
         return value
 
     def remove_examples(self, ids):
@@ -577,10 +716,13 @@ class Workspace:
         self.save()
 
     def mark_reviewed(self, ids):
-        for example_id in ids:
-            example = self.get_example(example_id)
-            if example:
-                self.update_example({**example, "quality": "Good"})
+        try:
+            for example_id in ids:
+                example = self.get_example(example_id)
+                if example:
+                    self.update_example({**example, "quality": "Good"}, save=False)
+        finally:
+            self.save()  # once, not once per id
 
     def audit(self, dataset_id):
         if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
@@ -604,15 +746,19 @@ class Workspace:
             self.use_disk_storage(dataset_id)
         if dataset.get("storage") == "sqlite":
             added, duplicate, invalid = 0, 0, 0
-            with self._connect({dataset_id}) as connection:
+            with self._connect({dataset_id}) as connection:  # one transaction for the whole import
+                batch = []
                 for row in rows:
                     example = normalize(row, dataset_id, source)
                     if example is None:
                         invalid += 1
                         continue
-                    stored = self._insert_rows(connection, [self._db_row(example)])
-                    added += stored
-                    duplicate += 1 - stored
+                    batch.append(self._db_row(example))
+                    if len(batch) >= INSERT_BATCH:
+                        stored = self._insert_rows(connection, batch)
+                        added, duplicate, batch = added + stored, duplicate + len(batch) - stored, []
+                stored = self._insert_rows(connection, batch)
+                added, duplicate = added + stored, duplicate + len(batch) - stored
                 dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
             self.save()
             return added, duplicate, invalid

@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from studio_timing import timed
 from studio_versions import NoCheckpoint
 
 
@@ -223,6 +224,7 @@ class Services:
             return (f"{after}; the queue opens {when}{plan}" if after else f"Starts {when}{plan}") if when else f"Waiting: {reason}"
         return after or "Starts now"
 
+    @timed("services.next_step")
     def next_step(self):
         """The single "what next" answer (studio_ia.next_step.NextStep) from this workspace's data, versions and queue."""
         from studio_ia.next_step import next_step
@@ -295,6 +297,11 @@ class Services:
     # data (S5) / evaluation (S4) / chat ------------------------------------
     def data(self, kind, query=""):
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
+        raise NotImplementedError
+
+    def data_page(self, kind, query="", cursor=None, limit=200):
+        """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
+        reached; cursor None = the first page, a next cursor of None = nothing follows. Rows are shaped like DataSummary.rows."""
         raise NotImplementedError
 
     def add_data(self, kind, fields):
@@ -579,6 +586,10 @@ class FakeServices(Services):
         out.rows = [dict(r) for r in rows if needle in f"{r['a']} {r['b']}".casefold()]
         return out
 
+    def data_page(self, kind, query="", cursor=None, limit=200):
+        rows, start = self.data(kind, query).rows, cursor or 0
+        return rows[start:start + limit], start + limit if start + limit < len(rows) else None
+
     def _add_row(self, kind, a, b, status="Good", dataset="Your data", draft=False):
         rows = self._rows()[kind]
         if not (a.strip() and b.strip()) or any((r["a"], r["b"]) == (a, b) for r in rows):
@@ -731,7 +742,7 @@ import threading  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-SUMMARY_FORMAT = 3  # data/summaries.json layout; 3: one entry per dataset, each with its rev; 2: whole workspace, text characters counted once. A saved summary of another format is rebuilt
+SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
@@ -888,6 +899,7 @@ class WorkspaceServices(Services):
         rows = self._rows()
         return self._version(rows[-1]) if rows else None
 
+    @timed("services.best_version")
     def best_version(self):
         """The version Chat follows: a later version takes over only when its held-back error is below the noise band of
         the one it replaces (studio_gate.moves_chat), so a difference inside the noise never moves Chat."""
@@ -940,6 +952,7 @@ class WorkspaceServices(Services):
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
 
+    @timed("services.refresh_downloads")
     def refresh_downloads(self):
         import studio_catalog as cat
         rebuilt = cat.refresh_downloads(self.workspace)
@@ -1037,7 +1050,7 @@ class WorkspaceServices(Services):
             self._probe.on = False
 
     def _stamp(self):
-        """Size and time of the files the stored data lives in: says whether data/summaries.json still describes them."""
+        """Size and time of the files the stored data lives in: says whether data/summaries.sqlite still describes them."""
         db = self.workspace.db_path
 
         def stat(path):
@@ -1048,22 +1061,18 @@ class WorkspaceServices(Services):
                 return None
         return [stat(self.workspace.path), stat(db), stat(db.with_name(db.name + "-wal"))]
 
+    @timed("services._summaries")
     def _summaries(self):
-        """{kind: DataSummary with every sample row, "example": the first training conversation}. Kept per dataset in
-        data/summaries.json beside each dataset's `rev`, so a change to one dataset reads that dataset only and a launch
-        reads nothing the file still describes."""
+        """{kind: DataSummary with the first page of sample rows, "example": the first training conversation, "takes": what
+        a search reads}. Kept per dataset in data/summaries.sqlite beside each dataset's `rev`, so a change to one dataset
+        reads that dataset only and a launch reads nothing the file still describes."""
         import studio_data_kinds as dk
-        from studio_core import atomic_json
 
         def make():
-            path, stamp = self.root / "data" / "summaries.json", self._stamp()
-            cached, unchanged = {}, False
-            try:
-                saved = json.loads(path.read_text(encoding="utf-8"))
-                if saved.get("format") == SUMMARY_FORMAT:  # any other layout is stale: rebuilt once
-                    cached, unchanged = saved["datasets"], saved["stamp"] == stamp
-            except (OSError, ValueError, KeyError, TypeError, AttributeError):
-                pass
+            stamp = self._stamp()
+            cache = self._summary_cache()
+            cached, saved, view = cache.load()
+            unchanged = saved == stamp
             datasets = list(self.workspace.state["datasets"])
             # The files differ from what the summary was made of, yet no dataset's rev moved: an older app wrote them without
             # counting, so nothing can be trusted.
@@ -1073,14 +1082,18 @@ class WorkspaceServices(Services):
                 entries, reread = dk.refresh(self.workspace, cached, rescan_all=rescan_all, progress=self.note)
             except (KeyError, TypeError, IndexError, AttributeError):  # an entry that does not have the shape this version writes
                 entries, reread = dk.refresh(self.workspace, {}, progress=self.note)
-            out, example = dk.assemble(datasets, entries)
-            out["example"] = example
             if reread or set(entries) != set(cached):
                 self.note("Saving the summary")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_json(path, {"format": SUMMARY_FORMAT, "stamp": stamp, "datasets": entries})
+                view = cache.save(datasets, entries, stamp)
+                (self.root / "data" / "summaries.json").unlink(missing_ok=True)  # the layout before 4: one large file
+            out, example = dk.assemble(datasets, entries, view)
+            out["example"], out["takes"] = example, view["takes"]
             return out
         return self._fresh("summaries", make)
+
+    def _summary_cache(self):
+        from studio_data_cache import SummaryCache
+        return SummaryCache(self.root / "data" / "summaries.sqlite", SUMMARY_FORMAT)
 
     def pretrain_preview(self, dataset_ids, rows=16):
         import studio_estimate
@@ -1149,9 +1162,9 @@ class WorkspaceServices(Services):
         """Pieces per second of the newest run that logged one (for the time estimate)."""
         for ver in reversed(self.versions()):
             for run in reversed(ver.runs):
-                got = [r["tokens_per_second"] for r in read_metrics(Path(run) / "metrics.jsonl") if r.get("tokens_per_second")]
+                got = next((r["tokens_per_second"] for r in reversed(read_metrics(Path(run) / "metrics.jsonl")) if r.get("tokens_per_second")), None)
                 if got:
-                    return got[-1]
+                    return got
         return None
 
     # job results -> versions
@@ -1278,6 +1291,7 @@ class WorkspaceServices(Services):
 
     def _curve_for(self, number):
         """(points [(trained tokens, held-back bits/char)], schedule id, finished) of a version's latest run."""
+        from studio_core import read_json
         from studio_model import read_metrics
         v = self._as_version(number)
         run = Path(v.runs[-1]) if v and v.runs else None
@@ -1285,8 +1299,8 @@ class WorkspaceServices(Services):
             return [], "", False
         curve = self.run_curve(run)
         tokens = {r["step"]: r.get("trained_tokens") or r["step"] for r in read_metrics(run / "metrics.jsonl")}
-        spec = json.loads((run / "spec.json").read_text(encoding="utf-8")) if (run / "spec.json").exists() else {}
-        status = json.loads((run / "run.json").read_text(encoding="utf-8")).get("status") if (run / "run.json").exists() else None
+        spec = read_json(run / "spec.json") if (run / "spec.json").exists() else {}
+        status = read_json(run / "run.json").get("status") if (run / "run.json").exists() else None
         return [(tokens.get(s, s), y) for s, y in curve["heldout"]], json.dumps([spec.get("train", {}).get("schedule"), curve["total"]]), status == "completed"
 
     def verdict(self, a, b):
@@ -1301,9 +1315,18 @@ class WorkspaceServices(Services):
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
+        summaries = self._summaries()
+        full = summaries[kind]
+        if not query.strip():
+            return replace(full, rows=list(full.rows))
+        names = {d["id"]: d["name"] for d in self.workspace.state["datasets"]}
+        return replace(full, rows=self._summary_cache().search(kind, query, summaries["takes"][kind], names))
+
+    def data_page(self, kind, query="", cursor=None, limit=200):
         import studio_data_kinds as dk
-        full = self._summaries()[kind]
-        return replace(full, rows=dk.matching(full.rows, query))
+        summary = self.data(kind)  # the sets and the near-duplicates; the rows come from storage
+        dups = {r["id"] for r in summary.rows if r["status"] == "Near-duplicate"}
+        return dk.page(self.workspace, kind, query, [(x["id"], x["name"]) for x in summary.sets], cursor, limit, dups)
 
     def has_text(self):
         """One indexed look at the first text row of each dataset, not the whole-store summary (a cold one reads every dataset)."""
@@ -1419,8 +1442,8 @@ class WorkspaceServices(Services):
         teacher.model = models[0]
         rng, rows = random.Random(), []
         if kind == "conversations":
-            pool = [e for d in self.workspace.state["datasets"] for e in self.workspace.iter_examples(d["id"])
-                    if dk.classify(e) == "conversations" and e.get("quality") == "Good"]
+            pool = [e for d in self.workspace.state["datasets"]  # up to n good conversations from each dataset, picked by rowid, not read whole
+                    for e in self.workspace.sample(d["id"], n, rng.getrandbits(32), reviewed_only=True, kind="conversations")]
             if not pool:
                 raise RuntimeError("There are no good conversations to rewrite yet.")
             work = [(json.dumps({"user": e["user"], "assistant": e["assistant"]}), True) for e in rng.sample(pool, min(n, len(pool)))]
@@ -1441,10 +1464,10 @@ class WorkspaceServices(Services):
                 rows.append({**row, "quality": "Review", "synthetic": True})
         return self.workspace.add(dk.ensure_dataset(self.workspace, self._DRAFT_SETS[kind]), rows, "synthetic")[0]
 
+    @timed("services.draft_count")
     def draft_count(self):
         names = set(self._DRAFT_SETS.values())
-        return sum(1 for d in self.workspace.state["datasets"] if d["name"] in names
-                   for e in self.workspace.iter_examples(d["id"]) if e.get("quality") == "Review")
+        return sum(self.workspace.review_count(d["id"]) for d in self.workspace.state["datasets"] if d["name"] in names)
 
     def review_data(self, example_id, keep):
         if keep:
@@ -1485,6 +1508,7 @@ class WorkspaceServices(Services):
         except OSError:
             return None
 
+    @timed("services._heldout")
     def _heldout(self):
         """The held-back documents, read once per version of data/heldout.json (it is tens of MB)."""
         stamp = self._heldout_stamp()
@@ -1507,6 +1531,7 @@ class WorkspaceServices(Services):
                 self._cache[key] = make()
             return self._cache[key]
 
+    @timed("services.references")
     def references(self, version):
         """Reference lines for the run page. Cached per checkpoint and held-back file: the run page asks every 1.5 s."""
         import studio_eval
@@ -1530,12 +1555,14 @@ class WorkspaceServices(Services):
                self._heldout_stamp())
         return self._cached(key, make)
 
+    @timed("services.run_curve")
     def run_curve(self, run_dir):
         import studio_eval
+        from studio_core import read_json
         from studio_model import read_metrics
         run = Path(run_dir)
         rows = [r for r in read_metrics(run / "metrics.jsonl") if r.get("loss") is not None]
-        spec = json.loads((run / "spec.json").read_text(encoding="utf-8")) if (run / "spec.json").exists() else {}
+        spec = read_json(run / "spec.json") if (run / "spec.json").exists() else {}
         train = spec.get("train", {})
         total = train.get("run", {}).get("steps") or (rows[-1]["step"] if rows else 0)
         cpp = 1.0  # characters per piece; nats per piece / ln2 / cpp = bits per character
@@ -1560,11 +1587,9 @@ class WorkspaceServices(Services):
     @staticmethod
     def _run_samples(run):
         """The latest 'what it writes now' samples train() logged (samples.jsonl), with the prompt and the steps between them."""
-        def rows(name):
-            path = run / name
-            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line] if path.exists() else []
-        cfg = json.loads((run / "config.json").read_text(encoding="utf-8")) if (run / "config.json").exists() else {}
-        samples = rows("samples.jsonl")[-5:]
+        from studio_core import jsonl_tail, read_json
+        cfg = read_json(run / "config.json") if (run / "config.json").exists() else {}
+        samples = jsonl_tail(run / "samples.jsonl", 5)
         return {"samples": [{"step": x["step"], "text": x["text"]} for x in samples],
                 "sample_every": (cfg.get("sample_every") or 0) * cfg.get("eval_every", 0) or None,
                 "prompt": samples[-1]["prompt"] if samples else cfg.get("sample_prompt")}
