@@ -59,6 +59,17 @@ class CompareGui(unittest.TestCase):
         self.assertEqual(job.params["experiment"]["seeds"], 5)
         self.assertEqual(job.params["datasets"], ["d1"])
 
+    def test_queue_button_is_live_only_with_a_variant_and_a_guess(self):
+        page = self.app.show("compare")
+        self.assertIn("disabled", page.queue_btn.state())
+        self.assertEqual(page.problem.cget("text"), "Add a variant first.")
+        page.add_variant(spec=self.variant(page))
+        self.assertIn("disabled", page.queue_btn.state())
+        self.assertEqual(page.problem.cget("text"), "Pick your guess first.")
+        page.guess.pick(T["better"])
+        self.assertNotIn("disabled", page.queue_btn.state())
+        self.assertEqual(page.problem.cget("text"), "")
+
     def test_no_text_means_no_compare_job(self):
         self.fake.data = lambda kind: {"kind": kind, "count": 0, "sets": []}
         page = self.app.show("compare")

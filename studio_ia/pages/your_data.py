@@ -38,6 +38,11 @@ def shown_line(summary, query):
     return T["shown"].format(shown=len(summary.rows), count=summary.count) if not query.strip() and len(summary.rows) < summary.count else ""
 
 
+def collection_shown(summary):
+    """The recommended collection is first-run guidance: it shows while the open kind has no sets."""
+    return not summary.sets
+
+
 def parse_rule(text):
     """A rule key or its plain label (either case) -> key, else None."""
     word = (text or "").strip().casefold()
@@ -129,7 +134,7 @@ class YourDataPage(Page):
         self.edit_button = ttk.Button(self.detail, text=T["edit"], command=self.edit)
         self.note = tk_label(body, "", 13, "muted", wraplength=760)
         self.note.pack(fill="x", pady=GUTTER)
-        buttons = tk.Frame(body, bg=C["bg"])
+        buttons = self.buttons = tk.Frame(body, bg=C["bg"])
         buttons.pack(fill="x")
         self.add_button = ttk.Button(buttons, style="Primary.TButton", command=self.add)
         self.add_button.pack(side="left")
@@ -138,8 +143,7 @@ class YourDataPage(Page):
         self.dup_button.pack(side="left")
         self.make_button = ttk.Button(buttons, command=self.make)
         self.make_button.pack(side="left", padx=8)
-        card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
-        card.pack(fill="x", pady=(GUTTER, 0), before=self.entry.master)  # above search and the table, so it is in view
+        card = self.collection_card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
         tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)).pack(anchor="w")
         self.collection_desc = tk_label(card, "", 13, "muted", "panel", wraplength=760)
         self.collection_desc.pack(anchor="w")
@@ -212,6 +216,10 @@ class YourDataPage(Page):
     # recommended collection of the open kind ------------------------------------------
     def paint_collection(self):
         kind = self.kind
+        if kind not in self.summaries or collection_shown(self.summaries[kind]):  # below the table, and only while the kind is empty: Next says what to do first
+            self.collection_card.pack(fill="x", pady=(GUTTER, 0), after=self.buttons)
+        else:
+            self.collection_card.pack_forget()
         try:
             rows = self.services.collection(kind)
         except NotImplementedError:
