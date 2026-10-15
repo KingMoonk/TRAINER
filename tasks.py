@@ -5,7 +5,7 @@
     python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). CI only.
     python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
     python tasks.py web:lint                  eslint + tsc on the web UI (web/). Needs pnpm.
-    python tasks.py web:test                  the web UI's tests (none yet).
+    python tasks.py web:test                  Playwright smoke tests against web/out. Run web:build first, and `pnpm exec playwright install chromium` once.
     python tasks.py web:build                 next build: the static export in web/out.
 
 Each level includes the one before it. The window tests open real Tk and Panda3D windows, so test:ci and test:ci:e2e refuse
