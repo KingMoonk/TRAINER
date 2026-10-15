@@ -516,7 +516,10 @@ def _initialize_from(model, tokenizer, path):
 
 
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
-          snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None):
+          snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, schedule_window=None):
+    """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
+    step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
+    Left None (the default) the schedule spans this run alone."""
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
@@ -526,6 +529,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise ValueError("Wall-clock budget must be positive.")
     if resume and init_from:
         raise ValueError("Resume and initialize-from cannot be combined.")
+    if schedule_window and schedule_window[0] + cfg["steps"] > schedule_window[1]:
+        raise ValueError("The schedule window must cover this run's steps.")
     directory = Path(output_dir)
     if any((directory / name).exists() for name in ("config.json", "dataset.jsonl", "last.npz", "best.npz")):
         raise ValueError("Choose a new output folder to preserve the existing run.")
@@ -707,7 +712,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     left.append((token_budget - trained_tokens) * (step - first_step) / max(1, trained_tokens))
                 planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
-            rate = schedule.rate(next_step, planned, cfg["learning_rate"])
+            rate = (schedule.rate(schedule_window[0] + next_step, schedule_window[1], cfg["learning_rate"]) if schedule_window
+                    else schedule.rate(next_step, planned, cfg["learning_rate"]))
             sample_telemetry = bool(telemetry_every) and (next_step == 1 or next_step % telemetry_every == 0)
             while True:
                 model.zero_grad()
