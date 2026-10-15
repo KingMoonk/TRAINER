@@ -7,6 +7,7 @@ from tkinter import ttk
 from studio_spec import default_spec
 from studio_versions import spec_diff
 from studio_warmstart import NOTES
+from studio_ia.copy import EXPECTATION
 from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
@@ -36,6 +37,8 @@ class BuilderTest(unittest.TestCase):
         self.assertIn("Build your model", texts(self.page))
         self.assertEqual(self.page.tray_kicker, B.T["no_changes"])
         self.assertEqual(self.page.expect_texts, [B.T["change_something"]])
+        self.assertIn(EXPECTATION["letters"], self.page.guide_text)
+        self.assertIn(EXPECTATION["letters"], "\n".join(texts(self.page)))
         self.assertEqual(sorted(self.page.links), sorted(r for r, _ in B.LINKS))
 
     def test_first_design_can_be_saved_without_a_change(self):

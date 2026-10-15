@@ -1120,7 +1120,7 @@ class WorkspaceServices(Services):
             estimated = total > chars
             pieces = round(counted * total / max(1, chars)) if estimated else counted
             return {"pieces": pieces if sample else None, "estimated": estimated,
-                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
+                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         key = self._preview_key(v, dataset_ids, rows)
         store = self._previews()
