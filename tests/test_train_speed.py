@@ -123,6 +123,23 @@ class Checkpointing(unittest.TestCase):
                     np.testing.assert_allclose(got[key], value, atol=1e-10, rtol=1e-8, err_msg=key)
                 self.assertGreater(max(np.abs(value).max() for value in got.values()), 0)
 
+    def test_lora_adapters_get_the_same_gradients_with_checkpointing(self):
+        from studio_lora import attach_lora   # the recompute must put back W + scale * A @ B, not the frozen W
+        plain, saving = build(spec_of()), build(spec_of(checkpointing=True))
+        same_weights(plain, saving)
+        for model in (plain, saving):
+            attach_lora(model, {"rank": 2})
+        rng = np.random.default_rng(3)
+        for key in sorted(plain.adapter_names):
+            value = torch.as_tensor(rng.normal(0, .1, tuple(plain.p[key].shape)), dtype=plain.p[key].dtype)
+            plain.p[key], saving.p[key] = value.clone(), value.clone()
+        loss, expected = gradients(plain)
+        saved_loss, got = gradients(saving)
+        self.assertAlmostEqual(saved_loss, loss, places=10)
+        for key in plain.adapter_names:
+            np.testing.assert_allclose(got[key], expected[key], atol=1e-10, rtol=1e-8, err_msg=key)
+        self.assertGreater(max(np.abs(expected[key]).max() for key in plain.adapter_names), 0)
+
     def test_nothing_is_recomputed_outside_training_or_while_inspecting(self):
         model = build(spec_of(checkpointing=True))
         with mock.patch("studio_compile.checkpoint", wraps=lambda fn, x, **kw: fn(x)) as wrapped:
