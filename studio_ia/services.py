@@ -1,10 +1,16 @@
 """The one façade pages talk to. `Services` is the protocol; `FakeServices` is an in-memory stand-in."""
 from __future__ import annotations
 
+import errno
+import logging
+import socket
+import urllib.error
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import numpy as np
+
+from studio_versions import NoCheckpoint
 
 
 @dataclass
@@ -52,6 +58,28 @@ class QueueState:
     stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
+
+
+_log = logging.getLogger(__name__)
+
+
+def plain_error(error, name=None):
+    """One sentence for what went wrong and what to do next. `name` is what was being worked on (a source, a file), for the
+    sentences that mention it. The one place pages and background work turn an exception into words; the log keeps the rest."""
+    import studio_catalog as cat
+    what = name or "that file"
+    if isinstance(error, urllib.error.HTTPError):
+        return f"The server returned {error.code} for {what}. The file may have moved; try again later."
+    if isinstance(error, (urllib.error.URLError, socket.timeout, ConnectionError)):
+        return "Could not reach the download server. Check the connection and try again."
+    if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+        return "The disk is full. Free space in This computer › Storage, then try again."
+    if isinstance(error, MemoryError):
+        return f"Ran out of memory while reading {what}."
+    if isinstance(error, (cat.DownloadCancelled, ValueError)) and str(error):
+        return str(error)
+    _log.error("Unexpected %s%s", type(error).__name__, f" while working on {name}" if name else "", exc_info=error)
+    return f"Something went wrong: {type(error).__name__}. The log has the details."
 
 
 def problem_items(rule, n, rng):
@@ -245,6 +273,10 @@ class Services:
         raise NotImplementedError
 
     def clean_storage(self, days=None, data=False):
+        raise NotImplementedError
+
+    def free_space(self) -> int:
+        """Bytes free on the disk that holds the workspace (where checkpoints are written)."""
         raise NotImplementedError
 
     def pretrain_preview(self, dataset_ids, rows=16):
@@ -483,6 +515,9 @@ class FakeServices(Services):
         self.cleaned = (days, data)
         return (0, 0)
 
+    def free_space(self):
+        return 120 * 10 ** 9
+
     def remove(self, job_id):
         self._queue.up_next = [j for j in self._queue.up_next if j.id != job_id]
         self.emit("queue", self._queue)
@@ -693,7 +728,7 @@ import threading  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-SUMMARY_FORMAT = 2  # data/summaries.json layout; 2: text characters counted once. A saved summary of another format is rebuilt
+SUMMARY_FORMAT = 3  # data/summaries.json layout; 3: one entry per dataset, each with its rev; 2: whole workspace, text characters counted once. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
@@ -918,6 +953,10 @@ class WorkspaceServices(Services):
     def hold(self, job_id, held=True):
         self.runner.hold(job_id, held)
 
+    def free_space(self):
+        import shutil
+        return shutil.disk_usage(self.root).free
+
     def storage(self, days=None, data=False):
         import studio_cleanup
         paths = studio_cleanup.plan(self.root, days, data)
@@ -1007,26 +1046,36 @@ class WorkspaceServices(Services):
         return [stat(self.workspace.path), stat(db), stat(db.with_name(db.name + "-wal"))]
 
     def _summaries(self):
-        """{kind: DataSummary with every sample row, "example": the first training conversation}. Read from
-        data/summaries.json when the stored files have not changed since it was written, so a launch reads nothing twice."""
+        """{kind: DataSummary with every sample row, "example": the first training conversation}. Kept per dataset in
+        data/summaries.json beside each dataset's `rev`, so a change to one dataset reads that dataset only and a launch
+        reads nothing the file still describes."""
         import studio_data_kinds as dk
         from studio_core import atomic_json
 
         def make():
             path, stamp = self.root / "data" / "summaries.json", self._stamp()
+            cached, unchanged = {}, False
             try:
                 saved = json.loads(path.read_text(encoding="utf-8"))
-                if saved["stamp"] == stamp and saved.get("format") == SUMMARY_FORMAT:
-                    return {**{k: dk.DataSummary(**saved[k]) for k in dk.KINDS}, "example": saved["example"]}
-            except (OSError, ValueError, KeyError, TypeError):
+                if saved.get("format") == SUMMARY_FORMAT:  # any other layout is stale: rebuilt once
+                    cached, unchanged = saved["datasets"], saved["stamp"] == stamp
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 pass
-            scanned = dk.scan(self.workspace, progress=self.note)
-            out = {k: dk.summarize(self.workspace, k, limit=None, scanned=scanned, progress=self.note) for k in dk.KINDS}
-            first = next((e for e, _ in scanned[1]["conversations"] if not dk.held_back(e)), None)  # the first of post_rows("conversations")
-            out["example"] = {"prompt": first["user"], "answer": first["assistant"]} if first and first.get("user") else {}
-            self.note("Saving the summary")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_json(path, {**{k: asdict(out[k]) for k in dk.KINDS}, "example": out["example"], "stamp": stamp, "format": SUMMARY_FORMAT})
+            datasets = list(self.workspace.state["datasets"])
+            # The files differ from what the summary was made of, yet no dataset's rev moved: an older app wrote them without
+            # counting, so nothing can be trusted.
+            moved = any(cached.get(d["id"], {}).get("rev") != d.get("rev", 0) for d in datasets)
+            rescan_all = bool(cached) and not unchanged and not moved
+            try:
+                entries, reread = dk.refresh(self.workspace, cached, rescan_all=rescan_all, progress=self.note)
+            except (KeyError, TypeError, IndexError, AttributeError):  # an entry that does not have the shape this version writes
+                entries, reread = dk.refresh(self.workspace, {}, progress=self.note)
+            out, example = dk.assemble(datasets, entries)
+            out["example"] = example
+            if reread or set(entries) != set(cached):
+                self.note("Saving the summary")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_json(path, {"format": SUMMARY_FORMAT, "stamp": stamp, "datasets": entries})
             return out
         return self._fresh("summaries", make)
 
@@ -1266,7 +1315,7 @@ class WorkspaceServices(Services):
 
     def import_data(self, kind, paths):
         import studio_data_kinds as dk
-        report = self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
+        report = self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]), describe=plain_error)
         self.emit("data", {"kind": kind})
         return report
 
@@ -1295,6 +1344,11 @@ class WorkspaceServices(Services):
                          "error": self._failed.get(cid, "")})
         return rows
 
+    @staticmethod
+    def _source_name(cid):
+        import studio_catalog as cat
+        return next((e["name"] for e in cat.CATALOG if e["id"] == cid), cid)
+
     def _background(self, ids, work, done):
         with self._lock:
             if self._busy:
@@ -1308,7 +1362,7 @@ class WorkspaceServices(Services):
                     self.emit(done, {"id": cid})
                 except Exception as error:  # shown to the person in plain words; the rest of the list still runs
                     self._busy.pop(cid, None)
-                    self._failed[cid] = str(error) or error.__class__.__name__
+                    self._failed[cid] = plain_error(error, self._source_name(cid))
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
             self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
@@ -1512,7 +1566,7 @@ class WorkspaceServices(Services):
     def _checkpoint(self, version):
         v = self._as_version(version)
         if v is None or not v.best_checkpoint:
-            raise ValueError("That version has no trained checkpoint yet.")
+            raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
         return v.best_checkpoint
 
     def chat(self, version, messages, on_text, stop):

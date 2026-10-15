@@ -24,9 +24,9 @@ class SlowReads(unittest.TestCase):
             counts = {k: self.svc.data(k).count for k in dk.KINDS}
             self.svc.data("text", "number 7")
             self.svc.post_training(None)
-            self.assertEqual((counts, scan.call_count), ({"text": 30, "conversations": 3, "problems": 0}, 1))
+            self.assertEqual((counts, scan.call_count), ({"text": 30, "conversations": 3, "problems": 0}, 2))  # one read per dataset
             self.ws.add(self.big, [{"text": "one more story"}])
-            self.assertEqual((self.svc.data("text").count, scan.call_count), (31, 2))
+            self.assertEqual((self.svc.data("text").count, scan.call_count), (31, 3))  # and the change reads only its dataset
 
     def test_cached_summary_matches_a_direct_read_and_filters_by_query(self):
         for kind in dk.KINDS:

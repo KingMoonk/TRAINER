@@ -19,6 +19,17 @@ from studio_spec import block_at, structure_key, validate_spec
 STATUSES = ("draft", "saved", "queued", "training", "trained")
 NEXT = {"draft": {"saved"}, "saved": {"queued"}, "queued": {"saved", "training"},
         "training": {"trained", "queued", "saved"}, "trained": {"queued"}}
+
+
+class NoCheckpoint(ValueError):
+    """A version has no trained weights yet. The message says which one and where to fix it; it is already written for people."""
+
+    def __init__(self, version=None):
+        self.version = version
+        super().__init__(f"Version {version} has not trained yet. Queue it from Build your model, or pick a trained version."
+                         if version else "No version has trained yet. Queue one from Build your model.")
+
+
 _WORDS = {"byte": "letters", "character": "letters", "bpe_gpt2": "large word list", "bpe_custom": "small word list"}
 
 
