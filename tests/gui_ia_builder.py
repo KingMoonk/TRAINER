@@ -243,6 +243,31 @@ class BuilderTest(unittest.TestCase):
         self.page.edit(L=6)
         self.assertIn("\n\nLast time blocks changed (2 → 4, version 1 → 2)", self.page.hover_text)
 
+    def test_a_ready_made_design_shows_its_cost_then_loads_as_an_unsaved_draft(self):
+        self.assertEqual(self.page.preset_mb.cget("text"), B.T["start_from_pick"])
+        self.assertFalse(self.page.preset_btn.winfo_ismapped())
+        menu = self.page.preset_mb.nametowidget(self.page.preset_mb.cget("menu"))
+        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)]
+        spec = dict(self.page.presets)["gpt3_small_style"]
+        menu.invoke(labels.index(spec["name"]))
+        self.app.update()
+        self.assertEqual(self.page.tray_kicker, B.T["no_changes"])  # looking changes nothing
+        shown = texts(self.page)
+        self.assertIn(B.T["preset_gpt3_small_style"], shown)
+        for line in self.page.preset_cost["lines"]:
+            self.assertIn(line, shown)
+        self.assertIn(B.T["preset_recipe"].format(recipe=B.recipe_text(spec)), shown)
+        self.page.preset_btn.invoke()
+        self.app.update()
+        self.assertEqual(self.page.tray_kicker, B.T["not_saved"])
+        self.assertIn("longer reading window (256 → 2048)", self.page.chip_texts)
+        self.assertEqual(self.page.blocks_label.cget("fg"), B.C["amber"])
+        self.assertEqual(len(self.fake.versions()), 1)  # nothing saved until the person saves
+        self.page.save()
+        saved = self.fake.versions()[1].spec
+        self.assertEqual(saved["train"], spec["train"])
+        self.assertEqual(saved["dims"]["n_ctx"], 2048)
+
 
 if __name__ == "__main__":
     unittest.main()
