@@ -65,8 +65,9 @@ def button(parent, text, command, primary=False):
 
 def text_box(parent, height=5, **kwargs):
     return tk.Text(parent, height=height, bg=INPUT, fg=TEXT, insertbackground=ACCENT,
-                   selectbackground="#355473", relief="flat", borderwidth=0, padx=12,
-                   pady=10, font=(FONT, 10), wrap="word", undo=True, **kwargs)
+                   selectbackground="#355473", relief="flat", borderwidth=0, padx=14, pady=12,
+                   highlightthickness=1, highlightbackground=EDGE, highlightcolor=ACCENT,
+                   font="TkTextFont", wrap="word", undo=True, **kwargs)
 
 
 def content(widget):

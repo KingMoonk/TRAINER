@@ -27,6 +27,8 @@ GUTTER = 16
 SIDEBAR_W = 220
 BUTTON_H = 44
 MIN_FONT = 12
+FIELD_PAD = (12, 10)  # inner padding (x, y) of a one-line text box: as tall as a TButton beside it
+TEXT_PAD = (14, 12)  # inner padding (x, y) of a multi-line text box
 
 
 def font(size=15, bold=False, mono=False, serif=False):
@@ -62,8 +64,14 @@ def apply(root):
     # Primary buttons are at least 44px tall: 15px text + 2 * 14px padding + border.
     style.configure("Primary.TButton", background=C["violet"], foreground=C["bg"], padding=(20, 14), font=font(15, bold=True))
     style.map("Primary.TButton", background=[("disabled", C["panel2"]), ("active", "#b3a4ff"), ("focus", "#b3a4ff")], foreground=[("disabled", C["muted"])])
-    style.configure("TCombobox", fieldbackground=C["panel2"], background=C["panel2"], foreground=C["text"],
-                    arrowcolor=C["muted"], selectbackground=C["panel2"], selectforeground=C["text"])
+    # Text boxes: padded, a flat 1px border that turns violet on focus (the inner bevel matches the field, so it stays 1px).
+    field = dict(fieldbackground=C["panel2"], foreground=C["text"], bordercolor=C["border"], lightcolor=C["panel2"],
+                 darkcolor=C["panel2"], padding=FIELD_PAD)
+    style.configure("TEntry", insertcolor=C["text"], selectbackground=C["violet"], selectforeground=C["bg"], **field)
+    style.map("TEntry", fieldbackground=[("disabled", C["panel"])], foreground=[("disabled", C["muted"])],
+              bordercolor=[("focus", C["violet"])])
+    style.configure("TCombobox", background=C["panel2"], arrowcolor=C["muted"], selectbackground=C["panel2"],
+                    selectforeground=C["text"], **field)
     style.map("TCombobox", fieldbackground=[("readonly", C["panel2"]), ("disabled", C["panel"])],
               foreground=[("readonly", C["text"]), ("disabled", C["muted"])], bordercolor=[("focus", C["violet"])],
               arrowcolor=[("disabled", C["dim"])])
@@ -81,3 +89,16 @@ def tk_label(parent, text="", size=15, color="text", bg="bg", **kw):
     """Plain tk.Label in token colours (use where per-widget background matters, e.g. inside cards)."""
     return tk.Label(parent, text=text, font=kw.pop("font", font(size)), fg=C.get(color, color), bg=C.get(bg, bg),
                     anchor=kw.pop("anchor", "w"), justify=kw.pop("justify", "left"), **kw)
+
+
+def entry(parent, size=15, **kw):
+    """One-line text box in the UI font, styled by "TEntry" (see apply). Beside a button, pack it with fill="y" to match its height."""
+    return ttk.Entry(parent, font=font(size), **kw)
+
+
+def text_box(parent, height=4, size=15, **kw):
+    """Multi-line text box: the same field colours, UI font, padding and violet focus border as `entry`."""
+    options = dict(height=height, wrap="word", bg=C["panel2"], fg=C["text"], insertbackground=C["text"], font=font(size),
+                   selectbackground=C["violet"], selectforeground=C["bg"], relief="flat", bd=0, padx=TEXT_PAD[0],
+                   pady=TEXT_PAD[1], highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
+    return tk.Text(parent, **{**options, **kw})

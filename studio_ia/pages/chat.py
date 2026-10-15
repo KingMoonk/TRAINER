@@ -10,7 +10,7 @@ from studio_ia.copy import CHAT as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import plain_error
-from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.theme import C, GUTTER, entry, font, text_box, tk_label
 from studio_ia.widgets import Card, Kicker, Toggle, _activate, button, info_icon, tip
 
 A_COLOR, B_COLOR = "violet", "blue"
@@ -166,17 +166,17 @@ class ChatPage(Page):
             f = Card(self.panes_row)
             tag = tk_label(f, "", 13, A_COLOR if i == 0 else B_COLOR, "panel", font=font(13, bold=True))
             tag.pack(anchor="w")
-            text = tk.Text(f, height=7, width=40, wrap="word", bg=C["panel2"], fg=C["text"], relief="flat",
-                           font=font(14, serif=True), highlightthickness=0, state="disabled")
-            text.pack(fill="x", pady=6)
+            text = text_box(f, height=7, width=40, state="disabled")
+            text.tag_configure("placeholder", foreground=C["muted"])
+            text.pack(fill="x", pady=(8, 0))
             self.pane_frames.append(f)
             self.pane_tags.append(tag)
             self.pane_texts.append(text)
             self.pane_better.append(tip(button(f, T["this_one_better"], lambda k=i: self.better(k)), T["picking_reply_desc"]))
         self.send_row = tk.Frame(body, bg=C["bg"])
         self.send_row.pack(fill="x", pady=(0, GUTTER))
-        self.entry = tk.Entry(self.send_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(15))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(0, 8))
+        self.entry = entry(self.send_row)
+        self.entry.pack(side="left", fill="both", expand=True, padx=(0, 8))
         self.entry.bind("<Return>", lambda _e: self.send())
         self.send_btn = button(self.send_row, T["send"], self.send, True)
         self.send_btn.pack(side="left")
@@ -186,8 +186,8 @@ class ChatPage(Page):
         link.pack(anchor="w")
         _activate(link, lambda: self.teach_row.pack(anchor="w", fill="x", pady=4))
         self.teach_row = tk.Frame(teach, bg=C["bg"])
-        self.correction = tk.Entry(self.teach_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(14))
-        self.correction.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 8))
+        self.correction = entry(self.teach_row, 14)
+        self.correction.pack(side="left", fill="both", expand=True, padx=(0, 8))
         button(self.teach_row, "Save", self.teach).pack(side="left")
         self.whole = Toggle(self.teach_row, "It is a whole new answer (round 1)", False, bg="bg")
         self.whole.pack(side="left", padx=8)
@@ -240,17 +240,17 @@ class ChatPage(Page):
             self.pane_tags[i].configure(text=tag)
             self.pane_better[i].pack_forget()
             if self.compare:
-                self.pane_better[i].pack(anchor="w")
-            self._set_text(i, self.replies.get(i, T["its_reply"]))
+                self.pane_better[i].pack(anchor="w", pady=(8, 0))
+            self._set_text(i, self.replies.get(i, T["its_reply"]), () if i in self.replies else "placeholder")
         self._verdict(vs)
         self._shelf(vs, best)
         self._score(cur)
 
-    def _set_text(self, i, text):
+    def _set_text(self, i, text, tags=()):
         t = self.pane_texts[i]
         t.configure(state="normal")
         t.delete("1.0", "end")
-        t.insert("1.0", text)
+        t.insert("1.0", text, tags)
         t.configure(state="disabled")
 
     def _verdict(self, vs):

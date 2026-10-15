@@ -11,7 +11,7 @@ from tkinter import ttk
 import studio_rules as rules  # rule names only
 from studio_ia.copy import MAKEDATA as T
 from studio_ia.pages.base import Page
-from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.theme import C, GUTTER, entry, font, tk_label
 from studio_ia.widgets import Kicker, _activate, tip
 
 MAX_N = 100000
@@ -94,11 +94,10 @@ class MakeDataPage(Page):
         ctl.pack(fill="x", pady=(GUTTER, 0))
         tk_label(ctl, T["how_many"], 14, "text").pack(side="left")
         self.n = tk.StringVar(value="100")
-        tk.Entry(ctl, textvariable=self.n, width=8, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat",
-                 highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"]).pack(side="left", padx=8, ipady=6)
+        entry(ctl, 14, textvariable=self.n, width=8).pack(side="left", fill="y", padx=8)
         self.rule = ttk.Combobox(ctl, values=[T["all_rules"], *(rules.LABELS[r] for r in rules.RULES)], state="readonly", width=22)
         self.rule.set(T["all_rules"])
-        self.rule.pack(side="left", padx=8)
+        self.rule.pack(side="left", fill="y", padx=8)
         self.go = ttk.Button(ctl, style="Primary.TButton", command=lambda: self.run(trial=False))
         self.go.pack(side="left", padx=4)
         tip(self.go, lambda: self.where_tip)
