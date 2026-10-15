@@ -1,11 +1,14 @@
 """The benchmark track: the fixed suite, its per-version cache, the chart data and the page helpers, all window-free."""
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import studio_bench
 import studio_catalog
+import studio_eval
 from studio_ia.copy import BENCH
 from studio_ia.pages import benchmark as page
 from studio_ia.services import FakeServices, FixtureServices
@@ -32,7 +35,7 @@ class Suite(unittest.TestCase):
     def test_sizes_are_bounded_and_the_pick_does_not_depend_on_order(self):
         a = studio_bench.build_suite(**pieces())
         self.assertEqual((len(a["docs"]), len(a["choice"]), len(a["pool"]), len(a["problems"])),
-                         (studio_bench.DOCS, studio_bench.CHOICE_ITEMS, 80, studio_bench.PROBLEMS))
+                         (studio_bench.DOCS, studio_bench.CHOICE_ITEMS, 20, studio_bench.PROBLEMS))
         shuffled = {kind: list(reversed(items)) for kind, items in pieces().items()}
         self.assertEqual(studio_bench.build_suite(**shuffled)["id"], a["id"])
         self.assertEqual(studio_bench.build_suite(**pieces())["id"], a["id"])
@@ -61,6 +64,27 @@ class Suite(unittest.TestCase):
         self.assertEqual(suite["dropped"]["choice"], 0)
         self.assertEqual(studio_bench.build_suite(**pieces(10))["dropped"], {kind: 0 for kind in studio_bench.KINDS})  # keep_all drops nothing
 
+    def test_the_id_changes_with_the_scoring_settings(self):
+        base = studio_bench.build_suite(**pieces())["id"]
+        with mock.patch.object(studio_eval, "SCORE_METHOD", "another-method"):
+            self.assertNotEqual(studio_bench.build_suite(**pieces())["id"], base)
+        with mock.patch.dict(studio_bench.studio_rules.MAX_TOKENS, {"copy": 99}):
+            self.assertNotEqual(studio_bench.build_suite(**pieces())["id"], base)
+
+    def test_held_back_questions_are_never_worked_examples(self):
+        data = pieces(10)
+        suite = studio_bench.build_suite(**data)
+        asked = {studio_bench._key(i) for i in data["choice"]}
+        self.assertTrue(data["pool"][10:])  # the pool had training-only items besides the held-back ones
+        self.assertTrue(all(studio_bench._key(i) not in asked for i in suite["pool"]))
+        self.assertEqual(len(suite["pool"]), 20)
+        held, training = [choice(i) for i in range(5)], [choice(i) for i in range(5, 9)]
+        rows = lambda items: [{"prompt": f"{i['question']}\n\n" + "\n".join(f"{'ABC'[n]}) {c}" for n, c in enumerate(i["choices"])),
+                               "rule": "choice", "params": {"answer": "ABC"[i["answer"]]}} for i in items]
+        built = studio_bench.suite_from_rows(["a document"], rows(held), rows(training))
+        self.assertEqual((len(built["choice"]), len(built["pool"])), (5, 4))
+        self.assertTrue({studio_bench._key(i) for i in built["pool"]}.isdisjoint({studio_bench._key(i) for i in built["choice"]}))
+
     def test_suite_from_rows_reads_post_rows(self):
         rows = [problem(0), {"prompt": "Q\n\nA) x\nB) y", "rule": "choice", "params": {"answer": "B"}}]
         suite = studio_bench.suite_from_rows(["a document"], rows, rows)
@@ -77,6 +101,54 @@ class Tokens(unittest.TestCase):
             self.assertEqual(studio_bench.tokens_seen([run], run / "last.npz"), 300)
             self.assertIsNone(studio_bench.tokens_seen([run / "missing"]))
             self.assertIsNone(studio_bench.tokens_seen([]))
+
+
+class Lineage(unittest.TestCase):
+    """Tokens seen add up every run the weights descend from, not just the newest run's own count."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_dir(self, name, rows, **record):
+        run = self.root / name
+        run.mkdir()
+        (run / "metrics.jsonl").write_text("\n".join(json.dumps({"trained_tokens": t, "val_loss": v}) for t, v in rows), encoding="utf-8")
+        (run / "run.json").write_text(json.dumps(record), encoding="utf-8")
+        return run
+
+    def test_a_resumed_run_counts_its_parents_rows_and_then_its_own(self):
+        # the log of a resumed run starts with its parent's rows and counts from 0 again
+        run = self.run_dir("cool", [(100, 3.0), (200, 2.0), (300, 2.5), (50, 2.4), (100, 1.9)], resumed_from="gone/last.npz")
+        self.assertEqual(studio_bench.tokens_seen([run], run / "best.npz"), 400)
+        self.assertEqual(studio_bench.tokens_seen([run], run / "last.npz"), 400)
+        kept = self.run_dir("kept", [(100, 3.0), (200, 2.0), (300, 2.5), (50, 2.4), (100, 2.3)], resumed_from="gone/last.npz")
+        self.assertEqual(studio_bench.tokens_seen([kept], kept / "best.npz"), 200)  # the best weights are still the parent's
+
+    def test_a_catch_up_run_adds_the_checkpoint_it_started_from(self):
+        first = self.run_dir("first", [(100, 3.0), (200, 2.0), (300, 2.5)])
+        second = self.run_dir("second", [(100, 2.5), (250, 2.6)], initialized_from=str(first / "best.npz"))
+        self.assertEqual(studio_bench.tokens_seen([second], second / "last.npz"), 200 + 250)
+        self.assertEqual(studio_bench.tokens_seen([second], second / "best.npz"), 200 + 100)
+        third = self.run_dir("third", [(10, 1.0)], initialized_from=str(second / "last.npz"))
+        self.assertEqual(studio_bench.tokens_seen([third], third / "last.npz"), 450 + 10)
+
+    def test_an_unknown_starting_point_leaves_the_version_unplaced(self):
+        orphan = self.run_dir("orphan", [(100, 2.0)], initialized_from=str(self.root / "nowhere" / "best.npz"))
+        self.assertIsNone(studio_bench.tokens_seen([orphan], orphan / "last.npz"))
+        first = self.run_dir("first", [(100, 2.0)])
+        moved = self.run_dir("moved", [(10, 1.0)], initialized_from=str(self.root / "post" / "best.npz"))  # a post-training checkpoint
+        self.assertIsNone(studio_bench.tokens_seen([moved], moved / "last.npz"))
+        self.assertEqual(studio_bench.tokens_seen([moved], moved / "last.npz", owner=lambda path: [first]), 110)
+
+    def test_the_run_holding_the_checkpoint_is_used_not_the_newest(self):
+        old = self.run_dir("old", [(100, 2.0), (200, 1.0)])
+        new = self.run_dir("new", [(900, 3.0)])
+        self.assertEqual(studio_bench.tokens_seen([old, new], old / "best.npz"), 200)
+        self.assertEqual(studio_bench.tokens_seen([old, new], self.root / "round" / "best.npz"), 900)  # elsewhere: the newest run
 
 
 class Cache(unittest.TestCase):
@@ -120,6 +192,45 @@ class Cache(unittest.TestCase):
         self.assertIsNone(studio_bench.cached(self.root, self.version, suite))
         studio_bench.benchmark(self.root, self.version, suite, 500, run=self.run_fake)
         self.assertEqual(len(self.calls), 2)
+
+    def test_the_stamp_is_taken_before_the_run_so_a_rewrite_mid_run_is_checked_again(self):
+        suite = studio_bench.build_suite(**pieces())
+
+        def rewrites(version, suite, tokens):
+            self.calls.append(suite["id"])
+            self.checkpoint.write_bytes(b"weights that arrived while the suite was running")
+            return {"suite": suite["id"], "bpc": 2.0}
+        studio_bench.benchmark(self.root, self.version, suite, 1, run=rewrites)
+        self.assertIsNone(studio_bench.cached(self.root, self.version, suite))
+        studio_bench.benchmark(self.root, self.version, suite, 1, run=self.run_fake)
+        self.assertEqual(len(self.calls), 2)
+        self.assertIsNotNone(studio_bench.cached(self.root, self.version, suite))
+        self.assertEqual(studio_bench.cached(self.root, self.version, suite)["suite"], suite["id"])
+        stored = json.loads(studio_bench.cache_path(self.root, 3).read_text(encoding="utf-8"))["suites"][suite["id"]]["checkpoint"]
+        self.assertEqual(stored[0], str(self.checkpoint))  # the stamp names the file too
+        elsewhere = self.root / "other.npz"
+        elsewhere.write_bytes(self.checkpoint.read_bytes())
+        self.assertIsNone(studio_bench.cached(self.root, (3, elsewhere), suite))
+
+    def test_two_workers_do_not_run_the_same_version_at_once(self):
+        suite = studio_bench.build_suite(**pieces())
+        started, release = threading.Event(), threading.Event()
+
+        def slow(version, suite, tokens):
+            self.calls.append(1)
+            started.set()
+            release.wait(5)
+            return {"suite": suite["id"], "bpc": 2.0}
+        results = []
+        first = threading.Thread(target=lambda: results.append(studio_bench.benchmark(self.root, self.version, suite, 1, run=slow)))
+        first.start()
+        self.assertTrue(started.wait(5))
+        second = threading.Thread(target=lambda: results.append(studio_bench.benchmark(self.root, self.version, suite, 1, run=slow)))
+        second.start()
+        release.set()
+        first.join(5)
+        second.join(5)
+        self.assertEqual((len(self.calls), len(results), results[0] == results[1]), (1, 2, True))
 
     def test_a_damaged_file_counts_as_empty(self):
         suite = studio_bench.build_suite(**pieces())
@@ -181,12 +292,20 @@ class PageHelpers(unittest.TestCase):
     def test_designs_are_lettered_in_the_order_they_first_appear(self):
         self.assertEqual(page.designs(self.rows), {"a": ("A", [1, 2, 4]), "b": ("B", [3, 5])})
 
-    def test_pending_lists_unchecked_versions_oldest_first_and_skips_the_tried(self):
+    def test_pending_lists_unchecked_versions_oldest_first(self):
         self.assertEqual(page.pending(self.state()), [5])
-        self.assertEqual(page.pending(self.state(), tried={5}), [])
         self.assertEqual(page.pending(self.state([row(2, "a", 1, None), row(1, "a", 1, None)])), [1, 2])
         self.assertEqual(page.pending(self.state(docs=0, choice=0, problems=0, rows=[row(1, "a", 1, None)])), [])  # nothing to check with
         self.assertEqual(page.pending(None), [])
+
+    def test_the_few_shot_chart_says_how_many_examples_were_really_used(self):
+        def with_used(used):
+            res = result(2.0, .4)
+            res["few_shot"]["rows"] = [{"shots": 0, "used": 0, "accuracy": .3}, {"shots": 4, "used": used, "accuracy": .4}]
+            return self.state([row(1, "a", 1, res)])
+        self.assertEqual(page.shots_text(with_used(4.0)), "4")
+        self.assertEqual(page.shots_text(with_used(3.5)), BENCH["up_to"].format(shots=4))
+        self.assertEqual(page.shots_text(self.state()), "4")  # results with no rows: nothing to say otherwise
 
     def test_has_items_follows_the_suite_sizes(self):
         state = self.state(choice=0)
@@ -226,6 +345,73 @@ class PageHelpers(unittest.TestCase):
         failed = page.check_versions(svc, [1, 2, 3])
         self.assertEqual((svc.ran, list(failed)), ([1, 3], [2]))
         self.assertEqual(svc.noted, [0, 1 / 3, 2 / 3])
+
+
+class FakePage(page.BenchmarkPage):
+    """The page's logic without a window: quietly runs the work where it stands and keeps the callback to deliver later."""
+
+    def __init__(self, services, state):
+        self.services, self.state, self.running, self.failed = services, state, False, {}
+        self.later, self.drawn, self.refreshed = [], 0, 0
+
+    def draw(self):
+        self.drawn += 1
+
+    def refresh(self):
+        self.refreshed += 1
+
+    def winfo_exists(self):
+        return True
+
+    def quietly(self, work, then, lane="fast"):
+        self.lane = lane
+        self.later.append((work, then))
+
+
+class Checking(unittest.TestCase):
+    class Services:
+        def __init__(self):
+            self.ran = []
+
+        def note(self, text, fraction):
+            pass
+
+        def run_benchmark(self, number):
+            if number == 2:
+                raise ValueError("bad checkpoint")
+            self.ran.append(number)
+
+    def state(self, numbers):
+        return {"suite": "x", "sizes": {"docs": 1, "choice": 1, "problems": 1}, "dropped": {}, "rows": [row(n, "a", 1, None) for n in numbers]}
+
+    def test_opening_the_page_only_reads_and_the_button_starts_one_run_on_the_slow_lane(self):
+        svc = self.Services()
+        fake = FakePage(svc, None)
+        fake._show(self.state([1, 2, 3]))
+        self.assertEqual((fake.later, svc.ran), ([], []))  # showing results starts nothing
+        fake.on_event("versions", None)
+        self.assertEqual((fake.refreshed, fake.later), (1, []))
+        fake.check()
+        fake.check()  # a second press while it runs
+        fake.on_event("versions", None)
+        self.assertEqual((len(fake.later), fake.lane, fake.running), (1, "slow", True))
+        work, then = fake.later[0]
+        then(work())
+        self.assertEqual((svc.ran, fake.running, list(fake.failed)), ([1, 3], False, [2]))
+
+    def test_failures_pile_up_and_a_version_that_now_works_clears_its_own(self):
+        fake = FakePage(self.Services(), self.state([2, 4]))
+        fake.failed = {7: "old trouble", 2: "older trouble"}
+        fake.check()
+        work, then = fake.later.pop()
+        then(work())
+        self.assertEqual(set(fake.failed), {7, 2})
+        self.assertEqual(fake.failed[2], "bad checkpoint")
+        fake.state = self.state([4])
+        fake.check()
+        work, then = fake.later.pop()
+        then(work())
+        self.assertEqual(set(fake.failed), {7, 2})  # 2 was not retried; 7 never was
 
 
 class RealModel(unittest.TestCase):
@@ -271,6 +457,16 @@ class Services(unittest.TestCase):
         self.assertEqual([r["result"] is not None for r in after["rows"]], [True, False])
         self.assertEqual(after["rows"][0]["result"], done)
         self.assertEqual(page.pending({**after}), [2])
+
+    def test_one_bad_spec_does_not_break_the_whole_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = FixtureServices(tmp)
+            try:
+                with mock.patch("studio_spec.structure_key", side_effect=KeyError("dims")):
+                    rows = svc.benchmark()["rows"]
+            finally:
+                svc.close()
+        self.assertEqual([r["lineage"] for r in rows], ["v1", "v2"])
 
     def test_fake_services_return_the_same_shape(self):
         fake = FakeServices().benchmark()

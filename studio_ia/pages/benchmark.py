@@ -34,11 +34,19 @@ def designs(rows):
     return out
 
 
-def pending(state, tried=()):
-    """Version numbers whose suite result is missing, oldest first, leaving out the ones already tried this session."""
+def pending(state):
+    """Version numbers whose suite result is missing, oldest first."""
     if not state or not any(state["sizes"].values()):
         return []
-    return [r["number"] for r in sorted(state["rows"], key=lambda r: r["number"]) if r["result"] is None and r["number"] not in tried]
+    return [r["number"] for r in sorted(state["rows"], key=lambda r: r["number"]) if r["result"] is None]
+
+
+def shots_text(state):
+    """The worked examples per question the multiple-choice chart used: the number asked for, or "up to" it when some questions
+    had fewer examples fit (a short window, a small pool)."""
+    most = studio_bench.SHOTS[-1]
+    used = [((r["result"]["few_shot"].get("rows") or [{}])[-1]).get("used") for r in state["rows"] if (r.get("result") or {}).get("few_shot")]
+    return T["up_to"].format(shots=most) if any(u is not None and u < most - 1e-9 for u in used) else str(most)
 
 
 def has_items(state, metric):
@@ -91,37 +99,39 @@ class BenchmarkPage(Page):
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
-        self.state, self.tried, self.failed = None, set(), {}  # tried: versions checked since this page opened; a failure is not retried on its own
+        self.state, self.running, self.failed = None, False, {}  # failed: {version: plain error} from the checks this session
         self.top = Card(self.body)
         self.top.pack(fill="x", pady=(0, GUTTER))
         self.charts = tk.Frame(self.body, bg=C["bg"])
         self.charts.pack(fill="x")
 
-    def refresh(self):
+    def refresh(self):  # only reads what is stored: the checks start when asked for
         self.slow(self.services.benchmark, self._show)
 
     def _show(self, state):
         self.state = state
         self.draw()
-        todo = pending(state, self.tried)
-        if todo:
-            self._check(todo)
 
     def on_event(self, kind, payload):
-        if kind == "versions":  # a version finished training: it needs its numbers
+        if kind == "versions":  # a version finished training: show it, waiting to be checked
             self.refresh()
 
-    def _check(self, numbers):
-        self.tried.update(numbers)
+    def check(self):
+        """Run the suite on every unchecked version on the slow lane (the app stays usable). Does nothing while a run is going."""
+        todo = pending(self.state)
+        if self.running or not todo:
+            return
+        self.running = True
+        self.draw()
 
         def done(failed):
-            self.failed = failed
-            self.refresh()
-        self.background(lambda: check_versions(self.services, numbers), done, T["checking"])
-
-    def retry(self):
-        self.tried.clear()
-        self.refresh()
+            self.running = False
+            for number in todo:
+                self.failed.pop(number, None)
+            self.failed.update(failed)
+            if self.winfo_exists():
+                self.refresh()
+        self.quietly(lambda: check_versions(self.services, todo), done, lane="slow")
 
     def draw(self):
         state = self.state
@@ -137,12 +147,15 @@ class BenchmarkPage(Page):
             tk_label(self.top, T["failed"].format(number=number, error=error), 13, "amber", "panel", wraplength=780).pack(anchor="w", pady=(4, 0))
         if sum(state["dropped"].values()):
             tk_label(self.top, T["dropped"].format(n=sum(state["dropped"].values())), 13, "muted", "panel", wraplength=780).pack(anchor="w", pady=(4, 0))
-        if pending(state):
-            button(self.top, T["run"], self.retry).pack(anchor="w", pady=(GUTTER, 0))
+        if self.running:
+            tk_label(self.top, T["running_now"], 13, "muted", "panel", wraplength=780).pack(anchor="w", pady=(GUTTER, 0))
+        elif pending(state):
+            button(self.top, T["run"], self.check).pack(anchor="w", pady=(GUTTER, 0))
         if not state["rows"] or not any(sizes.values()):
             return
+        shots = shots_text(state)
         for metric, title, desc, what in CHARTS:
-            self._chart(state, metric, T[title], T[desc].format(shots=studio_bench.SHOTS[-1]), T[what])
+            self._chart(state, metric, T[title], T[desc].format(shots=shots), T[what])
 
     def _chart(self, state, metric, title, desc, what):
         card = Card(self.charts)

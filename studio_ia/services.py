@@ -1564,6 +1564,14 @@ class WorkspaceServices(Services):
                                                 filter_items=studio_bench.keep_all)
         return self._cached(("bench_suite", self._heldout_stamp(), self.workspace.revision), make)
 
+    def _bench_tokens(self, v, checkpoint):
+        """Tokens seen by a version's checkpoint over every run it descends from (studio_bench.tokens_seen), or None."""
+        import studio_bench
+
+        def owner(path):  # the runs of the version that made a checkpoint that does not sit in a run folder with a log
+            return next(([self._abs(r) for r in w.runs] for w in self.versions() if w.best_checkpoint and Path(w.best_checkpoint) == Path(path)), None)
+        return studio_bench.tokens_seen([self._abs(r) for r in v.runs], checkpoint, owner)
+
     def benchmark(self):
         import hashlib
         import studio_bench
@@ -1575,10 +1583,9 @@ class WorkspaceServices(Services):
                 continue
             try:
                 lineage = hashlib.sha1(structure_key(v.spec).encode()).hexdigest()[:8]  # one design, trained differently, is one line
-            except ValueError:
+            except (ValueError, KeyError, TypeError):
                 lineage = f"v{v.number}"
-            rows.append({"number": v.number, "name": v.name, "lineage": lineage,
-                         "tokens": studio_bench.tokens_seen([self._abs(r) for r in v.runs], v.best_checkpoint),
+            rows.append({"number": v.number, "name": v.name, "lineage": lineage, "tokens": self._bench_tokens(v, v.best_checkpoint),
                          "result": studio_bench.cached(self.root, v, suite)})
         return {"suite": suite["id"], "sizes": {k: len(suite[k]) for k in ("docs", "choice", "problems")}, "dropped": suite["dropped"],
                 "rows": rows}
@@ -1586,8 +1593,7 @@ class WorkspaceServices(Services):
     def run_benchmark(self, number):
         import studio_bench
         v, checkpoint = self._as_version(number), self._checkpoint(number)
-        tokens = studio_bench.tokens_seen([self._abs(r) for r in v.runs], checkpoint)
-        return studio_bench.benchmark(self.root, (v.number, checkpoint), self._bench_suite(), tokens)
+        return studio_bench.benchmark(self.root, (v.number, checkpoint), self._bench_suite(), self._bench_tokens(v, checkpoint))
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):

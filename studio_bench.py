@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -54,14 +55,17 @@ def build_suite(docs, choice, pool, problems, filter_items=keep_all, seed=SEED):
 
     filter_items(kind, items) -> kept runs on each list before anything is sampled, so a dropped item is replaced by the
     next one in line. Returns {id, format, seed, docs, choice, pool, problems, dropped: {kind: n filtered out}}."""
-    given = {"docs": [d for d in docs if d.strip()], "choice": list(choice), "pool": list(pool),
+    held = {_key(i) for i in choice}  # a question being asked is never also a worked example
+    given = {"docs": [d for d in docs if d.strip()], "choice": list(choice), "pool": [i for i in pool if _key(i) not in held],
              "problems": [p for p in problems if p.get("rule") != "choice"]}  # lettered problems are the few-shot metric's
     kept = {kind: list(filter_items(kind, items)) for kind, items in given.items()}
     suite = {"format": SUITE_FORMAT, "seed": seed,
              "docs": [d[:DOC_CHARS] for d in _pick(kept["docs"], DOCS, seed)],
              "choice": _pick(kept["choice"], CHOICE_ITEMS, seed), "pool": _pick(kept["pool"], CHOICE_POOL, seed),
              "problems": _pick(kept["problems"], PROBLEMS, seed)}
-    suite["id"] = hashlib.sha1(_key({**suite, "shots": SHOTS, "doc_chars": DOC_CHARS}).encode()).hexdigest()[:12]
+    settings = {"shots": SHOTS, "doc_chars": DOC_CHARS, "score_method": studio_eval.SCORE_METHOD,  # whatever else changes the numbers
+                "max_tokens": {rule: studio_rules.max_tokens(rule) for rule in sorted({p.get("rule") or "" for p in suite["problems"]})}}
+    suite["id"] = hashlib.sha1(_key({**suite, **settings}).encode()).hexdigest()[:12]
     suite["dropped"] = {kind: len(given[kind]) - len(kept[kind]) for kind in KINDS}
     return suite
 
@@ -70,7 +74,7 @@ def suite_from_rows(docs, held_problems, training_problems=(), filter_items=keep
     """build_suite from the rows the workspace holds, as post_rows gives them: held-back documents (strings), held-back
     problems (checkable ones and lettered ones) and training problems (only their lettered ones supply worked examples)."""
     held = [i for i in map(choice_item, held_problems) if i]
-    pool = held + [i for i in map(choice_item, training_problems) if i]
+    pool = [i for i in map(choice_item, training_problems) if i]  # worked examples come from training problems, never the held-back questions
     return build_suite(docs, held, pool, held_problems, filter_items, seed)
 
 
@@ -100,7 +104,7 @@ def run_suite(version, suite, tokens=None):
         result["bpc"] = sum(n for n, _ in scores) / chars / studio_eval.LN2 if chars else None
     if suite["choice"]:
         table = studio_eval.few_shot(local, suite["choice"], shots=SHOTS, seed=suite["seed"], pool=suite["pool"])
-        rows = [{"shots": r["shots"], "accuracy": r["accuracy"]} for r in table["rows"]]
+        rows = [{"shots": r["shots"], "used": r["used"], "accuracy": r["accuracy"]} for r in table["rows"]]
         result["few_shot"] = {"items": table["items"], "chance": table["chance"], "accuracy": rows[-1]["accuracy"], "rows": rows}
     if suite["problems"]:
         passed = sum(studio_rules.check(q["rule"], q["prompt"], local.generate([{"role": "user", "content": q["prompt"]}],
@@ -111,20 +115,61 @@ def run_suite(version, suite, tokens=None):
     return result
 
 
-def tokens_seen(runs, checkpoint=None):
-    """Tokens a version's newest run had trained on when its checkpoint was saved: the best checkpoint is the run's lowest
-    held-back loss, anything else (a later round's weights, last.npz) counts the whole run. None when no run logged tokens."""
+def _same(a, b):
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
+def _run_rows(run):
+    """[(tokens trained in the whole lineage so far, held-back loss or None)] for a run's logged rows. A resumed run's log
+    starts with its parent's rows and then counts from 0 again, so a count that falls starts a new stretch on top of the last."""
     from studio_model import read_metrics
-    run = Path(runs[-1]) if runs else None
-    if run is None or not (run / "metrics.jsonl").exists():
-        return None
-    rows = [r for r in read_metrics(run / "metrics.jsonl") if r.get("trained_tokens") is not None]
+    path = Path(run) / "metrics.jsonl"
+    if not path.exists():
+        return []
+    out, offset, previous = [], 0, 0
+    for row in read_metrics(path):
+        tokens = row.get("trained_tokens")
+        if tokens is None:
+            continue
+        if tokens < previous:
+            offset += previous
+        previous = tokens
+        out.append((offset + tokens, row.get("val_loss")))
+    return out
+
+
+def tokens_seen(runs, checkpoint=None, owner=None, _depth=0):
+    """Tokens the weights of `checkpoint` have trained on, over every run they descend from, or None when that cannot be told.
+
+    The run holding the checkpoint is the one whose folder it sits in (a checkpoint elsewhere, such as a post-training
+    round's, descends from the newest of `runs`). Its best.npz counts to the lowest held-back loss, anything else (last.npz,
+    a later round) the whole run; a resumed run's log already carries its parent's rows (see _run_rows). A run started from
+    another checkpoint (run.json initialized_from, a catch-up) adds what that checkpoint had seen. `owner(checkpoint)` may
+    name the runs of the version that made such a checkpoint when it does not sit in a run folder with a log."""
+    runs = [Path(r) for r in runs]
+    home = Path(checkpoint).parent if checkpoint else None
+    run = next((r for r in runs if home and _same(r, home)), home if home and (home / "metrics.jsonl").exists() else runs[-1] if runs else None)
+    rows = _run_rows(run) if run else []
     if not rows:
         return None
-    held = [r for r in rows if r.get("val_loss") is not None]
-    if checkpoint and Path(checkpoint) == run / "best.npz" and held:
-        return min(held, key=lambda r: r["val_loss"])["trained_tokens"]
-    return rows[-1]["trained_tokens"]
+    held = [r for r in rows if r[1] is not None]
+    own = min(held, key=lambda r: r[1])[0] if checkpoint and Path(checkpoint) == run / "best.npz" and held else rows[-1][0]
+    try:
+        start = read_json(run / "run.json").get("initialized_from")
+    except (OSError, ValueError, AttributeError):
+        start = None
+    if not start:
+        return own
+    if _depth >= 8:
+        return None
+    parents = [Path(start).parent]
+    if owner is not None and not (parents[0] / "metrics.jsonl").exists():
+        parents = list(owner(start) or [])
+    before = tokens_seen(parents, start, owner, _depth + 1) if parents else None
+    return None if before is None else before + own
 
 
 # ---------------------------------------------------------------------------------------------------- cache
@@ -134,11 +179,11 @@ def cache_path(root, number):
 
 
 def _stamp(checkpoint):
-    """Size and time of the checkpoint file: a retrained or post-trained version has a new one."""
+    """Path, size and time of the checkpoint file: a retrained or post-trained version has a new one. None when it is not there."""
     try:
         s = Path(checkpoint).stat()
-        return [s.st_mtime_ns, s.st_size]
-    except OSError:
+        return [str(checkpoint), s.st_mtime_ns, s.st_size]
+    except (OSError, TypeError):
         return None
 
 
@@ -154,20 +199,33 @@ def cached(root, version, suite):
     """The stored result of this suite for this version's current checkpoint, or None (never computes)."""
     number, checkpoint = _facts(version)
     hit = _read(root, number).get(suite["id"])
-    return hit["result"] if hit and checkpoint and hit.get("checkpoint") == _stamp(checkpoint) else None
+    stamp = _stamp(checkpoint) if checkpoint else None
+    return hit["result"] if hit and stamp is not None and hit.get("checkpoint") == stamp else None
+
+
+_locks, _locks_guard = {}, threading.Lock()
+
+
+def _lock(root, number):
+    with _locks_guard:
+        return _locks.setdefault((str(Path(root).resolve()), number), threading.Lock())
 
 
 def benchmark(root, version, suite, tokens=None, run=run_suite):
-    """cached(), else run the suite and store it under data/bench/<version>.json, keyed by suite id (the last KEPT_SUITES kept)."""
-    hit = cached(root, version, suite)
-    if hit is not None:
-        return hit
+    """cached(), else run the suite and store it under data/bench/<version>.json, keyed by suite id (the last KEPT_SUITES kept).
+    One run per version at a time: a second caller waits and then reads the first one's result. The checkpoint is stamped
+    before the run, so a checkpoint rewritten while the suite was running is checked again next time."""
     number, checkpoint = _facts(version)
-    result = run(version, suite, tokens)
-    suites = {k: v for k, v in _read(root, number).items() if k != suite["id"]}
-    suites[suite["id"]] = {"checkpoint": _stamp(checkpoint), "result": result}
-    atomic_json(cache_path(root, number), {"suites": dict(list(suites.items())[-KEPT_SUITES:])})
-    return result
+    with _lock(root, number):
+        hit = cached(root, version, suite)
+        if hit is not None:
+            return hit
+        stamp = _stamp(checkpoint)
+        result = run(version, suite, tokens)
+        suites = {k: v for k, v in _read(root, number).items() if k != suite["id"]}
+        suites[suite["id"]] = {"checkpoint": stamp, "result": result}
+        atomic_json(cache_path(root, number), {"suites": dict(list(suites.items())[-KEPT_SUITES:])})
+        return result
 
 
 # ---------------------------------------------------------------------------------------------------- chart data
