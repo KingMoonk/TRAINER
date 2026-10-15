@@ -1153,9 +1153,9 @@ class WorkspaceServices(Services):
         """Pieces per second of the newest run that logged one (for the time estimate)."""
         for ver in reversed(self.versions()):
             for run in reversed(ver.runs):
-                got = [r["tokens_per_second"] for r in read_metrics(Path(run) / "metrics.jsonl") if r.get("tokens_per_second")]
+                got = next((r["tokens_per_second"] for r in reversed(read_metrics(Path(run) / "metrics.jsonl")) if r.get("tokens_per_second")), None)
                 if got:
-                    return got[-1]
+                    return got
         return None
 
     # job results -> versions
@@ -1282,6 +1282,7 @@ class WorkspaceServices(Services):
 
     def _curve_for(self, number):
         """(points [(trained tokens, held-back bits/char)], schedule id, finished) of a version's latest run."""
+        from studio_core import read_json
         from studio_model import read_metrics
         v = self._as_version(number)
         run = Path(v.runs[-1]) if v and v.runs else None
@@ -1289,8 +1290,8 @@ class WorkspaceServices(Services):
             return [], "", False
         curve = self.run_curve(run)
         tokens = {r["step"]: r.get("trained_tokens") or r["step"] for r in read_metrics(run / "metrics.jsonl")}
-        spec = json.loads((run / "spec.json").read_text(encoding="utf-8")) if (run / "spec.json").exists() else {}
-        status = json.loads((run / "run.json").read_text(encoding="utf-8")).get("status") if (run / "run.json").exists() else None
+        spec = read_json(run / "spec.json") if (run / "spec.json").exists() else {}
+        status = read_json(run / "run.json").get("status") if (run / "run.json").exists() else None
         return [(tokens.get(s, s), y) for s, y in curve["heldout"]], json.dumps([spec.get("train", {}).get("schedule"), curve["total"]]), status == "completed"
 
     def verdict(self, a, b):
@@ -1543,10 +1544,11 @@ class WorkspaceServices(Services):
     @timed("services.run_curve")
     def run_curve(self, run_dir):
         import studio_eval
+        from studio_core import read_json
         from studio_model import read_metrics
         run = Path(run_dir)
         rows = [r for r in read_metrics(run / "metrics.jsonl") if r.get("loss") is not None]
-        spec = json.loads((run / "spec.json").read_text(encoding="utf-8")) if (run / "spec.json").exists() else {}
+        spec = read_json(run / "spec.json") if (run / "spec.json").exists() else {}
         train = spec.get("train", {})
         total = train.get("run", {}).get("steps") or (rows[-1]["step"] if rows else 0)
         cpp = 1.0  # characters per piece; nats per piece / ln2 / cpp = bits per character
@@ -1571,11 +1573,9 @@ class WorkspaceServices(Services):
     @staticmethod
     def _run_samples(run):
         """The latest 'what it writes now' samples train() logged (samples.jsonl), with the prompt and the steps between them."""
-        def rows(name):
-            path = run / name
-            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line] if path.exists() else []
-        cfg = json.loads((run / "config.json").read_text(encoding="utf-8")) if (run / "config.json").exists() else {}
-        samples = rows("samples.jsonl")[-5:]
+        from studio_core import jsonl_tail, read_json
+        cfg = read_json(run / "config.json") if (run / "config.json").exists() else {}
+        samples = jsonl_tail(run / "samples.jsonl", 5)
         return {"samples": [{"step": x["step"], "text": x["text"]} for x in samples],
                 "sample_every": (cfg.get("sample_every") or 0) * cfg.get("eval_every", 0) or None,
                 "prompt": samples[-1]["prompt"] if samples else cfg.get("sample_prompt")}

@@ -38,7 +38,7 @@ import torch
 
 from studio_arch import parameter_breakdown, validate_spec
 from studio_backend import DEVICES
-from studio_core import atomic_json, fingerprint, messages_of, now, replace_file
+from studio_core import atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
 from studio_modules.objective.ce import cross_entropy  # noqa: F401  (part of this module's API)
@@ -382,17 +382,8 @@ def load_checkpoint(path, weights_only=False):
 
 
 def read_metrics(path):
-    """The rows of a run's metrics.jsonl (a partial last line from a crash is skipped)."""
-    rows = []
-    try:
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            try:
-                rows.append(json.loads(line))
-            except ValueError:
-                continue
-    except OSError:
-        pass
-    return rows
+    """The rows of a run's metrics.jsonl (a partial last line from a crash is skipped). A run in progress is read only past what was read before."""
+    return jsonl_rows(path)
 
 
 def _tuples(value):
