@@ -141,9 +141,12 @@ class YourDataPage(Page):
         style.configure("YD.Treeview.Heading", background=C["bg"], foreground=C["muted"], font=font(12, bold=True))
         style.map("YD.Treeview", background=[("selected", C["violet_bg"])], foreground=[("selected", C["text"])])
         body = self.body
-        storage = tk_label(self.header, T["storage_link"], 13, "violet", cursor="hand2", takefocus=1)
-        storage.pack(anchor="w", pady=(6, 0))
-        _activate(storage, lambda: self.navigate("storage"))
+        links = tk.Frame(self.header, bg=C["bg"])
+        links.pack(anchor="w", pady=(6, 0))
+        for key, route in (("storage_link", "storage"), ("passive_link", "passive")):
+            link = tk_label(links, T[key], 13, "violet", cursor="hand2", takefocus=1)
+            link.pack(side="left", padx=(0, 2 * GUTTER))
+            _activate(link, lambda r=route: self.navigate(r))
         self.back = tk_label(body, "", 14, "violet", cursor="hand2", takefocus=1)
         self.back.pack(anchor="w")
         self.tabs = {}

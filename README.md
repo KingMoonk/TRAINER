@@ -99,7 +99,7 @@ The window has four areas in the sidebar, then Queue and Resources, and a machin
 
 **Queue** (or the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
 
-**Resources** holds Your data, Make extra data and **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it.
+**Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it, and **Passive training**, which lists the sessions that train on their own outside the queue, with their trainer and watchdog status, a Stop button, and a way to stop the watchdog starting when you sign in.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 

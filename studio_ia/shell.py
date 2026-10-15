@@ -41,6 +41,7 @@ ROUTES = {
     "your_data": Route("resources", "Your data", "Three kinds, because each one trains a different stage.", ()),
     "make_data": Route("resources", "Make extra data", "Optional. Generate more, then keep what passes review.", ()),
     "storage": Route("resources", "Storage", "What the app keeps on this computer's disk, and what you can delete to free space.", ()),
+    "passive": Route("resources", "Passive training", "Training that keeps going on its own, outside the queue, restarted by a watchdog. See it, stop it, or stop it starting when you sign in.", ()),
     "post_training": Route("post", "Post-training", "Four rounds, always in this order. Same design throughout; only the weights shift.", ()),
     "chat": Route("chat", "Chat", "Talk to any trained version. Compare two to see what a change really did.", ()),
 }
@@ -95,6 +96,8 @@ class Studio(tk.Tk):
         self.factories["your_data"], self.factories["make_data"] = YourDataPage, MakeDataPage
         from studio_ia.pages.storage import StoragePage
         self.factories["storage"] = StoragePage
+        from studio_ia.pages.passive import PassivePage
+        self.factories["passive"] = PassivePage
         self.route = None
         self._area_rows = {}
         self._build_sidebar()

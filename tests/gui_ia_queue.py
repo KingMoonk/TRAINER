@@ -46,6 +46,31 @@ class StorageCardTest(unittest.TestCase):
         self.assertEqual(self.app.route, "storage")
 
 
+
+class PassivePageTest(unittest.TestCase):
+    def setUp(self):
+        self.fake = FakeServices()
+        self.fake.passive_sessions = [{"id": "p1", "status": "running", "created": "2026-10-15T08:30:00+00:00", "stop": "Stops after 8 hours.",
+                                       "trainer": "Running", "watchdog": "Running", "restarts": 0, "heard": 30.0, "error": ""}]
+        self.fake.passive_signin = True
+        try:
+            self.app = Studio(self.fake)
+        except tk.TclError as error:
+            self.skipTest(f"no display: {error}")
+        self.addCleanup(self.app.destroy)
+        self.page = self.app.show("passive")
+        self.app.update()
+
+    def test_stop_asks_first_and_sign_in_can_be_removed(self):
+        with mock.patch("tkinter.messagebox.askyesno", return_value=False):
+            self.page._stop("p1")
+        self.assertEqual(self.fake.passive()["sessions"][0]["status"], "running")
+        with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+            self.page._stop("p1")
+        self.assertEqual(self.fake.passive()["sessions"][0]["status"], "stopped")
+        self.page._remove_signin()
+        self.assertFalse(self.fake.passive()["signin"])
+
 class UpNextTest(unittest.TestCase):
     def setUp(self):
         from studio_ia.services import Job

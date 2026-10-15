@@ -300,6 +300,19 @@ class Services:
         """Bytes free on the disk that holds the workspace (where checkpoints are written)."""
         raise NotImplementedError
 
+    def passive(self):
+        """{"sessions": [...], "signin": bool}: passive training sessions, newest first, each {id, status, created, stop,
+        trainer, watchdog, restarts, heard, error}; signin is True while its watchdog is set to start when you sign in."""
+        raise NotImplementedError
+
+    def stop_passive(self, session_id):
+        """Ask a passive session to stop. Returns its status afterwards."""
+        raise NotImplementedError
+
+    def remove_passive_signin(self):
+        """Stop the passive watchdog from starting when you sign in."""
+        raise NotImplementedError
+
     def pretrain_preview(self, dataset_ids, rows=16):
         """{pieces, params, context, first_rows}: pieces = tokenised size of the chosen text, params = current
         version's parameter count, first_rows = first `rows` rows of token groups, each a list of example numbers
@@ -477,6 +490,7 @@ class FakeServices(Services):
         self._viewer_running = False
         self.snapshot_paths: list = []  # what viewer_snapshots returns
         self.probe_path = None  # what viewer_probe_step returns
+        self.passive_sessions, self.passive_signin = [], False  # what passive() returns
 
     def viewer_status(self):
         return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
@@ -561,6 +575,19 @@ class FakeServices(Services):
 
     def free_space(self):
         return 120 * 10 ** 9
+
+    def passive(self):
+        return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
+
+    def stop_passive(self, session_id):
+        for row in self.passive_sessions:
+            if row["id"] == session_id:
+                row.update(status="stopped", trainer="Stopped", watchdog="Stopped")
+                return "stopped"
+        return None
+
+    def remove_passive_signin(self):
+        self.passive_signin = False
 
     def remove(self, job_id):
         self._queue.up_next = [j for j in self._queue.up_next if j.id != job_id]
@@ -1033,6 +1060,28 @@ class WorkspaceServices(Services):
     def free_space(self):
         import shutil
         return shutil.disk_usage(self.root).free
+
+    def passive(self):
+        import studio_passive_watch as watch
+        from studio_passive import ACTIVE, PassiveStore, plan_summary
+        signin = watch.installed(self.root)
+        if not (self.root / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
+            return {"sessions": [], "signin": signin}
+        store, rows = PassiveStore(self.root), []
+        for s in store.list()[:10]:
+            facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
+            rows.append({"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"],
+                         "error": s["error"], **facts})
+        return {"sessions": rows, "signin": signin}
+
+    def stop_passive(self, session_id):
+        import studio_passive_watch as watch
+        from studio_passive import PassiveStore
+        return watch.stop(PassiveStore(self.root), session_id)
+
+    def remove_passive_signin(self):
+        import studio_passive_watch as watch
+        watch.uninstall(self.root)
 
     def storage(self, days=None, data=False):
         import studio_cleanup

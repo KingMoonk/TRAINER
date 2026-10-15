@@ -23,7 +23,7 @@ class Areas(unittest.TestCase):
         self.assertEqual((names["queue"], AREA_HOME["queue"]), ("Queue", "queue"))
         self.assertEqual((names["resources"], AREA_HOME["resources"]), ("Resources", "your_data"))
         self.assertLess([k for k, _ in AREAS].index("chat"), [k for k, _ in AREAS].index("queue"))
-        self.assertEqual([ROUTES[r].area for r in ("queue", "your_data", "make_data", "storage")], ["queue", "resources", "resources", "resources"])
+        self.assertEqual([ROUTES[r].area for r in ("queue", "your_data", "make_data", "storage", "passive")], ["queue", "resources", "resources", "resources", "resources"])
         self.assertEqual(ROUTES["storage"].title, "Storage")
         self.assertNotIn("This computer", names.values())
 

@@ -380,6 +380,32 @@ def start(root, session_id=None, *, spawn=spawn, install=install, alive=alive, o
     return pid
 
 
+def installed(root, *, home=None, platform=sys.platform):
+    """True when the watchdog is registered to start at sign-in (Windows: its launch script is there; schtasks is not asked)."""
+    root = Path(root).resolve()
+    if platform == "darwin":
+        return (Path(home or Path.home()) / "Library" / "LaunchAgents" / f"com.groundwork.passive.{_label(root)}.plist").exists()
+    if platform.startswith("linux"):
+        return _desktop(root, home).exists()
+    return platform == "win32" and _script(root).exists()
+
+
+def stop(store, session_id, *, alive=alive, ours=ours):
+    """The app's Stop: leave "stop" for the trainer. With neither the trainer nor the watchdog running nobody would take it,
+    so the record is closed here instead. Returns the session's status afterwards."""
+    session = store.get(session_id)
+    if session is None or session["status"] not in ACTIVE:
+        return session and session["status"]
+    store.command(session_id, "stop")
+    trainer = alive(session["trainer_pid"]) and ours(session["trainer_pid"], "studio_passive", session_id)
+    watchdog = alive(session["watchdog_pid"]) and ours(session["watchdog_pid"], "studio_passive_watch")
+    if trainer or watchdog:
+        return session["status"]
+    store.update(session_id, status="stopped", command="")
+    store.append(session_id, {"type": "stop", "reason": "user"})
+    return "stopped"
+
+
 def status(store, session, *, now=time.time, alive=alive, ours=ours):
     """The plain facts for the 'Keeping it going' table."""
     t, beat = now(), session["heartbeat"]
