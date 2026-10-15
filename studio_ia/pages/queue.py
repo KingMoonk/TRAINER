@@ -11,8 +11,8 @@ from studio_ia.widgets import Toggle, info_icon, tip
 
 HOURS = (("any", "Any time"), ("nights", "Nights only"), ("set", "Set hours"))
 MEMORY = (("half", "Half"), ("most", "Most"), ("all", "All"))
-TOGGLES = (("idle_only", "Only when I’m not using the computer", "Pauses within a few seconds of keyboard or mouse use."),
-           ("pause_on_battery", "Pause on battery", "Resumes when plugged in."),
+TOGGLES = (("idle_only", "Only when I’m not using the computer", ""),
+           ("pause_on_battery", "Pause on battery", ""),
            ("keep_awake", "Keep the computer awake while training", "Otherwise it pauses when the computer sleeps."),
            ("chat_follows_best", "Chat follows the best checkpoint",
             "Chat uses the checkpoint with the lowest error on held-back text, not simply the newest."))
@@ -56,7 +56,6 @@ def total_hours(state):
 
 class QueuePage(Page):
     title = "This computer"
-    lead = "What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue."
 
     hour_boxes: dict = {}
     choice, data = "Older than 30 days", False

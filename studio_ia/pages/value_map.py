@@ -50,7 +50,6 @@ class FunnelCanvas(tk.Canvas):
 
 class ValueMapPage(Page):
     title = VALUE_MAP["h1"]
-    lead = VALUE_MAP["lead"]
     crumb = (*LI, "Value map")
 
     def __init__(self, *args, **kw):

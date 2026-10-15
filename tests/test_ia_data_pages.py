@@ -54,7 +54,7 @@ class YourDataLogicTest(unittest.TestCase):
 
     def test_every_tab_has_its_board_copy(self):
         for k in yd.KINDS:
-            for suffix in ("tab", "lead", "note", "add", "make", "col_a", "col_b", "search"):
+            for suffix in ("tab", "note", "add", "make", "col_a", "col_b", "search"):
                 self.assertTrue(copy.YOURDATA[f"{k}_{suffix}"])
         for status in yd.STATUS_COLOR:
             self.assertIn(status, ("In use", "Held back", "Near-duplicate", "Good", "Review", "From Chat", "Ready"))

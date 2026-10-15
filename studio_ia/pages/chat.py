@@ -81,7 +81,7 @@ def stream_reply(chat, version, messages, stop, put):
 
 
 class ChatPage(Page):
-    title, lead = T["h1"], T["lead"]
+    title = T["h1"]
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -286,7 +286,8 @@ class ChatPage(Page):
         head = tk.Frame(self.shelf, bg=C["panel"])
         head.pack(anchor="w", pady=(0, 6))
         Kicker(head, T["versions"], bg="panel").pack(side="left")
-        info_icon(head, T["shelf_hint_compare" if self.compare else "shelf_hint_single"]).pack(side="left", padx=(4, 0))
+        if not self.compare:
+            info_icon(head, T["shelf_hint_single"]).pack(side="left", padx=(4, 0))
         self.rows = {}
         for num, v in sorted(vs.items()):
             is_a, is_b = num == self.use, self.compare and num == self.b

@@ -21,7 +21,7 @@ CARDS = (
          safe=T["problems_safe"], example=T["problems_example"], where=T["problems_where"], go=T["problems_go"]),
     dict(key="rewrite", makes="conversations", safe_color="amber", name=T["rewrite_model"], note=T["rewrite_note"], makes_line=T["rewrite_makes"],
          safe=T["rewrite_safe"], example=T["rewrite_example"], where=T["rewrite_where"], go=T["rewrite_go"]),
-    dict(key="prose", makes="text", safe_color="amber", name=T["prose_model"], note=T["prose_note"], makes_line=T["prose_makes"],
+    dict(key="prose", makes="text", safe_color="amber", name=T["prose_model"], makes_line=T["prose_makes"],
          safe=T["prose_safe"], example=T["prose_example"], where=T["prose_where"], go=T["prose_go"]),
 )
 
@@ -63,7 +63,6 @@ def drafts_summary(kind, added):
 
 class MakeDataPage(Page):
     title = T["h1"]
-    lead = T["lead"]
 
     def __init__(self, parent, services, navigate=None, seed=None, **kw):
         super().__init__(parent, services, navigate, **kw)
@@ -84,7 +83,7 @@ class MakeDataPage(Page):
             _activate(box, lambda i=i: self.pick(i))
             for w in labels:
                 w.bind("<Button-1>", lambda _e, i=i: self.pick(i))
-            tip(box, card["note"])
+            tip(box, card.get("note"))
             self.cards.append((box, labels))
         Kicker(body, T["kicker"]).pack(fill="x", pady=(GUTTER, 4))
         self.example = tk_label(body, "", 14, "text", "panel", font=font(14, mono=True), padx=GUTTER, pady=10)

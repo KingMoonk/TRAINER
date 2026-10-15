@@ -30,7 +30,8 @@ class ShellTest(unittest.TestCase):
             page = self.app.show(route)
             self.app.update()
             self.assertIn(spec.title, texts(page), route)
-            self.assertIn(spec.lead, tips_in(page), route)  # the lead is the ⓘ hover
+            if spec.lead:
+                self.assertIn(spec.lead, tips_in(page), route)  # the lead is the ⓘ hover
 
     def test_sidebar_rows_for_queue_and_data_follow_the_page(self):
         from studio_ia.theme import C

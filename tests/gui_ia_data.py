@@ -56,7 +56,7 @@ class DataPagesTest(unittest.TestCase):
         for want in (Y["h1"], Y["text_tab"], Y["conversations_tab"], Y["problems_tab"], "‹ " + Y["back_post"], Y["search"]):
             self.assertIn(want, text)
         tips = tips_in(page)  # the explanations are hovers now
-        for want in (Y["lead"], Y["text_lead"], Y["conversations_lead"], Y["problems_lead"], Y["conversations_note"]):
+        for want in (Y["lead"], Y["conversations_lead"], Y["problems_lead"], Y["conversations_note"]):
             self.assertIn(want, tips)
             self.assertNotIn(want, text)
         self.click(find(page, Y["problems_tab"]))
@@ -155,7 +155,6 @@ class DataPagesTest(unittest.TestCase):
         for want in (M["h1"], M["problems_rule"], M["rewrite_model"], M["prose_model"], M["kicker"], M["problems_example"],
                      M["how_many"]):
             self.assertIn(want, text)
-        self.assertIn(M["lead"], tips_in(page))
         self.assertIn(M["problems_where"], tips_in(page))
         self.assertIn(M["problems_note"], tips_in(page))
         self.invoke(page.try5)

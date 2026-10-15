@@ -140,7 +140,6 @@ def status_of(services):
 
 class Inside3DPage(Page):
     title = T["h1"]
-    lead = T["lead"]
     crumb = (*LI, "3D")
 
     def __init__(self, *args, **kw):

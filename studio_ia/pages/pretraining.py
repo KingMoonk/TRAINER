@@ -106,7 +106,6 @@ def sets_of(summary):
 
 class PretrainingPage(Page):
     title = T["h1"]
-    lead = T["lead"]
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -122,7 +121,7 @@ class PretrainingPage(Page):
         self.model_line = tk_label(b, "", 15)
         self.model_line.pack(anchor="w", pady=(2, GUTTER))
         # data
-        self.data_card = self._card(T["data"], T["what_reads"])
+        self.data_card = self._card(T["data"])
         self.tiles = tk.Frame(self.data_card, bg=C["panel"])
         self.tiles.pack(fill="x")
         self.data_line = tk_label(self.data_card, "", 13, "muted", "panel", wraplength=720)
@@ -137,7 +136,7 @@ class PretrainingPage(Page):
         self._link(row, T["post_training_r1"], "post_training").pack(side="left")
         tk_label(row, T["post_training_r1_end"], 13, "muted", "panel").pack(side="left")
         # recommended collection
-        self.collection_card = self._card(T["collection"], T["collection_desc"])
+        self.collection_card = self._card(T["collection"])
         self.collection_rows = tk.Frame(self.collection_card, bg=C["panel"])
         self.collection_rows.pack(fill="x")
         # enough text
@@ -153,7 +152,7 @@ class PretrainingPage(Page):
         self.expect_details = ""
         self.expect_info = info_icon(row, lambda: self.expect_details)
         # batches
-        card = self._card(T["batches"], f"{T['batches_desc'].capitalize()}; {T['rebuilt_auto']}.")
+        card = self._card(T["batches"], T["rebuilt_auto"].capitalize() + ".")
         self.step_line = tk_label(card, "", 13, "text2", "panel", wraplength=720)
         self.step_line.pack(anchor="w", pady=(4, 6))
         self.grid = tk.Canvas(card, height=20, bg=C["panel"], highlightthickness=0)
@@ -168,7 +167,7 @@ class PretrainingPage(Page):
         self.per_step = tk_label(card, "", 13, "muted", "panel")
         self.per_step.pack(anchor="w", pady=(6, 0))
         # train
-        card = self._card(T["train_label"], T["continue_start"])
+        card = self._card(T["train_label"])
         self.need = tk_label(card, "", 13, "muted", "panel")
         self.need.pack(anchor="w", pady=(0, 6))
         self.mode_boxes = {}

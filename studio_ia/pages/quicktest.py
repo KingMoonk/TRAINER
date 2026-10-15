@@ -67,7 +67,6 @@ def signal_text(result, name, guess):
 
 class QuickTestPage(Page):
     title = T["h1"]
-    lead = T["lead"]
     crumb = ("Network designer",)
 
     def __init__(self, *a, **kw):
@@ -95,14 +94,14 @@ class QuickTestPage(Page):
         self.data_tip = self.size_tip = ""
         self.data = self._choice(choices, T["tiny_dataset"], Segmented(choices, [T[d[1]] for d in DATASETS], T["short_stories"], self.note_data),
                                  lambda: self.data_tip)
-        self.time = self._choice(choices, T["time_each"], Segmented(choices, [T[m[0]] for m in MINUTES], T["3_min"]), T["both_get_time"])
+        self.time = self._choice(choices, T["time_each"], Segmented(choices, [T[m[0]] for m in MINUTES], T["3_min"]), None)
         self.size = self._choice(choices, T["size_label"], Segmented(choices, [T["full"], T["shrunk_quarter_label"]], T["full"], self.note_size),
                                  lambda: self.size_tip)
         self.note_data(T["short_stories"])
         self.note_size(T["full"])
         guess = tk.Frame(b, bg=C["bg"])
         guess.pack(fill="x", pady=(0, GUTTER))
-        tip(tk_label(guess, T["your_guess"], 15), T["result_shows"]).pack(anchor="w")
+        tk_label(guess, T["your_guess"], 15).pack(anchor="w")
         self.guess = GuessChips(guess, GUESSES, bg="bg")
         self.guess.pack(anchor="w", pady=6)
         self.run_btn = button(guess, "Run quick test", self.start, primary=True)
@@ -129,8 +128,12 @@ class QuickTestPage(Page):
         return title, desc
 
     def _choice(self, card, name, seg, hint):
-        tip(tk_label(card, name, 14, "text2", "panel"), hint).pack(anchor="w", pady=(6, 2))
-        tip(seg, hint).pack(anchor="w", pady=(0, 6))
+        label = tk_label(card, name, 14, "text2", "panel")
+        label.pack(anchor="w", pady=(6, 2))
+        seg.pack(anchor="w", pady=(0, 6))
+        if hint:
+            tip(label, hint)
+            tip(seg, hint)
         return seg
 
     def note_data(self, label):

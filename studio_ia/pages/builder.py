@@ -258,7 +258,7 @@ def text_sets(summary):
 
 
 class BuilderPage(Page):
-    title, lead = T["h1"], T["lead"]
+    title = T["h1"]
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)

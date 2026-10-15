@@ -41,7 +41,6 @@ def num(x):
 
 class TrainingRunPage(Page):
     title = "Pretraining"
-    lead = T["step"]
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -126,7 +125,6 @@ class TrainingRunPage(Page):
         parent = next((p for p in s.versions() if v and p.number == v.parent), None) if v else None
         n, pn = (v.number if v else None), (parent.number if parent else None)
         self.h1.configure(text=("Pretraining" if n is None else f"Pretraining · version {n}") + (" catching up" if q.job else ""))
-        self.set_lead("Step k of n, the schedule phase and the error so far.")
         if v is None:
             change = "No version yet: design one in the Network designer, then train it in Pretraining."
         elif pn is None:

@@ -2,15 +2,14 @@
 
 BUILDER = {
     "h1": "Build your model",
-    "lead": "Change the picture. See what it costs and what it does.",
     "run_pill": "{version} {status}",
     "next_word": "Next word",
     "next_word_desc": "Scores every piece in the word list, then picks one.",
     "blocks": "Blocks",
-    "blocks_desc": "Blocks: rounds of processing per word.",
+    "blocks_desc": "Rounds of processing per word.",
     "your_text_title": "Your text, cut into pieces",
-    "look_back_heads_tip": "How many things each block looks for at once. Each look-back head looks for something different in earlier words (attention).",
-    "thinking_room_tip": "Space to work on each word. The thinking room works on each word by itself (MLP).",
+    "look_back_heads_tip": "Each head looks for something different in earlier words (attention).",
+    "thinking_room_tip": "Working space for each word, on its own (MLP).",
     "what_costs": "WHAT YOUR CHANGES COST",
     "training_memory": "Training memory:",
     "training_memory_fits": "unknown (memory size not reported)",
@@ -76,7 +75,6 @@ BUILDER = {
 
 CHAT = {
     "h1": "Chat",
-    "lead": "Talk to any trained version. Compare two to see what a change really did.",
     "live": "LIVE",
     "head_using": "{version}",
     "no_trained": "No trained version yet.",
@@ -104,7 +102,6 @@ CHAT = {
     "send": "Send",
     "versions": "VERSIONS",
     "example_verdicts": "example verdicts",
-    "shelf_hint_compare": "Pick the version for the right-hand reply.",
     "shelf_hint_single": "Chat follows the best checkpoint unless you pick one. Switching is live; nothing retrains.",
     "placeholder_compare": "Ask both versions the same thing",
     "placeholder_single": "Type a message",
@@ -127,7 +124,7 @@ CHAT = {
 
 COMPARE = {
     "h1": "Compare runs",
-    "lead": "Change one thing, hold the rest equal, run several seeds. A difference counts only if it is larger than the spread across seeds.",
+    "lead": "A difference counts only if it is larger than the spread across seeds.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "/ Compare runs",
     "question": "Question",
@@ -183,7 +180,6 @@ COMPARE = {
 
 QUEUE = {
     "h1": "This computer",
-    "lead": "What it's training now, what's waiting, and when it's allowed to work. Every \"Train\" or \"Run\" button in the app adds to this queue.",
     "now": "NOW",
     "now_status": "{version} · {what}",
     "now_step": "step [N] of [N]",
@@ -194,14 +190,14 @@ QUEUE = {
     "now_pause": "Pause",
     "now_resume": "Resume",
     "checkpoint_now": "Make a checkpoint now",
-    "checkpoint_desc": '"Make a checkpoint now" branches off a short cool-down and keeps the main run going. Pausing keeps everything; the run resumes exactly where it stopped.',
+    "checkpoint_desc": "Branches off a short cool-down and keeps the main run going. Pausing keeps everything; the run resumes exactly where it stopped.",
     "up_next": "UP NEXT · IN ORDER",
     "all_done_in": "all done in about [N] h at the current plan",
     "move_up": "Move up",
     "remove": "Remove",
     "nothing_waiting": "Nothing waiting.",
-    "nothing_waiting_tip": "When the current job ends, the computer keeps improving the current version in its steady phase, within the plan below.",
-    "reorder_tip": "Drag ⠿ to reorder. A held job keeps its place and is skipped until you release it.",
+    "nothing_waiting_tip": "When the current job ends, it keeps improving the current version in its steady phase, within the plan below.",
+    "reorder_tip": "A held job keeps its place and is skipped until you release it.",
     "when_train_tip": "Chat answering never stops training. It shares the computer, so training slows while it answers.",
     "when_train": "WHEN IT MAY TRAIN",
     "hours": "Hours",
@@ -213,9 +209,7 @@ QUEUE = {
     "most": "Most",
     "all": "All",
     "idle_only": "Only when I'm not using the computer",
-    "idle_desc": "Pauses within a few seconds of keyboard or mouse use.",
     "pause_battery": "Pause on battery",
-    "pause_battery_desc": "Resumes when plugged in.",
     "keep_awake": "Keep the computer awake while training",
     "keep_awake_desc": "Otherwise it pauses when the computer sleeps.",
     "chat_follows_best": "Chat follows the best checkpoint",
@@ -236,7 +230,6 @@ QUEUE = {
 
 QUICKTEST = {
     "h1": "Quick test",
-    "lead": "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Quick test",
     "throwaway": "THROWAWAY",
@@ -249,7 +242,6 @@ QUICKTEST = {
     "your_idea_desc": "Version 4 with your change",
     "change_designer": "Change the idea in the designer",
     "your_guess": "Your guess first",
-    "result_shows": "the result shows next to it",
     "early_signal": "EARLY SIGNAL",
     "after_minutes": "After the same [N] minutes, your idea's error is",
     "lower_same_higher": "[lower / about the same / higher]",
@@ -281,7 +273,6 @@ QUICKTEST = {
     "1_min": "1 min",
     "3_min": "3 min",
     "10_min": "10 min",
-    "both_get_time": "Both designs get the same time.",
     "size_label": "Size",
     "full": "Full",
     "shrunk_quarter_label": "Shrunk to ¼",
@@ -300,7 +291,6 @@ QUICKTEST = {
 
 TRACE = {
     "h1": "Trace a position",
-    "lead": "Follow one position's stream through the model. Numbers appear when the engine has run your prompt.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Look inside / Trace a position",
     "example_prompt": "EXAMPLE PROMPT · FOLLOWING THE LAST POSITION",
@@ -317,16 +307,14 @@ TRACE = {
     "output": "Output",
     "output_what": "final norm, then unembedding to logits",
     "approx_legend": "≈ marks a guess read before the last layer: approximate, because those layers are not trained to be read this way. Only the output row is the model's real prediction.",
-    "relative_note": "Relative change says how much a stage added compared with what was already there; the cosine says whether it kept the direction (near 1) or turned it. Size alone grows steadily through most models and says little. The guess column is the logit lens: the final norm and unembedding applied early. Layers before the last are not trained to be read this way, so early guesses can look odd. Numbers appear when the engine has run your prompt.",
+    "relative_note": "Relative change says how much a stage added compared with what was already there; the cosine says whether it kept the direction (near 1) or turned it. Size alone grows steadily through most models and says little. The guess column is the logit lens: the final norm and unembedding applied early. Layers before the last are not trained to be read this way, so early guesses can look odd.",
 }
 
 TRAINING = {
     "h1": "Pretraining · version 5 catching up",
-    "lead": "Version 5 = version 4 with 6 blocks (was 4) and wide thinking room (was normal). The new parts start at zero, so it began exactly at version 4's error. ·",
     "see_change": "see the change",
     "pause": "Pause",
     "stop_cooldown": "Stop after a short cool-down",
-    "step": "Step",
     "of": "of",
     "pass": "Pass",
     "over_text": "over your text ·",
@@ -342,7 +330,7 @@ TRAINING = {
     "version_best": "{parent}'s best, held-back",
     "learning": "Learning",
     "cooldown_drop": "Error usually drops most in the cool-down, where the learning rate falls to near zero.",
-    "bits_per_char_note": "All three in bits per character, so versions with different word lists compare fairly. Lower is better.",
+    "bits_per_char_note": "In bits per character, so versions with different word lists compare fairly.",
     "example_shape": "Example shape, not real data",
     "training_text": "training text, smoothed",
     "every_step": "every step",
@@ -376,7 +364,6 @@ TRAINING = {
 
 HEAD_ZOOM = {
     "h1": "Inside a head",
-    "lead": "One attention head, one step at a time, on a real prompt.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Look inside / Inside a head",
     "head_label": "Block {block} · head {head} · {tokens} tokens",
@@ -420,7 +407,6 @@ HEAD_ZOOM = {
 
 VALUE_MAP = {
     "h1": "Value map",
-    "lead": "How a head's values are projected down and back up, and why the heads add up.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Look inside / Value map",
     "d_model": "d_model 256 · heads",
@@ -445,7 +431,6 @@ VALUE_MAP = {
 
 LOSS = {
     "h1": "Loss",
-    "lead": "What one wrong or right prediction costs, and the gradient it sends back.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Look inside / Loss",
     "example": "…The largest planet is",
@@ -469,7 +454,6 @@ LOSS = {
 
 HEAD_LAB = {
     "h1": "Head lab",
-    "lead": "Where does each attention head look, and how much does the model rely on it? Switch heads off and watch the answer change.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Look inside / Head lab",
     "live": "LIVE",
@@ -479,7 +463,6 @@ HEAD_LAB = {
     "hide_importance": "Hide importance",
     "switch_all_on": "Switch all back on",
     "grid_note_ranked": "Each tile shows how much the error rises without that head. The engine fills these in by switching heads off one at a time.",
-    "grid_note_normal": "Click a tile to inspect a head. Use the buttons on the right to switch it off or test its attention pattern.",
     "head_on": "on",
     "head_off": "switched off",
     "switch_off": "Switch it off",
@@ -507,7 +490,6 @@ HEAD_LAB = {
     "measure_attention": "measure attention on prepared text: share on the previous word, share on the first word (an idle-head sign), and, for induction, on random sequences repeated twice, share on the word after the earlier copy of the current word.",
     "step_through": "Step through one head's maths in Inside a head",
     "previous_word": "Previous word",
-    "previous_desc": "Looks at the word just before.",
     "parks_first": "Parks on the first word",
     "parks_desc": "Most of its attention goes to the first piece. This often means the head is idle here (an attention sink), not that the first piece matters.",
     "copying_pattern": "Copying a pattern (induction)",
@@ -532,7 +514,6 @@ HEAD_LAB = {
 
 INSIDE3D = {
     "h1": "Inside the network",
-    "lead": "Build the model from the inside and watch it train, from a window of positions down to single weights.",
     "breadcrumb": "‹ Network designer",
     "breadcrumb_page": "Look inside / 3D",
     "reduce_motion": "Reduce motion",
@@ -644,11 +625,9 @@ INSIDE3D = {
 
 PRETRAINING = {
     "h1": "Pretraining",
-    "lead": "Feed it text. It learns by predicting the next word, over and over.",
     "model_label": "MODEL BEING TRAINED",
     "version_source": "Version 5 · from the Network designer",
     "data": "Data",
-    "what_reads": "what it reads",
     "data_status_format": "{count}% · {mb} MB of {total} MB",
     "enough_text": "ENOUGH TEXT?",
     "text_estimate": "This model could use about {times}× more text than you have",
@@ -664,7 +643,6 @@ PRETRAINING = {
     "post_training_r1": "Post-training round 1",
     "post_training_r1_end": "; problems with a checkable answer to round 2. A model learns the language from plain text first.",
     "batches": "Batches",
-    "batches_desc": "how the text is fed in",
     "rebuilt_auto": "rebuilt automatically when the word list changes",
     "one_step": "One step: {rows} rows × 256 pieces. Each colour is a different example; the dark square marks where one ends.",
     "layout_note": "Layout shown with an example; real rows come from your data.",
@@ -675,7 +653,6 @@ PRETRAINING = {
     "per_step_pieces": "{pieces} pieces per step · one pass over your data ≈ {passes} steps",
     "per_step_only": "{pieces} pieces per step",
     "train_label": "Train",
-    "continue_start": "continue or start over",
     "version_needs": "version 5 needs catch-up training",
     "how_long": "How long",
     "steps_time": "{steps} steps · about {minutes} min on this computer",
@@ -691,7 +668,6 @@ PRETRAINING = {
     "add_queue": "Add to the queue",
     "queue_note": "Runs after the current job on this computer, or right away if nothing is running. Chat keeps {parent} until {version} beats it on held-back text.",
     "collection": "Recommended collection",
-    "collection_desc": "plain text to download, checked, then added to your sources",
     "download_all": "Download all",
     "download": "Download",
     "import": "Add to my sources",
@@ -704,11 +680,10 @@ PRETRAINING = {
 
 FEEDBACK = {
     "h1": "Post-training",
-    "lead": "Four rounds, always in this order. Same design throughout; only the weights shift.",
+    "lead": "Always in this order. The design stays the same; only the weights shift.",
     "starts_from": "STARTS FROM",
     "version_best": "Version 4 · best checkpoint from Pretraining",
     "at_this_size": "At this size the gain from each round is small. The shape of the pipeline is what you are learning.",
-    "click_round": "Click a round to see it.",
     "round_1": "ROUND 1 · PRACTICE ANSWERS",
     "r1_method": "supervised fine-tuning",
     "r1_lead": "Teaches the shape of an answer, not the skill. Pretraining taught it to continue text; here it studies prompts paired with good answers.",
@@ -796,7 +771,6 @@ FEEDBACK = {
 
 MAKEDATA = {
     "h1": "Make extra data",
-    "lead": "Optional. Generate more, then keep what passes review.",
     "problems_rule": "Problems a rule can check",
     "problems_note": "Sort, reverse, count, copy, small addition, length limits, ending cleanly.",
     "problems_makes": "makes: problems",
@@ -812,7 +786,6 @@ MAKEDATA = {
     "rewrite_where": "Goes to Your data → Conversations as drafts. Nothing is used until you mark it Good.",
     "rewrite_go": "Make drafts",
     "prose_model": "Generate prose with your local model",
-    "prose_note": "Short passages in a style or topic you pick.",
     "prose_makes": "makes: text",
     "prose_safe": "for review only: it can introduce mistakes",
     "prose_example": "[a paragraph about tides, in plain English]",
@@ -840,7 +813,6 @@ YOURDATA = {
     "text_tab": "Text it reads",
     "text_used": "used by Pretraining",
     "text_count": "[N] characters · 3 sets",
-    "text_lead": "Plain text. It learns by predicting the next piece.",
     "text_sets": "Short stories · Recommended collection · your files",
     "text_note": "Held-back text is split off by document, after exact duplicates are removed, and never trained on.",
     "text_add": "Add a document",
@@ -850,7 +822,7 @@ YOURDATA = {
     "conversations_count": "[N] conversations · 2 sets",
     "conversations_lead": "A prompt and a good answer. Only the answer is trained on.",
     "conversations_sets": "Dolly 15K (14,996) · Alpaca · your corrections",
-    "conversations_note": "Open one to read, edit or mark it Good. Corrections you teach in Chat appear here.",
+    "conversations_note": "Corrections you teach in Chat appear here.",
     "conversations_add": "Write a conversation",
     "conversations_make": "Make extra conversations",
     "problems_tab": "Problems with a checkable answer",
@@ -860,9 +832,8 @@ YOURDATA = {
     "problems_sets": "Generated from rules · Recommended collection · your own",
     "problems_note": "Rule-made problems can be generated safely in any amount; the recommended collection adds real ones with an answer key.",
     "collection": "Recommended collection",
-    "text_collection_desc": "Plain text to download and check. Pretraining adds the ones you import to its sources.",
-    "conversations_collection_desc": "Conversations to download, check and add to your sets.",
-    "problems_collection_desc": "Real problems with an answer key (math, science, reading) to download, check and add to your sets.",
+    "text_collection_desc": "Pretraining adds the ones you import to its sources.",
+    "problems_collection_desc": "Real problems with an answer key (math, science, reading).",
     "download_add": "Download and add",
     "download_add_all": "Download and add all",
     "download_all": "Download all",

@@ -47,7 +47,7 @@ class PostTrainingTest(unittest.TestCase):
             self.assertIn(want, text)
         tips = "\n".join(tips_in(self.page))
         self.assertIn(T["lead"], tips)
-        for want in (T["click_round"], T["chat_moves"], T["judge_note"]):  # explained on hover, not printed
+        for want in (T["chat_moves"], T["judge_note"]):  # explained on hover, not printed
             self.assertIn(want, tips)
             self.assertNotIn(want, text)
         for name in ("Practice answers", "Practice with checks", "Learn from a teacher", "Your votes"):

@@ -29,8 +29,8 @@ class TestIACopy(unittest.TestCase):
         "NAV": "Network designer",  # First item in NAV
     }
 
-    def test_all_pages_have_h1_and_lead(self):
-        """Every page dict must have 'h1' and 'lead' keys."""
+    def test_all_pages_have_h1(self):
+        """Every page dict must have an 'h1' key."""
         page_dicts = [
             copy.BUILDER,
             copy.CHAT,
@@ -52,7 +52,6 @@ class TestIACopy(unittest.TestCase):
 
         for page_dict in page_dicts:
             self.assertIn("h1", page_dict, f"Missing 'h1' in {page_dict}")
-            self.assertIn("lead", page_dict, f"Missing 'lead' in {page_dict}")
 
     def test_h1_values_match_boards(self):
         """H1 values must match the boards exactly."""

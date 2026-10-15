@@ -100,7 +100,6 @@ def heat(value, scale):
 
 class HeadZoomPage(Page):
     title = HEAD_ZOOM["h1"]
-    lead = HEAD_ZOOM["lead"]
     crumb = (*LI, "Inside a head")
 
     def __init__(self, *args, **kw):

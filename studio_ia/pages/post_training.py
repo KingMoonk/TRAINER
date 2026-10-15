@@ -134,7 +134,7 @@ class PostTrainingPage(Page):
         self._stages(status, notes)
         row = tk.Frame(self.body, bg=C["bg"])
         row.pack(fill="x", pady=GUTTER)
-        tip(Chip(row, T["at_this_size"], "neutral"), T["click_round"]).pack(anchor="w")
+        Chip(row, T["at_this_size"], "neutral").pack(anchor="w")
         self._card(version, status)
         self._gate_card(status)
         self._drawn = live_view(self.selected, self.group, self.heat, self.moved, self.gates)

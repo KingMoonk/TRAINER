@@ -153,7 +153,7 @@ class YourDataPage(Page):
             name, used, count = (tk_label(tab, "", s, c, "panel", font=font(s, bold=b)) for s, c, b in ((15, "text", True), (12, "muted", False), (13, "text2", False)))
             for w in (name, used, count):
                 w.pack(fill="x")
-            tip(tab, T[f"{k}_lead"])
+            tip(tab, T.get(f"{k}_lead"))
             _activate(tab, lambda k=k: self.show(k))
             for w in (name, used, count):
                 w.bind("<Button-1>", lambda _e, k=k: self.show(k))
@@ -203,7 +203,7 @@ class YourDataPage(Page):
         self.make_button = ttk.Button(buttons, command=self.make)
         self.make_button.pack(side="left", padx=8)
         card = self.collection_card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
-        tip(tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)), lambda: T[f"{self.kind}_collection_desc"]).pack(anchor="w")
+        tip(tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)), lambda: T.get(f"{self.kind}_collection_desc")).pack(anchor="w")
         self.collection_rows = tk.Frame(card, bg=C["panel"])
         self.collection_rows.pack(fill="x", pady=(6, 0))
         self.notes, self.collections, self.status_labels, self.painted = {}, {}, {}, None  # notes: source id -> latest progress line

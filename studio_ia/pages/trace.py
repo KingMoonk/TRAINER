@@ -42,7 +42,6 @@ def num(value, spec="{:.2f}"):
 
 class TracePage(Page):
     title = TRACE["h1"]
-    lead = TRACE["lead"]
     crumb = (*LI, "Trace a position")
 
     def refresh(self):
@@ -64,7 +63,7 @@ class TracePage(Page):
         notes = {2: TRACE["relative_note"], 3: TRACE["relative_note"], 4: TRACE["approx_legend"]}
         for c, text in enumerate(heads):
             tip(tk_label(table, text, 12, "muted", wraplength=190), notes.get(c)).grid(row=0, column=c, sticky="w", padx=(0, GUTTER), pady=(0, 6))
-        what = {"embedding": TRACE["embedding_what"], "mixer": "mixer adds", "channel": "MLP adds", "output": TRACE["output_what"]}
+        what = {"embedding": TRACE["embedding_what"], "output": TRACE["output_what"]}
         self.cells = []
         for r, row in enumerate(data["rows"], 1):
             name = TRACE["embedding"] if row["kind"] == "embedding" else TRACE["output"] if row["kind"] == "output" else row["stage"]
@@ -75,5 +74,5 @@ class TracePage(Page):
                 color = "muted" if c == 4 and row["approximate"] else "text"
                 cell = tk_label(table, text, 14, color, font=font(14, mono=c > 0))
                 cell.grid(row=r, column=c, sticky="w", padx=(0, GUTTER), pady=(0, 6))
-                if c == 0:
+                if c == 0 and row["kind"] in what:
                     tip(cell, what[row["kind"]])

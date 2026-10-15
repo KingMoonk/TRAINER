@@ -14,7 +14,7 @@ from studio_ia.pages.trace import LI, ask, current, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, _activate, button, info_icon, tip
 
-TESTS = (("previous", "previous_word", "previous_desc"), ("first", "parks_first", "parks_desc"), ("induction", "copying_pattern", "copying_desc"))
+TESTS = (("previous", "previous_word", None), ("first", "parks_first", "parks_desc"), ("induction", "copying_pattern", "copying_desc"))
 THRESHOLD = .5  # a share of attention above this counts as "passes"; a description of where it looks, not a verdict
 GUESSES = (HEAD_LAB["lot"], HEAD_LAB["little"], HEAD_LAB["not_at_all"])
 MODES = {HEAD_LAB["mode_mean"]: "mean", HEAD_LAB["mode_zero"]: "zero"}
@@ -44,7 +44,6 @@ def top_relied(rises, k=3):
 
 class HeadLabPage(Page):
     title = HEAD_LAB["h1"]
-    lead = HEAD_LAB["lead"]
     crumb = (*LI, "Head lab")
 
     def __init__(self, *args, **kw):
@@ -93,7 +92,7 @@ class HeadLabPage(Page):
         top = tk.Frame(self.body, bg=C["bg"])
         top.pack(fill="x", pady=(GUTTER, 4))
         Kicker(top, f"{self.n_heads} HEADS · CLICK ONE").pack(side="left")
-        info_icon(top, HEAD_LAB["heads_note"] + "\n\n" + HEAD_LAB["grid_note_ranked" if self.ranked else "grid_note_normal"], "bg").pack(side="left", padx=(4, 0))
+        info_icon(top, HEAD_LAB["heads_note"] + ("\n\n" + HEAD_LAB["grid_note_ranked"] if self.ranked else ""), "bg").pack(side="left", padx=(4, 0))
         bar = tk.Frame(self.body, bg=C["bg"])
         bar.pack(fill="x", pady=8)
         self.rank_button = button(bar, HEAD_LAB["hide_importance"] if self.ranked else HEAD_LAB["rank_heads"], self.rank, primary=True)
@@ -206,7 +205,7 @@ class HeadLabPage(Page):
             value = float(self.stats[b][key][h])
             r = tk.Frame(card, bg=C["panel"])
             r.pack(fill="x", pady=2)
-            tip(tk_label(r, f"{HEAD_LAB[name]}", 14, "text", "panel", width=28), HEAD_LAB[what]).pack(side="left")
+            tip(tk_label(r, f"{HEAD_LAB[name]}", 14, "text", "panel", width=28), HEAD_LAB[what] if what else None).pack(side="left")
             tk_label(r, f"{value:.2f}  " + ("passes" if value >= THRESHOLD else "no"), 14, "sage" if value >= THRESHOLD else "muted", "panel", font=font(14, mono=True)).pack(side="left")
 
     def _changed(self):

@@ -37,7 +37,6 @@ def loss_rows(p, target, pieces, k=5):
 
 class LossPage(Page):
     title = LOSS["h1"]
-    lead = LOSS["lead"]
     crumb = (*LI, "Loss")
 
     def __init__(self, *args, **kw):
