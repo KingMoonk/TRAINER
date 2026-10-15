@@ -48,7 +48,7 @@ BUILDER = {
     "add_catchup": "Add catch-up to the queue",
     "start_from_scratch": "Start from scratch instead",
     "queued": "QUEUED ON THIS COMPUTER",
-    "queued_text": '{new_version} waits behind the current job. The sidebar and "Queue and schedule" show where it is.',
+    "queued_text": '{new_version} is in the queue. The sidebar and "This computer" show where it is.',
     "move_to_front": "Move it to the front",
     "training": "{new_version} {status}",
     "training_text": "Version {current}'s run is paused and can resume. Chat switches to {new_version} only when it beats version {current} on held-back text, or when you pick it.",

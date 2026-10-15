@@ -311,9 +311,10 @@ class ComparePage(Page):
         label = f"Compare runs: {self.plan['n_runs']} runs" + (f" + {self.plan['n_sweeps']} short sweeps" if self.plan["n_sweeps"] else "")
         self.job_id = uuid.uuid4().hex[:8]
         self.live, self.results, self.done_guess = {}, None, self.guess.value
-        self.services.enqueue(Job(id=self.job_id, kind="compare", label=label, note=exp.question,
-                                  params={"experiment": asdict(exp), "dataset_kind": "text", "datasets": sets, "guess": self.guess.value}))
-        self.status.configure(text=f"Queued: {label}.")
+        job = Job(id=self.job_id, kind="compare", label=label, note=exp.question,
+                  params={"experiment": asdict(exp), "dataset_kind": "text", "datasets": sets, "guess": self.guess.value})
+        self.services.enqueue(job)
+        self.status.configure(text=f"Queued: {label}. {self.services.queue_outlook(job)}.")
         self.draw_table(self.retune.value)
         self.draw_curves()
 

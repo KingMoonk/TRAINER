@@ -30,6 +30,14 @@ class ShellTest(unittest.TestCase):
             self.assertIn(spec.title, texts(page), route)
             self.assertIn(spec.lead, texts(page), route)
 
+    def test_sidebar_rows_for_queue_and_data_follow_the_page(self):
+        from studio_ia.theme import C
+        for route, area in (("queue", "machine"), ("your_data", "data"), ("make_data", "data"), ("builder", "designer")):
+            self.app.show(route)
+            self.app.update()
+            on = [key for key, (row, *_rest) in self.app._area_rows.items() if row.cget("bg") == C["violet_bg"]]
+            self.assertEqual(on, [area], route)
+
     def test_queue_event_updates_machine_strip(self):
         self.assertIn("Nothing is training", self.app.strip_text)
         self.fake.set_queue(QueueState(job=Job("1", "pretrain", "Version 5 catch-up"), step=50, total=200,

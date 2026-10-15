@@ -16,16 +16,18 @@ from studio_ia.widgets import Progress
 
 Route = namedtuple("Route", "area title lead crumb")
 
-AREAS = [("designer", "Network designer"), ("pretraining", "Pretraining"), ("post", "Post-training"), ("chat", "Chat")]
-AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat"}
+AREAS = [("designer", "Network designer"), ("pretraining", "Pretraining"), ("post", "Post-training"), ("chat", "Chat"),
+         ("machine", "This computer"), ("data", "Your data")]
+AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat", "machine": "queue", "data": "your_data"}
+UTILITY_AREAS = ("machine", "data")  # not stages of the pipeline: set off from the four above by a rule
 LI = ("Network designer", "Look inside")
 
-# route -> Route(area, h1, lead, breadcrumb). area None = reached from the machine strip.
+# route -> Route(area, h1, lead, breadcrumb): area is the sidebar row that lights up on that page.
 ROUTES = {
     "builder": Route("designer", "Build your model", "Change the picture. See what it costs and what it does.", ()),
     "quicktest": Route("designer", "Quick test", "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real.", ("Network designer",)),
     "compare": Route("designer", "Compare runs", "Change one thing, hold the rest equal, run several seeds. A difference counts only if it is larger than the spread across seeds.", ("Network designer",)),
-    "queue": Route(None, "This computer", "What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.", ()),
+    "queue": Route("machine", "This computer", "What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.", ()),
     "trace": Route("designer", "Trace a position", "Follow one position's stream through the model. Numbers appear when the engine has run your prompt.", (*LI, "Trace a position")),
     "head_zoom": Route("designer", "Inside a head", "One attention head, one step at a time, on a real prompt.", (*LI, "Inside a head")),
     "value_map": Route("designer", "Value map", "How a head's values are projected down and back up, and why the heads add up.", (*LI, "Value map")),
@@ -34,8 +36,8 @@ ROUTES = {
     "inside3d": Route("designer", "Inside the network", "Build the model from the inside and watch it train, from a window of positions down to single weights.", (*LI, "3D")),
     "pretraining": Route("pretraining", "Pretraining", "Feed it text. It learns by predicting the next word, over and over.", ()),
     "training_run": Route("pretraining", "Pretraining", "Step k of n, the schedule phase and the error so far.", ()),
-    "your_data": Route("pretraining", "Your data", "Three kinds, because each one trains a different stage.", ()),
-    "make_data": Route("pretraining", "Make extra data", "Optional. Generate more, then keep what passes review.", ()),
+    "your_data": Route("data", "Your data", "Three kinds, because each one trains a different stage.", ()),
+    "make_data": Route("data", "Make extra data", "Optional. Generate more, then keep what passes review.", ()),
     "post_training": Route("post", "Post-training", "Four rounds, always in this order. Same design throughout; only the weights shift.", ()),
     "chat": Route("chat", "Chat", "Talk to any trained version. Compare two to see what a change really did.", ()),
 }
@@ -109,6 +111,8 @@ class Studio(tk.Tk):
         side.pack_propagate(False)
         tk_label(side, "Groundwork Studio", 17, "text", "panel", font=font(17, bold=True)).pack(fill="x", padx=GUTTER, pady=GUTTER)
         for key, name in AREAS:
+            if key == UTILITY_AREAS[0]:
+                tk.Frame(side, bg=C["border2"], height=1).pack(fill="x", padx=GUTTER, pady=(6, 6))
             row = tk.Frame(side, bg=C["panel"], takefocus=1, cursor="hand2", highlightthickness=1,
                            highlightbackground=C["panel"], highlightcolor=C["violet"])
             row.pack(fill="x")

@@ -191,12 +191,13 @@ class QuickTestPage(Page):
             minutes = next(m[1] for m in MINUTES if T[m[0]] == self.time.value)
             self.job_id, self.running, self.result, self.started = uuid.uuid4().hex[:8], True, None, time.time()
             self.paces, self.progress = {}, {}
-            self.services.enqueue(Job(id=self.job_id, kind="quicktest", label=f"Quick test · {minutes} min each",
-                                      params={"current_spec": current, "draft_spec": draft, "dataset": data, "minutes": minutes,
-                                              "shrink": self.size.value == T["shrunk_quarter_label"], "guess": self.guess.value}))
+            job = Job(id=self.job_id, kind="quicktest", label=f"Quick test · {minutes} min each",
+                      params={"current_spec": current, "draft_spec": draft, "dataset": data, "minutes": minutes,
+                              "shrink": self.size.value == T["shrunk_quarter_label"], "guess": self.guess.value})
+            self.services.enqueue(job)
             self.run_btn.configure(text=T["running"] + "…")
             self.run_btn.state(["disabled"])
-            self.status.configure(text="Queued: it runs when the computer is free.")
+            self.status.configure(text=f"Queued. {self.services.queue_outlook(job)}.")
             self.show_result()
 
     def on_event(self, kind, payload):
