@@ -12,7 +12,7 @@ from studio_versions import VersionStore
 AGED = ("runs", "logs", "exports", "artifacts", "data/backups")          # each child is judged by its own age
 WHOLE = ("data/weights", "data/curriculum", "data/versions.json", "data/architectures.sqlite", "data/passive.sqlite",
          "studio-error.log")                           # only "delete all" removes these
-DATA = ("data/records.sqlite", "data/downloads", "data/heldout.json", "data/catalog_registry.json", "data/catalog_removed.json")
+DATA = ("data/records.sqlite", "data/records.sqlite-wal", "data/records.sqlite-shm", "data/downloads", "data/heldout.json", "data/catalog_registry.json", "data/catalog_removed.json")
 
 
 def _files(path):

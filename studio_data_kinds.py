@@ -92,27 +92,35 @@ def make_problem(item, quality="Good"):
 def add_problems(workspace, dataset_id, items, quality="Good"):
     """Store problems (rule + params kept on each example). Returns (added, duplicate)."""
     added = duplicate = 0
-    known = {studio_core.fingerprint(e) for e in workspace.iter_examples(dataset_id)}
+    dataset = workspace._dataset(dataset_id)
+    on_disk = dataset.get("storage") == "sqlite"
+    known = set() if on_disk else {studio_core.fingerprint(e) for e in workspace.iter_examples(dataset_id)}
+    examples = []
     for item in items:
         row = make_problem(item, quality)
         example = studio_core.normalize(row, dataset_id, "synthetic")
-        if example is None or studio_core.fingerprint(example) in known:
+        if example is None:
             duplicate += 1
             continue
-        known.add(studio_core.fingerprint(example))
         example["rule"], example["params"] = row["rule"], row["params"]
-        dataset = workspace._dataset(dataset_id)
-        if dataset.get("storage") == "sqlite":
-            with workspace._connect({dataset_id}) as connection:
-                workspace._insert_rows(connection, [workspace._db_row(example)])
-        else:
-            workspace.state["examples"].append(stamp(example, studio_core.fingerprint(example)))
+        examples.append(example)
+    if on_disk:
+        with workspace._connect({dataset_id}) as connection:  # one transaction; UNIQUE(dataset_id, fingerprint) rejects the duplicates
+            for example in examples:
+                stored = workspace._insert_rows(connection, [workspace._db_row(example)])
+                added, duplicate = added + stored, duplicate + 1 - stored
+            if added:
+                dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+    else:
+        for example in examples:
+            key = studio_core.fingerprint(example)
+            if key in known:
+                duplicate += 1
+                continue
+            known.add(key)
+            workspace.state["examples"].append(stamp(example, key))
             workspace._bump(dataset_id)
-        added += 1
-    if added and workspace._dataset(dataset_id).get("storage") == "sqlite":
-        with workspace._connect() as connection:
-            workspace._dataset(dataset_id)["recordCount"] = connection.execute(
-                "SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+            added += 1
     workspace.save()
     return added, duplicate
 

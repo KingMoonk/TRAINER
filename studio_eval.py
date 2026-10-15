@@ -8,14 +8,16 @@ import json
 import math
 import random
 import tempfile
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import torch
 
-from studio_slots import BOS, UNK
+from studio_slots import BOS, PAD, UNK
 
 LN2 = math.log(2)
+SCORE_WINDOWS = 512  # windows gathered before a scoring pass
+SCORE_ELEMENTS = 4_000_000  # most float64 logits (batch x window x vocabulary) one scoring pass holds
 
 
 def heldout_split(docs, fraction=.1, seed=0):
@@ -26,28 +28,49 @@ def heldout_split(docs, fraction=.1, seed=0):
     return unique[held:], unique[:held]
 
 
+def _ids(tokenizer, text):
+    """Token ids of text as an int64 array (tokenizers without encode_array build it from the list)."""
+    return tokenizer.encode_array(text) if hasattr(tokenizer, "encode_array") else np.asarray(tokenizer.encode(text), dtype=np.int64)
+
+
 def score_docs(model, docs):
     """Per document (nats, characters). Characters the tokenizer cannot encode (UNK pieces) are scored at ln V.
 
-    model is a checkpoint path or a LocalModel.
+    model is a checkpoint path or a LocalModel. Windows from many documents run through the model together,
+    right-padded to the longest in the batch; every mixer is causal, so the padding never reaches a real position.
     """
     from studio_model import LocalModel
     local = model if isinstance(model, LocalModel) else LocalModel(model, device="cpu")
     tok, context, uniform = local.tokenizer, local.config["context"], math.log(local.tokenizer.vocab_size)
-    out = []
-    for text in docs:
-        ids = np.array([BOS] + tok.encode(text), dtype=np.int64)
-        nats = 0.
+    nats = [0.] * len(docs)
+    pending = []  # (document, inputs, targets); scored and cleared once enough have gathered, so memory stays bounded
+
+    def flush():
+        pending.sort(key=lambda window: len(window[1]))  # similar lengths together: little padding
+        size = max(1, SCORE_ELEMENTS // (context * tok.vocab_size))
+        for first in range(0, len(pending), size):
+            batch = pending[first:first + size]
+            lengths = np.array([len(inputs) for _, inputs, _ in batch])
+            x, y = np.full((2, len(batch), lengths.max()), PAD, dtype=np.int64)
+            for row, (_, inputs, targets) in enumerate(batch):
+                x[row, :len(inputs)], y[row, :len(targets)] = inputs, targets
+            logp = torch.log_softmax(local.model.forward(x).double(), dim=-1).gather(-1, torch.as_tensor(y)[..., None])[..., 0].cpu().numpy()
+            real = np.arange(x.shape[1])[None, :] < lengths[:, None]
+            unknown = real & (y == UNK)
+            scored = np.where(real & ~unknown, -logp, 0.).sum(axis=1) + uniform * unknown.sum(axis=1)
+            for (doc, _, _), value in zip(batch, scored):
+                nats[doc] += float(value)
+        pending.clear()
+
+    for doc, text in enumerate(docs):
+        ids = np.concatenate([[BOS], _ids(tok, text)])
         for start in range(0, len(ids) - 1, context):
-            x, y = ids[start:start + context], ids[start + 1:start + context + 1]
-            logits = local.model.backend.to_cpu(local.model.forward(x[None, :len(y)]))[0].astype(np.float64)
-            logits -= logits.max(axis=-1, keepdims=True)
-            logp = logits - np.log(np.exp(logits).sum(axis=-1, keepdims=True))
-            picked = logp[np.arange(len(y)), y]
-            unknown = y == UNK
-            nats += float(-picked[~unknown].sum()) + uniform * int(unknown.sum())
-        out.append((nats, len(text)))
-    return out
+            y = ids[start + 1:start + context + 1]
+            pending.append((doc, ids[start:start + len(y)], y))
+        if len(pending) >= SCORE_WINDOWS:
+            flush()
+    flush()
+    return [(n, len(text)) for n, text in zip(nats, docs)]
 
 
 def _bpc(scores):
@@ -72,13 +95,16 @@ def unigram_bpc(tokenizer, docs, eval_docs=None):
 
     Unencodable pieces and pieces never seen in docs are scored at the uniform rate.
     """
-    counts = Counter(t for d in docs for t in tokenizer.encode(d) if t != UNK)
-    total, uniform = sum(counts.values()), math.log(tokenizer.vocab_size)
+    counts = np.zeros(tokenizer.vocab_size, dtype=np.int64)
+    for first in range(0, len(docs), 1024):  # a thousand documents at a time: the whole corpus is never one array
+        counts += np.bincount(np.concatenate([_ids(tokenizer, d) for d in docs[first:first + 1024]]), minlength=len(counts))
+    counts[UNK] = 0
+    total, uniform = counts.sum(), math.log(tokenizer.vocab_size)
     nats = chars = 0
     for d in docs if eval_docs is None else eval_docs:
         chars += len(d)
-        for t in tokenizer.encode(d):
-            nats += math.log(total / counts[t]) if counts.get(t) else uniform
+        seen = counts[_ids(tokenizer, d)]
+        nats += float(np.log(total / seen[seen > 0]).sum()) + uniform * int((seen == 0).sum())
     return nats / chars / LN2
 
 
