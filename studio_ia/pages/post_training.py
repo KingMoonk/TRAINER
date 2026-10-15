@@ -12,7 +12,7 @@ from studio_ia.copy import FEEDBACK as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added
-from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.theme import C, GUTTER, font, text_box, tk_label
 from studio_ia.widgets import Card, Chip, HeatGrid, Kicker, KofN, Segmented, _activate, button, info_icon, tip
 
 ROUNDS = (("Practice answers", T["round_1"], T["r1_method"], T["r1_lead"], T["answers_now"]),
@@ -291,7 +291,7 @@ class PostTrainingPage(Page):
         words, surprise = (live["words"], live["surprise"]) if live else SAMPLE_HEAT
         tk_label(card, T["prompt_label"] + (": " + live["prompt"] if live else ": What is the capital of Australia?"), 12, "muted", "panel").pack(anchor="w")
         tk_label(card, T["answer_shaded"], 12, "muted", "panel").pack(anchor="w", pady=(6, 4))
-        text = tk.Text(card, height=3, wrap="word", bg=C["panel2"], fg=C["text"], font=font(16), bd=0, padx=10, pady=8, highlightthickness=0)
+        text = text_box(card, height=3, size=16)
         top = max(1.0, max(surprise, default=0))
         for n, (w, s) in enumerate(zip(words, surprise)):
             text.tag_configure(f"w{n}", background=HeatGrid._mix(C["panel2"], C["coral"], min(1., s / top)))

@@ -3,9 +3,10 @@
 Tk objects (StringVar, PhotoImage...) may only be freed on the Tk thread, and the cyclic collector runs on whichever
 thread allocates. A worker that triggers a collection which frees a dead page's variables aborts the process
 (Tcl_AsyncDelete). So the collector stays off while any worker runs, and the Tk thread collects once they are done.
-hold/release are counted, so the shell's worker, the page threads and the downloads compose.
+hold/release are counted, so the shell's lanes, the page threads and the downloads compose.
 """
 import gc
+import queue
 import threading
 
 _lock = threading.Lock()
@@ -84,3 +85,53 @@ def settle():
         _done[:] = [t for t in _done if t.is_alive()]
     for _ in finished:
         release()
+
+
+class Lane:
+    """One long-lived worker thread that runs jobs in the order they were submitted. submit() and finished() are Tk thread only.
+    The lane holds the collector from its first queued job until finished() has handed back the last result, so two busy
+    lanes are two holds."""
+
+    def __init__(self):
+        self._jobs, self._done, self.pending, self._held = queue.Queue(), queue.Queue(), 0, False
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def _work(self):
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                return
+            if job == "stop":  # stopped while busy: the jobs before this one have run, so the next app's settle can release
+                done()
+                return
+            work, tag = job
+            try:
+                result = (tag, work(), None)
+            except Exception as error:
+                result = (tag, None, error)
+            del job, work, tag  # an idle lane keeps nothing of its last job: its callbacks hold pages, which only the Tk thread may free
+            self._done.put(result)
+            del result
+
+    def submit(self, work, tag=None):
+        if not self.pending:
+            self._held = hold()
+        self.pending += 1
+        self._jobs.put((work, tag))
+
+    def finished(self):
+        """[(tag, value, error)] for the jobs that are done since the last call; the lane gives its hold back when it has none left."""
+        out = []
+        while self.pending:
+            try:
+                out.append(self._done.get_nowait())
+            except queue.Empty:
+                break
+            self.pending -= 1
+        if out and not self.pending and self._held:
+            release()
+        return out
+
+    def stop(self):
+        """Tk thread: end the lane. A busy lane hands its hold to the worker, which gives it back once its jobs are done."""
+        self._jobs.put("stop" if self.pending and self._held else None)
