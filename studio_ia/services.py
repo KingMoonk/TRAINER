@@ -968,6 +968,10 @@ class _Slow(_Cold):
     """A _Cold that is long however small the store is (scoring a checkpoint, parsing the held-back text): ready() says no."""
 
 
+class _Pending(Exception):
+    """_held_scores(later=True) on the Tk thread: the checkpoint is being scored on a worker, which emits "versions" when done."""
+
+
 class WorkspaceServices(Services):
     """Every Services method over the real modules. Queue events fire on the runner thread and hop to Tk via emit."""
 
@@ -988,6 +992,8 @@ class WorkspaceServices(Services):
         self._lock = threading.RLock()
         self._made = {}  # cache key -> the lock held while it is being made
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
+        self._to_score, self._scorer, self._unscorable = {}, False, set()  # held-back scores the Tk thread asked for (_held_scores)
+        self._score_lock = threading.Lock()
         workspace.progress = self.note
         if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
             threads.start(workspace.ensure_schema)
@@ -1195,7 +1201,10 @@ class WorkspaceServices(Services):
             if best is None:  # with one scored version there is nothing to compare, so no held-back text is read
                 best = row
                 continue
-            gain = self._gate(self._abs(best["best_checkpoint"]), self._abs(row["best_checkpoint"]))
+            try:
+                gain = self._gate(self._abs(best["best_checkpoint"]), self._abs(row["best_checkpoint"]))
+            except _Pending:  # not scored yet: the stored numbers decide, as without held-back text, until the worker's "versions" event
+                gain = None
             if gain is not None:
                 weighed[row["number"]] = {**gain, "vs": best["number"]}
                 self._rescored(best)
@@ -1215,7 +1224,10 @@ class WorkspaceServices(Services):
         import studio_eval
         if row["scorecard"].get("bpc_method") == studio_eval.SCORE_METHOD:
             return
-        scores = self._held_scores(self._abs(row["best_checkpoint"]))
+        try:
+            scores = self._held_scores(self._abs(row["best_checkpoint"]), later=True)
+        except _Pending:  # swapped in when the worker's "versions" event makes this read again
+            return
         if scores is not None:
             card = {**(self.store.get(row["number"]).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                     "bpc_method": studio_eval.SCORE_METHOD}
@@ -2046,9 +2058,11 @@ class WorkspaceServices(Services):
         name = str(Path(ckpt).relative_to(self.root)) if Path(ckpt).is_relative_to(self.root) else str(ckpt)
         return name, json.dumps([name, file, stamp, studio_eval.SCORE_METHOD])
 
-    def _held_scores(self, ckpt):
+    def _held_scores(self, ckpt, later=False):
         """(documents, 2) array of nats and characters per held-back document for a checkpoint, or None without held-back text.
-        Kept in data/held_back_scores/ per key (_score_key), so a new launch scores nothing it already scored."""
+        Kept in data/held_back_scores/ per key (_score_key), so a new launch scores nothing it already scored. Scoring takes
+        seconds per version: with later=True the Tk thread does not wait for it but gets _Pending, and a worker scores the
+        checkpoint (_score_later)."""
         import hashlib
         import studio_eval
         got = self._score_key(ckpt)
@@ -2063,6 +2077,10 @@ class WorkspaceServices(Services):
                 self._cache[("scores", key)] = np.load(file)
             except (OSError, ValueError):
                 pass  # unreadable: scored again below
+        if (later and ("scores", key) not in self._cache and threading.get_ident() == self._ui_thread
+                and not getattr(self._probe, "on", False)):  # ready() still says not ready, so a page's worker reads it in place
+            self._score_later(ckpt, key)
+            raise _Pending
 
         def make():
             docs = self._heldout()
@@ -2079,10 +2097,39 @@ class WorkspaceServices(Services):
             return scores
         return self._cached(("scores", key), make)
 
+    def _score_later(self, ckpt, key):
+        """Score ckpt's held-back text on one worker, after any already asked for, then emit "versions" once so whatever
+        weighed versions without these scores reads again. A checkpoint whose scoring failed is not tried again from here."""
+        with self._score_lock:
+            if key in self._unscorable or key in self._to_score:
+                return
+            self._to_score[key] = ckpt
+            if self._scorer:
+                return
+            self._scorer = True
+
+        def run():
+            while True:
+                with self._score_lock:
+                    if not self._to_score:
+                        self._scorer = False
+                        break
+                    key, ckpt = next(iter(self._to_score.items()))
+                try:
+                    self._held_scores(ckpt)
+                except Exception:
+                    logging.getLogger(__name__).exception("scoring %s on the held-back text failed", ckpt)
+                    self._unscorable.add(key)
+                with self._score_lock:
+                    self._to_score.pop(key, None)
+            self.emit("versions", None)
+        threads.start(run)
+
     def _gate(self, parent_ckpt, candidate_ckpt):
-        """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair."""
+        """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair.
+        _Pending on the Tk thread while either is still being scored."""
         import studio_eval
-        parent, candidate = self._held_scores(parent_ckpt), self._held_scores(candidate_ckpt)
+        parent, candidate = self._held_scores(parent_ckpt, later=True), self._held_scores(candidate_ckpt, later=True)
         if parent is None or candidate is None:
             return None
         return self._cached(("gain", self._score_key(parent_ckpt)[1], self._score_key(candidate_ckpt)[1]),
@@ -2102,12 +2149,15 @@ class WorkspaceServices(Services):
             run = Path(v.best_checkpoint).parent
             tok = self._tokenizer(run)
             train = _run_docs(run)
-            scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
+            scores = self._held_scores(best.best_checkpoint, later=True) if best and best.best_checkpoint else None
             return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
                     "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
         key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
                self._heldout_stamp())
-        return self._cached(key, make)
+        try:
+            return self._cached(key, make)
+        except _Pending:  # the best version is being scored: the lines come with the worker's "versions" event
+            return out
 
     @timed("services.run_curve")
     def run_curve(self, run_dir):
