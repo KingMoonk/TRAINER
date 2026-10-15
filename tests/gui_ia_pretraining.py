@@ -54,11 +54,11 @@ class PretrainingTest(unittest.TestCase):
         page = self.app.show("pretraining")
         self.app.update()
         t = "\n".join(texts(page))
-        self.assertIn("Download all", t)
+        self.assertIn("Download and add all", t)
         self.assertIn("Add to my sources", t)
         page.fetch(None, "download")
         page.fetch("wikitext2", "import")
-        self.assertEqual(self.fake.calls, [("download_sources", None), ("import_source", "wikitext2")])
+        self.assertEqual(self.fake.calls, [("download_sources", None, "text", True), ("import_source", "wikitext2")])
         self.fake._collection[0]["error"] = "no network"
         page.on_event("download_failed", {"id": "tinystories", "error": "no network"})
         self.assertIn("Could not finish: no network.", "\n".join(texts(page)))
@@ -124,6 +124,19 @@ class PretrainingTest(unittest.TestCase):
         self.assertIn("Step 40 of 200", t)
         page.pause_btn.invoke()
         self.assertTrue(self.fake.queue().paused)
+        self.assertTrue(page.chip.winfo_ismapped())
+
+    def test_run_page_controls_follow_the_job(self):
+        self.fake.set_queue(QueueState())
+        self.fake.run_curve = lambda d: {}
+        page = self.app.show("training_run")
+        self.app.update()
+        self.assertTrue(page.pause_btn.instate(["disabled"]) and page.stop_btn.instate(["disabled"]))
+        self.assertFalse(page.chip.winfo_ismapped())
+        self.fake.set_queue(QueueState(paused=True))
+        page.refresh()
+        self.assertFalse(page.pause_btn.instate(["disabled"]))  # Resume stays available
+        self.assertTrue(page.stop_btn.instate(["disabled"]))
 
 
 if __name__ == "__main__":

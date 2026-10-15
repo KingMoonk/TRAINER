@@ -8,7 +8,7 @@ from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
-from studio_ia.pages.pretraining import collection_view, enough_text, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
+from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import size_text, storage_state, total_hours
 from studio_ia.pages.training_run import history_of, phase_at
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
@@ -179,6 +179,19 @@ class RecommendedCollection(unittest.TestCase):
             self.svc._worker.join(10)
         self.assertEqual(self.states()["tinystories"], "imported")
         self.assertEqual(self.svc.data("text").count, 2)
+
+    def test_text_downloads_and_adds_in_one_step(self):
+        from unittest.mock import patch
+        with patch("studio_catalog._fetch", side_effect=self.fake_fetch):
+            self.assertTrue(self.svc.download_sources(["tinystories"], install=True))
+            self.svc._worker.join(10)
+        self.assertEqual(self.states()["tinystories"], "imported")
+        self.assertEqual(self.svc.data("text").count, 2)
+
+    def test_validation_and_test_splits_are_held_out(self):
+        self.assertTrue(held_out("catalog_tinystories_valid"))
+        self.assertFalse(held_out("catalog_tinystories"))
+        self.assertFalse(held_out("d1"))  # the person's own set
 
     def test_collections_by_kind_and_problem_install(self):
         from pathlib import Path
