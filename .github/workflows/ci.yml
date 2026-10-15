@@ -35,6 +35,11 @@ jobs:
       # compileall, ruff, unit tests, window tests (gui_*.py) and the real training run, in that order; see tasks.py
       - run: python tasks.py test:ci:e2e
         timeout-minutes: 12
+      # a native crash (exit 245/246) leaves its C stack only in the macOS crash report
+      - if: failure() && runner.os == 'macOS'
+        run: |
+          sleep 15
+          for f in ~/Library/Logs/DiagnosticReports/*.ips; do [ -e "$f" ] && { echo "== $f"; cat "$f"; }; done
 
   secrets:
     runs-on: ubuntu-latest
