@@ -10,7 +10,7 @@ from studio_ia.copy import COMPARE as T
 from studio_ia.pages.base import Page
 from studio_ia.pages.builder import text_sets
 from studio_ia.services import Job
-from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.theme import C, GUTTER, entry, font, tk_label
 from studio_ia.widgets import BpcPlot, Card, GuessChips, Kicker, Segmented, Toggle, _activate, button, tip
 from studio_spec import default_spec, validate_spec
 from studio_versions import change_text
@@ -101,8 +101,8 @@ class ComparePage(Page):
         setup = Card(b)
         setup.pack(fill="x", pady=(0, GUTTER))
         Kicker(setup, T["question"], bg="panel").pack(anchor="w")
-        self.question = tk.Entry(setup, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(15))
-        self.question.pack(fill="x", pady=(4, GUTTER), ipady=6)
+        self.question = entry(setup)
+        self.question.pack(fill="x", pady=(4, GUTTER))
         Kicker(setup, T["hold_equal"], bg="panel").pack(anchor="w")
         self.modes = Segmented(setup, [T[m[1]] for m in MODE_KEYS], T["params_mode"], self.pick_mode)
         self.modes.pack(anchor="w", pady=(4, GUTTER))

@@ -15,7 +15,7 @@ import studio_rules as rules  # names and labels of the rules only
 from studio_ia.copy import YOURDATA as T
 from studio_ia.pages.base import Page, Throttle
 from studio_ia.pages.pretraining import source_action, source_status
-from studio_ia.theme import C, GUTTER, font, tk_label
+from studio_ia.theme import C, GUTTER, entry, font, tk_label
 from studio_ia.widgets import _activate, button, tip
 
 KINDS = ("text", "conversations", "problems")
@@ -163,9 +163,8 @@ class YourDataPage(Page):
         bar = tk.Frame(body, bg=C["bg"])
         bar.pack(fill="x", pady=GUTTER)
         tk_label(bar, T["search"], 13, "muted").pack(side="left")
-        self.entry = tk.Entry(bar, textvariable=self.query, width=40, bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
-                              relief="flat", highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
-        self.entry.pack(side="left", padx=8, ipady=6)
+        self.entry = entry(bar, 14, textvariable=self.query, width=40)
+        self.entry.pack(side="left", padx=8)
         self.entry.bind("<KeyRelease>", lambda _e: self._typed())
         self.table = ttk.Treeview(body, columns=("a", "b", "status"), show="headings", style="YD.Treeview", height=9)
         self.table.pack(fill="x")
