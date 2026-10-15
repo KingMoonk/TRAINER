@@ -23,7 +23,7 @@ import studio_registry as registry
 from studio_slots import BLOCK_SLOTS, TRAIN_SLOTS, Dims, config_dict
 
 SCHEMA = 1
-DIM_RANGES = {"d_model": (16, 1024), "n_layer": (1, 24), "n_ctx": (32, 1024)}
+DIM_RANGES = {"d_model": (16, 1024), "n_layer": (1, 24), "n_ctx": (32, 2048)}
 MODEL_SLOTS = ("tokenizer", "embedding", "position", "head")
 DEFAULTS = {"tokenizer": "byte", "embedding": "learned", "position": "learned", "norm": "layernorm", "mixer": "attention",
             "channel": "mlp_gelu", "head": "tied", "objective": "ce", "optimizer": "adamw", "schedule": "cosine",

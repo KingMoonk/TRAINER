@@ -1,6 +1,7 @@
 """Chat: talk to any trained version, compare two, teach a correction."""
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import tkinter as tk
@@ -33,6 +34,36 @@ def score_rows(v):
             (T["answers_prompts"], "yes" if s.get("answers") in (True, "yes") else "not yet"),
             (T["checked_problems"], kn("problems")), (T["judge_preferred"], kn("judge")),
             (T["size_speed"], " · ".join(k for k in known if k) or T["val_size_speed"])]
+
+
+def against_chance(correct, items, chance):
+    """better | about the same | worse than guessing: outside two standard deviations of a guesser's count."""
+    spread = 2 * math.sqrt(items * chance * (1 - chance))
+    return T["few_shot_above"] if correct > items * chance + spread else T["few_shot_below"] if correct < items * chance - spread \
+        else T["few_shot_near"]
+
+
+def few_shot_rows(table):
+    """(examples shown, right, score, guessing gets, against guessing) per row of services.few_shot; [] when nothing was asked."""
+    if not table or not table.get("items"):
+        return []
+    items, chance = table["items"], table["chance"]
+    out = []
+    for r in table["rows"]:
+        n = r["shots"]
+        shown = T["few_shot_zero"] if n == 0 else T["few_shot_one"] if n == 1 else T["few_shot_some"].format(n=n)
+        if r["used"] < n:
+            shown += T["few_shot_fitted"].format(used=f"{r['used']:.1f}")
+        out.append((shown, f"{r['correct']} of {items}", f"{r['accuracy']:.0%}", f"{chance:.0%}", against_chance(r["correct"], items, chance)))
+    return out
+
+
+def few_shot_note(table):
+    """The plain lines under the table: what was asked, where it came from, what guessing scores."""
+    lines = [T["few_shot_asked"].format(items=table["items"], tasks=table.get("tasks", 1))]
+    if not table.get("held_back", True):
+        lines.append(T["few_shot_training"])
+    return " ".join(lines + [T["few_shot_chance"].replace("[N]", f"{100 * table['chance']:.0f}")])
 
 
 def answering_version(numbers, best, picked, follows=True, current=None, trained=None):
@@ -198,6 +229,8 @@ class ChatPage(Page):
         self.shelf.pack(fill="x", pady=(0, GUTTER))
         self.score_card = Card(body)
         self.score_card.pack(fill="x", pady=(0, GUTTER))
+        self.shot_card = Card(body)
+        self.shots, self.shot_busy = {}, set()  # few-shot tables and the checks running, by version number
         row = tk.Frame(body, bg=C["bg"])
         row.pack(fill="x")
         button(row, T["test_change"], lambda: self.navigate("compare"), True).pack(side="left", padx=(0, 8))
@@ -245,6 +278,7 @@ class ChatPage(Page):
         self._verdict(vs)
         self._shelf(vs, best)
         self._score(cur)
+        self._few_shot(cur)
 
     def _set_text(self, i, text, tags=()):
         t = self.pane_texts[i]
@@ -323,6 +357,52 @@ class ChatPage(Page):
             row.pack(fill="x", pady=1)
             tk_label(row, k, 14, "text2", "panel", width=34).pack(side="left")
             tk_label(row, val, 14, "text", "panel", font=font(14, mono=True)).pack(side="left")
+
+    def _few_shot(self, cur):
+        card = self.shot_card
+        for w in card.winfo_children():
+            w.destroy()
+        card.pack_forget()
+        if cur is None:
+            return
+        card.pack(fill="x", pady=(0, GUTTER), after=self.score_card)
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(fill="x")
+        Kicker(head, T["few_shot"], bg="panel").pack(side="left")
+        info_icon(head, T["few_shot_hint"]).pack(side="left", padx=(4, 0))
+        table = self.shots.get(cur.number)
+        run = button(head, T["few_shot_run" if table is None else "few_shot_again"], lambda n=cur.number: self._check_few_shot(n))
+        run.pack(side="right")
+        run.state(["disabled" if cur.number in self.shot_busy else "!disabled"])
+        rows = few_shot_rows(table)
+        if not rows:
+            line = T["few_shot_not_run"] if table is None else table.get("error") or T["few_shot_none"]
+            tk_label(card, line, 13, "muted", "panel", wraplength=780).pack(anchor="w", pady=(6, 0))
+            return
+        grid = tk.Frame(card, bg=C["panel"])
+        grid.pack(anchor="w", pady=(6, 0))
+        for c, text in enumerate(T["few_shot_head"]):
+            tk_label(grid, text, 12, "muted", "panel").grid(row=0, column=c, sticky="w", padx=(0, 18))
+        for r, cells in enumerate(rows, 1):
+            for c, text in enumerate(cells):
+                tk_label(grid, text, 14, "text2" if c in (0, 4) else "text", "panel", font=font(14, mono=c in (1, 2, 3))).grid(
+                    row=r, column=c, sticky="w", padx=(0, 18))
+        tk_label(card, few_shot_note(table), 12, "muted", "panel", wraplength=780).pack(anchor="w", pady=(6, 0))
+
+    def _check_few_shot(self, number):
+        def work():
+            try:
+                return self.services.few_shot(number)
+            except Exception as error:  # say it in the card; the button comes back
+                return {"error": plain_error(error)}
+
+        def done(table):
+            self.shot_busy.discard(number)
+            self.shots[number] = table
+            self._few_shot(self._versions().get(self.use))
+        self.shot_busy.add(number)
+        self._few_shot(self._versions().get(self.use))
+        self.background(work, done, T["few_shot_running"])
 
     # actions ----------------------------------------------------------------
     def send(self):

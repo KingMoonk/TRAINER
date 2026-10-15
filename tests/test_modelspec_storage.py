@@ -99,6 +99,25 @@ class ModelSpecStorage(unittest.TestCase):
         if "tiny_llama_style" in presets:
             self.assertEqual(presets["tiny_llama_style"]["position"]["id"], "rope")
 
+    def test_gpt3_presets_carry_the_paper_shape_and_recipe(self):
+        presets = model_spec_presets()
+        for key, (width, layers, heads, lr) in {"gpt3_small_style": (768, 12, 12, 6e-4), "gpt3_medium_style": (1024, 24, 16, 3e-4)}.items():
+            spec = presets[key]
+            self.assertEqual(spec["dims"], {"d_model": width, "n_layer": layers, "n_ctx": 2048, "dropout": .1})
+            self.assertEqual((spec["block"]["mixer"]["id"], spec["block"]["mixer"]["config"]["heads"]), ("attention", heads))
+            self.assertEqual((spec["block"]["channel"]["id"], spec["block"]["channel"]["config"]["d_ff"]), ("mlp_gelu", 4 * width))
+            self.assertEqual((spec["block"]["norm"]["id"], spec["position"]["id"], spec["head"]["id"]), ("layernorm", "learned", "tied"))
+            self.assertEqual(spec["tokenizer"]["id"], presets["gpt2_small_style"]["tokenizer"]["id"])
+            optimizer = spec["train"]["optimizer"]
+            self.assertEqual(optimizer["id"], "adamw")
+            self.assertEqual({k: optimizer["config"][k] for k in ("lr", "beta1", "beta2", "eps", "weight_decay")},
+                             {"lr": lr, "beta1": .9, "beta2": .95, "eps": 1e-8, "weight_decay": .1})
+            self.assertEqual((spec["train"]["schedule"]["id"], spec["train"]["schedule"]["config"]["min_lr"]), ("cosine", .1))
+            self.assertGreater(spec["train"]["schedule"]["config"]["warmup"], 0)
+        # The recipe rides on the preset: a plain spec keeps the global defaults.
+        starter = presets["starter"]["train"]["optimizer"]["config"]
+        self.assertEqual((starter["beta2"], starter["weight_decay"]), (.999, .01))
+
 
 if __name__ == "__main__":
     unittest.main()

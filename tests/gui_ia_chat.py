@@ -84,6 +84,19 @@ class ChatTest(unittest.TestCase):
         self.page.toggle_compare()
         self.assertEqual(len(self.page.panes()), 1)
 
+    def test_few_shot_card_shows_the_table_beside_guessing(self):
+        self.assertIn(T["few_shot_not_run"], texts(self.page))
+        self.page._check_few_shot(2)
+        end = time.time() + 10
+        while 2 not in self.page.shots and time.time() < end:
+            self.app.update()
+            time.sleep(.01)
+        self.app.update()
+        shown = texts(self.page)
+        self.assertIn("14 of 40", shown)
+        self.assertIn("30%", shown)
+        self.assertIn(T["few_shot_again"], shown)
+
     def test_teach_correction(self):
         self.page.messages = [{"role": "user", "content": "Largest planet?"}]
         self.page.correction.insert(0, "Jupiter")

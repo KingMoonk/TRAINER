@@ -146,6 +146,26 @@ CHAT = {
     "val_bpc": "not measured yet",
     "val_kofn": "not checked yet",
     "val_size_speed": "not measured yet",
+    "few_shot": "LEARNING FROM EXAMPLES IN THE QUESTION",
+    "few_shot_hint": "Multiple-choice questions from your checked problems, asked three ways: on their own, with one solved "
+                     "example written in front, then with a few. Nothing is trained. The version picks the option it finds "
+                     "most likely, so this shows how much it learns from examples alone.",
+    "few_shot_run": "Check it",
+    "few_shot_again": "Check again",
+    "few_shot_running": "Asking the multiple-choice questions",
+    "few_shot_not_run": "Not checked yet for this version. It can take a few minutes.",
+    "few_shot_none": "No multiple-choice problems yet. Add a set with lettered options, such as ARC or HellaSwag, in Your data.",
+    "few_shot_head": ("Solved examples shown", "Right", "Score", "Guessing gets", "Against guessing"),
+    "few_shot_zero": "none",
+    "few_shot_one": "one",
+    "few_shot_some": "{n}",
+    "few_shot_fitted": " ({used} fit on average)",
+    "few_shot_above": "better",
+    "few_shot_near": "about the same",
+    "few_shot_below": "worse",
+    "few_shot_asked": "{items} questions from {tasks} kinds of problem.",
+    "few_shot_training": "There are no held-back multiple-choice problems yet, so these come from the ones used for training.",
+    "few_shot_chance": "Picking at random gets about [N]% right. A small model usually scores close to that; only a clear gap above it means it learned something.",
 }
 
 COMPARE = {
