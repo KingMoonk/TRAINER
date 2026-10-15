@@ -1,13 +1,16 @@
 """Storage (in Resources): how much history the app keeps on disk, and deleting it by age, rendered from services.storage()."""
 from __future__ import annotations
 
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 
+from studio_ia.copy import EXPORT as X
 from studio_ia.copy import STORAGE as T
 from studio_ia.pages.base import Page
+from studio_ia.services import plain_error
 from studio_ia.theme import C, GUTTER, tk_label
-from studio_ia.widgets import info_icon
+from studio_ia.widgets import info_icon, tip
 
 CHOICES = {"Older than 1 day": (1, False), "Older than 7 days": (7, False), "Older than 30 days": (30, False), "Older than 90 days": (90, False), "All history": (None, False)}
 ALL = "All history"
@@ -25,6 +28,27 @@ def storage_state(services, choice, data=False):
     items, size = services.storage(days, data)
     line = T["storage_frees"].format(size=size_text(size), n=items) if items else T["storage_nothing"]
     return days, data, choice == ALL, line, items > 0
+
+
+def export_rows(versions):
+    """[(number, name, why GGUF is unavailable or "")] for each version that has trained, in order."""
+    import studio_export
+    from studio_model import effective_spec, validate_config
+    return [(v.number, v.name, studio_export.gguf_problem(effective_spec(validate_config(v.spec)))) for v in versions if v.best_checkpoint]
+
+
+def export_default_name(name):
+    """A file name stem for a version: its name with anything a file system dislikes turned into a dash."""
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in name.strip()).strip("-") or "model"
+
+
+def export_run(services, number, name, kind, path):
+    """The line to show after exporting version `number` to `path`: what was written, or the plain reason it was not."""
+    try:
+        report = services.export_version(number, kind, path)
+    except (ValueError, OSError) as error:
+        return plain_error(error, name)
+    return X["done"].format(name=name, path=report["path"], note=report.get("note", "")).strip()
 
 
 class StoragePage(Page):
@@ -56,6 +80,7 @@ class StoragePage(Page):
         self.delete_btn.pack(anchor="w")
         self._vars = (choice, data)
         self._paint_storage()
+        self._export_card()
 
     def _pick(self, choice, data):
         self.choice, self.data = choice.get(), data.get()
@@ -81,3 +106,46 @@ class StoragePage(Page):
             return self._paint_storage(str(error))
         self.refresh()
         self._paint_storage(T["storage_freed"].format(size=size_text(freed)))
+
+    exported = ""
+
+    def _export_card(self):
+        card = ttk.Frame(self.body, padding=GUTTER)
+        card.pack(fill="x", pady=(0, GUTTER))
+        head = tk.Frame(card, bg=C["bg"])
+        head.pack(anchor="w")
+        tk_label(head, X["kicker"], 12, "muted", bg="bg").pack(side="left")
+        info_icon(head, X["desc"], "bg").pack(side="left", padx=(4, 0))
+        rows = export_rows(self.services.versions())
+        if not rows:
+            tk_label(card, X["none"], 14, "text2").pack(anchor="w", pady=(6, 0))
+        for number, name, no_gguf in rows:
+            row = ttk.Frame(card)
+            row.pack(anchor="w", pady=(6, 0))
+            tk_label(row, name, 14, "text2").pack(side="left", padx=(0, GUTTER))
+            ttk.Button(row, text=X["hf"], command=lambda n=number, v=name: self._export(n, v, "hf")).pack(side="left")
+            gguf = ttk.Button(row, text=X["gguf"], command=lambda n=number, v=name: self._export(n, v, "gguf"))
+            gguf.pack(side="left", padx=(6, 0))
+            if no_gguf:
+                gguf.state(["disabled"])
+                tip(gguf, no_gguf)
+        self.export_line = tk_label(card, self.exported, 14, "text2", wraplength=720)
+        self.export_line.pack(anchor="w", pady=(6, 0))
+
+    def _export(self, number, name, kind):
+        from tkinter import filedialog
+        stem = export_default_name(name)
+        if kind == "hf":
+            parent = filedialog.askdirectory(parent=self, title=X["pick_hf"].format(name=name))
+            path = str(Path(parent) / stem) if parent else ""   # the model gets a folder of its own inside the one chosen
+        else:
+            path = filedialog.asksaveasfilename(parent=self, title=X["pick_gguf"].format(name=name), initialfile=f"{stem}.gguf",
+                                                defaultextension=".gguf", filetypes=[("GGUF model", "*.gguf")])
+        if not path:
+            return
+
+        def done(line):
+            self.exported = line
+            if self.export_line.winfo_exists():
+                self.export_line.configure(text=line)
+        self.background(lambda: export_run(self.services, number, name, kind, path), done, X["working"])
