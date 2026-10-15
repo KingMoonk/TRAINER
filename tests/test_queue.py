@@ -122,6 +122,7 @@ class QueueTests(unittest.TestCase):
         r.resume()
         self.assertIn(("queue", {"paused": False}), events)
         self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
+        r.shutdown()  # its thread may still be saving the finished job; Windows refuses to open a file mid-replace
         self.assertFalse(Runner(self.path, self.handlers).state().paused)
 
     def test_move_up_and_remove(self):

@@ -43,7 +43,9 @@ def test_ci():
         sys.exit("test:ci opens real windows and runs in CI only. Run `python tasks.py test` locally.")
     run(PY, "-m", "compileall", "-q", ".")  # catches syntax errors in modules no test imports
     test()
-    run(PY, "-m", "unittest", "discover", "-s", "tests", "-p", "gui_*.py", *VERBOSE)
+    # One process per module, as in the app: Panda3D runs in its own process there, never beside Tk. A crash prints every thread's stack.
+    for path in sorted(Path(__file__).with_name("tests").glob("gui_*.py")):
+        run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", "-p", path.name, *VERBOSE)
 
 
 def test_ci_e2e():

@@ -1,6 +1,7 @@
 """Studio window: sidebar (four areas + machine strip) and the page router."""
 from __future__ import annotations
 
+import gc
 import queue
 import threading
 import tkinter as tk
@@ -65,6 +66,9 @@ def strip_lines(q, version=None):
 
 class Studio(tk.Tk):
     def __init__(self, services=None):
+        # Free the Tk objects of earlier, destroyed Studios now, before this interpreter exists and outside any Tk
+        # callback. Left to the collector they can be freed during this app's update(), which crashes Tk on macOS.
+        gc.collect()
         super().__init__()
         self.title("Groundwork Studio")
         self.geometry("1280x820")
@@ -453,6 +457,8 @@ class Studio(tk.Tk):
         self.after_cancel(self._settle_id)
         self.after_cancel(self._pump_id)
         self.unsubscribe()
+        for pending in self.tk.splitlist(self.tk.call("after", "info")):
+            self.tk.call("after", "cancel", pending)  # left behind, it fires in the next app's update() into deleted commands
         close = getattr(self.services, "close", None)
         if close:
             close()  # stops the queue runner; a job cut short goes back to the front of the queue
