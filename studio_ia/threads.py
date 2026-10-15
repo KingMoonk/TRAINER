@@ -22,28 +22,30 @@ def attach():
 
 
 def detach():
-    """Call on the Tk thread when the app is destroyed; puts the collector back."""
-    global _attached, _holds
-    with _lock:
-        _attached, _holds = False, 0
-        _done.clear()
-    gc.enable()
+    """Call on the Tk thread when the app is destroyed. Threads still running keep their holds: the collector stays
+    off until they finish and the next app settles them, so a dead app's Tk objects are never freed off the Tk thread."""
+    global _attached
+    _attached = False
+    settle()
 
 
 def hold():
+    """Returns whether a hold was taken: only an attached app takes one."""
     global _holds
     with _lock:
-        if _attached:
-            if not _holds:
-                gc.disable()
-            _holds += 1
+        if not _attached:
+            return False
+        if not _holds:
+            gc.disable()
+        _holds += 1
+        return True
 
 
 def release():
     """Tk thread only: the last release collects here, where freeing Tk objects is allowed, then re-enables."""
     global _holds
     with _lock:
-        if not _attached or not _holds:
+        if not _holds:
             return
         _holds -= 1
         last = not _holds
@@ -54,18 +56,24 @@ def release():
 
 def start(target, *args):
     """Run target(*args) on a daemon thread with the collector held until settle() sees it finished."""
-    hold()
+    held = hold()
 
     def run():
         try:
             target(*args)
         finally:
-            with _lock:
-                _done.append(threading.current_thread())
+            if held:
+                done()
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     return thread
+
+
+def done():
+    """Called by a held thread as it finishes: its hold is released by the next settle() on the Tk thread."""
+    with _lock:
+        _done.append(threading.current_thread())
 
 
 def settle():
@@ -82,13 +90,16 @@ class Lane:
     lanes are two holds."""
 
     def __init__(self):
-        self._jobs, self._done, self.pending = queue.Queue(), queue.Queue(), 0
+        self._jobs, self._done, self.pending, self._held = queue.Queue(), queue.Queue(), 0, False
         threading.Thread(target=self._work, daemon=True).start()
 
     def _work(self):
         while True:
             job = self._jobs.get()
             if job is None:
+                return
+            if job == "stop":  # stopped while busy: the jobs before this one have run, so the next app's settle can release
+                done()
                 return
             work, tag = job
             try:
@@ -98,7 +109,7 @@ class Lane:
 
     def submit(self, work, tag=None):
         if not self.pending:
-            hold()
+            self._held = hold()
         self.pending += 1
         self._jobs.put((work, tag))
 
@@ -111,9 +122,10 @@ class Lane:
             except queue.Empty:
                 break
             self.pending -= 1
-        if out and not self.pending:
+        if out and not self.pending and self._held:
             release()
         return out
 
     def stop(self):
-        self._jobs.put(None)
+        """Tk thread: end the lane. A busy lane hands its hold to the worker, which gives it back once its jobs are done."""
+        self._jobs.put("stop" if self.pending and self._held else None)

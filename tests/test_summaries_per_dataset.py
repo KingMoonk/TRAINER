@@ -1,14 +1,17 @@
 """Summaries are kept per dataset beside the dataset's rev: a change reads only the datasets it touched. Window-free."""
 import json
 import random
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
 import studio_catalog
 import studio_data_kinds as dk
 from studio_core import Workspace
+from studio_data_cache import SummaryCache
 from studio_ia.services import SUMMARY_FORMAT, WorkspaceServices
 from studio_rules import generate
 
@@ -29,14 +32,21 @@ class PerDataset(unittest.TestCase):
         self.ws.add(self.a, [STORY, STORY + " today", "a different text about cooking pasta with garlic and olive oil slowly"])
         self.ws.add(self.b, [{"user": f"q{i}", "assistant": f"a{i}", "quality": "Good"} for i in range(6)] + [STORY + " again", {"user": STORY, "assistant": "yes"}])
         dk.add_problems(self.ws, self.c, generate("copy", random.Random(1), 3))
-        self.saved = self.root / "data" / "summaries.json"
+        self.saved = self.root / "data" / "summaries.sqlite"
 
     def scanned(self):
         """The dataset_ids of every dk.scan call made while `work` runs."""
         return mock.patch.object(dk, "scan", wraps=dk.scan)
 
     def entries(self):
-        return json.loads(self.saved.read_text(encoding="utf-8"))["datasets"]
+        return SummaryCache(self.saved, SUMMARY_FORMAT).load()[0]
+
+    def stored_rows(self):
+        return self.sql("SELECT dataset_id, kind, COUNT(*) FROM rows GROUP BY dataset_id, kind")
+
+    def sql(self, statement, *values):
+        with closing(sqlite3.connect(self.saved)) as connection, connection:
+            return connection.execute(statement, values).fetchall()
 
     def everything(self, svc=None):
         svc = svc or self.svc
@@ -125,33 +135,73 @@ class PerDataset(unittest.TestCase):
 
     def test_older_summary_formats_and_garbage_are_rebuilt_once(self):
         expected = self.everything()
-        for content in (json.dumps({"format": SUMMARY_FORMAT - 1, "stamp": [], "text": {}, "conversations": {}, "problems": {}, "example": {}}),
-                        "not json", "[]", json.dumps({"format": SUMMARY_FORMAT, "stamp": self.svc._stamp(), "datasets": {self.a: {"rev": 1}}})):
-            self.saved.write_text(content, encoding="utf-8")
+        legacy = self.root / "data" / "summaries.json"
+
+        def with_format(number):
+            def write():
+                self.sql("UPDATE meta SET value=? WHERE key='format'", str(number))
+            return write
+
+        def with_entry(entry):
+            def write():
+                self.sql("UPDATE datasets SET entry=? WHERE id=?", json.dumps(entry), self.a)
+            return write
+        for name, damage in (("older format", with_format(SUMMARY_FORMAT - 1)), ("not a database", lambda: self.saved.write_bytes(b"not a database" * 100)),
+                             ("empty file", lambda: self.saved.write_bytes(b"")), ("an entry of another shape", with_entry({"rev": self.ws._dataset(self.a)["rev"]}))):
+            damage()
+            legacy.write_text("{}", encoding="utf-8")
             with self.scanned() as scan:
                 svc = WorkspaceServices(Workspace(self.root))
                 self.addCleanup(svc.close)
-                self.assertEqual(self.everything(svc), expected, content[:30])
-                self.assertEqual(scan.call_count, 3, content[:30])
-                self.assertEqual(json.loads(self.saved.read_text(encoding="utf-8"))["format"], SUMMARY_FORMAT)
+                self.assertEqual(self.everything(svc), expected, name)
+                self.assertEqual(scan.call_count, 3, name)
+                self.assertEqual(SummaryCache(self.saved, SUMMARY_FORMAT).load()[0].keys(), {self.a, self.b, self.c}, name)
+                self.assertFalse(legacy.exists(), name)  # the one large file an older app wrote is not kept
                 self.assertEqual(WorkspaceServices(Workspace(self.root)).data("text").count, 4)
                 self.assertEqual(scan.call_count, 3)  # the rebuilt file is read as it is
 
     def test_a_dataset_that_shrinks_gives_its_budget_to_the_next(self):
         ws = Workspace(self.root / "small")
+        cache = SummaryCache(self.root / "small" / "data" / "summaries.sqlite", SUMMARY_FORMAT)
         first, second = ws.create_dataset("first"), ws.create_dataset("second")
         ws.add(first, [f"first story number {i} " + "alpha beta gamma delta " * 3 for i in range(5)])
         ws.add(second, [f"second story number {i} " + "kappa omicron sigma tau " * 3 for i in range(5)])
-        entries, reread = dk.refresh(ws, {}, scan_limit=6)
-        self.assertEqual((reread, [len(entries[d]["rows"]["text"]) for d in (first, second)]), ([first, second], [5, 5]))
-        self.assertEqual(dk.assemble(ws.state["datasets"], entries, 6)[0]["text"].scanned, 6)
+
+        def update(scan_limit, cached):
+            entries, reread = dk.refresh(ws, cached, scan_limit=scan_limit)
+            view = cache.save(ws.state["datasets"], entries, [], scan_limit)
+            return entries, reread, view
+
+        entries, reread, view = update(6, {})
+        self.assertEqual((reread, [entries[d]["kept"]["text"] for d in (first, second)]), ([first, second], [5, 1]))  # the second keeps what the budget takes
+        self.assertEqual(dk.assemble(ws.state["datasets"], entries, view, 6)[0]["text"].scanned, 6)
         ws.remove_examples([e["id"] for e in ws.examples(first)[:3]])
-        entries, reread = dk.refresh(ws, entries, scan_limit=6)
-        self.assertEqual(reread, [first])  # the second set already kept the five rows it could be asked for
-        self.assertEqual(dk.assemble(ws.state["datasets"], entries, 6)[0]["text"].scanned, 6)
-        entries, reread = dk.refresh(ws, {**entries, second: {**entries[second], "rows": {**entries[second]["rows"], "text": entries[second]["rows"]["text"][:1]}}}, scan_limit=6)
-        self.assertEqual(reread, [second])  # one that kept fewer rows than its turn asks for is read again
-        self.assertEqual(dk.summarize(ws, "text", scan_limit=6).rows, dk.assemble(ws.state["datasets"], entries, 6)[0]["text"].rows)
+        entries, reread, view = update(6, entries)
+        self.assertEqual(reread, [first, second])  # the second one kept one row and is now asked for four
+        self.assertEqual([entries[d]["kept"]["text"] for d in (first, second)], [2, 4])
+        self.assertEqual(dk.assemble(ws.state["datasets"], entries, view, 6)[0]["text"].scanned, 6)
+        self.assertEqual(dk.summarize(ws, "text", scan_limit=6).rows, dk.assemble(ws.state["datasets"], entries, view, 6)[0]["text"].rows)
+        self.assertEqual(update(6, entries)[1], [])  # nothing moved: nothing is read
+
+    def test_the_cache_keeps_the_rows_the_budget_takes_and_a_search_reaches_all_of_them(self):
+        ws = Workspace(self.root / "wide")
+        cache = SummaryCache(self.root / "wide" / "data" / "summaries.sqlite", SUMMARY_FORMAT)
+        first, second = ws.create_dataset("first", storage="sqlite"), ws.create_dataset("second", storage="sqlite")
+        ws.add(first, [{"user": f"question {i} about topic{i}", "assistant": f"answer {i} " + "word " * 9 + f"unique{i}"} for i in range(30)])
+        ws.add(second, [{"user": f"other {i} about thing{i}", "assistant": f"reply {i} " + "term " * 9 + f"single{i}"} for i in range(30)])
+        entries, _ = dk.refresh(ws, {}, scan_limit=40)
+        view = cache.save(ws.state["datasets"], entries, [], 40)
+        self.assertEqual(entries[second]["kept"]["conversations"], 10)  # 30 + 10 is the budget: the other 20 are not kept
+        self.saved = cache.path
+        self.assertEqual(self.sql("SELECT dataset_id, COUNT(*) FROM rows GROUP BY dataset_id ORDER BY dataset_id"), sorted([(first, 30), (second, 10)]))
+        self.assertEqual(len(view["rows"]["conversations"]), 40)
+        names = {first: "first", second: "second"}
+        found = cache.search("conversations", " THING9 ", view["takes"]["conversations"], names)
+        self.assertEqual([(r["a"], r["dataset"]) for r in found], [("other 9 about thing9", "second")])
+        self.assertEqual(cache.search("conversations", "thing19", view["takes"]["conversations"], names), [])  # past the budget
+        self.assertEqual(len(cache.search("conversations", "word", view["takes"]["conversations"], names, limit=7)), 7)
+        direct = dk.summarize(ws, "conversations", "about", limit=None, scan_limit=40)
+        self.assertEqual(cache.search("conversations", "about", view["takes"]["conversations"], names, limit=1000), direct.rows)
 
     def test_disk_datasets_are_counted_by_the_kind_column_not_read_whole(self):
         with mock.patch.object(Workspace, "iter_examples", side_effect=AssertionError("read the whole dataset")):

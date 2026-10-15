@@ -4,6 +4,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 
+from studio_data_kinds import DataSummary
 from studio_spec import default_spec
 from studio_versions import spec_diff
 from studio_warmstart import NOTES
@@ -22,7 +23,7 @@ class BuilderTest(unittest.TestCase):
         self.fake = FakeServices()
         self.fake.save_version(default_spec(), "first design")
         self.fake.versions()[0].best_checkpoint = "/tmp/ckpt/best.npz"  # trained, so a catch-up can start from it
-        self.has_text = lambda kind: {"kind": kind, "count": 1, "sets": [{"id": "d1", "name": "books", "count": 1}]}
+        self.has_text = lambda kind, query="": DataSummary(kind, 1, sets=[{"id": "d1", "name": "books", "count": 1}])
         self.fake.data = self.has_text
         try:
             self.app = Studio(self.fake)
@@ -50,6 +51,28 @@ class BuilderTest(unittest.TestCase):
         page.save()
         app.update()
         self.assertEqual([(v.number, v.change) for v in fake.versions()], [(1, "first design")])
+
+    def test_nothing_trained_shows_one_line_instead_of_a_chart_and_rows(self):
+        fake = FakeServices()  # nothing saved yet
+        fake.data = self.has_text
+        app = Studio(fake)
+        self.addCleanup(app.destroy)
+        page = app.show("builder")
+        app.update()
+        shown = texts(page)
+        self.assertIsNone(page.plot)
+        self.assertIsNone(page.ask_btn)
+        self.assertEqual(page.no_curve, B.T["no_curve_first"])
+        self.assertEqual(sum(t.startswith("No error curve yet") for t in shown), 1)
+        self.assertIn(B.T["nothing_to_ask_first"], shown)
+        self.assertNotIn(B.T["example_prompt"], shown)
+
+    def test_one_trained_version_answers_and_the_other_says_why_not(self):
+        self.assertIsNone(self.page.plot)  # trained but no run curve on the fake
+        self.assertEqual(sorted(self.page.answer_labels), [1, 2])
+        self.assertEqual(self.page.answer_labels[1].cget("text"), B.T["its_answer_appears"])
+        self.assertEqual(self.page.answer_labels[2].cget("text"), B.T["compare_later"])
+        self.assertIsNotNone(self.page.ask_btn)
 
     def test_edit_marks_not_saved_with_chips(self):
         self.page.edit(L=4, H=8)
@@ -80,7 +103,7 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(self.page.phase, "queued")
 
     def test_no_text_means_no_job(self):
-        self.fake.data = lambda kind: {"kind": kind, "count": 0, "sets": []}
+        self.fake.data = lambda kind, query="": DataSummary(kind)
         self.page.edit(L=4)
         self.page.save()
         self.page.queue_it(False)

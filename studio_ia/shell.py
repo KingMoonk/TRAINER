@@ -6,6 +6,7 @@ import traceback
 from collections import namedtuple
 from tkinter import ttk
 
+from studio_timing import timed
 from studio_ux import format_duration
 from studio_ia import services as services_module
 from studio_ia import threads
@@ -103,9 +104,11 @@ class Studio(tk.Tk):
         threads.attach()
         self._settle()
         self.services.start_queue()  # jobs saved as waiting by the last session start again
-        self.refresh_strip()
+        with timed("shell.refresh_strip"):
+            self.refresh_strip()
         self.refresh_next()
-        self.show("builder")
+        with timed("shell.show_builder"):
+            self.show("builder")
         self.quietly(self.services.refresh_downloads, lambda _rebuilt: None, lane="slow")  # downloads an older app converted get rebuilt once
 
     # sidebar ----------------------------------------------------------------

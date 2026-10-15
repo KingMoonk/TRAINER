@@ -1,11 +1,14 @@
 """Your data: three tabs (text, conversations, problems) with counts, search, a table with STATUS, review and actions.
 
-Reads and writes only through services (data, add_data, edit_data, import_data, review_data). Decision logic is in plain
-functions at the top so it runs without Tk.
+Reads and writes only through services (data, data_page, add_data, edit_data, import_data, review_data). Decision logic is in
+plain functions and classes at the top so it runs without Tk. The summaries give the counts; the table is read a page at a time
+(data_page) on the shell's worker, so a search reaches every row and a typing burst costs one read.
 """
 from __future__ import annotations
 
+import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import studio_rules as rules  # names and labels of the rules only
@@ -16,8 +19,27 @@ from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import _activate, button
 
 KINDS = ("text", "conversations", "problems")
+PAGE = 200  # rows the table gains per read
+SEARCH_DELAY = 250  # ms after the last key before a search runs
+PROGRESS_EVERY = 1.0  # seconds between repaints of a download's status line
+CELL_PAD = 16  # px of a table cell that text cannot use
+CELL_READ = 2000  # characters of a cell looked at; the rest could never fit
 STATUS_COLOR = {"In use": "text2", "Held back": "blue", "Near-duplicate": "amber", "Good": "violet", "Review": "muted",
                 "From Chat": "pink", "Ready": "text2"}
+
+
+def fit_cell(text, width, measure):
+    """One line for a table cell: every run of whitespace (newlines too) becomes one space, and the line is cut with an
+    ellipsis at the last whole character that fits `width` pixels as measure(text) reports them. The full text is in the detail."""
+    text = str(text)
+    line = " ".join(text[:CELL_READ].split())
+    if len(text) <= CELL_READ and measure(line) <= width:
+        return line
+    low, high = 0, len(line)  # the longest prefix that still fits with the ellipsis
+    while low < high:
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if measure(line[:middle].rstrip() + "…") <= width else (low, middle - 1)
+    return line[:low].rstrip() + "…"
 
 
 def back_link(kind):
@@ -33,9 +55,56 @@ def dup_label(found, only_dups):
     return T["near_duplicates"].replace("[N]", f"{found:,}") + (" · showing" if only_dups else "")
 
 
-def shown_line(summary, query):
-    """'Showing the first N of M.' when the table holds fewer rows than exist and nothing is filtered, else ''."""
-    return T["shown"].format(shown=len(summary.rows), count=summary.count) if not query.strip() and len(summary.rows) < summary.count else ""
+def shown_line(loaded, count, query, more):
+    """'Showing the first N of M.' (of the matches, when searching) while more rows wait behind Load more, else ''."""
+    if not more:
+        return ""
+    return T["shown_matches"].format(shown=loaded) if query.strip() else T["shown"].format(shown=loaded, count=count)
+
+
+class Search:
+    """Debounce for the search box plus a token that drops stale results. The page hands in its own after/after_cancel, so this
+    runs without Tk. run(token) starts a read; its result is used only while wanted(token)."""
+
+    def __init__(self, after, cancel, run, delay=SEARCH_DELAY):
+        self.after, self.cancel, self.run, self.delay = after, cancel, run, delay
+        self.token, self.timer = 0, None
+
+    def type(self):
+        """A key was pressed: search `delay` ms after the last one, and drop any read still in flight."""
+        self.claim()
+        self.timer = self.after(self.delay, self._fire)
+
+    def _fire(self):
+        self.timer = None
+        self.run(self.claim())
+
+    def claim(self):
+        """A new token, now: the pending search is cancelled and every read made with an older token is stale."""
+        if self.timer is not None:
+            self.cancel(self.timer)
+            self.timer = None
+        self.token += 1
+        return self.token
+
+    def wanted(self, token):
+        return token == self.token
+
+
+class Throttle:
+    """One pass per `interval` seconds: ready(now) is True (and starts the next interval) or False; wait(now) is the time left."""
+
+    def __init__(self, interval=PROGRESS_EVERY):
+        self.interval, self.last = interval, None
+
+    def ready(self, now):
+        if self.last is None or now - self.last >= self.interval:
+            self.last = now
+            return True
+        return False
+
+    def wait(self, now):
+        return 0.0 if self.last is None else max(0.0, self.interval - (now - self.last))
 
 
 def collection_shown(summary):
@@ -79,6 +148,8 @@ class YourDataPage(Page):
     def __init__(self, parent, services, navigate=None, **kw):
         super().__init__(parent, services, navigate, **kw)
         self.kind, self.only_dups, self.summaries, self.selected = "conversations", False, {}, None
+        self.rows, self.cursor, self.applied, self.loading_more = [], None, "", False  # the table: loaded rows, where the next page starts, the query they answer
+        self.search = Search(self.after, self.after_cancel, lambda token: self._request(token, None))
         self.query = tk.StringVar()
         style = ttk.Style(self)
         style.configure("YD.Treeview", background=C["panel"], fieldbackground=C["panel"], foreground=C["text"], rowheight=28,
@@ -112,19 +183,24 @@ class YourDataPage(Page):
         self.entry = tk.Entry(bar, textvariable=self.query, width=40, bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
                               relief="flat", highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
         self.entry.pack(side="left", padx=8, ipady=6)
-        self.entry.bind("<KeyRelease>", lambda _e: self._search())
+        self.entry.bind("<KeyRelease>", lambda _e: self._typed())
         self.table = ttk.Treeview(body, columns=("a", "b", "status"), show="headings", style="YD.Treeview", height=9)
         self.table.pack(fill="x")
         self.table.column("a", width=340)
         self.table.column("b", width=340)
-        self.table.column("status", width=130, anchor="w")
+        self.table.column("status", width=110, anchor="w", stretch=False)
+        for column in ("a", "b", "status"):
+            self.table.heading(column, anchor="w")  # the cells are left-aligned
         self.table.heading("status", text=T["status"])
+        self.cell_fonts, self.fitted = (tkfont.Font(root=self, font=font(14)), tkfont.Font(root=self, font=font(13, mono=True))), None
+        self.table.bind("<Configure>", lambda _e: self._resized())
         for status, color in STATUS_COLOR.items():
             self.table.tag_configure(status, foreground=C[color])
         self.table.tag_configure("mono", font=font(13, mono=True))
         self.table.bind("<<TreeviewSelect>>", lambda _e: self._select())
         self.shown = tk_label(body, "", 12, "dim")
         self.shown.pack(fill="x")
+        self.more_button = ttk.Button(body, text=T["load_more"], command=self.load_more)
         self.detail = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
         self.detail.pack(fill="x", pady=(8, 0))
         self.detail_text = tk_label(self.detail, T["pick_row"], 14, "text2", "panel", wraplength=760)
@@ -150,14 +226,17 @@ class YourDataPage(Page):
         self.collection_desc.pack(anchor="w")
         self.collection_rows = tk.Frame(card, bg=C["panel"])
         self.collection_rows.pack(fill="x", pady=(6, 0))
-        self.notes = {}  # source id -> latest progress line
+        self.notes, self.collections, self.status_labels, self.painted = {}, {}, {}, None  # notes: source id -> latest progress line
+        self.throttle, self.dirty, self.flush_timer, self.resize_timer = Throttle(), set(), None, None
         _activate(self.back, self.go_back)
 
     # navigation ---------------------------------------------------------------------
     def show(self, kind):
         """Open on one tab (links from other pages call this after navigating here)."""
         self.kind, self.only_dups, self.selected = kind, False, None
+        self.rows, self.cursor, self.applied = [], None, ""
         self.query.set("")
+        self._paint_rows()
         self.reload()
 
     def go_back(self):
@@ -169,22 +248,61 @@ class YourDataPage(Page):
             page.show(self.kind)
 
     # data ---------------------------------------------------------------------------
-    def _load(self, kind):
-        self.summaries[kind] = self.services.data(kind, self.query.get().strip() if kind == self.kind else "")
-
     def preload(self):
         for k in KINDS:
-            self.services.data(k)
+            self.summaries[k] = self.services.data(k)
 
     def refresh(self):
         for k in KINDS:
-            self._load(k)
+            if k not in self.summaries:
+                self.summaries[k] = self.services.data(k)
         self._render()
+        self._collect()
+        self._request(self.search.claim(), None)
 
-    def _search(self):
-        self.selected = None
-        self._load(self.kind)
-        self._render()
+    def _typed(self):
+        if self.query.get().strip() != self.applied:
+            self.search.type()
+
+    def _request(self, token, cursor):
+        """Read a page of the open kind on the worker: the first page (cursor None) or the one after `cursor`."""
+        kind = self.kind
+        if cursor is None:
+            self.applied, self.loading_more = self.query.get().strip(), False
+        query = self.applied  # a later page answers the query the table shows, not what is being typed
+        self.quietly(lambda: self.services.data_page(kind, query, cursor, PAGE), lambda result: self._arrived(token, kind, cursor, result))
+
+    def _arrived(self, token, kind, cursor, result):
+        if not self.search.wanted(token) or kind != self.kind:  # typed on, or moved to another tab, while it was being read
+            return
+        rows, self.cursor = result
+        self.loading_more = False
+        self.more_button.configure(state="normal")
+        if cursor is not None:
+            self.rows += rows
+            self._paint_rows(len(self.rows) - len(rows))
+        elif rows != self.rows:
+            self.rows = rows
+            self._paint_rows()
+        else:
+            self._paint_rows(len(rows))  # the same rows again (a reload): leave the table as it is
+
+    def _resized(self):
+        """The columns got wider or narrower: cut the cells again once the dragging stops."""
+        if self.fitted != tuple(self.table.column(c, "width") - CELL_PAD for c in ("a", "b")):
+            if self.resize_timer is not None:
+                self.after_cancel(self.resize_timer)
+            self.resize_timer = self.after(150, self._refit)
+
+    def _refit(self):
+        self.resize_timer = None
+        self._paint_rows()
+
+    def load_more(self):
+        if self.cursor is not None and not self.loading_more:
+            self.loading_more = True
+            self.more_button.configure(state="disabled")
+            self._request(self.search.token, self.cursor)
 
     def _render(self):
         kind, s = self.kind, self.summaries[self.kind]
@@ -200,19 +318,33 @@ class YourDataPage(Page):
         self.sets_line.configure(text=" · ".join(f"{x['name']} ({x['count']:,})" for x in s.sets) or T["no_sets"])
         self.table.heading("a", text=T[f"{kind}_col_a"])
         self.table.heading("b", text=T[f"{kind}_col_b"])
-        self.table.delete(*self.table.get_children())
-        for r in visible_rows(s.rows, self.only_dups):
-            self.table.insert("", "end", iid=r["id"], values=(r["a"], r["b"], r["status"]),
-                              tags=(r["status"], "mono") if kind == "problems" else (r["status"],))
-        if self.selected and self.table.exists(self.selected):
-            self.table.selection_set(self.selected)
-        self.shown.configure(text=shown_line(s, self.query.get()))
         self.note.configure(text=T[f"{kind}_note"])
         self.add_button.configure(text=T[f"{kind}_add"])
         self.make_button.configure(text=T[f"{kind}_make"])
         self.dup_button.configure(text=dup_label(s.near_duplicates, self.only_dups), state="normal" if s.near_duplicates else "disabled")
-        self._detail()
         self.paint_collection()
+
+    def _paint_rows(self, keep=0):
+        """Show self.rows; the first `keep` of them are already in the table (a page was appended, or nothing changed)."""
+        if not keep:
+            self.table.delete(*self.table.get_children())
+        mono = self.kind == "problems"
+        measure = self.cell_fonts[mono].measure
+        wa, wb = self.fitted = tuple(self.table.column(c, "width") - CELL_PAD for c in ("a", "b"))
+        for r in visible_rows(self.rows[keep:], self.only_dups):
+            self.table.insert("", "end", iid=r["id"], values=(fit_cell(r["a"], wa, measure), fit_cell(r["b"], wb, measure), r["status"]),
+                              tags=(r["status"], "mono") if mono else (r["status"],))
+        if self.selected and self.table.exists(self.selected):
+            self.table.selection_set(self.selected)
+        else:
+            self.selected = None
+        summary = self.summaries.get(self.kind)
+        self.shown.configure(text=shown_line(len(self.rows), summary.count if summary else 0, self.applied, self.cursor is not None))
+        if self.cursor is None:
+            self.more_button.pack_forget()
+        else:
+            self.more_button.pack(anchor="w", pady=(4, 0), after=self.shown)
+        self._detail()
 
     # recommended collection of the open kind ------------------------------------------
     def paint_collection(self):
@@ -221,11 +353,12 @@ class YourDataPage(Page):
             self.collection_card.pack(fill="x", pady=(GUTTER, 0), after=self.buttons)
         else:
             self.collection_card.pack_forget()
-        try:
-            rows = self.services.collection(kind)
-        except NotImplementedError:
-            rows = []
+        rows = self.collections.get(kind, [])
         self.collection_desc.configure(text=T[f"{kind}_collection_desc"])
+        if self.painted == (kind, rows):  # only the status lines move while a download runs; they are updated in place
+            return
+        self.painted = (kind, rows)
+        self.status_labels = {}
         for child in self.collection_rows.winfo_children():
             child.destroy()
         for row in rows:
@@ -237,11 +370,29 @@ class YourDataPage(Page):
             if action:
                 label = T["download_add"] if action == "download" and kind != "text" else label
                 button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
-            tk_label(line, source_status(row, self.notes.get(row["id"], "")), 12,
-                     "coral" if row.get("error") else "muted", "panel").pack(side="right", padx=10)
+            status = self.status_labels[row["id"]] = tk_label(line, source_status(row, self.notes.get(row["id"], "")), 12,
+                                                              "coral" if row.get("error") else "muted", "panel")
+            status.pack(side="right", padx=10)
         if any(source_action(r)[1] == "download" for r in rows):
             button(self.collection_rows, T["download_add_all"] if kind != "text" else T["download_all"],
                    lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
+
+    def _collect(self):
+        """Read the open kind's collection (manifests on disk) on the worker and repaint it when it differs. Only a download
+        finishing or failing, a download starting or the page opening asks again; progress never does."""
+        kind = self.kind
+
+        def work():
+            try:
+                return self.services.collection(kind)
+            except NotImplementedError:
+                return []
+        self.quietly(work, lambda rows: self._collected(kind, rows))
+
+    def _collected(self, kind, rows):
+        self.collections[kind] = rows
+        if kind == self.kind:
+            self.paint_collection()
 
     def fetch(self, source_id, action):
         """Download (and, outside text, add) one source or the whole collection; import a downloaded one."""
@@ -249,19 +400,43 @@ class YourDataPage(Page):
         started = (self.services.download_sources(ids, kind=self.kind, install=self.kind != "text") if action == "download"
                    else self.services.import_source(source_id))
         if started:
-            self.paint_collection()
+            self._collect()
 
     def on_event(self, kind, payload):
         if kind == "download":
             self.notes[payload["id"]] = payload["text"]
-            self.paint_collection()
+            self.dirty.add(payload["id"])
+            self._flush_soon()
         elif kind in ("download_done", "import_done", "download_failed"):
-            self.paint_collection()  # cheap: manifests and the set list only
+            self._collect()
         elif kind == "downloads_finished":
             self.quiet_reload()  # re-counting every row is slow; the page stays usable while it runs
 
+    def _flush_soon(self):
+        """Progress arrives several times a second: repaint the changed status lines at most once per PROGRESS_EVERY."""
+        if self.flush_timer is not None:
+            return
+        now = time.monotonic()
+        if self.throttle.ready(now):
+            self._flush_notes()
+        else:
+            self.flush_timer = self.after(int(self.throttle.wait(now) * 1000) + 20, self._flush_later)
+
+    def _flush_later(self):
+        self.flush_timer = None
+        self.throttle.ready(time.monotonic())
+        self._flush_notes()
+
+    def _flush_notes(self):
+        rows = {r["id"]: r for r in self.collections.get(self.kind, [])}
+        for source_id in self.dirty:
+            label, row = self.status_labels.get(source_id), rows.get(source_id)
+            if label is not None and row is not None:  # a progress line means the source is being fetched, whatever the rows read last said
+                label.configure(text=source_status({**row, "state": "downloading", "error": ""}, self.notes[source_id]), fg=C["muted"])
+        self.dirty.clear()
+
     def _row(self):
-        return next((r for r in self.summaries[self.kind].rows if r["id"] == self.selected), None)
+        return next((r for r in self.rows if r["id"] == self.selected), None)
 
     def _select(self):
         picked = self.table.selection()
@@ -289,6 +464,7 @@ class YourDataPage(Page):
     def toggle_duplicates(self):
         self.only_dups = not self.only_dups
         self._render()
+        self._paint_rows()
 
     def _ask(self, prompt, initial=""):
         return simpledialog.askstring(T["dialog"], prompt, parent=self, initialvalue=initial)
