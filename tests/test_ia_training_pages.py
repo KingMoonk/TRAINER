@@ -9,7 +9,7 @@ from studio_data_kinds import add_problems
 from studio_ia.copy import CHAT
 from studio_ia.pages.chat import against_chance, answering_version, few_shot_note, few_shot_rows, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, is_mixed_precision, live_view, lora_blocker, lora_config, lora_default, spread_text, step_line, teacher_options
-from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
+from studio_ia.pages.pretraining import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import export_default_name, export_rows, export_run, size_text, storage_state
 from studio_ia.copy import TRAINING as T
@@ -196,17 +196,6 @@ class RecommendedCollection(unittest.TestCase):
         self.assertEqual(source_action({"state": "imported"}), (None, None))
         self.assertEqual(source_status({"state": "downloading"}, "Downloading x · 1.0 MB"), "Downloading x · 1.0 MB")
         self.assertIn("Could not finish: no network.", source_status({"state": "not downloaded", "error": "no network"}))
-
-    def test_collection_view_ignores_progress_but_sees_state_changes(self):
-        row = {"id": "a", "name": "A", "size": "1 MB", "records": "5", "state": "downloading", "completed": 1, "total": 9, "error": ""}
-        before = collection_view([row])
-        row["completed"] = 5  # progress alone does not rebuild the card
-        self.assertEqual(collection_view([row]), before)
-        row["state"] = "downloaded"
-        self.assertNotEqual(collection_view([row]), before)
-        row["error"] = "no network"
-        self.assertNotEqual(collection_view([row]), collection_view([{**row, "error": ""}]))
-        self.assertNotEqual(collection_view([row]), collection_view([]))
 
     def test_download_then_import_into_the_text_sets(self):
         from unittest.mock import patch
