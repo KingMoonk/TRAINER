@@ -728,6 +728,7 @@ class FakeServices(Services):
 import json  # noqa: E402
 import math  # noqa: E402
 import threading  # noqa: E402
+from studio_ia import threads  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -810,7 +811,7 @@ class WorkspaceServices(Services):
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
         workspace.progress = self.note
         if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-            threading.Thread(target=workspace.ensure_schema, daemon=True).start()
+            threads.start(workspace.ensure_schema)
 
     def close(self):
         if getattr(self, "_viz", None) is not None:
@@ -1373,8 +1374,7 @@ class WorkspaceServices(Services):
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
             self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
-        self._worker = threading.Thread(target=run, daemon=True)
-        self._worker.start()
+        self._worker = threads.start(run)
         return True
 
     def download_sources(self, ids=None, kind="text", install=False):

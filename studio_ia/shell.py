@@ -1,7 +1,6 @@
 """Studio window: sidebar (four areas + machine strip) and the page router."""
 from __future__ import annotations
 
-import gc
 import queue
 import threading
 import tkinter as tk
@@ -11,6 +10,7 @@ from tkinter import ttk
 
 from studio_ux import format_duration
 from studio_ia import services as services_module
+from studio_ia import threads
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, SIDEBAR_W, apply, font, tk_label
 from studio_ia.widgets import Progress, _activate
@@ -102,6 +102,8 @@ class Studio(tk.Tk):
                            ("loss", loss.LossPage), ("head_lab", head_lab.HeadLabPage)):
             self.register(route, cls)
         self.unsubscribe = self.services.subscribe(self.on_event)
+        threads.attach()
+        self._settle()
         self.services.start_queue()  # jobs saved as waiting by the last session start again
         self.refresh_strip()
         self.refresh_next()
@@ -351,9 +353,7 @@ class Studio(tk.Tk):
     def _submit(self, work, then, quiet):
         busy = self._waiting + self._quiet
         if not busy:
-            # Tk objects may only be freed on the Tk thread, and the collector runs on whichever thread allocates:
-            # hold it while the worker is busy. ponytail: the queue's own training threads are not covered.
-            gc.disable()
+            threads.hold()  # Tk objects may only be freed on the Tk thread: see studio_ia/threads.py
         self.jobs.put((work, then, quiet))
         if quiet:
             self._quiet += 1
@@ -379,13 +379,17 @@ class Studio(tk.Tk):
                 if not self._waiting:
                     self.loader.place_forget()
             if not self._waiting + self._quiet:
-                gc.enable()
+                threads.release()
             if error is None:
                 then(value)
             else:
                 self.report_callback_exception(type(error), error, error.__traceback__)
         if self._waiting + self._quiet:
             self.after(60, self._poll)
+
+    def _settle(self):
+        threads.settle()  # page and download threads that finished give the collector back, here on the Tk thread
+        self._settle_id = self.after(250, self._settle)
 
     def on_event(self, kind, payload):
         if kind in NEXT_EVENTS:
@@ -400,7 +404,8 @@ class Studio(tk.Tk):
 
     def destroy(self):
         self.jobs.put((None, None, False))
-        gc.enable()
+        threads.detach()
+        self.after_cancel(self._settle_id)
         self.unsubscribe()
         close = getattr(self.services, "close", None)
         if close:
