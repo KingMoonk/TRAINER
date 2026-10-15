@@ -106,6 +106,7 @@ class Studio(tk.Tk):
         self.refresh_strip()
         self.refresh_next()
         self.show("builder")
+        self.quietly(self.services.refresh_downloads, lambda _rebuilt: None)  # downloads an older app converted get rebuilt once
 
     # sidebar ----------------------------------------------------------------
     def _build_sidebar(self):

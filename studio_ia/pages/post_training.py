@@ -198,7 +198,7 @@ class PostTrainingPage(Page):
             go = tk_label(actions, link[0] + " ›", 14, "violet", "panel", cursor="hand2", takefocus=1)
             go.pack(side="left", padx=GUTTER)
             _activate(go, lambda route=link[1]: self.navigate(route))
-        foot = {0: "Corrections you teach in Chat that need a whole new answer also land here.", 1: "Prompts where all answers pass, or all fail, teach nothing and are skipped.",
+        foot = {0: "Corrections you teach in Chat that need a whole new answer also land here.", 1: "Prompts where all answers pass, or all fail, teach nothing and are skipped. Each rule gets the room its answers need, up to 96 word pieces, so a step takes longer than it would with every answer cut at 32.",
                 2: "Also runs on its own after a night of training on new text: new text can erode how it answers, and a short lesson from the previous best version restores it without losing the new text.",
                 3: f"{count(self.counts.get('pairs'))} pairs rated. 1 in 5 is held back to check the result."}[i]
         tk_label(card, foot, 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(8, 0))

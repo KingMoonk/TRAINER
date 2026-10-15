@@ -193,10 +193,17 @@ def chart_args(old, new, refs):
                 band=refs.get("noise_band") if refs else None)
 
 
+def version_name(n):
+    """'version 3', or 'no version yet' for 0: the number before the first design is saved."""
+    return f"version {n}" if n else "no version yet"
+
+
 def pill_text(job, base):
     """Header pill: what is training now, else where the current version stands."""
     if job:
         n = job.params.get("version", base.number if base else 0)
+        if not n:
+            return "Training (no version yet)"
         scratch = job.params.get("mode") == "from_scratch"
         return f"Version {n} {'is training' if scratch or job.kind != 'pretrain' else 'is catching up'}"
     return f"Version {base.number} is {base.status}" if base else "No saved version yet"
@@ -713,7 +720,7 @@ class BuilderPage(Page):
         legend = tk.Frame(card, bg=C["panel"])
         legend.pack(anchor="w")
         if has:
-            tk_label(legend, T["version_label"].format(version=self.n), 12, "violet", "panel").pack(side="left", padx=(0, 16))
+            tk_label(legend, version_name(self.n).capitalize(), 12, "violet", "panel").pack(side="left", padx=(0, 16))
             if self.new_curve:
                 tk_label(legend, f"faint line: {self.nv}, continuing from version {self.n}'s end", 12, "amber", "panel").pack(side="left")
         else:
@@ -732,7 +739,7 @@ class BuilderPage(Page):
                 text = ("save your changes and train them to compare" if self.phase == "edit" and number == self.n + 1 else TRAINED_NOT)
             row = tk.Frame(card, bg=C["panel"])
             row.pack(anchor="w", fill="x")
-            tk_label(row, f"version {number}", 13, "violet" if number == self.n else "amber", "panel", width=10).pack(side="left")
+            tk_label(row, version_name(number), 13, "violet" if number == self.n else "amber", "panel", width=14).pack(side="left")
             label = tk_label(row, text, 13, "text" if number in self.answers else "muted", "panel", font=font(13, serif=True), wraplength=640)
             label.pack(side="left")
             self.answer_labels[number] = label

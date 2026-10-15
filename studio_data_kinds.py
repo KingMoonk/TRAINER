@@ -101,9 +101,9 @@ def add_problems(workspace, dataset_id, items, quality="Good"):
         dataset = workspace._dataset(dataset_id)
         if dataset.get("storage") == "sqlite":
             with workspace._connect() as connection:
-                connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", workspace._db_row(example))
+                workspace._insert_rows(connection, [workspace._db_row(example)])
         else:
-            workspace.state["examples"].append(example)
+            workspace.state["examples"].append(stamp(example, studio_core.fingerprint(example)))
         added += 1
     if added and workspace._dataset(dataset_id).get("storage") == "sqlite":
         with workspace._connect() as connection:
@@ -185,8 +185,23 @@ class DataSummary:
         return f"{self.count:,} problems · {len(self.rules)} rules"
 
 
+def held_key(fingerprint):
+    """Held back or not, from a fingerprint already in hand (the records table stores it as the `holdout` column)."""
+    return int(hashlib.sha1(fingerprint.encode()).hexdigest(), 16) % HELD_BACK_EVERY == 0
+
+
 def held_back(example):
-    return int(hashlib.sha1(studio_core.fingerprint(example).encode()).hexdigest(), 16) % HELD_BACK_EVERY == 0
+    return held_key(studio_core.fingerprint(example))
+
+
+def stamp(example, fingerprint=None):
+    """Write `kind` and `holdout` into an in-memory (JSON dataset) example so post_rows reads two keys, not a classify and a hash.
+    Without `fingerprint` only missing keys are filled (examples saved before the stamp existed)."""
+    if fingerprint is not None or "kind" not in example:
+        example["kind"] = classify(example)
+    if fingerprint is not None or "holdout" not in example:
+        example["holdout"] = int(held_key(fingerprint or studio_core.fingerprint(example)))
+    return example
 
 
 def _columns(kind, example, dataset_name):

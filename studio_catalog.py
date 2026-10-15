@@ -223,7 +223,7 @@ STARTER_IDS = ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1")
 def default_catalog_ids():
     """Ids downloaded by default (commercially usable, bounded), in catalogue/stage order."""
     return [entry["id"] for entry in CATALOG if entry.get("default")]
-FORMAT_VERSION = 2  # 2: line endings normalised to \n; older converted files are rebuilt from the cached source
+FORMAT_VERSION = 3  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. Older converted files are rebuilt from the cached source
 MAX_DOWNLOAD_BYTES = 1_000_000_000
 MAX_RECORD_CHARS = 16_000_000
 _DOWNLOAD_LOCK = threading.Lock()
@@ -477,6 +477,8 @@ def convert_record(raw, entry):
     parser = entry["parser"]
     if parser == "oasst":
         tree_id = raw.get("message_tree_id", "")
+        if raw.get("prompt", {}).get("lang") != "en":  # the collection is English-only; a tree is one language from its prompt down
+            return
         stack = [(raw.get("prompt", {}), [], False)]
         while stack:
             node, ancestors, synthetic = stack.pop()
@@ -621,6 +623,19 @@ def _keyed(prompt, answer, rule, key, intent, source_id=""):
             "metadata": {"rule": rule, "params": {"answer": key}}}
 
 
+def _capitalised(text):
+    text = str(text or "").strip()
+    return text[:1].upper() + text[1:]
+
+
+def _sentence(text):
+    """A HellaSwag ending as a sentence: capital first letter, and a full stop unless it already ends in terminal punctuation."""
+    text = _capitalised(text)
+    if text and text.rstrip("\"')]").rstrip()[-1:] not in (".", "!", "?", "…", ""):
+        text += "."
+    return text
+
+
 def _lettered(intro, question, options, index, intent, source_id=""):
     if not question or not 2 <= len(options) <= len(_LETTERS) or not 0 <= index < len(options) or not all(options):
         return None
@@ -655,8 +670,8 @@ def _checkable(raw, parser):
                          labels.index(key) if key in labels else -1, "multiple_choice", str(raw.get("id", "")))
     if parser == "hellaswag_check":
         label = str(raw.get("label") or "").strip()
-        context = ": ".join(p for p in (str(raw.get("activity_label") or "").strip(), str(raw.get("ctx") or "").strip()) if p)
-        return _lettered("Pick the most sensible continuation. ", context, [str(e).strip() for e in raw.get("endings") or []],
+        context = ": ".join(p for p in (str(raw.get("activity_label") or "").strip(), _capitalised(raw.get("ctx"))) if p)
+        return _lettered("Pick the most sensible continuation. ", context, [_sentence(e) for e in raw.get("endings") or []],
                          int(label) if label.isdigit() else -1, "multiple_choice", str(raw.get("source_id", "")))
     if parser == "boolq_check":
         question, passage, answer = str(raw.get("question") or "").strip(), str(raw.get("passage") or "").strip(), raw.get("answer")
@@ -845,7 +860,6 @@ def register_download(workspace, result, stop=None, emit=None):
     if count != result["records"] or stale:
         # One transaction swaps the old rows for the new ones: WAL readers keep seeing the old set until the commit,
         # and a cancel or failure rolls back to it. No staging copy to rename and one sync instead of one per batch.
-        insert = "INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)"
         with workspace._connect() as connection:
             connection.execute("PRAGMA synchronous=NORMAL")  # WAL stays consistent; a power cut may lose this import only
             try:
@@ -863,11 +877,11 @@ def register_download(workspace, result, stop=None, emit=None):
                         batch.append(workspace._db_row(row))
                         count += 1
                         if len(batch) >= 5000:
-                            connection.executemany(insert, batch)
+                            workspace._insert_rows(connection, batch, ignore=False)
                             batch.clear()
                         if emit and count % 5000 == 0:
                             emit({"text": f"Indexing {result['name']} · {count:,}/{result['records']:,}", "completed": count, "total": result["records"]})
-                connection.executemany(insert, batch)
+                workspace._insert_rows(connection, batch, ignore=False)
                 if count != result["records"]:
                     raise ValueError("Catalogue record count does not match its manifest.")
                 connection.commit()
@@ -878,7 +892,7 @@ def register_download(workspace, result, stop=None, emit=None):
                 "createdAt": now(), "storage": "sqlite", "recordCount": count, "catalogId": catalog_id,
                 "license": result["license"], "source_url": result["source_url"], "revision": result["revision"],
                 "manifestPath": result["manifest_path"], "split": result["split"], "sourceSha256": result["sha256"]}
-    # ponytail: Workspace.apply does not exist yet; hold the lock just for the in-memory swap and save.
+    # the lock covers only the in-memory swap and the save
     with workspace.lock:
         workspace.state["datasets"] = [entry for entry in workspace.state["datasets"] if entry["id"] != dataset_id] + [metadata]
         workspace.save()
@@ -897,3 +911,30 @@ def reconcile_downloads(workspace, stop=None, emit=None):
     removed = _read_state(tombstones, [])
     return [register_download(workspace, result, stop=stop, emit=emit) for result in list_downloads(workspace.root)
             if f"catalog_{result['catalog_id']}" not in removed]
+
+
+def refresh_downloads(workspace, stop=None, emit=None):
+    """Rebuild downloads converted by an older FORMAT_VERSION from their cached source, then re-index those already in the workspace.
+
+    Runs at app open, so it never fetches: a download whose source file is gone keeps its old conversion. A second run finds
+    every manifest current and does nothing. Returns the catalogue ids it rebuilt.
+    """
+    root, rebuilt = Path(workspace.root), []
+    for old in list_downloads(root):
+        catalog_id = old["catalog_id"]
+        if old.get("format_version") == FORMAT_VERSION:
+            continue
+        entry = _entry(catalog_id)
+        if not (root / "data" / "downloads" / catalog_id / Path(entry["filename"]).name).is_file():
+            continue
+        try:
+            result = download_dataset(catalog_id, root, stop=stop, emit=emit)
+            if workspace._dataset(f"catalog_{catalog_id}") is not None:
+                register_download(workspace, result, stop=stop, emit=emit)
+        except DownloadCancelled:
+            raise
+        except Exception as error:  # one broken or busy download must not stop the rest; it is retried at the next open
+            _log.warning("Could not refresh %s (%s).", catalog_id, error)
+            continue
+        rebuilt.append(catalog_id)
+    return rebuilt
