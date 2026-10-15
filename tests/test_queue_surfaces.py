@@ -18,12 +18,14 @@ def fake(**state):
 
 
 class Areas(unittest.TestCase):
-    def test_queue_and_data_are_rows_of_their_own(self):
+    def test_queue_and_resources_are_rows_of_their_own(self):
         names = dict(AREAS)
-        self.assertEqual((names["machine"], AREA_HOME["machine"]), ("This computer", "queue"))
-        self.assertEqual((names["data"], AREA_HOME["data"]), ("Your data", "your_data"))
-        self.assertLess([k for k, _ in AREAS].index("chat"), [k for k, _ in AREAS].index("machine"))
-        self.assertEqual((ROUTES["queue"].area, ROUTES["your_data"].area, ROUTES["make_data"].area), ("machine", "data", "data"))
+        self.assertEqual((names["queue"], AREA_HOME["queue"]), ("Queue", "queue"))
+        self.assertEqual((names["resources"], AREA_HOME["resources"]), ("Resources", "your_data"))
+        self.assertLess([k for k, _ in AREAS].index("chat"), [k for k, _ in AREAS].index("queue"))
+        self.assertEqual([ROUTES[r].area for r in ("queue", "your_data", "make_data", "storage")], ["queue", "resources", "resources", "resources"])
+        self.assertEqual(ROUTES["storage"].title, "Storage")
+        self.assertNotIn("This computer", names.values())
 
     def test_every_route_lights_a_row_and_every_row_opens_a_page_in_its_area(self):
         keys = [k for k, _ in AREAS]

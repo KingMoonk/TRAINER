@@ -55,7 +55,7 @@ BUILDER = {
     "add_catchup": "Add catch-up to the queue",
     "start_from_scratch": "Start from scratch instead",
     "queued": "QUEUED ON THIS COMPUTER",
-    "queued_text": '{new_version} is in the queue. The sidebar and "This computer" show where it is.',
+    "queued_text": '{new_version} is in the queue. The sidebar and "Queue" show where it is.',
     "move_to_front": "Move it to the front",
     "training": "{new_version} {status}",
     "training_text": "Version {current}'s run is paused and can resume. Chat switches to {new_version} only when it beats version {current} on held-back text, or when you pick it.",
@@ -182,7 +182,7 @@ COMPARE = {
 }
 
 QUEUE = {
-    "h1": "This computer",
+    "h1": "Queue",
     "lead": "What it's training now, what's waiting, and when it's allowed to work. Every \"Train\" or \"Run\" button in the app adds to this queue.",
     "now": "NOW",
     "now_status": "{version} · {what}",
@@ -220,9 +220,14 @@ QUEUE = {
     "keep_awake_desc": "Otherwise it pauses when the computer sleeps.",
     "chat_follows_best": "Chat follows the best checkpoint",
     "chat_follows_desc": "Chat uses the checkpoint with the lowest error on held-back text, not simply the newest.",
-    "answering_note": "Answering in Chat never stops training. It shares the computer, so training slows while it answers.",
-    "storage": "Storage",
-    "storage_desc": "History is run folders, checkpoints, saved versions, logs, exports and backups. Settings and chat ratings are never deleted.",
+    "answering_note": "Answering in Chat never stops training. It shares the computer, so training slows while it answers."
+}
+
+STORAGE = {
+    "h1": "Storage",
+    "lead": "What the app keeps on this computer's disk, and what you can delete to free space.",
+    "kicker": "STORAGE",
+    "desc": "History is run folders, checkpoints, saved versions, logs, exports and backups. Settings and chat ratings are never deleted.",
     "storage_older": "Older than {days} days",
     "storage_all": "All history",
     "storage_data": "Also delete my datasets and downloads",
@@ -844,6 +849,7 @@ MAKEDATA = {
 
 YOURDATA = {
     "h1": "Your data",
+    "storage_link": "Storage: free up disk space ›",
     "lead": "Three kinds, because each one trains a different stage.",
     "text_tab": "Text it reads",
     "text_used": "used by Pretraining",

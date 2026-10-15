@@ -18,9 +18,9 @@ from studio_ia.widgets import Progress, _activate
 Route = namedtuple("Route", "area title lead crumb")
 
 AREAS = [("designer", "Network designer"), ("pretraining", "Pretraining"), ("post", "Post-training"), ("chat", "Chat"),
-         ("machine", "This computer"), ("data", "Your data")]
-AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat", "machine": "queue", "data": "your_data"}
-UTILITY_AREAS = ("machine", "data")  # not stages of the pipeline: set off from the four above by a rule
+         ("queue", "Queue"), ("resources", "Resources")]
+AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat", "queue": "queue", "resources": "your_data"}
+UTILITY_AREAS = ("queue", "resources")  # not stages of the pipeline: set off from the four above by a rule
 LI = ("Network designer", "Look inside")
 NEXT_EVENTS = ("queue", "job", "blocked", "versions", "checkpoint", "data", "download_done", "import_done", "downloads_finished")  # what can change the Next row
 
@@ -29,7 +29,7 @@ ROUTES = {
     "builder": Route("designer", "Build your model", "Change the picture. See what it costs and what it does.", ()),
     "quicktest": Route("designer", "Quick test", "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real.", ("Network designer",)),
     "compare": Route("designer", "Compare runs", "Change one thing, hold the rest equal, run several seeds. A difference counts only if it is larger than the spread across seeds.", ("Network designer",)),
-    "queue": Route("machine", "This computer", "What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.", ()),
+    "queue": Route("queue", "Queue", "What it’s training now, what’s waiting, and when it’s allowed to work. Every “Train” or “Run” button in the app adds to this queue.", ()),
     "trace": Route("designer", "Trace a position", "Follow one position's stream through the model. Numbers appear when the engine has run your prompt.", (*LI, "Trace a position")),
     "head_zoom": Route("designer", "Inside a head", "One attention head, one step at a time, on a real prompt.", (*LI, "Inside a head")),
     "value_map": Route("designer", "Value map", "How a head's values are projected down and back up, and why the heads add up.", (*LI, "Value map")),
@@ -38,8 +38,9 @@ ROUTES = {
     "inside3d": Route("designer", "Inside the network", "Build the model from the inside and watch it train, from a window of positions down to single weights.", (*LI, "3D")),
     "pretraining": Route("pretraining", "Pretraining", "Feed it text. It learns by predicting the next word, over and over.", ()),
     "training_run": Route("pretraining", "Pretraining", "Step k of n, the schedule phase and the error so far.", ()),
-    "your_data": Route("data", "Your data", "Three kinds, because each one trains a different stage.", ()),
-    "make_data": Route("data", "Make extra data", "Optional. Generate more, then keep what passes review.", ()),
+    "your_data": Route("resources", "Your data", "Three kinds, because each one trains a different stage.", ()),
+    "make_data": Route("resources", "Make extra data", "Optional. Generate more, then keep what passes review.", ()),
+    "storage": Route("resources", "Storage", "What the app keeps on this computer's disk, and what you can delete to free space.", ()),
     "post_training": Route("post", "Post-training", "Four rounds, always in this order. Same design throughout; only the weights shift.", ()),
     "chat": Route("chat", "Chat", "Talk to any trained version. Compare two to see what a change really did.", ()),
 }
@@ -92,6 +93,8 @@ class Studio(tk.Tk):
         from studio_ia.pages.make_data import MakeDataPage
         from studio_ia.pages.your_data import YourDataPage
         self.factories["your_data"], self.factories["make_data"] = YourDataPage, MakeDataPage
+        from studio_ia.pages.storage import StoragePage
+        self.factories["storage"] = StoragePage
         self.route = None
         self._area_rows = {}
         self._build_sidebar()

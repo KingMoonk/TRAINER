@@ -1,4 +1,4 @@
-"""Queue page Storage card: the confirm dialog is patched; CI-only."""
+"""Storage page (Resources) and the Queue page's Up next list: the confirm dialog is patched; CI-only."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tkinter as tk
 import unittest
@@ -21,7 +21,7 @@ class StorageCardTest(unittest.TestCase):
         except tk.TclError as error:
             self.skipTest(f"no display: {error}")
         self.addCleanup(self.app.destroy)
-        self.page = self.app.show("queue")
+        self.page = self.app.show("storage")
         self.app.update()
 
     def test_delete_asks_then_cleans_default_30_days(self):
@@ -32,6 +32,18 @@ class StorageCardTest(unittest.TestCase):
         with mock.patch("tkinter.messagebox.askyesno", return_value=True):
             self.page._delete()
         self.assertEqual(self.fake.cleaned, (30, False))
+
+    def test_queue_page_has_no_storage_card(self):
+        page = self.app.show("queue")
+        self.app.update()
+        self.assertFalse(hasattr(page, "delete_btn"))
+
+    def test_your_data_links_to_storage(self):
+        self.app.show("your_data")
+        self.app.update()
+        self.app.pages["your_data"].navigate("storage")
+        self.app.update()
+        self.assertEqual(self.app.route, "storage")
 
 
 class UpNextTest(unittest.TestCase):

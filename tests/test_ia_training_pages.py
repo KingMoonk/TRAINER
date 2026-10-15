@@ -9,7 +9,8 @@ from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
 from studio_ia.pages.pretraining import collection_view, enough_text, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
-from studio_ia.pages.queue import size_text, storage_state, total_hours
+from studio_ia.pages.queue import total_hours
+from studio_ia.pages.storage import size_text, storage_state
 from studio_ia.pages.training_run import history_of, phase_at
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
 from studio_model import validate_config
