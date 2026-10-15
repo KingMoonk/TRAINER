@@ -204,6 +204,47 @@ class BandTest(unittest.TestCase):
             self.assertEqual(again.best_version().number, self.svc.best_version().number)
             self.assertEqual(again.gate_result(2)["diff"], self.svc.gate_result(2)["diff"])
 
+    def tk_thread(self, emitted):
+        """This test thread stands in for the Tk thread; emitted() runs for every event the services send."""
+        self.svc._ui_thread = threading.get_ident()
+        self.addCleanup(setattr, self.svc, "_ui_thread", None)
+        patch = mock.patch.object(self.svc, "emit", side_effect=emitted)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_on_the_tk_thread_missing_scores_are_made_by_a_worker_that_says_when_they_are_in(self):
+        import studio_eval
+        release, announced, scored_on = threading.Event(), threading.Event(), set()
+        real = studio_eval.score_docs
+
+        def slow(*args, **kwargs):
+            scored_on.add(threading.get_ident())
+            release.wait(30)
+            return real(*args, **kwargs)
+        self.tk_thread(lambda kind, payload=None: announced.set() if kind == "versions" else None)
+        with mock.patch("studio_eval.score_docs", side_effect=slow):
+            self.assertEqual(self.svc.best_version().number, 2)  # not scored yet: the stored numbers decide, and the launch goes on
+            self.assertIsNone(self.svc.gate_result(2))
+            self.assertFalse(list(self.scores.glob("*.npy")))
+            release.set()
+            self.assertTrue(announced.wait(30))
+        self.assertNotIn(threading.get_ident(), scored_on)
+        self.assertEqual(len(list(self.scores.glob("*.npy"))), 2)
+        with mock.patch("studio_eval.score_docs", side_effect=AssertionError("scored again")):
+            self.assertIsNotNone(self.svc.gate_result(2))  # what the "versions" event reads: weighed now, in place
+
+    def test_a_checkpoint_that_cannot_be_scored_is_not_tried_again_from_the_tk_thread(self):
+        announced = threading.Event()
+        self.tk_thread(lambda kind, payload=None: announced.set() if kind == "versions" else None)
+        with mock.patch("studio_eval.score_docs", side_effect=ValueError("broken")) as score, self.assertLogs("studio_ia.services", "ERROR"):
+            self.svc.best_version()
+            self.assertTrue(announced.wait(30))
+            calls = score.call_count
+            announced.clear()
+            self.svc.best_version()  # what the "versions" event makes the strip do
+            self.assertFalse(announced.wait(0.5))
+            self.assertEqual(score.call_count, calls)
+
     def test_a_changed_checkpoint_or_held_back_file_is_scored_again(self):
         self.svc.best_version()
         ckpt = self.svc.versions()[0].best_checkpoint
