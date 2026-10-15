@@ -2,11 +2,11 @@
 import unittest
 from datetime import datetime
 
-from studio_ia.pages.builder import queued_outlook
 from studio_ia.pages.post_training import round_outlook
-from studio_ia.services import FakeServices, Job, QueueState, if_added
+from studio_ia.pages.pretraining import queue_line
+from studio_ia.services import FakeServices, Job, QueueState, if_added, queued_outlook
 from studio_ia.shell import AREA_HOME, AREAS, ROUTES, UTILITY_AREAS
-from studio_queue import Gate
+from studio_queue import PASSIVE, Gate
 
 NIGHT = Gate("outside hours", datetime(2099, 1, 1, 22))
 
@@ -64,6 +64,14 @@ class OutlookText(unittest.TestCase):
         queued = Job("q", "post_round", "Round 2", params={"round": 2})
         self.assertEqual(round_outlook(fake(job=running, up_next=[queued]), 1, "queued"), "Starts after Version 3")
         self.assertEqual(round_outlook(fake(up_next=[queued]), 1, "queued"), "Starts now")
+
+    def test_pretraining_says_when_its_job_starts(self):
+        self.assertEqual(queue_line(fake(), None), "If you add it: starts now.")
+        mine, other = Job("mine", "pretrain", "Version 2 catch-up"), Job("other", "quicktest", "Quick test", eta_s=600.)
+        self.assertEqual(queue_line(fake(up_next=[other, mine]), "mine"), "Queued. Starts after Quick test (about 10 min).")
+        self.assertEqual(queue_line(fake(job=mine), "mine"), "Queued. Running now.")
+        self.assertEqual(queue_line(fake(up_next=[mine], gate=Gate(PASSIVE)), "mine"), "Queued. Waiting: passive training is running.")
+        self.assertEqual(queue_line(fake(job=other), "mine"), "If you add it: starts after Quick test.")  # it has run
 
     def test_move_to_the_front_starts_when_the_head_of_the_queue_would(self):
         running = Job("r", "pretrain", "Version 3", eta_s=None)

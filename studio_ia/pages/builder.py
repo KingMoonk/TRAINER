@@ -17,7 +17,7 @@ from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
-from studio_ia.services import Job, if_added, plain_error
+from studio_ia.services import Job, if_added, plain_error, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon, tip
 
@@ -242,13 +242,6 @@ def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
     return Job(job_id, "pretrain", f"Version {number} {'from scratch' if scratch else 'catch-up'}",
                params={"config": cfg_, "datasets": list(datasets), "mode": mode, "init_from": None if scratch else parent_checkpoint,
                        "output_dir": None, "user_text": False, "version": number})
-
-
-def queued_outlook(services, job_id):
-    """When the queued job `job_id` starts (services.queue_outlook), or "" once it has left the queue."""
-    q = services.queue()
-    job = next((j for j in [q.job, *q.up_next] if j is not None and j.id == job_id), None)
-    return services.queue_outlook(job) if job else ""
 
 
 def text_sets(summary):
