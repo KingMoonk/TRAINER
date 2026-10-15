@@ -103,6 +103,28 @@ class ServicesTest(unittest.TestCase):
         self.assertTrue(self.svc.inspect_logit_lens(None, "hello"))
 
 
+class WordListsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.svc = FixtureServices(self.tmp.name)
+        self.addCleanup(self.svc.close)
+        gpt2 = mock.patch.object(WorkspaceServices, "_gpt2", return_value=None)  # nothing is downloaded in a test
+        gpt2.start()
+        self.addCleanup(gpt2.stop)
+
+    def test_fitted_on_the_stored_text_and_kept_until_it_changes(self):
+        from studio_modules.tokenizer.word import WordTokenizer
+        empty = self.svc.word_lists()
+        self.assertEqual(empty["tokenizers"][1:], (None, None, None))
+        self.assertIs(self.svc.word_lists(), empty)
+        self.assertTrue(self.svc.add_data("text", {"text": "A kingfisher flashed past the old mill at dawn."}))
+        lists = self.svc.word_lists()
+        self.assertIsInstance(lists["tokenizers"][3], WordTokenizer)
+        self.assertIn(" kingfisher", lists["tokenizers"][3].lookup)
+        self.assertEqual(lists["sentence"], "A kingfisher flashed past the old mill at dawn.")
+
+
 class BandTest(unittest.TestCase):
     """Scoring the held-back text stays off the Tk thread: ready() says no for it, it is kept on disk, and one scored version needs none."""
 
