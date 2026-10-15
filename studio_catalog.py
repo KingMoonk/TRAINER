@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file, truthy, uid
+from studio_decontam import group_id
 
 _log = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ STARTER_IDS = ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1")
 def default_catalog_ids():
     """Ids downloaded by default (commercially usable, bounded), in catalogue/stage order."""
     return [entry["id"] for entry in CATALOG if entry.get("default")]
-FORMAT_VERSION = 3  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. Older converted files are rebuilt from the cached source
+FORMAT_VERSION = 4  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. Older converted files are rebuilt from the cached source
 MAX_DOWNLOAD_BYTES = 1_000_000_000
 MAX_RECORD_CHARS = 16_000_000
 _DOWNLOAD_LOCK = threading.Lock()
@@ -519,7 +520,7 @@ def convert_record(raw, entry):
             value["input"] = ""
         yield {**value, "intent": "coding"}
     elif parser == "gsm":
-        yield {"user": raw["question"], "assistant": raw["answer"], "intent": "math_reasoning"}
+        yield {"user": raw["question"], "assistant": raw["answer"], "intent": "math_reasoning", "groupId": group_id(raw["question"])}
     elif parser == "story":
         yield {"text": raw["text"], "intent": "story"}
     elif parser == "wikitext":
@@ -534,8 +535,9 @@ def convert_record(raw, entry):
                "groupId": "no_robots:" + str(raw.get("prompt_id", ""))}
     elif parser == "metamath":
         query, response = str(raw.get("query") or "").strip(), str(raw.get("response") or "").strip()
-        if query and response:
-            yield {"user": query, "assistant": response, "intent": "math_reasoning", "metadata": {"type": raw.get("type", "")}}
+        if query and response:  # a rewrite shares its GSM8K / MATH source question's group, so the two stay on one side of a split
+            yield {"user": query, "assistant": response, "intent": "math_reasoning", "metadata": {"type": raw.get("type", "")},
+                   "groupId": group_id(raw.get("original_question") or query)}
     elif parser == "mbpp":
         tests = [str(test).strip() for test in raw.get("test_list") or [] if str(test).strip()]
         prompt = str(raw["text"]).strip() + ("\n\nYour code must pass these tests:\n" + "\n".join(tests) if tests else "")
@@ -617,10 +619,11 @@ def _number_key(text):
     return str(int(value)) if value == int(value) else repr(value)
 
 
-def _keyed(prompt, answer, rule, key, intent, source_id=""):
+def _keyed(prompt, answer, rule, key, intent, source_id="", group=""):
     """A problem row: the key text is the stored answer; rule and key travel in metadata, which normalize keeps."""
-    return {"user": prompt, "assistant": answer, "intent": intent, "sourceId": source_id,
-            "metadata": {"rule": rule, "params": {"answer": key}}}
+    row = {"user": prompt, "assistant": answer, "intent": intent, "sourceId": source_id,
+           "metadata": {"rule": rule, "params": {"answer": key}}}
+    return {**row, "groupId": group} if group else row
 
 
 def _capitalised(text):
@@ -648,7 +651,7 @@ def _checkable(raw, parser):
     if parser == "gsm_check":
         key = _number_key(str(raw.get("answer", "")).rpartition("####")[2])
         question = str(raw.get("question") or "").strip()
-        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem") if key and question else None
+        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem", group=group_id(question)) if key and question else None
     if parser == "svamp_check":
         key = _number_key(raw.get("Answer"))
         question = str(raw.get("question_concat") or f"{raw.get('Body', '')} {raw.get('Question', '')}").strip()
@@ -656,7 +659,8 @@ def _checkable(raw, parser):
     if parser == "metamath_check":
         query, response = str(raw.get("query") or "").strip(), str(raw.get("response") or "")
         key = _number_key(response.rpartition("The answer is:")[2]) if "The answer is:" in response else None
-        return _keyed(query + NUMBER_ASK, key, "final_number", key, "math_problem") if key and query else None
+        return (_keyed(query + NUMBER_ASK, key, "final_number", key, "math_problem", group=group_id(raw.get("original_question") or query))
+                if key and query else None)
     if parser == "aqua_check":
         options = [re.sub(r"^\s*[A-E]\s*\)\s*", "", str(o)).strip() for o in raw.get("options") or []]
         key = str(raw.get("correct") or "").strip().upper()

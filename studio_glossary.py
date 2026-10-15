@@ -14,7 +14,7 @@ GLOSSARY = {
     "import_format": ("Importing files", "Each example needs a question and an answer. JSONL: one line per example like {\"user\": \"...\", \"assistant\": \"...\"}. CSV or TSV: columns named user and assistant (or prompt and response). TXT: plain text, one document per file or blank-line separated. Exact duplicates are skipped."),
     "duplicates": ("Duplicates", "Examples that are exactly the same as another one. They waste training time, so they are skipped automatically."),
     "provenance": ("Provenance", "The record of where an example came from (which download, which generator, which helper model), so you can always trace it."),
-    "mixture": ("Mixture", "Training on several datasets at once, like a diet with several food groups. The weights say how much of each to include."),
+    "mixture": ("Mixture", "Training on several datasets at once, like a diet with several food groups. The weights say how much of each to include; by default a dataset counts for the square root of its size, so big ones do not drown out small ones."),
     "record_budget": ("Record budget", "The most examples used for one training run. A smaller budget means faster preparation; 10,000 is plenty for a first try."),
     "balance": ("Balance by", "How to share the budget between datasets. 'tokens' gives each dataset an equal amount of text so a dataset with very long answers does not take over. 'records' splits by number of examples."),
     "reviewed_only": ("Reviewed examples only", "Train only on examples marked Good. Safer, but you need to have reviewed some first."),
@@ -58,7 +58,7 @@ GLOSSARY = {
     "step": ("Step", "One adjustment of the model. The step counter shows progress through the run."),
     "run": ("Run", "One training session and everything it saved: checkpoints, the loss history and a copy of the data used."),
     "resume": ("Resume", "Continue training a saved checkpoint for more steps instead of starting over from random numbers."),
-    "curriculum": ("Sequential training (curriculum)", "Teaching in stages like school: easy language first, then instructions, code, reasoning. After each stage the model is re-tested on earlier ones to see what it forgot."),
+    "curriculum": ("Sequential training (curriculum)", "Teaching in stages like school: reading text first (that is where facts are learned), then instructions, code, reasoning, with earlier material replayed along the way. One learning-rate curve spans all stages. After each stage the model is re-tested on earlier ones to see what it forgot."),
     "replay": ("Replay earlier data", "Mixing a little of the old lessons into each new stage so the model does not forget them."),
     "forgetting": ("Forgetting", "When learning something new makes the model worse at something it learned before."),
     # ---- chat
