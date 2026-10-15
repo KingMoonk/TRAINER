@@ -126,7 +126,8 @@ ATTRIBUTION = {  # what the last change in blocks did, for Build your model (stu
     "unfair": "{move}. That is not a fair comparison: {why}.",
     "also": "also changed: {names}",
     "unchecked": "could not check: {names}",
-    "compare": "in a matched Compare run of {seeds} seeds, {move}.",
+    "compare": "in a matched Compare run of {seeds}, {move}.",
+    "checking": "{move}; checking what else changed…",
     "inside": " That is within the spread across seeds, so it could be luck.",
 }
 

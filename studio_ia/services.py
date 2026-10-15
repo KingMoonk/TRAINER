@@ -209,11 +209,11 @@ class Services:
 
     def run_facts(self, number):
         """What version `number`'s training run did, to tell whether two versions are a fair comparison:
-        {data, steps, tokens, start, lr, extra}, or {} when the run is not on this computer."""
+        {data, steps, tokens, start, lr, extra} (a fact the files do not give is left out), or {} when the run is not on this computer."""
         return {}
 
     def compare_runs(self):
-        """The saved Compare runs: [{base, variants, mode, results}] (specs as saved, results.json of each)."""
+        """The saved Compare runs: [{base, variants, mode, results, finished}] (specs as saved, results.json of each and its time)."""
         return []
 
     def save_version(self, spec, change_text):
@@ -1034,28 +1034,71 @@ class WorkspaceServices(Services):
             self._cache[key] = digest.hexdigest()
         return self._cache[key]
 
+    @staticmethod
+    def _file_stamp(path):
+        """(size, modified time) of a file, or None when it cannot be read."""
+        try:
+            stat = Path(path).stat()
+        except OSError:
+            return None
+        return stat.st_size, stat.st_mtime_ns
+
     def run_facts(self, number):
+        """What version `number`'s last run did. A fact the files do not give is left out, never guessed: the caller reads a
+        missing key as unknown. Read once per change of the run's files; the first read hashes the whole data file, so call
+        it off the Tk thread."""
         try:
             runs = self.store.get(number)["runs"]
             run = Path(self._abs(runs[-1]))
-            record = json.loads((run / "run.json").read_text(encoding="utf-8"))
-            config = json.loads((run / "config.json").read_text(encoding="utf-8"))
-            data = self._file_hash(run / "dataset.jsonl")
-        except (KeyError, IndexError, OSError, ValueError, TypeError):
+            files = (run / "run.json", run / "config.json", run / "dataset.jsonl", self.root / "data" / "post_training.json")
+            stamp = tuple(self._file_stamp(f) for f in files)
+            if None in stamp[:3]:
+                return {}
+            key = ("facts", str(run), number)
+            kept = self._cache.get(key)
+            if kept and kept[0] == stamp:
+                return dict(kept[1])
+            record = json.loads(files[0].read_text(encoding="utf-8"))
+            config = json.loads(files[1].read_text(encoding="utf-8"))
+            if not isinstance(record, dict) or not isinstance(config, dict):
+                return {}
+            facts = dict(data=self._file_hash(files[2]))
+        except (KeyError, IndexError, OSError, ValueError, TypeError, AttributeError):
             return {}
-        return dict(data=data, steps=record.get("step"), tokens=record.get("trained_tokens"), lr=config.get("learning_rate"),
-                    start=record.get("initialized_from") or record.get("resumed_from"),
-                    extra=any(r.get("ok") for r in self._json("post_training.json", {}).get(str(number), {}).values()))  # a passed round moved the weights
+        for name, value in (("steps", record.get("step")), ("tokens", record.get("trained_tokens")), ("lr", config.get("learning_rate"))):
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                facts[name] = value
+        if "initialized_from" in record or "resumed_from" in record:  # None here is a run from scratch; absent is unknown
+            facts["start"] = record.get("initialized_from") or record.get("resumed_from")
+        try:
+            facts["extra"] = any(r.get("ok") for r in self._json("post_training.json", {}).get(str(number), {}).values())  # a passed round moved the weights
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        self._cache[key] = (stamp, facts)
+        return dict(facts)
 
     def compare_runs(self):
         out = []
         for folder in sorted(Path(self.workspace.run_dir).glob("compare_*")):
-            try:
-                experiment = json.loads((folder / "experiment.json").read_text(encoding="utf-8"))
-                results = json.loads((folder / "results.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            files = (folder / "experiment.json", folder / "results.json")
+            stamp = tuple(self._file_stamp(f) for f in files)
+            if None in stamp:
                 continue
-            out.append(dict(base=experiment["base"], variants=experiment.get("variants") or [], mode=experiment.get("mode"), results=results))
+            key = ("compare", str(folder))
+            kept = self._cache.get(key)
+            if not kept or kept[0] != stamp:
+                try:
+                    experiment, results = (json.loads(f.read_text(encoding="utf-8")) for f in files)
+                    variants = experiment.get("variants") or []
+                    row = dict(base=experiment["base"], variants=variants, mode=experiment.get("mode"), results=results,
+                               finished=stamp[1][1])
+                    if not (isinstance(row["base"], dict) and isinstance(variants, list) and isinstance(results, dict)):
+                        row = None
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                    row = None
+                kept = self._cache[key] = (stamp, row)
+            if kept[1] is not None:
+                out.append(kept[1])
         return out
 
     def _as_version(self, version):
