@@ -5,7 +5,7 @@ import unittest
 from tkinter import ttk
 
 from studio_data_kinds import DataSummary
-from studio_spec import default_spec
+from studio_spec import block_at, default_spec
 from studio_versions import spec_diff
 from studio_warmstart import NOTES
 from studio_ia.copy import EXPECTATION
@@ -175,13 +175,63 @@ class BuilderTest(unittest.TestCase):
 
     def test_cost_say_matches_formulas(self):
         self.page.edit(L=4)
-        d, t = 64, 256
-        a, b = (B.cfg(dict(L=n, H=4, W=1, V=0, d=d, T=t)) for n in (2, 4))
-        self.assertEqual(self.page.cost_say[B.T["size_label"]], B.say(B.P(a), B.P(b), "bigger", "smaller"))
-        self.assertEqual(self.page.cost_say[B.T["time_per_step"]], f"about {B.C_(b) / B.C_(a):.1f}× slower")
-        self.assertEqual(self.page.cost_say[B.T["memory_while_training"]], f"about {B.TM(b) / B.TM(a):.1f}× more")
+        a, b = (B.sizes(B.write_spec(default_spec(), dict(self.page.cur, L=n)), 0) for n in (2, 4))
+        self.assertEqual(self.page.cost_say[B.T["size_label"]], B.say(a["params"], b["params"], "bigger", "smaller"))
+        self.assertEqual(self.page.cost_say[B.T["time_per_step"]], B.say(a["time"], b["time"], "slower", "faster"))
+        self.assertEqual(self.page.cost_say[B.T["memory_while_training"]], B.say(a["memory"], b["memory"], "more", "less"))
         self.page.discard()
         self.assertEqual(set(self.page.cost_say.values()), {"about the same"})
+
+    def test_tower_shows_the_parts_and_a_block_opens_to_its_sub_layers(self):
+        shown = texts(self.page)
+        for key in ("part_head", "final_norm", "part_position", "part_embedding"):
+            self.assertIn(B.T[key], shown)
+        self.assertEqual([(slot, mb.cget("text")) for mb, _, slot, _ in self.page.pickers],
+                         [(slot, B.module_name(slot, self.page.cur["M"][slot])) for slot in ("head", "position", "embedding")])
+        self.page.toggle(0)
+        self.app.update()
+        detail = texts(self.page.block_rows[0][8])
+        parts = (B.T["part_norm"], B.T["part_mixer"], B.T["part_channel"])
+        self.assertEqual([t for t in detail if t in parts], [B.T["part_channel"], B.T["part_norm"], B.T["part_mixer"], B.T["part_norm"]])
+        self.assertEqual(detail.count(f"⊕ {B.T['add_back']}"), 2)
+        self.page.toggle(0)
+        self.assertEqual(texts(self.page.block_rows[0][8]), [])
+
+    def test_one_block_gets_its_own_look_back(self):
+        self.page.toggle(1)
+        self.page.set_scope(1, True)
+        self.page.pick("mixer", "gru", 1)
+        self.app.update()
+        self.assertEqual(self.page.chip_texts, ["block 2 look back: GRU"])
+        row = self.page.block_rows[1]
+        self.assertEqual(row[0].cget("highlightbackground"), B.C["violet"])  # overridden blocks stand out
+        self.assertEqual(row[2].cget("text"), "")  # a GRU has no heads
+        self.assertIn(B.T["only_here"], texts(row[8]))
+        self.assertEqual(self.page.block_rows[0][2].cget("text"), "●" * 4)
+        self.page.save()
+        self.assertEqual(block_at(self.fake.versions()[1].spec, 1)["mixer"]["id"], "gru")
+        self.assertEqual(block_at(self.fake.versions()[1].spec, 0)["mixer"]["id"], "attention")
+
+    def test_menu_greys_out_what_cannot_work_and_picks_the_rest(self):
+        self.page.pick("mixer", "gru")
+        mb = self.page.pickers[1][0]  # position
+        menu = mb.nametowidget(mb.cget("menu"))
+        menu.tk.eval(menu.cget("postcommand"))
+        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)]
+        rope = next(i for i, label in enumerate(labels) if label.startswith(B.module_name("position", "rope")))
+        self.assertIn(B.T["wont_fit"], labels[rope])
+        self.assertEqual(menu.entrycget(rope, "state"), "disabled")
+        menu.invoke(labels.index(B.module_name("position", "none")))
+        self.assertEqual(self.page.draft["M"]["position"], "none")
+        self.assertEqual(mb.cget("text"), B.module_name("position", "none"))
+
+    def test_heads_knob_does_nothing_for_a_look_back_without_heads(self):
+        self.page.pick("mixer", "gru")
+        self.page.knob("H", 8)
+        self.assertEqual(self.page.draft["H"], 4)
+        self.assertEqual(self.page.knob_notes["H"].cget("text"), B.T["no_heads"])
+        self.assertEqual(self.page.chip_texts, ["look back: GRU"])
+        self.assertEqual(self.page.warm["kind"], "other")
 
     def test_last_change_sentence_only_with_history(self):
         self.page.edit(L=4)
