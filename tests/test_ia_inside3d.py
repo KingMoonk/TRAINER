@@ -100,6 +100,55 @@ class Inside3DLogic(unittest.TestCase):
             self.assertIn("not saved", text)
         self.assertEqual(len(svc.versions()), 1)
 
+    def test_load_snapshots_reply(self):
+        svc = FakeServices()
+        message, text = p.replay_reply(svc)  # no version yet
+        self.assertEqual(message, {"type": "notice", "message": copy.INSIDE3D["no_version_snapshots"]})
+        self.assertEqual(text, message["message"])
+        self._version(svc)
+        message, text = p.replay_reply(svc)
+        self.assertEqual(message["type"], "notice")
+        self.assertIn("no training snapshots", text)
+        svc.snapshot_paths = ["a.npz", "b.npz"]
+        message, text = p.replay_reply(svc)
+        self.assertEqual(message, {"type": "replay", "paths": ["a.npz", "b.npz"]})
+        self.assertIn("2 training snapshots", text)
+
+    def test_run_one_real_step_reply(self):
+        svc = FakeServices()
+        message, text = p.probe_reply(svc)  # no version: nothing runs
+        self.assertEqual(message, {"type": "error", "message": copy.INSIDE3D["probe_no_checkpoint"]})
+        self.assertEqual(svc.viewer_log, [])
+        self._version(svc)
+        message, text = p.probe_reply(svc)  # a version without a checkpoint
+        self.assertEqual(message["type"], "error")
+        self.assertEqual(svc.viewer_log, [("probe", copy.INSIDE3D["probe_text"])])
+        svc.probe_path = "probe.npz"
+        message, text = p.probe_reply(svc)
+        self.assertEqual(message, {"type": "snapshot", "path": "probe.npz"})
+        self.assertIn("version 1", text)
+
+        class Failing(FakeServices):
+            def viewer_probe_step(self, text):
+                raise ValueError("out of memory")
+        failing = Failing()
+        self._version(failing)
+        message, text = p.probe_reply(failing)
+        self.assertEqual(message, {"type": "error", "message": text})
+        self.assertIn("out of memory", text)
+
+    def test_page_follows_the_viewer(self):
+        scene = p.SceneState()
+        self.assertTrue(p.follow_viewer(scene, {"type": "select", "block_id": "blk_000002", "index": 2}))
+        self.assertEqual(scene.block, 3)
+        self.assertTrue(p.follow_viewer(scene, {"type": "scene", "level": "Head", "mode": "Ride a token"}))
+        self.assertEqual((scene.level, scene.mode), ("head", "ride"))
+        # Model is not on the board: the board keeps its zoom, and nothing changed
+        self.assertFalse(p.follow_viewer(scene, {"type": "scene", "level": "Model", "mode": "Ride a token"}))
+        self.assertEqual(scene.level, "head")
+        self.assertFalse(p.follow_viewer(scene, {"type": "select", "index": "2"}))
+        self.assertFalse(p.follow_viewer(scene, {"type": "closed"}))
+
     def test_train_events_become_compact_stats(self):
         self.assertEqual(p.stats_message({"job": "j", "step": 5, "total": 9, "loss": 1.5, "lr": 1e-3, "tokens_per_second": 900, "extra": 1}),
                          {"type": "stats", "step": 5, "total": 9, "loss": 1.5, "lr": 1e-3, "tokens_per_second": 900})
