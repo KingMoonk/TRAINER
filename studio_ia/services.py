@@ -141,6 +141,8 @@ class Services:
         self._subscribers: list[Callable[[str, Any], None]] = []
         self._ui = None  # a Tk widget; set by the shell so events hop onto the Tk thread
         self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
+        from studio_ia.snapshots import Snapshots
+        self.snapshots = Snapshots(self)  # what the Tk thread reads instead of calling slow services; inert until the shell starts it
 
     # events ---------------------------------------------------------------
     def bind_ui(self, widget):
@@ -2153,6 +2155,8 @@ class WorkspaceServices(Services):
             docs = self._heldout()
             if not docs:
                 return None
+            from studio_backend import cap_threads
+            cap_threads()  # a snapshot worker scores here too, not only _score_later: leave cores for Tk and training
             scores = np.array(studio_eval.score_docs(ckpt, docs), dtype=np.float64)
             with self._lock:
                 folder.mkdir(parents=True, exist_ok=True)
