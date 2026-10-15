@@ -7,7 +7,7 @@ from tkinter import ttk
 
 C = dict(
     bg="#0e1014", panel="#15181e", panel2="#1b1f27", border="#2a2f3a", border2="#20242c",
-    text="#e6e8ec", text2="#c3c8d1", muted="#8f97a6", dim="#5b6271",
+    text="#e6e8ec", text2="#c3c8d1", muted="#8f97a6", dim="#7f879a",
     violet="#9f8cff", amber="#e5b567", coral="#ef8a7a", blue="#6cb4ee", pink="#e58fb0", sage="#9fd36b",
     amber_bg="#211c12", coral_bg="#26171a", blue_bg="#121a22", violet_bg="#1a1730",
 )
@@ -26,10 +26,12 @@ STATES = {
 GUTTER = 16
 SIDEBAR_W = 220
 BUTTON_H = 44
+MIN_FONT = 12
 
 
 def font(size=15, bold=False, mono=False, serif=False):
-    """Font tuple with the size in pixels (negative size = pixels in Tk)."""
+    """Font tuple with the size in pixels (negative size = pixels in Tk). Never below MIN_FONT."""
+    size = max(size, MIN_FONT)
     if mono:
         family = tkfont.nametofont("TkFixedFont").actual("family")
     elif serif:
@@ -59,7 +61,17 @@ def apply(root):
     style.map("TButton", background=[("active", C["border"]), ("focus", C["border"])], bordercolor=[("focus", C["violet"])])
     # Primary buttons are at least 44px tall: 15px text + 2 * 14px padding + border.
     style.configure("Primary.TButton", background=C["violet"], foreground=C["bg"], padding=(20, 14), font=font(15, bold=True))
-    style.map("Primary.TButton", background=[("active", "#b3a4ff"), ("focus", "#b3a4ff")], foreground=[("disabled", C["dim"])])
+    style.map("Primary.TButton", background=[("disabled", C["panel2"]), ("active", "#b3a4ff"), ("focus", "#b3a4ff")], foreground=[("disabled", C["muted"])])
+    style.configure("TCombobox", fieldbackground=C["panel2"], background=C["panel2"], foreground=C["text"],
+                    arrowcolor=C["muted"], selectbackground=C["panel2"], selectforeground=C["text"])
+    style.map("TCombobox", fieldbackground=[("readonly", C["panel2"]), ("disabled", C["panel"])],
+              foreground=[("readonly", C["text"]), ("disabled", C["muted"])], bordercolor=[("focus", C["violet"])],
+              arrowcolor=[("disabled", C["dim"])])
+    # The dropdown list is a plain Tk listbox, so it is themed through the option database.
+    root.option_add("*TCombobox*Listbox.background", C["panel2"])
+    root.option_add("*TCombobox*Listbox.foreground", C["text"])
+    root.option_add("*TCombobox*Listbox.selectBackground", C["violet"])
+    root.option_add("*TCombobox*Listbox.selectForeground", C["bg"])
     style.configure("Vertical.TScrollbar", background=C["panel2"], arrowcolor=C["muted"])
     style.configure("TProgressbar", background=C["violet"], troughcolor=C["panel2"])
     return style

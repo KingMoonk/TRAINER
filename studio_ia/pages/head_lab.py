@@ -12,7 +12,7 @@ from studio_ia.copy import HEAD_LAB
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, current, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, button
+from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, _activate, button
 
 TESTS = (("previous", "previous_word", "previous_desc"), ("first", "parks_first", "parks_desc"), ("induction", "copying_pattern", "copying_desc"))
 THRESHOLD = .5  # a share of attention above this counts as "passes"; a description of where it looks, not a verdict
@@ -118,8 +118,7 @@ class HeadLabPage(Page):
         tk_label(how.body, HEAD_LAB["mean_exact"], 13, "muted", "bg", wraplength=760).pack(anchor="w", pady=2)
         link = tk_label(how.body, HEAD_LAB["step_through"] + " ›", 13, "violet", "bg", cursor="hand2", takefocus=1)
         link.pack(anchor="w", pady=2)
-        for seq in ("<Button-1>", "<Return>", "<space>"):
-            link.bind(seq, lambda _e: self._open_zoom())
+        _activate(link, self._open_zoom)
 
     def _open_zoom(self):
         page = self.navigate("head_zoom")
@@ -151,10 +150,9 @@ class HeadLabPage(Page):
         tk_label(frame, f"Head {h + 1}", 12, "text", "panel2" if on else "bg").pack(anchor="w")
         tk_label(frame, sub, 11, color, "panel2" if on else "bg").pack(anchor="w")
         self.tiles[key] = frame
-        for w in (frame, *frame.winfo_children()):
+        _activate(frame, lambda k=key: self._pick(k))
+        for w in frame.winfo_children():
             w.bind("<Button-1>", lambda _e, k=key: self._pick(k))
-        frame.bind("<Return>", lambda _e, k=key: self._pick(k))
-        frame.bind("<space>", lambda _e, k=key: self._pick(k))
 
     def _pick(self, key):
         self.sel = key
