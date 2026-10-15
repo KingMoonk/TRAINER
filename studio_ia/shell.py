@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import gc
+import threading
 import tkinter as tk
 import traceback
 from collections import namedtuple
+from pathlib import Path
 from tkinter import ttk
 
+import studio_ui_guard as ui_guard
 from studio_timing import timed
 from studio_ux import format_duration
 from studio_ia import services as services_module
@@ -78,6 +81,7 @@ class Studio(tk.Tk):
         apply(self)
         self.services = services or services_module.FakeServices()
         self.services.bind_ui(self)
+        self._watch_stalls()
         self.pages: dict[str, Page] = {}
         self.factories: dict[str, type] = {}  # route -> Page subclass; page builders register here
         from studio_ia.pages.builder import BuilderPage
@@ -393,6 +397,21 @@ class Studio(tk.Tk):
         self.services.pump()  # events the queue runner and other workers emitted, delivered here on the Tk thread
         self._pump_id = self.after(50, self._pump)
 
+    def _watch_stalls(self):
+        """The Tk loop beats every 100 ms; a daemon thread writes logs/ui-stalls.log, with the Tk thread's stack, when it stops beating."""
+        self._stalls = None
+        if not ui_guard.stalls_enabled():
+            return
+        from studio_core import ROOT
+        root = getattr(self.services, "root", None) or ROOT
+        self._stalls = ui_guard.StallWatch(Path(root) / "logs" / "ui-stalls.log", threading.get_ident(), hold=threads.hold_until_settled)
+        self._beat()
+        self._stalls.start()
+
+    def _beat(self):
+        self._stalls.beat()
+        self._beat_id = self.after(100, self._beat)
+
     def _settle(self):
         threads.settle()  # page and download threads that finished give the collector back, here on the Tk thread
         self._settle_id = self.after(250, self._settle)
@@ -409,6 +428,10 @@ class Studio(tk.Tk):
             self.pages[self.route].on_event(kind, payload)
 
     def destroy(self):
+        if self._stalls is not None:
+            self._stalls.stop()
+            self.after_cancel(self._beat_id)
+        ui_guard.unbind(self.services._ui_thread)
         for lane in self.lanes.values():
             lane.stop()
         threads.detach()

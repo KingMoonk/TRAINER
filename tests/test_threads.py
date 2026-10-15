@@ -132,6 +132,7 @@ class ThreadsTest(unittest.TestCase):
 
     def test_events_from_a_worker_never_touch_tk(self):
         """A worker's emit only queues: the Tk thread delivers it in pump(), so a destroyed app is never called from a worker."""
+        import studio_ui_guard
         from studio_ia.services import FakeServices
 
         class Widget:
@@ -142,6 +143,7 @@ class ThreadsTest(unittest.TestCase):
         calls, got = [], []
         services = FakeServices()
         services.bind_ui(Widget())
+        self.addCleanup(studio_ui_guard.unbind, services._ui_thread)  # this thread is not the Tk thread of the tests that follow
         services.subscribe(lambda kind, payload: got.append((kind, payload)))
         worker = threading.Thread(target=lambda: (services.emit("a", 1), services.emit("b", 2)))
         worker.start()

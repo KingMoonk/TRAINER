@@ -11,6 +11,7 @@ import zlib
 from array import array
 from dataclasses import dataclass, field, replace
 
+from studio_ui_guard import slow
 import studio_core
 from studio_rules import LABELS
 
@@ -24,6 +25,12 @@ PERMS = [(2 * i * 2654435761 + 1, 40503 * i + 7) for i in range(1, 17)]   # 16 m
 BUCKET_CAP = 8                # compare a document with at most this many earlier ones per band
 TEXT_CAP = 5000               # characters per document that feed the shingles
 NO_KEY = "(no answer key: the rule decides)"
+
+
+def _large(workspace):
+    """Whether reading this workspace is long (a stand-in with no is_small() is not)."""
+    small = getattr(workspace, "is_small", None)
+    return small is not None and not small()
 
 
 def rule_of(example):
@@ -266,6 +273,7 @@ def _status(kind, example, duplicate):
     return "Review" if quality == "Review" else "Ready"
 
 
+@slow("scan every dataset", when=lambda workspace, *args, **kwargs: _large(workspace))
 def scan(workspace, scan_limit=20000, dataset_ids=None, progress=None):
     """One pass over the workspace for all three kinds: ({kind: DataSummary without rows}, {kind: the first
     `scan_limit` (example, dataset name)}). progress(text, fraction) is told what is being read.
@@ -350,6 +358,7 @@ def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=()):
     return [row for *_, row in found[:limit]], (found[limit - 1][:2] if more else None)
 
 
+@slow("scan every dataset", when=lambda workspace, *args, **kwargs: _large(workspace))
 def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_ids=None, scanned=None, progress=None):
     """Counts, sets and up to `limit` sample rows of one kind. Near-duplicates are looked for in the first
     `scan_limit` examples of the kind only (bounded cost). `scanned` reuses an earlier scan() instead of reading again."""
@@ -391,6 +400,7 @@ def budgets(datasets, entries, scan_limit):
         yield dataset, entry, take
 
 
+@slow("scan a dataset", when=lambda workspace, *args, **kwargs: _large(workspace))
 def dataset_entry(workspace, dataset, scan_limit, progress=None):
     """{kind_counts, chars, holdout, rules, example, limit, kept, rows} for one dataset: counts of everything in it, and for
     its first `scan_limit` examples of each kind a row [id, a, b, status, can, signature] in `rows` (`kept` says how many)."""
@@ -412,6 +422,7 @@ def dataset_entry(workspace, dataset, scan_limit, progress=None):
     return entry
 
 
+@slow("scan every dataset", when=lambda workspace, *args, **kwargs: _large(workspace))
 def refresh(workspace, cached, scan_limit=20000, rescan_all=False, progress=None):
     """Bring per-dataset entries up to date: ({dataset_id: entry}, [ids read again]). `cached` entries are kept while their
     dataset's `rev` is the entry's and they hold the rows the budget asks of them; the rest are read with scan(dataset_ids=[id])

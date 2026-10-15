@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+import studio_ui_guard as ui_guard
 from studio_timing import timed
 from studio_versions import NoCheckpoint
 
@@ -27,6 +28,7 @@ class Version:
     best_checkpoint: str | None = None
     scorecard: dict = field(default_factory=dict)
     verdict: str = ""
+    prediction: dict = field(default_factory=dict)  # the guess made on saving: {"error": "lower", "step": "slower", "memory": "more"}
 
 
 @dataclass
@@ -143,6 +145,10 @@ class Services:
     # events ---------------------------------------------------------------
     def bind_ui(self, widget):
         self._ui, self._ui_thread = widget, threading.get_ident()
+        ui_guard.bind(self._ui_thread)  # the @slow primitives read it: one running on this thread is a freeze
+
+    def on_ui_thread(self):
+        return self._ui_thread is not None and threading.get_ident() == self._ui_thread
 
     def subscribe(self, callback):
         """callback(kind, payload) runs on the Tk thread. Returns an unsubscribe function."""
@@ -157,7 +163,7 @@ class Services:
                 callback(kind, payload)
         if self._ui is None:
             deliver()
-        elif threading.get_ident() == self._ui_thread:
+        elif self.on_ui_thread():
             self._ui.after(0, deliver)
         else:
             self._events.put((kind, payload))
@@ -216,7 +222,12 @@ class Services:
         """The saved Compare runs: [{base, variants, mode, results, finished}] (specs as saved, results.json of each and its time)."""
         return []
 
-    def save_version(self, spec, change_text):
+    def run_speed(self, number):
+        """Measured seconds per training step of version `number`'s last run, or None when it has not logged one here."""
+        return None
+
+    def save_version(self, spec, change_text, prediction=None):
+        """prediction: what the person guessed the change would do ({dimension: direction}), stored with the version."""
         raise NotImplementedError
 
     # queue (S2) -----------------------------------------------------------
@@ -434,6 +445,10 @@ class Services:
     def run_curve(self, run_dir):
         raise NotImplementedError
 
+    def run_phases(self, run_dir):
+        """[(from_step, to_step, name)] of the run's schedule, from its spec alone: cheap, so the Tk thread may ask it."""
+        raise NotImplementedError
+
     def chat(self, version, messages, on_text, stop, ablate=None):
         """ablate: optional [(block, head), ...] mean-ablated for this reply only."""
         raise NotImplementedError
@@ -587,8 +602,9 @@ class FakeServices(Services):
         done = [v for v in self._versions if v.best_checkpoint]
         return done[-1] if done else None
 
-    def save_version(self, spec, change_text):
-        v = Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", change_text, spec=spec, status="saved")
+    def save_version(self, spec, change_text, prediction=None):
+        v = Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", change_text, spec=spec, status="saved",
+                    prediction=dict(prediction or {}))
         self._versions.append(v)
         self.emit("versions", v)
         return v
@@ -810,6 +826,9 @@ class FakeServices(Services):
     def run_curve(self, run_dir):
         return {"steps": [], "smooth": [], "heldout": [], "lr": [], "phases": [], "total": 0}
 
+    def run_phases(self, run_dir):
+        return []
+
     def chat(self, version, messages, on_text, stop, ablate=None):
         return f"[reply with {len(ablate)} heads off]" if ablate else "[reply]"
 
@@ -1012,6 +1031,8 @@ class WorkspaceServices(Services):
         return self
 
     def close(self):
+        if self._ui_thread is not None:
+            ui_guard.unbind(self._ui_thread)
         if getattr(self, "_viz", None) is not None:
             self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
@@ -1155,6 +1176,35 @@ class WorkspaceServices(Services):
         self._cache[key] = (stamp, facts)
         return dict(facts)
 
+    def run_speed(self, number):
+        """Seconds per step of version `number`'s last run: word pieces per step (the growth in trained tokens over the growth
+        in steps between the first and last rows that log both) over the median measured pieces per second. Read once per change of metrics.jsonl; call it off the
+        Tk thread."""
+        from studio_model import read_metrics
+        try:
+            path = Path(self._abs(self.store.get(number)["runs"][-1])) / "metrics.jsonl"
+        except (KeyError, IndexError, TypeError):
+            return None
+        stamp = self._file_stamp(path)
+        if stamp is None:
+            return None
+        key = ("speed", str(path))
+        kept = self._cache.get(key)
+        if kept and kept[0] == stamp:
+            return kept[1]
+        ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0  # noqa: E731
+        try:
+            rows = read_metrics(path)
+        except (OSError, ValueError):
+            return None
+        speeds = sorted(r["tokens_per_second"] for r in rows if ok(r.get("tokens_per_second")))
+        counted = [r for r in rows if ok(r.get("trained_tokens")) and ok(r.get("step"))]  # trained_tokens counts from this run's first step
+        a, b = (counted[0], counted[-1]) if counted else (None, None)
+        per_step = (b["trained_tokens"] - a["trained_tokens"]) / (b["step"] - a["step"]) if counted and b["step"] > a["step"] else None
+        seconds = per_step / speeds[len(speeds) // 2] if speeds and per_step and per_step > 0 else None
+        self._cache[key] = (stamp, seconds)
+        return seconds
+
     def compare_runs(self):
         out = []
         for folder in sorted(Path(self.workspace.run_dir).glob("compare_*")):
@@ -1255,8 +1305,8 @@ class WorkspaceServices(Services):
         held = [r for r in read_metrics(Path(v.best_checkpoint).parent / "metrics.jsonl") if r.get("val_loss") is not None]
         return min(held, key=lambda r: r["val_loss"])["step"] if held else None  # best.npz is saved at the lowest held-back loss
 
-    def save_version(self, spec, change_text):
-        row = self.store.save_version(spec, change_text or None)
+    def save_version(self, spec, change_text, prediction=None):
+        row = self.store.save_version(spec, change_text or None, prediction)
         v = self._version(row)
         self.emit("versions", v)
         return v
@@ -1436,8 +1486,7 @@ class WorkspaceServices(Services):
         except _Slow:
             return False
         except _Cold:  # a small store is read in milliseconds, in place; a large one goes to the worker
-            state = self.workspace.state
-            return len(state["examples"]) + sum(d.get("recordCount") or 0 for d in state["datasets"]) <= 5000
+            return self.workspace.is_small()
         finally:
             self._probe.on = False
 
@@ -2093,7 +2142,7 @@ class WorkspaceServices(Services):
                 self._cache[("scores", key)] = np.load(file)
             except (OSError, ValueError):
                 pass  # unreadable: scored again below
-        if (later and ("scores", key) not in self._cache and threading.get_ident() == self._ui_thread
+        if (later and ("scores", key) not in self._cache and self.on_ui_thread()
                 and not getattr(self._probe, "on", False)):  # ready() still says not ready, so a page's worker reads it in place
             self._score_later(ckpt, key)
             raise _Pending
@@ -2125,6 +2174,8 @@ class WorkspaceServices(Services):
             self._scorer = True
 
         def run():
+            from studio_backend import cap_threads
+            cap_threads()
             while True:
                 with self._score_lock:
                     if not self._to_score:
@@ -2178,13 +2229,10 @@ class WorkspaceServices(Services):
     @timed("services.run_curve")
     def run_curve(self, run_dir):
         import studio_eval
-        from studio_core import read_json
         from studio_model import read_metrics
         run = Path(run_dir)
         rows = [r for r in read_metrics(run / "metrics.jsonl") if r.get("loss") is not None]
-        spec = read_json(run / "spec.json") if (run / "spec.json").exists() else {}
-        train = spec.get("train", {})
-        total = train.get("run", {}).get("steps") or (rows[-1]["step"] if rows else 0)
+        phases, total = self._phases(run, rows)
         cpp = 1.0  # characters per piece; nats per piece / ln2 / cpp = bits per character
         if any((run / n).exists() for n in ("best.npz", "last.npz")):
             def chars_per_piece():  # once per run: the held-back text (or a bounded slice of the run's own text) is read only here
@@ -2194,15 +2242,29 @@ class WorkspaceServices(Services):
             cpp = self._cached(("cpp", str(run), self._heldout_stamp()), chars_per_piece)
         bits = lambda nats: nats / LN2 / cpp  # noqa: E731
         steps = [(r["step"], bits(r["loss"])) for r in rows]
+        return {"steps": steps, "smooth": list(zip([s for s, _ in steps], studio_eval.smooth([b for _, b in steps]))),
+                "heldout": [(r["step"], bits(r["val_loss"])) for r in rows if r.get("val_loss") is not None],
+                "lr": [(r["step"], r["lr"]) for r in rows if r.get("lr") is not None],
+                "phases": phases, "total": total, **self._run_samples(run)}
+
+    @staticmethod
+    def _phases(run, rows):
+        """(phases, total steps) of the run's schedule, from its spec and the last metrics row."""
+        from studio_core import read_json
+        train = (read_json(run / "spec.json") if (run / "spec.json").exists() else {}).get("train", {})
+        total = train.get("run", {}).get("steps") or (rows[-1]["step"] if rows else 0)
         sched = train.get("schedule", {})
         warm = min(total, sched.get("config", {}).get("warmup", 0))
         stable = sched.get("config", {}).get("stable_fraction", .8)  # ponytail: schedules without a flat part use WSD's default split
         decay = warm + stable * (total - warm)
-        return {"steps": steps, "smooth": list(zip([s for s, _ in steps], studio_eval.smooth([b for _, b in steps]))),
-                "heldout": [(r["step"], bits(r["val_loss"])) for r in rows if r.get("val_loss") is not None],
-                "lr": [(r["step"], r["lr"]) for r in rows if r.get("lr") is not None],
-                "phases": [(0, warm, "warm-up"), (warm, decay, "steady"), (decay, total, "cool-down")], "total": total,
-                **self._run_samples(run)}
+        return [(0, warm, "warm-up"), (warm, decay, "steady"), (decay, total, "cool-down")], total
+
+    def run_phases(self, run_dir):
+        """The schedule's phases alone: run_curve also converts the loss to bits per character, which loads the run's
+        tokenizer and encodes the held-back text. The Queue page asks this on the Tk thread, so it must stay cheap."""
+        from studio_model import read_metrics
+        run = Path(run_dir)
+        return self._phases(run, [r for r in read_metrics(run / "metrics.jsonl") if r.get("loss") is not None])[0]
 
     @staticmethod
     def _run_samples(run):

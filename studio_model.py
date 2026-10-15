@@ -37,6 +37,7 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
 import numpy as np
 import torch
 
+from studio_ui_guard import slow
 import studio_shards
 from studio_arch import parameter_breakdown, validate_spec
 from studio_backend import DEVICES
@@ -331,6 +332,7 @@ def _anchored_windows(builder, tokens, mask, positions, roles, units, context):
             c = d
 
 
+@slow("encode a corpus into windows")
 def cut_windows(examples, tokenizer, cfg, builder):
     """Cut examples into training windows and hand each to builder.add(segment, flags): the cut samples_from() and the shards share."""
     context = cfg["context"]
@@ -382,6 +384,7 @@ def characters_in(examples):
     return sum(len(e["text"]) if e.get("text") else sum(len(m["content"]) for m in messages_of(e)) for e in examples)
 
 
+@slow("encode a corpus into windows")
 def shard_windows(training, validation, tokenizer, cfg, split_hash, root):
     """(train windows, validation windows, reused) read from token shards under root, tokenizing into them first when this data,
     tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut."""
@@ -406,6 +409,7 @@ def batch_arrays(samples):
     return x, y
 
 
+@slow("load a checkpoint")
 def load_checkpoint(path, weights_only=False, merged=True):
     """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads.
 
@@ -569,6 +573,7 @@ def _initialize_from(model, tokenizer, path):
     return transplant(old, model)
 
 
+@slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
           schedule_window=None):
@@ -885,6 +890,7 @@ def unsayable(tokenizer):
     return ids if end is None else ids + [OFFSET + end]
 
 
+@slow("run a model forward")
 def complete(model, tokenizer, prompt, max_tokens=48):
     """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
     tokens, result = [BOS] + tokenizer.encode(prompt), []
@@ -903,6 +909,7 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 
 class LocalModel:
+    @slow("build a model from a checkpoint")
     def __init__(self, path, seed=42, device="auto"):
         data = load_checkpoint(path, weights_only=True)
         self.config = validate_config(data["config"])
@@ -916,6 +923,7 @@ class LocalModel:
     def complete(self, prompt, max_tokens=48):
         return complete(self.model, self.tokenizer, prompt, max_tokens)
 
+    @slow("generate with a model")
     def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
         tokens = [BOS]
         roles = {"user": USER, "assistant": ASSISTANT, "system": SYSTEM}
