@@ -469,7 +469,9 @@ class Services:
 
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
-        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}}}; missing keys are fine."""
+        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}},
+        "overlap": {"text" | "problems": {"checked", "left_out", "note"}}}; missing keys are fine. overlap counts the held-back items
+        left out because a 13-gram of them also appears in training (studio_decontam)."""
         raise NotImplementedError
 
     def post_rows(self, kind):
@@ -1202,11 +1204,14 @@ class WorkspaceServices(Services):
     def examples(self, params):
         """Plain-text rows of params["datasets"] (default: every set) without the held-back documents. data/heldout.json is
         fixed the first time (exact duplicates removed, seeded split) and then kept, so every version is scored on the same text."""
+        import studio_decontam
         import studio_eval
         rows = self._text_rows(params.get("datasets"))
         path = self.root / "data" / "heldout.json"
         if not path.exists() and len(rows) > 1:  # ponytail: later sets never join the held-back text; delete the file to re-split
-            _, held = studio_eval.heldout_split([e["text"] for e in rows], params.get("heldout_fraction", .05))
+            train, held = studio_eval.heldout_split([e["text"] for e in rows], params.get("heldout_fraction", .05))
+            held, report = studio_decontam.exclude_overlap(held, studio_decontam.Index().add_all(train))  # a held-back text that shares a 13-gram with training is not scored
+            self._note_overlap("text", report)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
         held = set(self._heldout())
@@ -1472,7 +1477,27 @@ class WorkspaceServices(Services):
         return {"rounds": rounds, "gates": {int(n): g for n, g in done.items()},
                 "counts": {"conversations": convs.count, "corrections": len(self._json("corrections.json", [])),
                            "problems": self.data("problems").count, "pairs": len(self._human_pairs())},
+                "overlap": self._json("overlap.json", {}),
                 "example": self._summaries()["example"]}
+
+    def _note_overlap(self, name, report):
+        """Keep how many held-back items were left out for sharing a 13-gram with training (data/overlap.json, read by post_training)."""
+        saved = self._json("overlap.json", {})
+        if saved.get(name) != report.as_dict():
+            self._save_json("overlap.json", {**saved, name: report.as_dict()})
+
+    def _train_index(self):
+        """The 13-grams of everything training reads: pretraining text and the conversations and problems that are not held back."""
+        def make():
+            import studio_data_kinds as dk
+            import studio_decontam
+            held, index = set(self._heldout()), studio_decontam.Index()
+            for d in self.workspace.state["datasets"]:
+                for e in self.workspace.iter_examples(d["id"]):
+                    if not dk.is_draft(e) and not (e["text"] in held if dk.classify(e) == "text" else dk.stamp(e)["holdout"]):
+                        index.add(_doc(e))
+            return index
+        return self._fresh("train_index", make)
 
     def post_rows(self, kind):
         import studio_data_kinds as dk
@@ -1495,6 +1520,10 @@ class WorkspaceServices(Services):
                 rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
             out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
                        if want == "problems" else e for e in rows)
+        if held:  # a held-back problem whose text also appears in training would be answered from memory: leave it out and say how many
+            import studio_decontam
+            out, report = studio_decontam.exclude_overlap(out, self._train_index(), lambda row: row["prompt"])
+            self._note_overlap("problems", report)
         return out
 
     def teach_correction(self, version, messages, correction, whole_answer=False):
