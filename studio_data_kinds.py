@@ -317,6 +317,31 @@ def matching(rows, query="", limit=200):
     return [r for r in rows if not needle or needle in f"{r['a']} {r['b']}".casefold()][:limit]
 
 
+def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=()):
+    """(rows, next cursor) of one page of `kind` rows read from storage, not from the summary's sample: every row of
+    `sets` ((dataset id, name) in order) whose text holds `query` can be reached. cursor None = the first page; the
+    next cursor is None when nothing follows. `dups` = ids to show as near-duplicates. Disk datasets match in SQL, which
+    folds case for ASCII letters only; others match in Python."""
+    needle = query.strip().casefold()
+    rules = [key for key, label in LABELS.items() if needle in f"{key} {label}".casefold()] if needle and kind == "problems" else []
+    index, after = cursor or (0, 0)
+    found = []  # (set index, position in the set, row)
+    while index < len(sets) and len(found) <= limit:
+        dataset_id, name = sets[index]
+        want = limit + 1 - len(found)
+        if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            examples = workspace.kind_rows(dataset_id, kind, query, after, want, rules)
+        else:
+            examples = [(i, e) for i, e in enumerate(workspace.examples(dataset_id), 1) if i > after and classify(e) == kind and (
+                not needle or rule_of(e) in rules or needle in " ".join(str(e.get(k) or "") for k in ("user", "assistant", "intent", "text")).casefold())][:want]
+        for position, example in examples:
+            a, b = _columns(kind, example, name)
+            found.append((index, position, {"id": example["id"], "a": a, "b": b, "status": _status(kind, example, example["id"] in dups), "dataset": name}))
+        index, after = index + 1, 0
+    more = len(found) > limit
+    return [row for *_, row in found[:limit]], (found[limit - 1][:2] if more else None)
+
+
 def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_ids=None, scanned=None, progress=None):
     """Counts, sets and up to `limit` sample rows of one kind. Near-duplicates are looked for in the first
     `scan_limit` examples of the kind only (bounded cost). `scanned` reuses an earlier scan() instead of reading again."""
