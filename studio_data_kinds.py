@@ -48,6 +48,36 @@ def pretraining_examples(workspace, dataset_ids):
                 yield example
 
 
+def text_sample(workspace, dataset_ids, budget=5_000_000, exclude=()):
+    """(documents, total characters) for sizing pretraining without reading it all: disk sets give their size from the
+    stored character counts and an evenly spread sample of about `budget` characters (every k-th row); in-memory sets
+    are read whole. `exclude` holds texts to leave out (the held-back documents)."""
+    import json
+    docs, total, on_disk = [], 0, []
+    for dataset_id in dataset_ids:
+        if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            on_disk.append(dataset_id)
+            continue
+        for example in pretraining_examples(workspace, [dataset_id]):
+            if example.get("text") and example["text"] not in exclude:
+                docs.append(example["text"])
+                total += len(example["text"])
+    if on_disk:
+        marks = ",".join("?" * len(on_disk))
+        with workspace._connect() as connection:
+            chars = connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE dataset_id IN ({marks})", on_disk).fetchone()[0]
+            step = max(1, round(chars / budget))
+            total += chars
+            cursor = connection.execute(f"SELECT payload FROM records WHERE dataset_id IN ({marks}) AND rowid % ? = 0 ORDER BY rowid",
+                                        (*on_disk, step))
+            while batch := cursor.fetchmany(2000):
+                for (payload,) in batch:
+                    example = json.loads(payload)
+                    if classify(example) == "text" and not is_draft(example) and example.get("text") and example["text"] not in exclude:
+                        docs.append(example["text"])
+    return docs, total
+
+
 def make_problem(item, quality="Good"):
     """A problem item from studio_rules.generate -> a row for normalize/Workspace.add (rule fields mirrored in metadata)."""
     meta = {"rule": item["rule"], "params": item.get("params", {}), "noKey": "answer" not in item}
@@ -195,7 +225,9 @@ def scan(workspace, scan_limit=20000, dataset_ids=None, progress=None):
             kind = classify(example)
             counts[kind] += 1
             summary = out[kind]
-            summary.characters += len(example.get("text") or "") + len(example.get("user", "")) + len(example.get("assistant", ""))
+            # a text example repeats its text as "user", so it counts once
+            summary.characters += (len(example.get("text") or "") if kind == "text"
+                                   else len(example.get("user", "")) + len(example.get("assistant", "")))
             if kind == "problems":
                 summary.rules[rule_of(example)] = summary.rules.get(rule_of(example), 0) + 1
             if len(pairs[kind]) < scan_limit:

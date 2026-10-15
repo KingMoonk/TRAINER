@@ -589,6 +589,8 @@ import threading  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
+SUMMARY_FORMAT = 2  # data/summaries.json layout; 2: text characters counted once. A saved summary of another format is rebuilt
+PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
 
 LN2 = math.log(2)
@@ -871,7 +873,7 @@ class WorkspaceServices(Services):
             path, stamp = self.root / "data" / "summaries.json", self._stamp()
             try:
                 saved = json.loads(path.read_text(encoding="utf-8"))
-                if saved["stamp"] == stamp:
+                if saved["stamp"] == stamp and saved.get("format") == SUMMARY_FORMAT:
                     return {**{k: dk.DataSummary(**saved[k]) for k in dk.KINDS}, "example": saved["example"]}
             except (OSError, ValueError, KeyError, TypeError):
                 pass
@@ -881,7 +883,7 @@ class WorkspaceServices(Services):
             out["example"] = {"prompt": first["user"], "answer": first["assistant"]} if first and first.get("user") else {}
             self.note("Saving the summary")
             path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_json(path, {**{k: asdict(out[k]) for k in dk.KINDS}, "example": out["example"], "stamp": stamp})
+            atomic_json(path, {**{k: asdict(out[k]) for k in dk.KINDS}, "example": out["example"], "stamp": stamp, "format": SUMMARY_FORMAT})
             return out
         return self._fresh("summaries", make)
 
@@ -895,22 +897,21 @@ class WorkspaceServices(Services):
         context = v.spec["dims"]["n_ctx"]
 
         def make():
-            self.note("Reading the chosen text")
-            held = set(self._heldout())
-            docs = [e["text"] for e in self._text_rows(dataset_ids) if e["text"] not in held]
+            import studio_data_kinds as dk
+            self.note("Reading a sample of the chosen text")
+            ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
+            # Never the whole corpus: about 5M evenly spread characters build the word list and are counted; the
+            # total size comes from stored character counts, so pieces are scaled up ("estimated") for larger text.
+            sample, total = dk.text_sample(self.workspace, ids, PREVIEW_CHARS, exclude=set(self._heldout()))
             self.note("Building the word list")
             module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
-            tok = module.fit(cfg, [{"text": d} for d in docs])
-            total = sum(map(len, docs))
+            tok = module.fit(cfg, [{"text": d} for d in sample])
             self.note("Counting word pieces")
-            # Up to 5M characters are counted exactly; larger text is counted on an evenly spread sample of documents
-            # and scaled by characters, so the size is an estimate ("estimated": True) rather than missing.
-            stride = 1 if total <= 5_000_000 else max(1, round(total / 5_000_000))
-            sample = docs[::stride]
             encoded = [tok.encode(d) for d in sample]
             counted, chars = sum(map(len, encoded)) + len(sample), sum(map(len, sample))
-            pieces = counted if stride == 1 else round(counted * total / max(1, chars))
-            return {"pieces": pieces if docs else None, "estimated": stride > 1,
+            estimated = total > chars
+            pieces = round(counted * total / max(1, chars)) if estimated else counted
+            return {"pieces": pieces if sample else None, "estimated": estimated,
                     "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"],
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         heldout = self.root / "data" / "heldout.json"

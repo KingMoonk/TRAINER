@@ -114,6 +114,21 @@ class Kinds(unittest.TestCase):
         ws.add(a, ["a kept document", {"text": "a draft document", "quality": "Review", "synthetic": True}])
         self.assertEqual([e["text"] for e in dk.pretraining_examples(ws, [a])], ["a kept document"])
 
+    def test_text_sample_reads_a_bounded_spread_and_sizes_from_counts(self):
+        ws = workspace()
+        disk, small = ws.create_dataset("disk", storage="sqlite"), ws.create_dataset("small")
+        docs = [f"document {i:04d} " + "x" * 90 for i in range(400)]
+        ws.add(disk, docs + [{"user": "q", "assistant": "a conversation, never text"}])
+        ws.add(small, ["a short note kept whole"])
+        sample, total = dk.text_sample(ws, [disk, small], budget=4000, exclude={docs[0]})
+        self.assertEqual(total, sum(map(len, docs)) + len("q") + len("a conversation, never text") + len("a short note kept whole"))
+        self.assertIn("a short note kept whole", sample)
+        from_disk = [d for d in sample if d.startswith("document")]
+        self.assertTrue(4 <= len(from_disk) <= 80, len(from_disk))  # about budget / 100 characters, not all 400
+        self.assertGreater(int(from_disk[-1][9:13]), 300)  # spread across the set, not just its start
+        self.assertNotIn(docs[0], sample)
+        self.assertEqual(dk.summarize(ws, "text").characters, sum(map(len, docs)) + len("a short note kept whole"))  # counted once
+
     def test_sqlite_storage_problems(self):
         ws = workspace()
         d = ws.create_dataset("disk", storage="sqlite")
