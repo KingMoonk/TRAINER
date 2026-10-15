@@ -32,14 +32,17 @@ On Windows you can instead double-click `start_studio.bat`. The details below co
 
 ## Lint and tests
 
-CI runs `ruff check .` and every test on each push and pull request. The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced. To lint locally:
+`tasks.py` is the one entry point. Each level includes the one before it:
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m ruff check .
+.venv/bin/python tasks.py test                    # ruff + every window-free unit test (the local command)
+.venv/bin/python tasks.py test tests.test_queue   # ruff + only the named modules
+python tasks.py test:ci                           # + compileall + the window tests (tests/gui_*.py); CI only
+python tasks.py test:ci:e2e                       # + a real training run (tests.e2e_train); CI only
 ```
 
-Tests that open windows live in `gui_*.py` and skip themselves unless `CI` is set (GitHub Actions does) or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`).
+CI runs `test:ci:e2e` on each push and pull request. `test:ci` and `test:ci:e2e` refuse to run unless `CI` is set (GitHub Actions does), because the window tests open real Tk and 3D windows. Those tests live in `gui_*.py` and skip themselves unless `CI` is set or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
 
 ## Launch
 
@@ -215,7 +218,7 @@ Created at run time and git-ignored:
 `tests/` contains focused `unittest` modules for the engine, modules, data, architecture, inspection services, viewer bridge and GUI integration. GPU and display-dependent tests may skip when that hardware or display is unavailable.
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe tasks.py test
 ```
 
 Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, module estimates and checkpoint resumption. CUDA tests compare supported GPU operations against CPU and skip when CUDA is unavailable. The PyInstaller hook `packaging/hook-studio_modules.py` collects all discovered modules so registry lookup also works in packaged builds.
