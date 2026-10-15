@@ -6,19 +6,43 @@ for float16, `scaled = True` (gradients are produced under a loss scale, see Los
 """
 from __future__ import annotations
 
+import time
 from functools import lru_cache
 
 import torch
 
 
+def _best_time(fn, runs=3):
+    fn()
+    best = float("inf")
+    for _ in range(runs):
+        start = time.perf_counter()
+        fn()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def _cpu_half_is_fast(dtype):
+    """A CPU without half-precision matrix kernels runs them hundreds of times slower than float32, so probe the speed too."""
+    a, b = torch.randn(256, 256), torch.randn(256, 256)
+
+    def mixed():
+        with torch.autocast("cpu", dtype=dtype):
+            return a @ b
+
+    return _best_time(mixed) <= 2 * _best_time(lambda: a @ b)
+
+
 @lru_cache(maxsize=None)
 def autocast_works(device, dtype):
-    """True when `device` really runs a matrix multiply in `dtype` under torch.autocast (probed once, not assumed)."""
+    """True when `device` really runs a matrix multiply in `dtype` under torch.autocast, and on a CPU not slower than float32 (probed once, not assumed)."""
     try:
         with torch.autocast(device_type=device, dtype=dtype):
             ones = torch.ones((8, 8), device=device)
             product = ones @ ones
-        return product.dtype == dtype and float(product.float().sum()) == 512.
+        if product.dtype != dtype or float(product.float().sum()) != 512.:
+            return False
+        return device != "cpu" or _cpu_half_is_fast(dtype)
     except Exception:
         return False
 
@@ -29,7 +53,7 @@ def plan(module, device):
     if compute is None or autocast_works(device, compute):
         return compute, ""
     label = {"cpu": "the CPU", "cuda": "this GPU", "mps": "Apple GPUs"}.get(device, device)
-    return None, f"{module.name} is not available on {label} with this PyTorch; training in float32 instead."
+    return None, f"{module.name} is not supported, or far slower than float32, on {label} with this PyTorch; training in float32 instead."
 
 
 def likely_device(requested):

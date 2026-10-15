@@ -140,6 +140,12 @@ class Checkpointing(unittest.TestCase):
 
 
 class MixedPrecision(unittest.TestCase):
+    def setUp(self):
+        # Whether this machine's CPU has fast half-precision kernels varies (Apple CPUs do not); the logic is tested as if it did.
+        patcher = mock.patch.object(policy, "autocast_works", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_modules_keep_float32_weights_and_declare_their_compute_dtype(self):
         for short, compute, scaled in (("bf16", torch.bfloat16, False), ("fp16", torch.float16, True)):
             module = registry.get("precision", short)
@@ -250,6 +256,11 @@ class MixedPrecision(unittest.TestCase):
             self.assertEqual([issue.level for issue in issues], ["WARN"])
         self.assertEqual(build(spec_of(precision="bf16")).precision_note, "")
         self.assertEqual([issue for issue in validate(spec_of(precision="bf16")) if issue.slot == "precision"], [])
+
+    def test_cpu_half_precision_must_be_about_as_fast_as_float32(self):
+        for half_seconds, fast in ((.001, True), (.002, True), (.1, False)):
+            with self.subTest(half_seconds=half_seconds), mock.patch.object(policy, "_best_time", side_effect=[half_seconds, .001]):
+                self.assertEqual(policy._cpu_half_is_fast(torch.bfloat16), fast)
 
     def test_estimate_counts_bf16_activations_and_checkpointing(self):
         base = spec_of(precision="fp32", layers=4)
