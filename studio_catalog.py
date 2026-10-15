@@ -49,6 +49,24 @@ CATALOG = [
      "size_hint": "6 MB download", "records_hint": "15,488 paragraphs", "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
      "repo": "Salesforce/wikitext", "filename": "wikitext-2-raw-v1/train-00000-of-00001.parquet", "format": "parquet", "parser": "wikitext",
      "split": "train", "synthetic": False},
+    {"id": "simplewiki", "name": "Simple English Wikipedia · plain articles", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "Every Simple English Wikipedia article (November 2023 dump): encyclopaedic prose written with short sentences and common words. Stubs under 200 characters are skipped.",
+     "license": "CC BY-SA 3.0 and GFDL", "source_url": "https://huggingface.co/datasets/wikimedia/wikipedia",
+     "size_hint": "157 MB download", "records_hint": "~240K articles", "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+     "repo": "wikimedia/wikipedia", "filename": "20231101.simple/train-00000-of-00001.parquet", "format": "parquet", "parser": "wiki_article",
+     "split": "train", "synthetic": False},
+    {"id": "wikitext103_a", "name": "WikiText-103 · Wikipedia prose, part 1", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "First half of the WikiText-103 training split (raw): verified-good and featured Wikipedia articles as paragraphs. WikiText-2 is a small subset of it.",
+     "license": "CC BY-SA 3.0 and GFDL", "source_url": "https://huggingface.co/datasets/Salesforce/wikitext",
+     "size_hint": "157 MB download", "records_hint": "~400K paragraphs", "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+     "repo": "Salesforce/wikitext", "filename": "wikitext-103-raw-v1/train-00000-of-00002.parquet", "format": "parquet", "parser": "wikitext",
+     "split": "train", "synthetic": False},
+    {"id": "wikitext103_b", "name": "WikiText-103 · Wikipedia prose, part 2", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "Second half of the WikiText-103 training split (raw), paragraphs tagged with article and section.",
+     "license": "CC BY-SA 3.0 and GFDL", "source_url": "https://huggingface.co/datasets/Salesforce/wikitext",
+     "size_hint": "157 MB download", "records_hint": "~400K paragraphs", "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+     "repo": "Salesforce/wikitext", "filename": "wikitext-103-raw-v1/train-00001-of-00002.parquet", "format": "parquet", "parser": "wikitext",
+     "split": "train", "synthetic": False},
     # --- stage "instructions" -------------------------------------------------------------------
     {"id": "dolly15k", "name": "Dolly 15K · human instructions", "domain": "General instructions", "stage": "instructions", "default": True,
      "description": "Human-written instructions, extraction, summaries, brainstorming and question answering. Context is kept with each question.",
@@ -132,8 +150,73 @@ CATALOG = [
      "revision": "fdf72ae0827c1cda404aff25b6603abec9e3399b", "repo": "OpenAssistant/oasst1",
      "license_url": "https://huggingface.co/datasets/OpenAssistant/oasst1/resolve/fdf72ae0827c1cda404aff25b6603abec9e3399b/LICENSE?download=true",
      "filename": "2023-04-12_oasst_ready.trees.jsonl.gz", "format": "jsonl.gz", "parser": "oasst", "split": "ready_export", "synthetic": False},
+    {"id": "ultrachat_a", "name": "UltraChat 200K · multi-turn chats, part 1", "domain": "Conversation", "stage": "conversation", "default": True,
+     "description": "First of three shards of the filtered UltraChat SFT split: multi-turn English conversations about the world, writing and assistance, written by GPT-3.5.",
+     "license": "MIT", "source_url": "https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k",
+     "size_hint": "244 MB download", "records_hint": "~69K conversations", "revision": "8049631c405ae6576f93f445c6b8166f76f5505a",
+     "repo": "HuggingFaceH4/ultrachat_200k", "filename": "data/train_sft-00000-of-00003-a3ecf92756993583.parquet", "format": "parquet",
+     "parser": "ultrachat", "split": "train_sft", "synthetic": True},
+    # --- stage "problems": questions with an answer key a rule checks (Post-training, round 2) -------------
+    {"id": "gsm8k_check", "name": "GSM8K · word problems with a numeric key", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "The 7,473 GSM8K training problems, each stored with its final number as the key. Checked by the final number in the answer.",
+     "license": "MIT", "source_url": "https://github.com/openai/grade-school-math",
+     "size_hint": "4 MB download", "records_hint": "7,473 problems", "revision": "3101c7d5072418e28b9008a6636bde82a006892c",
+     "url": "https://raw.githubusercontent.com/openai/grade-school-math/3101c7d5072418e28b9008a6636bde82a006892c/grade_school_math/data/train.jsonl",
+     "card_url": "https://raw.githubusercontent.com/openai/grade-school-math/3101c7d5072418e28b9008a6636bde82a006892c/README.md",
+     "filename": "train.jsonl", "format": "jsonl", "parser": "gsm_check", "split": "train", "synthetic": False},
+    {"id": "svamp_check", "name": "SVAMP · one-step arithmetic stories", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "Short arithmetic word problems built to defeat shallow pattern matching (training split). Checked by the final number.",
+     "license": "MIT", "source_url": "https://huggingface.co/datasets/ChilleD/SVAMP",
+     "size_hint": "0.1 MB download", "records_hint": "700 problems", "revision": "5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef",
+     "repo": "ChilleD/SVAMP", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "svamp_check", "split": "train", "synthetic": False},
+    {"id": "metamath_check", "name": "MetaMathQA · numeric-answer problems", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "The bounded MetaMathQA prefix, keeping only problems whose stated answer is a plain number. Checked by the final number.",
+     "license": "MIT", "source_url": "https://huggingface.co/datasets/meta-math/MetaMathQA",
+     "size_hint": "30 MB download (bounded prefix)", "records_hint": "~25K problems", "revision": "aa4f34d3d2d3231299b5b03d9b3e5a20da45aa18",
+     "repo": "meta-math/MetaMathQA", "filename": "MetaMathQA-395K.json", "format": "json", "parser": "metamath_check",
+     "range_bytes": 30_000_000, "split": "train", "synthetic": True},
+    {"id": "aqua_check", "name": "AQuA-RAT · algebra multiple choice", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "Algebraic word problems with five lettered options (raw training split). Checked by the option letter.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/deepmind/aqua_rat",
+     "size_hint": "25 MB download", "records_hint": "97,467 problems", "revision": "33301c6a050c96af81f63cad5562cb5363e88971",
+     "repo": "deepmind/aqua_rat", "filename": "raw/train-00000-of-00001.parquet", "format": "parquet", "parser": "aqua_check", "split": "train", "synthetic": False},
+    {"id": "arc_check", "name": "ARC Easy · science questions with a key", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "ARC Easy training questions as problems. Checked by the option letter.",
+     "license": "CC BY-SA 4.0", "source_url": "https://huggingface.co/datasets/allenai/ai2_arc",
+     "size_hint": "0.3 MB download", "records_hint": "2,251 problems", "revision": "210d026faf9955653af8916fad021475a3f00453",
+     "repo": "allenai/ai2_arc", "filename": "ARC-Easy/train-00000-of-00001.parquet", "format": "parquet", "parser": "mcq_check", "split": "train", "synthetic": False},
+    {"id": "arc_challenge_check", "name": "ARC Challenge · harder science with a key", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "ARC Challenge training questions as problems. Checked by the option letter.",
+     "license": "CC BY-SA 4.0", "source_url": "https://huggingface.co/datasets/allenai/ai2_arc",
+     "size_hint": "0.2 MB download", "records_hint": "1,118 problems", "revision": "210d026faf9955653af8916fad021475a3f00453",
+     "repo": "allenai/ai2_arc", "filename": "ARC-Challenge/train-00000-of-00001.parquet", "format": "parquet", "parser": "mcq_check", "split": "train", "synthetic": False},
+    {"id": "commonsenseqa_check", "name": "CommonsenseQA · everyday questions with a key", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "CommonsenseQA training questions as problems. Checked by the option letter.",
+     "license": "MIT", "source_url": "https://huggingface.co/datasets/tau/commonsense_qa",
+     "size_hint": "1.2 MB download", "records_hint": "9,741 problems", "revision": "94630fe30dad47192a8546eb75f094926d47e155",
+     "repo": "tau/commonsense_qa", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "mcq_check", "split": "train", "synthetic": False},
+    {"id": "qasc_check", "name": "QASC · two-fact science questions", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "Grade-school science questions with eight lettered options, each answerable by combining two facts (training split). Checked by the option letter.",
+     "license": "CC BY 4.0", "source_url": "https://huggingface.co/datasets/allenai/qasc",
+     "size_hint": "2 MB download", "records_hint": "8,134 problems", "revision": "a34ba204eb9a33b919c10cc08f4f1c8dae5ec070",
+     "repo": "allenai/qasc", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "mcq_check", "split": "train", "synthetic": False},
+    {"id": "hellaswag_check", "name": "HellaSwag · pick the sensible continuation", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "Everyday activity descriptions with four possible continuations, three of them adversarially written (training split). Checked by the option letter.",
+     "license": "MIT", "source_url": "https://huggingface.co/datasets/Rowan/hellaswag",
+     "size_hint": "24 MB download", "records_hint": "39,905 problems", "revision": "218ec52e09a7e7462a5400043bb9a69a41d06b76",
+     "repo": "Rowan/hellaswag", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "hellaswag_check", "split": "train", "synthetic": False},
+    {"id": "boolq_check", "name": "BoolQ · yes/no questions about a passage", "domain": "Checkable problems", "stage": "problems", "default": True,
+     "description": "Naturally occurring yes/no questions with the Wikipedia passage that answers them (training split), as A) yes / B) no. Checked by the option letter.",
+     "license": "CC BY-SA 3.0", "source_url": "https://huggingface.co/datasets/google/boolq",
+     "size_hint": "4 MB download", "records_hint": "9,427 problems", "revision": "35b264d03638db9f4ce671b711558bf7ff0f80d5",
+     "repo": "google/boolq", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "boolq_check", "split": "train", "synthetic": False},
+    {"id": "winogrande_check", "name": "WinoGrande · who does the blank refer to", "domain": "Checkable problems", "stage": "problems", "default": False,
+     "description": "Fill-in-the-blank pronoun puzzles with two options (XL training split). Not downloaded by default: the Hugging Face card states no licence.",
+     "license": "Not stated on the dataset card", "source_url": "https://huggingface.co/datasets/allenai/winogrande",
+     "size_hint": "2 MB download", "records_hint": "40,398 problems", "revision": "01e74176c63542e6b0bcb004dcdea22d94fb67b5",
+     "repo": "allenai/winogrande", "filename": "winogrande_xl/train-00000-of-00001.parquet", "format": "parquet", "parser": "winogrande_check", "split": "train", "synthetic": False},
 ]
-STAGES = ("language", "instructions", "knowledge", "reasoning", "code", "conversation")
+STAGES = ("language", "instructions", "knowledge", "reasoning", "code", "conversation", "problems")
 STARTER_IDS = ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1")
 
 
@@ -460,6 +543,18 @@ def convert_record(raw, entry):
         converted = _multiple_choice(raw, parser)
         if converted:
             yield converted
+    elif parser == "wiki_article":
+        text = str(raw.get("text") or "").strip()
+        if len(text) >= 200:
+            yield {"text": text, "intent": "encyclopedia", "sourceId": str(raw.get("id", "")),
+                   "groupId": "simplewiki:" + str(raw.get("id", "")), "metadata": {"title": raw.get("title", "")}}
+    elif parser == "ultrachat":
+        yield {"messages": raw.get("messages") or [], "intent": "conversation", "sourceId": str(raw.get("prompt_id", "")),
+               "groupId": "ultrachat:" + str(raw.get("prompt_id", ""))}
+    elif parser.endswith("_check"):
+        converted = _checkable(raw, parser)
+        if converted:
+            yield converted
     else:
         yield raw
 
@@ -504,6 +599,77 @@ def _multiple_choice(raw, parser):
     lines = [f"{_LETTERS[i]}) {text}" for i, text in enumerate(options)]
     return {"user": f"{intro}Question: {question}\n\n" + "\n".join(lines), "assistant": lines[index], "intent": intent,
             "sourceId": source_id}
+
+
+NUMBER_ASK = "\n\nGive the final answer as a number."
+CHOICE_ASK = "Reply with the letter and the option text.\n\n"
+PLAIN_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def _number_key(text):
+    """A plain number as a key ('1,200' -> '1200', '145.0' -> '145'), else None: fractions, LaTeX and words are not keys."""
+    text = str(text if text is not None else "").strip().rstrip(".")
+    if not PLAIN_NUMBER.fullmatch(text):
+        return None
+    value = float(text.replace(",", ""))
+    return str(int(value)) if value == int(value) else repr(value)
+
+
+def _keyed(prompt, answer, rule, key, intent, source_id=""):
+    """A problem row: the key text is the stored answer; rule and key travel in metadata, which normalize keeps."""
+    return {"user": prompt, "assistant": answer, "intent": intent, "sourceId": source_id,
+            "metadata": {"rule": rule, "params": {"answer": key}}}
+
+
+def _lettered(intro, question, options, index, intent, source_id=""):
+    if not question or not 2 <= len(options) <= len(_LETTERS) or not 0 <= index < len(options) or not all(options):
+        return None
+    lines = [f"{_LETTERS[i]}) {text}" for i, text in enumerate(options)]
+    return _keyed(f"{intro}{CHOICE_ASK}{question}\n\n" + "\n".join(lines), lines[index], "choice", _LETTERS[index], intent, source_id)
+
+
+def _checkable(raw, parser):
+    """Source record -> a problem with an answer key (studio_rules.KEYED), or None when it has no clean key."""
+    if parser == "gsm_check":
+        key = _number_key(str(raw.get("answer", "")).rpartition("####")[2])
+        question = str(raw.get("question") or "").strip()
+        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem") if key and question else None
+    if parser == "svamp_check":
+        key = _number_key(raw.get("Answer"))
+        question = str(raw.get("question_concat") or f"{raw.get('Body', '')} {raw.get('Question', '')}").strip()
+        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem", str(raw.get("ID", ""))) if key and question else None
+    if parser == "metamath_check":
+        query, response = str(raw.get("query") or "").strip(), str(raw.get("response") or "")
+        key = _number_key(response.rpartition("The answer is:")[2]) if "The answer is:" in response else None
+        return _keyed(query + NUMBER_ASK, key, "final_number", key, "math_problem") if key and query else None
+    if parser == "aqua_check":
+        options = [re.sub(r"^\s*[A-E]\s*\)\s*", "", str(o)).strip() for o in raw.get("options") or []]
+        key = str(raw.get("correct") or "").strip().upper()
+        return _lettered("Solve the problem and pick the option. ", str(raw.get("question") or "").strip(), options,
+                         _LETTERS.find(key) if key else -1, "math_problem")
+    if parser == "mcq_check":
+        choices = raw.get("choices") or {}
+        labels, options = list(choices.get("label") or []), [str(t).strip() for t in choices.get("text") or []]
+        key = str(raw.get("answerKey") or "").strip()
+        return _lettered("Answer the question. ", str(raw.get("question") or "").strip(), options,
+                         labels.index(key) if key in labels else -1, "multiple_choice", str(raw.get("id", "")))
+    if parser == "hellaswag_check":
+        label = str(raw.get("label") or "").strip()
+        context = ": ".join(p for p in (str(raw.get("activity_label") or "").strip(), str(raw.get("ctx") or "").strip()) if p)
+        return _lettered("Pick the most sensible continuation. ", context, [str(e).strip() for e in raw.get("endings") or []],
+                         int(label) if label.isdigit() else -1, "multiple_choice", str(raw.get("source_id", "")))
+    if parser == "boolq_check":
+        question, passage, answer = str(raw.get("question") or "").strip(), str(raw.get("passage") or "").strip(), raw.get("answer")
+        if not question or not passage or not isinstance(answer, bool):
+            return None
+        return _lettered("Answer using the passage. ", f"Passage:\n{passage}\n\nQuestion: {question[0].upper()}{question[1:]}?",
+                         ["yes", "no"], 0 if answer else 1, "reading_problem")
+    if parser == "winogrande_check":
+        answer = str(raw.get("answer") or "").strip()
+        options = [str(raw.get("option1") or "").strip(), str(raw.get("option2") or "").strip()]
+        return _lettered("Which option fills the blank (_)? ", str(raw.get("sentence") or "").strip(), options,
+                         int(answer) - 1 if answer in ("1", "2") else -1, "multiple_choice")
+    return None
 
 
 def _entry(catalog_id):

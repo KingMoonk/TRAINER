@@ -26,6 +26,7 @@ from studio_rlhf import _encode_pair, _save, token_logps
 
 RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rule is always the minimum, 0
 MAX_TOKENS = 32
+MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measurement
 
 
 def _messages(item):
@@ -90,7 +91,7 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
     """Round 2. problems: [{"prompt", "rule", ...}]. rubric: optional callable (prompt, answer) -> 0..1, a smaller
     second reward that only counts for answers that pass the rule. Saves last.npz and best.npz (best mean reward)."""
     emit, stop, pause = emit or (lambda event: None), stop or threading.Event(), pause or threading.Event()
-    problems = [p for p in problems if p.get("rule") in studio_rules.RULES]
+    problems = [p for p in problems if p.get("rule") in studio_rules.CHECKABLE]
     if not problems:
         raise ValueError("Round 2 needs problems with a rule the app can check.")
     local, optimizer = _setup(checkpoint, device)
@@ -112,7 +113,7 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             messages = _messages(problem)
             prompt = _prompt_text(messages)
             answers = [local.generate(messages, max_tokens=max_tokens, temperature=temperature) for _ in range(group)]
-            passed = [studio_rules.check(problem["rule"], prompt, a) for a in answers]
+            passed = [studio_rules.check(problem["rule"], prompt, a, problem.get("params")) for a in answers]
             rewards = [float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.) for a, ok in zip(answers, passed)]
             flat = max(rewards) - min(rewards) < 1e-9   # all pass or all fail: nothing to learn
             adv = np.zeros(group) if flat else advantages(rewards, divide_by_std)
@@ -276,7 +277,10 @@ def measure(checkpoint, docs, problems):
     """{bpc, pass_k, pass_n}: bits per character on held-back text; greedy answers checked by each problem's rule."""
     import studio_eval
     local = LocalModel(checkpoint, device="cpu")
-    k = sum(studio_rules.check(q["rule"], q["prompt"], local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=MAX_TOKENS, temperature=0))
+    if len(problems) > MEASURE_PROBLEMS:  # imported sets hold back thousands; a fixed sample keeps before/after comparable
+        problems = random.Random(0).sample(list(problems), MEASURE_PROBLEMS)
+    k = sum(studio_rules.check(q["rule"], q["prompt"], local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=MAX_TOKENS, temperature=0),
+                               q.get("params"))
             for q in problems)
     return {"bpc": studio_eval.bits_per_char(checkpoint, [_doc(d) for d in docs]) if docs else None, "pass_k": k, "pass_n": len(problems)}
 

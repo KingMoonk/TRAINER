@@ -57,6 +57,17 @@ class DataPagesTest(unittest.TestCase):
         self.assertIn("‹ " + Y["back_pretraining"], labels(page))
         self.assertEqual(page.table.heading("a")["text"], Y["text_col_a"])
 
+    def test_problems_tab_offers_its_recommended_collection(self):
+        self.fake._collections = {"problems": [{"id": "gsm8k_check", "name": "GSM8K", "size": "4 MB download",
+                                                "records": "7,473 problems", "state": "not downloaded"}]}
+        page = self.app.show("your_data")
+        self.click(find(page, Y["problems_tab"]))
+        self.assertIn(Y["problems_collection_desc"], labels(page))
+        find(page, Y["download_add_all"], (ttk.Button,)).invoke()
+        find(page, Y["download_add"], (ttk.Button,)).invoke()
+        self.assertEqual(self.fake.calls, [("download_sources", None, "problems", True),
+                                           ("download_sources", ["gsm8k_check"], "problems", True)])
+
     def test_review_row_can_be_marked_good(self):
         page = self.app.show("your_data")
         self.app.update()

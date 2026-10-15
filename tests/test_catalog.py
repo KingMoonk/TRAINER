@@ -241,6 +241,58 @@ class CatalogMetadataTests(unittest.TestCase):
         self.assertEqual(_entry("gsm8k")["revision"], "3101c7d5072418e28b9008a6636bde82a006892c")
 
 
+class CheckableProblemTests(unittest.TestCase):
+    """Problem-stage converters: each row is a problem whose stored answer passes its own keyed rule."""
+
+    def _problem(self, catalog_id, raw):
+        import studio_data_kinds as dk
+        import studio_rules
+        from studio_core import normalize
+        rows = _convert(catalog_id, raw)
+        self.assertEqual(len(rows), 1, raw)
+        example = normalize({**rows[0], "quality": "Review"}, "d", "catalog")
+        self.assertEqual(dk.classify(example), "problems")
+        params = example["metadata"]["params"]
+        self.assertTrue(studio_rules.check(dk.rule_of(example), example["user"], example["assistant"], params))
+        return example, dk.rule_of(example), params["answer"]
+
+    def test_numeric_keys(self):
+        ex, rule, key = self._problem("gsm8k_check", {"question": "How many?", "answer": "48/2 = <<48/2=24>>24\n#### 1,072"})
+        self.assertEqual((rule, key, ex["assistant"]), ("final_number", "1072", "1072"))
+        self.assertTrue(ex["user"].startswith("How many?") and ex["user"].endswith("as a number."))
+        self.assertEqual(self._problem("svamp_check", {"ID": "s1", "question_concat": "Some apples?", "Answer": 145.0})[2], "145")
+        self.assertEqual(self._problem("metamath_check", {"query": "Q", "response": "Work.\nThe answer is: 2.5"})[2], "2.5")
+        for raw in ({"query": "Q", "response": "The answer is: \\frac{1}{2}"}, {"query": "Q", "response": "no key"}):
+            self.assertEqual(_convert("metamath_check", raw), [])
+        self.assertEqual(_convert("gsm8k_check", {"question": "Q", "answer": "#### seven"}), [])
+
+    def test_lettered_keys(self):
+        ex, rule, key = self._problem("aqua_check", {"question": "x?", "options": ["A)21", "B)21.5", "C)22"], "correct": "C"})
+        self.assertEqual((rule, key, ex["assistant"]), ("choice", "C", "C) 22"))
+        self.assertIn("A) 21\nB) 21.5\nC) 22", ex["user"])
+        self.assertEqual(self._problem("qasc_check", {"id": "q", "question": "Rain?", "answerKey": "B",
+                                                      "choices": {"label": ["A", "B"], "text": ["dust", "water"]}})[0]["assistant"], "B) water")
+        self.assertEqual(self._problem("hellaswag_check", {"activity_label": "Cooking", "ctx": "He stirs", "label": "1",
+                                                           "endings": ["the sky.", "the soup."]})[0]["assistant"], "B) the soup.")
+        boolq = self._problem("boolq_check", {"question": "is water wet", "passage": "Water is wet.", "answer": False})[0]
+        self.assertEqual(boolq["assistant"], "B) no")
+        self.assertIn("Question: Is water wet?", boolq["user"])
+        self.assertEqual(self._problem("winogrande_check", {"sentence": "A _ b", "option1": "x", "option2": "y", "answer": "2"})[2], "B")
+        self.assertEqual(_convert("aqua_check", {"question": "x?", "options": ["A)1", "B)2"], "correct": "E"}), [])
+        self.assertEqual(_convert("hellaswag_check", {"ctx": "c", "label": "", "endings": ["a", "b"]}), [])
+
+    def test_problem_sources_default_except_unlicensed_and_enrichment_parsers(self):
+        problems = [e for e in CATALOG if e["stage"] == "problems"]
+        self.assertTrue(all(e["parser"].endswith("_check") for e in problems))
+        self.assertFalse(_entry("winogrande_check")["default"])
+        self.assertGreaterEqual(sum(e["default"] for e in problems), 10)
+        self.assertEqual(_convert("simplewiki", {"id": "7", "title": "T", "text": "short"}), [])
+        article = _convert("simplewiki", {"id": "7", "title": "T", "text": "word " * 60})[0]
+        self.assertEqual((article["intent"], article["metadata"]["title"]), ("encyclopedia", "T"))
+        chat = _convert("ultrachat_a", {"prompt_id": "p", "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]})[0]
+        self.assertEqual((chat["groupId"], len(chat["messages"])), ("ultrachat:p", 2))
+
+
 class NewConverterTests(unittest.TestCase):
     def test_multiple_choice_maps_numeric_labels_to_letters_and_skips_bad_keys(self):
         raw = {"id": "q1", "question": "Which is a liquid?", "answerKey": "2",

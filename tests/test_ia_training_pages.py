@@ -167,6 +167,29 @@ class RecommendedCollection(unittest.TestCase):
         self.assertEqual(self.states()["tinystories"], "imported")
         self.assertEqual(self.svc.data("text").count, 2)
 
+    def test_collections_by_kind_and_problem_install(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        import studio_catalog as cat
+        stage = {e["id"]: e["stage"] for e in cat.CATALOG}
+        self.assertEqual({stage[i] for i in self.svc.collection_ids("text")}, {"language"})
+        self.assertEqual({stage[i] for i in self.svc.collection_ids("problems")}, {"problems"})
+        self.assertNotIn("winogrande_check", self.svc.collection_ids("problems"))
+        self.assertTrue({"ultrachat_a", "gsm8k", "oasst1"} <= set(self.svc.collection_ids("conversations")))
+
+        def fetch(url, path, stop=None, emit=None, maximum=None, range_bytes=None):
+            if Path(path).name == "train.jsonl":
+                Path(path).write_text('{"question": "What is 2 + 3?", "answer": "2 + 3 = 5\\n#### 5"}\n', encoding="utf-8")
+                return {"url": url, "filename": "train.jsonl", "bytes": 1, "sha256": cat.file_sha256(path)}
+            return self.fake_fetch(url, path, stop, emit, maximum, range_bytes)
+        with patch("studio_catalog._fetch", side_effect=fetch):
+            self.assertTrue(self.svc.download_sources(["gsm8k_check"], kind="problems", install=True))
+            self.svc._worker.join(10)
+        self.assertEqual({r["id"]: r["state"] for r in self.svc.collection("problems")}["gsm8k_check"], "imported")
+        self.assertEqual(self.svc.data("problems").count, 1)
+        rows = self.svc.post_rows("problems") + self.svc.post_rows("heldout_problems")
+        self.assertEqual([(r["rule"], r["params"]) for r in rows], [("final_number", {"answer": "5"})])
+
     def test_failure_is_reported_and_retryable(self):
         from unittest.mock import patch
         with patch("studio_catalog._fetch", side_effect=OSError("no network")):

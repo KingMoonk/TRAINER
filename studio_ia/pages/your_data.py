@@ -11,8 +11,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import studio_rules as rules  # names and labels of the rules only
 from studio_ia.copy import YOURDATA as T
 from studio_ia.pages.base import Page
+from studio_ia.pages.pretraining import source_action, source_status
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import _activate
+from studio_ia.widgets import _activate, button
 
 KINDS = ("text", "conversations", "problems")
 STATUS_COLOR = {"In use": "text2", "Held back": "blue", "Near-duplicate": "amber", "Good": "violet", "Review": "muted",
@@ -40,7 +41,7 @@ def shown_line(summary, query):
 def parse_rule(text):
     """A rule key or its plain label (either case) -> key, else None."""
     word = (text or "").strip().casefold()
-    return next((k for k in rules.RULES if word in (k, k.replace("_", " "), rules.LABELS[k].casefold())), None)
+    return next((k for k in rules.CHECKABLE if word in (k, k.replace("_", " "), rules.LABELS[k].casefold())), None)
 
 
 def collect_fields(kind, ask, say, initial=None):
@@ -57,9 +58,10 @@ def collect_fields(kind, ask, say, initial=None):
     prompt = ask(T["ask_problem"], was.get("prompt", ""))
     if not prompt:
         return None
-    names = ", ".join(rules.RULES)
+    allowed = rules.CHECKABLE if was.get("rule") in rules.KEYED else rules.RULES  # a keyed rule needs the key an import stored
+    names = ", ".join(allowed)
     rule = parse_rule(ask(T["ask_rule"].format(rules=names), was.get("rule", "")))
-    if rule is None:
+    if rule not in allowed:
         say(T["unknown_rule"].format(rules=names))
         return None
     return {"prompt": prompt, "rule": rule}
@@ -136,6 +138,14 @@ class YourDataPage(Page):
         self.dup_button.pack(side="left")
         self.make_button = ttk.Button(buttons, command=self.make)
         self.make_button.pack(side="left", padx=8)
+        card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
+        card.pack(fill="x", pady=(GUTTER, 0))
+        tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)).pack(anchor="w")
+        self.collection_desc = tk_label(card, "", 13, "muted", "panel", wraplength=760)
+        self.collection_desc.pack(anchor="w")
+        self.collection_rows = tk.Frame(card, bg=C["panel"])
+        self.collection_rows.pack(fill="x", pady=(6, 0))
+        self.notes = {}  # source id -> latest progress line
         _activate(self.back, self.go_back)
 
     # navigation ---------------------------------------------------------------------
@@ -197,6 +207,47 @@ class YourDataPage(Page):
         self.make_button.configure(text=T[f"{kind}_make"])
         self.dup_button.configure(text=dup_label(s.near_duplicates, self.only_dups), state="normal" if s.near_duplicates else "disabled")
         self._detail()
+        self.paint_collection()
+
+    # recommended collection of the open kind ------------------------------------------
+    def paint_collection(self):
+        kind = self.kind
+        try:
+            rows = self.services.collection(kind)
+        except NotImplementedError:
+            rows = []
+        self.collection_desc.configure(text=T[f"{kind}_collection_desc"])
+        for child in self.collection_rows.winfo_children():
+            child.destroy()
+        for row in rows:
+            line = tk.Frame(self.collection_rows, bg=C["panel"])
+            line.pack(fill="x", pady=3)
+            tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
+            tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
+            label, action = source_action(row)
+            if action:
+                label = T["download_add"] if action == "download" and kind != "text" else label
+                button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
+            tk_label(self.collection_rows, source_status(row, self.notes.get(row["id"], "")), 12,
+                     "coral" if row.get("error") else "muted", "panel", wraplength=720).pack(anchor="w")
+        if any(source_action(r)[1] == "download" for r in rows):
+            button(self.collection_rows, T["download_add_all"] if kind != "text" else T["download_all"],
+                   lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
+
+    def fetch(self, source_id, action):
+        """Download (and, outside text, add) one source or the whole collection; import a downloaded one."""
+        ids = None if source_id is None else [source_id]
+        started = (self.services.download_sources(ids, kind=self.kind, install=self.kind != "text") if action == "download"
+                   else self.services.import_source(source_id))
+        if started:
+            self.paint_collection()
+
+    def on_event(self, kind, payload):
+        if kind == "download":
+            self.notes[payload["id"]] = payload["text"]
+            self.paint_collection()
+        elif kind in ("download_done", "import_done", "download_failed"):
+            self.reload()
 
     def _row(self):
         return next((r for r in self.summaries[self.kind].rows if r["id"] == self.selected), None)

@@ -1,7 +1,8 @@
-"""Rules that decide if an answer is right: check(rule, prompt, answer) and generate(rule, rng, n).
+"""Rules that decide if an answer is right: check(rule, prompt, answer, params) and generate(rule, rng, n).
 
-The prompt text carries the problem (e.g. 'Reverse: groundwork'), so a rule needs only prompt and answer.
-Copy and reverse are case-sensitive; surrounding whitespace is ignored everywhere.
+For RULES the prompt text carries the problem (e.g. 'Reverse: groundwork'), so the rule needs only prompt and answer.
+KEYED rules compare the answer with a key stored in params["answer"] (imported datasets such as GSM8K or ARC);
+they have no generator. Copy and reverse are case-sensitive; surrounding whitespace is ignored everywhere.
 """
 import re
 
@@ -11,11 +12,19 @@ TERMINAL = ".!?…"
 CLOSERS = "\"')]}”’"
 PAIRS = {"(": ")", "[": "]", "{": "}", "“": "”"}
 NUMBER = re.compile(r"-?\d+")
+DECIMAL = re.compile(r"-?\d+(?:\.\d+)?")
+LETTER = re.compile(r"^\W*([A-J])(?:\)|\.|:|\s|$)")
 
 
 def _number(answer):
     found = NUMBER.findall(answer.replace(",", ""))
     return int(found[-1]) if found else None
+
+
+def decimal(text):
+    """The last number in text (commas ignored, decimals kept) as a float, else None."""
+    found = DECIMAL.findall(str(text).replace(",", ""))
+    return float(found[-1]) if found else None
 
 
 def _tail(prompt, label):
@@ -77,12 +86,28 @@ def _ends(prompt, answer):
 
 CHECKS = {"copy": _copy, "reverse": _reverse, "sort": _sort, "count": _count, "small_addition": _small_addition,
           "max_length": _max_length, "ends_cleanly": _ends}
+def _final_number(prompt, answer, params):
+    want, got = decimal(params.get("answer", "")), decimal(answer)
+    return want is not None and got is not None and abs(got - want) <= 1e-6 * max(1., abs(want))
+
+
+def _choice(prompt, answer, params):
+    m = LETTER.match(answer.strip())
+    return bool(m) and m.group(1) == str(params.get("answer", "")).strip().upper()
+
+
+KEYED_CHECKS = {"final_number": _final_number, "choice": _choice}
 LABELS = {"copy": "copy", "reverse": "reverse", "sort": "sort", "count": "count", "small_addition": "small addition",
           "max_length": "stay under N characters", "ends_cleanly": "end cleanly"}
-RULES = tuple(CHECKS)
+LABELS.update({"final_number": "final number matches the key", "choice": "picks the keyed option"})
+RULES = tuple(CHECKS)              # rules the app can make problems for
+KEYED = tuple(KEYED_CHECKS)        # rules that need an answer key: imported problems only
+CHECKABLE = RULES + KEYED
 
 
-def check(rule, prompt, answer):
+def check(rule, prompt, answer, params=None):
+    if rule in KEYED_CHECKS:
+        return bool(KEYED_CHECKS[rule](prompt or "", answer or "", params or {}))
     if rule not in CHECKS:
         raise ValueError(f"Unknown rule: {rule}")
     return bool(CHECKS[rule](prompt or "", answer or ""))

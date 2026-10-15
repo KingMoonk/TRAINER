@@ -182,20 +182,22 @@ class Services:
         """Import files into the kind's own set. Returns one report line per file."""
         raise NotImplementedError
 
-    def collection(self):
-        """The recommended text collection: one dict per source {id, name, size, records, state, completed, total, error};
-        state is "not downloaded" | "downloading" | "downloaded" | "imported"."""
+    def collection(self, kind="text"):
+        """The recommended collection of one kind ("text" | "conversations" | "problems"): one dict per source
+        {id, name, size, records, state, completed, total, error}; state is "not downloaded" | "downloading" |
+        "downloaded" | "imported"."""
         raise NotImplementedError
 
-    def download_sources(self, ids=None):
-        """Download the whole recommended collection (ids None) or the listed sources, one after another, on a background
-        thread. Progress arrives as events "download" {id, text, completed, total}, then "download_done" {id} or
-        "download_failed" {id, error}. False when a download is already running."""
+    def download_sources(self, ids=None, kind="text", install=False):
+        """Download the kind's whole recommended collection (ids None) or the listed sources, one after another, on a
+        background thread; install=True also adds each one to your sets. Progress arrives as events "download"
+        {id, text, completed, total}, then "download_done" {id} or "download_failed" {id, error}. False when a download
+        is already running."""
         raise NotImplementedError
 
     def import_source(self, source_id):
-        """Import one downloaded source into the text sets used for pretraining (background thread; events "import_done"
-        {id} or "download_failed" {id, error}). False when it is not downloaded or work is already running."""
+        """Import one downloaded source into your sets (background thread; events "import_done" {id} or
+        "download_failed" {id, error}). False when it is not downloaded or work is already running."""
         raise NotImplementedError
 
     def generate_problems(self, rule, n, store=True, rng=None):
@@ -452,11 +454,12 @@ class FakeServices(Services):
     def import_data(self, kind, paths):
         return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
 
-    def collection(self):
-        return getattr(self, "_collection", [])
+    def collection(self, kind="text"):
+        return getattr(self, "_collection", []) if kind == "text" else getattr(self, "_collections", {}).get(kind, [])
 
-    def download_sources(self, ids=None):
-        self.calls = getattr(self, "calls", []) + [("download_sources", ids)]
+    def download_sources(self, ids=None, kind="text", install=False):
+        call = ("download_sources", ids) if (kind, install) == ("text", False) else ("download_sources", ids, kind, install)
+        self.calls = getattr(self, "calls", []) + [call]
         return True
 
     def import_source(self, source_id):
@@ -1075,21 +1078,23 @@ class WorkspaceServices(Services):
         import studio_data_kinds as dk
         return self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
 
-    # recommended text collection (studio_catalog does the fetching, checking and indexing) -----------------------
+    # recommended collections (studio_catalog does the fetching, checking and indexing) ---------------------------
     _busy: dict = {}  # source id -> {completed, total}; swapped for a fresh dict per run, never mutated while shared
     _failed: dict = {}
 
     @staticmethod
-    def collection_ids():
+    def collection_ids(kind="text"):
+        """Default catalogue sources of one kind: language-stage text, problems-stage problems, every other stage conversations."""
         import studio_catalog as cat
-        return [e["id"] for e in cat.CATALOG if e["stage"] == "language" and e["default"]]
+        stage_kind = {"language": "text", "problems": "problems"}
+        return [e["id"] for e in cat.CATALOG if e["default"] and stage_kind.get(e["stage"], "conversations") == kind]
 
-    def collection(self):
+    def collection(self, kind="text"):
         import studio_catalog as cat
         have = {d["catalog_id"]: d for d in cat.list_downloads(self.root)}
         made = {d["id"] for d in self.workspace.state["datasets"]}
         rows = []
-        for entry in (e for e in cat.CATALOG if e["id"] in self.collection_ids()):
+        for entry in (e for e in cat.CATALOG if e["id"] in self.collection_ids(kind)):
             cid, busy = entry["id"], self._busy.get(entry["id"])
             state = ("downloading" if busy is not None else "imported" if f"catalog_{cid}" in made
                      else "downloaded" if cid in have else "not downloaded")
@@ -1118,15 +1123,17 @@ class WorkspaceServices(Services):
         self._worker.start()
         return True
 
-    def download_sources(self, ids=None):
+    def download_sources(self, ids=None, kind="text", install=False):
         import studio_catalog as cat
 
         def work(cid):
             def progress(info):
                 self._busy[cid] = {"completed": info["completed"], "total": info["total"]}
                 self.emit("download", {"id": cid, **info})
-            cat.download_dataset(cid, self.root, emit=progress)
-        return self._background(list(ids or self.collection_ids()), work, "download_done")
+            result = cat.download_dataset(cid, self.root, emit=progress)
+            if install:
+                cat.register_download(self.workspace, result, emit=progress)
+        return self._background(list(ids or self.collection_ids(kind)), work, "download_done")
 
     def import_source(self, source_id):
         import studio_catalog as cat
@@ -1210,7 +1217,8 @@ class WorkspaceServices(Services):
             new.update(user=fields.get("user", ""), assistant=fields.get("assistant", ""))
         else:
             rule, prompt = fields["rule"], fields.get("prompt", "")
-            if old["assistant"] != dk.NO_KEY and not studio_rules.check(rule, prompt, old["assistant"]):
+            params = old.get("params") or (old.get("metadata") or {}).get("params") or {}
+            if old["assistant"] != dk.NO_KEY and not studio_rules.check(rule, prompt, old["assistant"], params):
                 raise ValueError(f"That prompt no longer matches the stored answer under the rule \"{studio_rules.LABELS[rule]}\".")
             new.update(user=prompt, rule=rule, metadata={**(old.get("metadata") or {}), "rule": rule})
         self.workspace.update_example(new)

@@ -32,6 +32,22 @@ class Checks(unittest.TestCase):
             rules.check("nope", "x", "y")
         self.assertFalse(rules.check("reverse", "no label here", "x"))
 
+    def test_keyed_rules_compare_with_the_stored_key(self):
+        number = {"answer": "1200"}
+        for ok in ("1200", "So the total is 1,200.", "The answer is 1200.0"):
+            self.assertTrue(rules.check("final_number", "q", ok, number), ok)
+        for bad in ("120", "1200 then 3", "twelve hundred", ""):
+            self.assertFalse(rules.check("final_number", "q", bad, number), bad)
+        self.assertTrue(rules.check("final_number", "q", "about 0.5", {"answer": "0.5"}))
+        for ok in ("B) water", "B", " (B) water", "B. water"):
+            self.assertTrue(rules.check("choice", "q", ok, {"answer": "B"}), ok)
+        for bad in ("A) rock", "water", "Because B", ""):
+            self.assertFalse(rules.check("choice", "q", bad, {"answer": "B"}), bad)
+        # no key stored: nothing can pass
+        self.assertFalse(rules.check("final_number", "q", "3"))
+        self.assertFalse(rules.check("choice", "q", "B"))
+        self.assertEqual(set(rules.CHECKABLE), set(rules.RULES) | {"final_number", "choice"})
+
     def test_ends_cleanly_details(self):
         for ok in ("Done.", "Really?", "He said (quietly).", "Done.\n", "It's fine."):
             self.assertTrue(rules.check("ends_cleanly", "", ok), ok)
