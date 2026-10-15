@@ -15,7 +15,7 @@ from studio_versions import _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia.copy import BUILDER as T
 from studio_ia.pages.base import Page
-from studio_ia.services import Job
+from studio_ia.services import Job, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, StateTray, button
 
@@ -467,7 +467,7 @@ class BuilderPage(Page):
             if final:
                 put(final)
         except Exception as error:  # noqa: BLE001 - shown in place of the reply
-            put(f"[error: {error}]")
+            put(plain_error(error))
 
     def _pump(self):
         try:

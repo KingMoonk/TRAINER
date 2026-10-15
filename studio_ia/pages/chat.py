@@ -7,8 +7,9 @@ import tkinter as tk
 
 from studio_ia.copy import CHAT as T
 from studio_ia.pages.base import Page
+from studio_ia.services import plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Toggle, button
+from studio_ia.widgets import Card, Kicker, Toggle, _activate, button
 
 A_COLOR, B_COLOR = "violet", "blue"
 TONE = {"better": "violet", "baseline": "muted", "within the spread": "muted", "worse": "coral", "catching up": "coral"}
@@ -32,9 +33,12 @@ def score_rows(v):
             (T["size_speed"], " · ".join(k for k in known if k) or T["val_size_speed"])]
 
 
-def answering_version(numbers, best, picked, follows=True, current=None):
+def answering_version(numbers, best, picked, follows=True, current=None, trained=None):
     """Which version answers: the one the person picked; otherwise the best checkpoint's (when the plan says Chat follows
-    it), otherwise the one already answering; the newest as a last resort."""
+    it), otherwise the one already answering; the newest as a last resort. With `trained` (the numbers that have a
+    checkpoint) only those can answer, and None means there is nothing to chat with yet."""
+    if trained is not None:
+        numbers = [n for n in numbers if n in trained]
     if picked in numbers:
         return picked
     if follows and best in numbers:
@@ -59,7 +63,7 @@ def verdict_view(a, b, result=None):
 
 def stream_reply(chat, version, messages, stop, put):
     """Run one reply. chat(version, messages, on_text, stop) reports the reply so far (cumulative text) through on_text;
-    put(text) receives each cumulative text, then put(None) when the reply is over. Errors become the reply text."""
+    put(text) receives each cumulative text, then put(None) when the reply is over. A failure becomes a sentence in the reply."""
     seen = []
 
     def on_text(text):
@@ -70,7 +74,7 @@ def stream_reply(chat, version, messages, stop, put):
         if final and not seen:
             put(final)
     except Exception as error:  # show it in the pane instead of dying silently
-        put(f"[error: {error}]")
+        put(plain_error(error))
     put(None)
 
 
@@ -88,7 +92,15 @@ class ChatPage(Page):
 
     # state ------------------------------------------------------------------
     def _versions(self):
-        return {v.number: v for v in self.services.versions()}
+        """The versions Chat can talk to: those with a trained checkpoint. An untrained one is never offered or picked."""
+        return {v.number: v for v in self.services.versions() if v.best_checkpoint}
+
+    @staticmethod
+    def _other(vs, number):
+        """The trained version beside `number` for the compare slot: the one just before it, else the one just after, else None."""
+        before = [n for n in vs if n < (number or 0)]
+        after = [n for n in vs if n > (number or 0)]
+        return max(before) if before else min(after) if after else None
 
     def _best(self):
         best = self.services.best_version()
@@ -97,10 +109,12 @@ class ChatPage(Page):
     def refresh(self):
         vs = self._versions()
         follows = (self.services.queue().plan or {}).get("chat_follows_best", True)
-        self.use = answering_version(vs, self._best(), self.use if self.picked else None, follows, self.use)
+        self.use = answering_version(vs, self._best(), self.use if self.picked else None, follows, self.use, trained=vs)
         self.picked = self.picked and self.use != self._best() if follows else self.picked
-        if self.b not in vs:
-            self.b = (self.use - 1 if self.use and self.use > 1 else 2) if vs else None
+        if self.b not in vs or self.b == self.use:
+            self.b = self._other(vs, self.use)
+        if self.b is None:
+            self.compare = False
         self.render()
 
     def on_event(self, kind, payload):
@@ -113,10 +127,12 @@ class ChatPage(Page):
                 self.b = number
         else:
             self.use, self.picked = number, number != self._best()
-            self.b = number - 1 if number > 1 else 2
+            self.b = self._other(self._versions(), number)
         self.render()
 
     def toggle_compare(self):
+        if self.b is None:
+            return
         self.compare, self.how = not self.compare, False
         self.render()
 
@@ -136,6 +152,8 @@ class ChatPage(Page):
         self.using.pack(side="left", padx=10)
         self.mode = tk_label(row, "", 13, "muted", "panel")
         self.mode.pack(side="left")
+        self.build_link = tk_label(row, T["no_trained_link"], 13, "violet", "panel", cursor="hand2", takefocus=1)
+        _activate(self.build_link, lambda: self.navigate("builder"))
         self.cmp_btn = button(row, "", self.toggle_compare)
         self.cmp_btn.pack(side="right")
         self.panes_row = tk.Frame(body, bg=C["bg"])
@@ -158,7 +176,8 @@ class ChatPage(Page):
         self.entry = tk.Entry(self.send_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(15))
         self.entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(0, 8))
         self.entry.bind("<Return>", lambda _e: self.send())
-        button(self.send_row, T["send"], self.send, True).pack(side="left")
+        self.send_btn = button(self.send_row, T["send"], self.send, True)
+        self.send_btn.pack(side="left")
         teach = tk.Frame(body, bg=C["bg"])
         teach.pack(fill="x", pady=(0, GUTTER))
         link = tk_label(teach, T["teach_correction"], 14, "violet", cursor="hand2", takefocus=1)
@@ -192,7 +211,12 @@ class ChatPage(Page):
     def render(self):
         vs = self._versions()
         cur, best = vs.get(self.use), self._best()
-        self.using.configure(text=T["head_using"].format(version=name(cur)) if cur else "No trained version yet")
+        self.using.configure(text=T["head_using"].format(version=name(cur)) if cur else T["no_trained"])
+        (self.build_link.pack_forget if cur else lambda: self.build_link.pack(side="left", padx=10))()
+        ready = cur is not None  # nothing to talk to until a version has trained
+        self.entry.configure(state="normal" if ready else "disabled")
+        self.send_btn.state(["!disabled" if ready else "disabled"])
+        self.cmp_btn.state(["!disabled" if self.b is not None else "disabled"])
         self.mode.configure(text="" if not cur else T["head_mode_follows"] if not self.picked
                             else T["head_mode_picked"].format(best_version=f"Version {best}"))
         self.cmp_btn.configure(text=T["back_to_one"] if self.compare else T["compare_btn"])

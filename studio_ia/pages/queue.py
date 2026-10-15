@@ -248,6 +248,7 @@ class QueuePage(Page):
     def _storage(self):
         card = self._card(T["storage"].upper())
         tk_label(card, T["storage_desc"], 13, "muted", wraplength=720).pack(anchor="w")
+        tk_label(card, T["storage_free"].format(size=size_text(self.services.free_space())), 14, "text2").pack(anchor="w", pady=(6, 0))
         choice = tk.StringVar(value=self.choice)
         data = tk.BooleanVar(value=self.data)
         self.line = tk_label(card, "", 14, "text2")

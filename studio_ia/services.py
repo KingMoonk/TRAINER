@@ -1,10 +1,16 @@
 """The one façade pages talk to. `Services` is the protocol; `FakeServices` is an in-memory stand-in."""
 from __future__ import annotations
 
+import errno
+import logging
+import socket
+import urllib.error
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import numpy as np
+
+from studio_versions import NoCheckpoint
 
 
 @dataclass
@@ -52,6 +58,28 @@ class QueueState:
     stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
+
+
+_log = logging.getLogger(__name__)
+
+
+def plain_error(error, name=None):
+    """One sentence for what went wrong and what to do next. `name` is what was being worked on (a source, a file), for the
+    sentences that mention it. The one place pages and background work turn an exception into words; the log keeps the rest."""
+    import studio_catalog as cat
+    what = name or "that file"
+    if isinstance(error, urllib.error.HTTPError):
+        return f"The server returned {error.code} for {what}. The file may have moved; try again later."
+    if isinstance(error, (urllib.error.URLError, socket.timeout, ConnectionError)):
+        return "Could not reach the download server. Check the connection and try again."
+    if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+        return "The disk is full. Free space in This computer › Storage, then try again."
+    if isinstance(error, MemoryError):
+        return f"Ran out of memory while reading {what}."
+    if isinstance(error, (cat.DownloadCancelled, ValueError)) and str(error):
+        return str(error)
+    _log.error("Unexpected %s%s", type(error).__name__, f" while working on {name}" if name else "", exc_info=error)
+    return f"Something went wrong: {type(error).__name__}. The log has the details."
 
 
 def problem_items(rule, n, rng):
@@ -228,6 +256,10 @@ class Services:
         raise NotImplementedError
 
     def clean_storage(self, days=None, data=False):
+        raise NotImplementedError
+
+    def free_space(self) -> int:
+        """Bytes free on the disk that holds the workspace (where checkpoints are written)."""
         raise NotImplementedError
 
     def pretrain_preview(self, dataset_ids, rows=16):
@@ -465,6 +497,9 @@ class FakeServices(Services):
     def clean_storage(self, days=None, data=False):
         self.cleaned = (days, data)
         return (0, 0)
+
+    def free_space(self):
+        return 120 * 10 ** 9
 
     def remove(self, job_id):
         self._queue.up_next = [j for j in self._queue.up_next if j.id != job_id]
@@ -899,6 +934,10 @@ class WorkspaceServices(Services):
     def hold(self, job_id, held=True):
         self.runner.hold(job_id, held)
 
+    def free_space(self):
+        import shutil
+        return shutil.disk_usage(self.root).free
+
     def storage(self, days=None, data=False):
         import studio_cleanup
         paths = studio_cleanup.plan(self.root, days, data)
@@ -1246,7 +1285,7 @@ class WorkspaceServices(Services):
 
     def import_data(self, kind, paths):
         import studio_data_kinds as dk
-        return self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
+        return self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]), describe=plain_error)
 
     # recommended collections (studio_catalog does the fetching, checking and indexing) ---------------------------
     _busy: dict = {}  # source id -> {completed, total}; swapped for a fresh dict per run, never mutated while shared
@@ -1273,6 +1312,11 @@ class WorkspaceServices(Services):
                          "error": self._failed.get(cid, "")})
         return rows
 
+    @staticmethod
+    def _source_name(cid):
+        import studio_catalog as cat
+        return next((e["name"] for e in cat.CATALOG if e["id"] == cid), cid)
+
     def _background(self, ids, work, done):
         with self._lock:
             if self._busy:
@@ -1286,7 +1330,7 @@ class WorkspaceServices(Services):
                     self.emit(done, {"id": cid})
                 except Exception as error:  # shown to the person in plain words; the rest of the list still runs
                     self._busy.pop(cid, None)
-                    self._failed[cid] = str(error) or error.__class__.__name__
+                    self._failed[cid] = plain_error(error, self._source_name(cid))
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
             self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
@@ -1490,7 +1534,7 @@ class WorkspaceServices(Services):
     def _checkpoint(self, version):
         v = self._as_version(version)
         if v is None or not v.best_checkpoint:
-            raise ValueError("That version has no trained checkpoint yet.")
+            raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
         return v.best_checkpoint
 
     def chat(self, version, messages, on_text, stop):

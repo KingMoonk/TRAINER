@@ -65,8 +65,9 @@ class ChatStreaming(unittest.TestCase):
         stream_reply(lambda *a: "whole", 1, [], None, got.append)
         self.assertEqual(got, ["whole", None])
         got = []
-        stream_reply(lambda *a: 1 / 0, 1, [], None, got.append)
-        self.assertTrue(got[0].startswith("[error:") and got[-1] is None)
+        with self.assertLogs("studio_ia.services", "ERROR"):
+            stream_reply(lambda *a: 1 / 0, 1, [], None, got.append)
+        self.assertEqual(got, ["Something went wrong: ZeroDivisionError. The log has the details.", None])
 
 
 class PageLogic(unittest.TestCase):
@@ -193,12 +194,14 @@ class RecommendedCollection(unittest.TestCase):
 
     def test_failure_is_reported_and_retryable(self):
         from unittest.mock import patch
-        with patch("studio_catalog._fetch", side_effect=OSError("no network")):
+        import urllib.error
+        offline = "Could not reach the download server. Check the connection and try again."
+        with patch("studio_catalog._fetch", side_effect=urllib.error.URLError("no network")):
             self.svc.download_sources(["tinystories"])
             self.svc._worker.join(10)
         row = next(r for r in self.svc.collection() if r["id"] == "tinystories")
-        self.assertEqual((row["state"], row["error"]), ("not downloaded", "no network"))
-        self.assertIn(("download_failed", {"id": "tinystories", "error": "no network"}), self.events)
+        self.assertEqual((row["state"], row["error"]), ("not downloaded", offline))
+        self.assertIn(("download_failed", {"id": "tinystories", "error": offline}), self.events)
         with patch("studio_catalog._fetch", side_effect=self.fake_fetch):
             self.assertTrue(self.svc.download_sources(["tinystories"]))  # nothing left running
             self.svc._worker.join(10)
