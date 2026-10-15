@@ -119,7 +119,7 @@ class QueuePage(Page):
         run = s.job.params.get("output_dir")
         try:
             if run and getattr(self, "_phases", (None,))[0] != (run, s.total):  # fixed for a run of a given length: read once
-                self._phases = ((run, s.total), self.services.run_curve(run)["phases"])
+                self._phases = ((run, s.total), self.services.run_phases(run))
             return phase_at(self._phases[1], s.step) if run else ""
         except (OSError, ValueError, KeyError, NotImplementedError):
             return ""

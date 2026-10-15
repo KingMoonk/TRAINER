@@ -20,9 +20,13 @@ APP = Path(__file__).with_name("app.py")
 PROFILE = Path(__file__).with_name("profile.svg")
 
 
-def run(*cmd):
+UNIT = {"GROUNDWORK_STRICT_UI": "1", "GROUNDWORK_STALL_LOG": "0"}  # a slow primitive on a bound UI thread raises; no stall watcher in tests
+WINDOW = {"GROUNDWORK_STRICT_UI": "0", "GROUNDWORK_STALL_LOG": "0"}  # window tests drive pages on the Tk thread directly: they log it (studio_ui_guard)
+
+
+def run(*cmd, env=None):
     print("+", " ".join(cmd), flush=True)
-    code = subprocess.call(cmd)
+    code = subprocess.call(cmd, env={**os.environ, **(env or {})})
     if code:
         sys.exit(code)
 
@@ -33,9 +37,9 @@ def test(modules=()):
         window = [m for m in modules if "gui_" in m or "e2e" in m]
         if window:
             sys.exit(f"{window} open windows or train for real: they run in CI only (test:ci, test:ci:e2e).")
-        run(PY, "-m", "unittest", *VERBOSE, *modules)
+        run(PY, "-m", "unittest", *VERBOSE, *modules, env=UNIT)
     else:
-        run(PY, "-m", "unittest", "discover", "-s", "tests", *VERBOSE)  # test_*.py only, which never open a window
+        run(PY, "-m", "unittest", "discover", "-s", "tests", *VERBOSE, env=UNIT)  # test_*.py only, which never open a window
 
 
 def test_ci():
@@ -45,12 +49,12 @@ def test_ci():
     test()
     # One process per module, as in the app: Panda3D runs in its own process there, never beside Tk. A crash prints every thread's stack.
     for path in sorted(Path(__file__).with_name("tests").glob("gui_*.py")):
-        run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", "-p", path.name, *VERBOSE)
+        run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", "-p", path.name, *VERBOSE, env=WINDOW)
 
 
 def test_ci_e2e():
     test_ci()
-    run(PY, "-m", "unittest", "tests.e2e_train", *VERBOSE)  # a real training run on a committed sample, about 1 s of compute
+    run(PY, "-m", "unittest", "tests.e2e_train", *VERBOSE, env=WINDOW)  # a real training run on a committed sample, about 1 s of compute
 
 
 def profile():

@@ -1,6 +1,7 @@
 """Compute devices: PyTorch on the CPU, a CUDA GPU or Apple's MPS, with explicit device reporting."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -8,6 +9,19 @@ import numpy as np
 import torch
 
 DEVICES = ("auto", "cpu", "cuda", "mps")
+
+
+def background_threads(cores=None):
+    """How many threads torch's intra-op pool gets while the app is open: every core but one, so the Tk thread always has a
+    core to draw on and does not wait on the GIL behind torch's workers."""
+    return max(1, (cores or os.cpu_count() or 1) - 1)
+
+
+def cap_threads():
+    """Cap torch's intra-op pool for in-app background work (training jobs, scoring), where it starts. The pool is one per
+    process, not per thread, so this also caps any other torch work in the app: none of it runs on the Tk thread. A standalone
+    run (train.py) does not call it and keeps every core."""
+    torch.set_num_threads(background_threads())
 
 
 @lru_cache(maxsize=1)

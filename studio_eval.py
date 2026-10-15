@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from studio_ui_guard import slow
 from studio_catalog import CHOICE_ASK
 from studio_slots import BOS, OFFSET, PAD, UNK
 
@@ -55,6 +56,7 @@ def score_windows(length, context):
     return out
 
 
+@slow("score documents with a model")
 def score_docs(model, docs):
     """Per document (nats, characters). Characters the tokenizer cannot encode (UNK pieces) are scored at ln V.
 
@@ -114,6 +116,7 @@ def bits_per_char(checkpoint, docs):
     return corpus_bpc(score_docs(checkpoint, docs))
 
 
+@slow("encode a whole corpus")
 def uniform_bpc(tokenizer, docs):
     """The uniform guess: ln V per piece, converted with the corpus characters-per-piece."""
     pieces = sum(len(tokenizer.encode(d)) for d in docs)
@@ -121,6 +124,7 @@ def uniform_bpc(tokenizer, docs):
     return math.log(tokenizer.vocab_size) * pieces / chars / LN2
 
 
+@slow("encode a whole corpus")
 def unigram_bpc(tokenizer, docs, eval_docs=None):
     """Counting word frequencies: exact entropy of the piece counts over docs, scored on eval_docs (default docs).
 
@@ -373,6 +377,7 @@ def _continuation_logprobs(local, pairs):
     return out
 
 
+@slow("run few-shot checks")
 def few_shot(model, items, shots=SHOTS, seed=0, pool=None):
     """few_shot_table scored by a checkpoint path or LocalModel."""
     from studio_model import LocalModel
