@@ -21,6 +21,7 @@ from studio_validate import errors, validate
 from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia import pieces as cut
+from studio_ia.attribution import attribute, blocks_change_text
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
@@ -398,16 +399,17 @@ def preset_draft(spec):
     return dict(s), (validate_spec(spec), s)
 
 
-def last_blocks_change(versions):
-    """(from, to, v_from, v_to, bpc_moved|None) for the latest block-count change in the history, else None.
-    The size of the move is measured from the two versions' held-back scores, or None when either is missing."""
+def last_blocks_change(versions, facts=None, compares=None):
+    """(from, to, v_from, v_to, attribution) for the latest block-count change in the history, else None. The attribution
+    (studio_ia.attribution) has the signed move in held-back error and what else differed. `facts(number)` and `compares()` are
+    Services.run_facts and Services.compare_runs, called only when a change is found."""
     vs = [v for v in versions if v.spec]
     for i in range(len(vs) - 1, 0, -1):
         a, b = _facts(vs[i - 1].spec)["blocks"], _facts(vs[i].spec)["blocks"]
         if a != b:
-            x, y = vs[i - 1].scorecard.get("bpc"), vs[i].scorecard.get("bpc")
-            moved = f"{abs(y - x):.2f}" if isinstance(x, (int, float)) and isinstance(y, (int, float)) else None
-            return a, b, vs[i - 1].number, vs[i].number, moved
+            facts = facts or (lambda number: {})
+            return a, b, vs[i - 1].number, vs[i].number, attribute(vs[i - 1], vs[i], facts(vs[i - 1].number), facts(vs[i].number),
+                                                                    compares() if compares else ())
     return None
 
 
@@ -417,16 +419,15 @@ def design_expectation(s, spec):
     return expectation(c["params"], TOKENIZERS[s["V"]], embedding_params=c["table"])
 
 
-def expectations(cur, draft, versions=(), issues=()):
+def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
     """What to expect from each change, then the advice (`issues`, from new_issues) the new design gets."""
     a, b, out = cur, draft, []
     if b["L"] > a["L"]:
         out.append(EXPECT["more"])
     if b["L"] < a["L"]:
         out.append(EXPECT["fewer"])
-    if b["L"] != a["L"] and (last := last_blocks_change(versions)):
-        out.append(f"Last time blocks changed ({last[0]} → {last[1]}, version {last[2]} → {last[3]}), "
-                   + (f"error moved by {last[4]} bits per character." if last[4] else "but one of them has no held-back score yet."))
+    if b["L"] != a["L"] and (last := last_blocks_change(versions, facts, compares)):
+        out.append(blocks_change_text(*last))
     if b["H"] != a["H"]:
         out.append(EXPECT["heads"].format(how="more, narrower" if b["H"] > a["H"] else "fewer, wider"))
     if b["W"] > a["W"]:
@@ -732,12 +733,10 @@ class BuilderPage(Page):
             return NO_PARENT.format(n=self.n)
         return NOTES[warm_kind(self.cur, self.draft)]
 
-    def last_blocks_change(self):
-        return last_blocks_change(self.services.versions())
-
     def expectations(self):
         issues = new_issues(self.base_spec(), self.draft_spec) if self.draft_spec else ()
-        return expectations(self.cur, self.draft, self.services.versions(), issues)
+        return expectations(self.cur, self.draft, self.services.versions(), issues, self.services.run_facts,
+                            self.services.compare_runs)
 
     def preview_preset(self, key):
         """Show a ready-made design's cost; nothing changes until it is loaded."""

@@ -207,6 +207,15 @@ class Services:
         """Training step at which the version's best checkpoint was saved, or None when unknown."""
         return None
 
+    def run_facts(self, number):
+        """What version `number`'s training run did, to tell whether two versions are a fair comparison:
+        {data, steps, tokens, start, lr, extra}, or {} when the run is not on this computer."""
+        return {}
+
+    def compare_runs(self):
+        """The saved Compare runs: [{base, variants, mode, results}] (specs as saved, results.json of each)."""
+        return []
+
     def save_version(self, spec, change_text):
         raise NotImplementedError
 
@@ -1003,6 +1012,43 @@ class WorkspaceServices(Services):
 
     def _abs(self, p):
         return None if not p else str(p if Path(p).is_absolute() else self.root / p)
+
+    def _file_hash(self, path):
+        """sha256 of a file, read once per change of its size or time."""
+        import hashlib
+        stat = Path(path).stat()
+        key = ("sha", str(path), stat.st_size, stat.st_mtime_ns)
+        if key not in self._cache:
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+            self._cache[key] = digest.hexdigest()
+        return self._cache[key]
+
+    def run_facts(self, number):
+        try:
+            runs = self.store.get(number)["runs"]
+            run = Path(self._abs(runs[-1]))
+            record = json.loads((run / "run.json").read_text(encoding="utf-8"))
+            config = json.loads((run / "config.json").read_text(encoding="utf-8"))
+            data = self._file_hash(run / "dataset.jsonl")
+        except (KeyError, IndexError, OSError, ValueError, TypeError):
+            return {}
+        return dict(data=data, steps=record.get("step"), tokens=record.get("trained_tokens"), lr=config.get("learning_rate"),
+                    start=record.get("initialized_from") or record.get("resumed_from"),
+                    extra=any(r.get("ok") for r in self._json("post_training.json", {}).get(str(number), {}).values()))  # a passed round moved the weights
+
+    def compare_runs(self):
+        out = []
+        for folder in sorted(Path(self.workspace.run_dir).glob("compare_*")):
+            try:
+                experiment = json.loads((folder / "experiment.json").read_text(encoding="utf-8"))
+                results = json.loads((folder / "results.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            out.append(dict(base=experiment["base"], variants=experiment.get("variants") or [], mode=experiment.get("mode"), results=results))
+        return out
 
     def _as_version(self, version):
         if isinstance(version, int):
