@@ -162,8 +162,14 @@ def next_start(plan, now):
 
 
 class Runner:
-    def __init__(self, path, handlers, services=None, tick=3., clock=datetime.now):
-        self.path, self.handlers, self.services, self.tick, self.clock = Path(path), handlers, services, tick, clock
+    """Runs one job at a time, each in a worker process of its own (studio_worker). `prepare(job)` runs in this process just before a
+    job starts: it fills in what the handler would otherwise ask the app for (output folder, checkpoints) and returns the context
+    the handler gets, {"root", "run_dir"}. Without it the context is the folder above data/ and its runs/."""
+
+    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now):
+        self.path, self.handlers, self.prepare, self.tick, self.clock = Path(path), handlers, prepare, tick, clock
+        self.root = self.path.parent.parent
+        self.handles = set()           # live workers: the running job's and any cool-down branched off it
         self.lock = threading.RLock()
         self.subscribers = []
         self.jobs, self.plan = [], Plan()
@@ -263,7 +269,7 @@ class Runner:
         with self.lock:
             job = next((j for j in self.jobs if j.id == job_id), None)
             if job is self.running:
-                self.stop_event.set()  # the running job is stopped; the runner marks it
+                self.stop_event.set()  # the running job is stopped (the runner thread tells its worker); the runner marks it
             elif job:
                 self.jobs.remove(job)
                 self._save()
@@ -305,13 +311,18 @@ class Runner:
         def work():
             self._emit("checkpoint", {"job": main.id, "phase": "start"})
             try:
-                handler(child, self.services, lambda e: self._emit("train", {"job": child.id, **e}), threading.Event(), threading.Event())
+                handle = self._start(child, handler, lambda e: self._emit("train", {"job": child.id, **e}))
+                handle.done.wait()
+                error = handle.error
             except Exception as exc:  # noqa: BLE001
-                self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": str(exc)})
+                error = str(exc) or type(exc).__name__
+            if error:
+                self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": error})
                 return
             self._emit("checkpoint", {"job": main.id, "phase": "done"})
             if then_stop:
                 self.stop_event.set()
+                self.wake.set()
         threading.Thread(target=work, daemon=True).start()
         return True
 
@@ -319,6 +330,7 @@ class Runner:
         self.stopping = True
         if not self.checkpoint_now(then_stop=True):
             self.stop_event.set()
+            self.wake.set()
 
     def state(self):
         gate = self.gate  # the last reading of the runner thread; reading it here would spawn ioreg/pmset on the Tk thread
@@ -336,9 +348,13 @@ class Runner:
         self.thread.start()
 
     def shutdown(self, timeout=10):
+        """Stop the running job and wait up to `timeout` for it to save. A worker still saving then is left to finish: it exits by
+        itself once this process has gone (its socket closes), and the job runs again at the next start."""
         self.closed.set()
         self.stop_event.set()
         self.wake.set()
+        for handle in list(self.handles):
+            handle.stop()
         if self.thread:
             self.thread.join(timeout)
 
@@ -392,7 +408,31 @@ class Runner:
                 self._gate_busy = False
         threading.Thread(target=work, daemon=True).start()
 
+    def _reap(self):
+        """Workers an app that crashed left behind: their jobs went back to waiting in _load, so stop them before those run again."""
+        import studio_worker
+        try:
+            studio_worker.reap(self.root / "data" / "workers")
+        except OSError:
+            pass
+
+    def _start(self, job, handler, emit, on_end=None):
+        """Start `job` in a worker process; the handle is tracked until the process ends."""
+        import studio_worker
+        context = self.prepare(job) if self.prepare else {"root": str(self.root), "run_dir": str(self.root / "runs")}
+
+        def ended():
+            self.handles.difference_update([h for h in list(self.handles) if h.done.is_set()])
+            if on_end:
+                on_end()
+        handle = studio_worker.Handle(job, handler, context, emit, self.root / "data" / "workers", self.root / "logs" / "worker.log", ended)
+        self.handles.add(handle)
+        if handle.done.is_set():  # it ended before it was added
+            self.handles.discard(handle)
+        return handle
+
     def _loop(self):
+        self._reap()
         while not self.closed.is_set():
             self.wake.clear()  # before looking: whatever sets it from here on is seen by the next pass
             self._watch()
@@ -435,34 +475,26 @@ class Runner:
             self._emit("train", {"job": job.id, **event})
 
         awake = platform_helpers.keep_awake(os.getpid()) if self.plan.keep_awake else None
-        outcome, done = {}, threading.Event()
-
-        def work():
+        error, handle = short, None
+        if not short:
             try:
-                if short:
-                    outcome["error"] = short
-                    return
-                try:
-                    with timed(f"job {getattr(handler, '__name__', job.kind)}"):
-                        handler(job, self.services, emit, self.stop_event, self.pause_event)
-                except Exception as exc:  # noqa: BLE001
-                    outcome["error"] = str(exc) or type(exc).__name__
-            finally:
-                done.set()
-                self.wake.set()
-        worker = threading.Thread(target=work, daemon=True)
+                handle = self._start(job, handler, emit, self.wake.set)
+            except Exception as exc:  # noqa: BLE001 - prepare or the spawn failed: the job fails with the reason
+                error = str(exc) or type(exc).__name__
         self._emit("job", {"job": job.id, "status": "running"})
-        worker.start()
-        while not done.is_set():
+        while handle and not handle.done.is_set():
             self.wake.clear()
             self._watch()
-            if not done.is_set():
+            handle.sync(self.stop_event, self.pause_event)  # whatever set them also set wake
+            if not handle.done.is_set():
                 self.wake.wait(self.tick)
-        worker.join()
         platform_helpers.release_awake(awake)
         with self.lock:
-            job.status = "failed" if "error" in outcome else "stopped" if self.stop_event.is_set() else "done"
-            job.error = outcome.get("error", "")
+            if handle:
+                job.params.update(handle.params)
+                error = handle.error
+            job.status = "failed" if error else "stopped" if self.stop_event.is_set() else "done"
+            job.error = error
             self.running = None
             self.stopping = False
             if job.status == "done" and job.kind == "pretrain" and job.params.get("user_text"):

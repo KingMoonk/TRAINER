@@ -13,7 +13,7 @@ import torch
 import studio_gate
 import studio_rl
 import studio_rules
-from studio_jobs import HANDLERS
+from studio_jobs import post_round
 from studio_model import AdamW, ScratchTransformer, Tokenizer, load_checkpoint, train
 from studio_queue import Job, Plan, Runner
 from studio_rlhf import _encode_pair
@@ -24,6 +24,12 @@ EXAMPLES = [{"user": f"Copy: {w}", "assistant": w} for w in WORDS] * 3
 TINY = dict(device="cpu", width=32, layers=1, heads=2, context=32, expansion=2, dropout=0, batch_size=4,
             steps=20, learning_rate=.004, warmup=0, validation=0, eval_every=10, objective="assistant")
 USER = [{"role": "user", "content": "Copy: yes"}]
+
+
+def one_problem_solved(job, context, emit, stop, pause):
+    """post_round in the worker, with the probe saying the model solves one problem (a patch here would not reach the worker)."""
+    with mock.patch.object(studio_rl, "pass_at_k", return_value={"problems": 8, "k": 4, "solved": 1, "passed": 1, "answers": 32}):
+        return post_round(job, context, emit, stop, pause)
 
 
 class RLChecks(unittest.TestCase):
@@ -214,57 +220,65 @@ class RLChecks(unittest.TestCase):
     # ------------------------------------------------------------------ handler through a Runner
     def test_round_2_is_skipped_when_the_model_solves_nothing(self):
         problems = _generate_problems(10, __import__("random").Random(42))
-        recorded, events = [], []
-        services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,
-                                   best_version=lambda: None, post_rows=lambda kind: [],
-                                   record_round=lambda number, version, result: recorded.append((number, result)))
+        events = []
+        context = SimpleNamespace(run_dir=self.dir / "runs", post_rows=lambda kind: [])
         job = SimpleNamespace(id="skip", params={"round": 2, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "skipped"),
                                                  "problems": problems})
         none_solved = {"problems": 8, "k": 4, "solved": 0, "passed": 0, "answers": 32}
         with mock.patch.object(studio_rl, "pass_at_k", return_value=none_solved):
-            done = studio_rl.run_round(2, job, services, events.append, threading.Event(), threading.Event())
+            done = studio_rl.run_round(2, job, context, events.append, threading.Event(), threading.Event())
         self.assertEqual((done["ok"], done["checkpoint"]), (False, str(self.ckpt)))
         self.assertFalse((self.dir / "skipped").exists())                    # nothing trained
         gate = next(e for e in events if e["type"] == "gate")
         self.assertTrue(gate["skipped"] and not gate["ok"])
         self.assertIn("teach nothing", gate["verdict"])
         self.assertEqual(gate["checks"][0]["detail"], "0 of 32 sampled answers passed, on 8 problems")
-        self.assertEqual((recorded[0][0], recorded[0][1]["checkpoint"]), (2, str(self.ckpt)))   # recorded, and it never moves Chat
+        self.assertEqual(job.params["result"], {k: v for k, v in gate.items() if k != "type"})   # left for the app to record; it never moves Chat
+        self.assertFalse(job.params["result"]["ok"])
 
     def test_round_1_keeps_a_lora_versions_settings_unless_the_job_says_otherwise(self):
         lora = {"rank": 4, "alpha": 8, "dropout": 0, "targets": ["attn"]}
-        services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,
-                                   best_version=lambda: None, post_rows=lambda kind: [])
+        context = SimpleNamespace(run_dir=self.dir / "runs", post_rows=lambda kind: [])
 
         def trained_with(config):
             job = SimpleNamespace(id="r1", params={"round": 1, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "r1"), "config": config})
             with mock.patch.object(studio_rl, "load_checkpoint", return_value={"config": {"width": 32, "lora": lora}}), \
                  mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "pass_k": 0, "pass_n": 0}), \
                  mock.patch.object(studio_rl, "train", return_value={"checkpoint": str(self.ckpt)}) as fit:
-                studio_rl.run_round(1, job, services, lambda event: None, threading.Event(), threading.Event())
+                studio_rl.run_round(1, job, context, lambda event: None, threading.Event(), threading.Event())
             return fit.call_args.args[0]
 
         self.assertEqual(trained_with({})["lora"], lora)
         self.assertIsNone(trained_with({"lora": None})["lora"])
 
+    def test_the_app_records_a_rounds_result_once_it_ends(self):
+        from studio_ia.services import WorkspaceServices
+        recorded = []
+        services = object.__new__(WorkspaceServices)
+        services.record_round = lambda number, version, result: recorded.append((number, version, result["ok"]))
+        job = Job("post_round", "r", params={"version": 3, "result": {"round": 2, "ok": True}})
+        services.runner = SimpleNamespace(jobs=[job])
+        services._record_job("job", {"job": job.id, "status": "running", "error": ""})
+        self.assertEqual(recorded, [])
+        services._record_job("job", {"job": job.id, "status": "done", "error": ""})
+        self.assertEqual(recorded, [(2, 3, True)])
+
     def test_post_round_handler_completes_through_a_runner(self):
         problems = _generate_problems(10, __import__("random").Random(42))
-        services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,
-                                   best_version=lambda: None, post_rows=lambda kind: [])
         events = []
-        runner = Runner(self.dir / "queue.json", HANDLERS, services, tick=.01)
+        runner = Runner(self.dir / "data" / "queue.json", {"post_round": one_problem_solved}, tick=.01)  # in a worker process
         runner.set_plan(Plan(hours="any", idle_only=False, pause_on_battery=False))
         runner.subscribe(lambda kind, payload: events.append(payload) if kind == "train" else None)
         self.addCleanup(runner.shutdown)
         job = runner.enqueue(Job("post_round", "Round 2", params={
             "round": 2, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "queued"), "problems": problems[:6], "group": 3,
             "steps": 2, "heldout_problems": problems[6:], "heldout_docs": [{"user": "Copy: yes", "assistant": "yes"}, "Copy: no no"]}))
-        with mock.patch.object(studio_rl, "pass_at_k", return_value={"problems": 8, "k": 4, "solved": 1, "passed": 1, "answers": 32}):
-            runner.start()
-            end = time.time() + 120
-            while time.time() < end and job.status in ("waiting", "running"):
-                time.sleep(.05)
+        runner.start()
+        end = time.time() + 120
+        while time.time() < end and job.status in ("waiting", "running"):
+            time.sleep(.05)
         self.assertEqual((job.status, job.error), ("done", ""))
+        self.assertEqual(job.params["result"]["round"], 2)   # the result came back from the worker for the app to record
         gate = next(e for e in events if e.get("type") == "gate")
         self.assertEqual(gate["round"], 2)
         self.assertLessEqual(gate["taught"], gate["groups"])

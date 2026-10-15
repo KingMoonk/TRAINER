@@ -974,23 +974,36 @@ class WorkspaceServices(Services):
     def __init__(self, workspace):
         import studio_jobs
         import studio_queue
-        import studio_versions
 
         super().__init__()
+        self._reads(workspace)
+        self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
+                                          prepare=lambda job: studio_jobs.prepare(job, self))
+        self.runner.subscribe(self.emit)
+        self.runner.subscribe(self._record_job)
+        workspace.progress = self.note
+        if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
+            threads.start(workspace.ensure_schema)
+
+    def _reads(self, workspace):
+        import studio_versions
         self.workspace = workspace
         self.root = Path(workspace.root)
         self.store = studio_versions.VersionStore(self.root)
         self.store.versions = lambda: self._rows()  # tolerant of the simpler list schema
-        self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS, services=self)
-        self.runner.subscribe(self.emit)
-        self.runner.subscribe(self._record_job)
         self._models, self._cache = {}, {}
         self._lock = threading.RLock()
         self._made = {}  # cache key -> the lock held while it is being made
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
-        workspace.progress = self.note
-        if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-            threads.start(workspace.ensure_schema)
+
+    @classmethod
+    def reader(cls, root):
+        """The data reads a queue job makes (examples, post_rows), in its worker process: no runner, no window, no schema update."""
+        from studio_core import Workspace
+        self = cls.__new__(cls)
+        Services.__init__(self)
+        self._reads(Workspace(root))
+        return self
 
     def close(self):
         if getattr(self, "_viz", None) is not None:
@@ -1574,6 +1587,9 @@ class WorkspaceServices(Services):
         if kind != "job" or not isinstance(payload, dict):
             return
         job = next((j for j in self.runner.jobs if j.id == payload.get("job")), None)
+        if job and job.kind in ("post_round", "restore_answers") and payload["status"] != "running" and job.params.get("result"):
+            result = job.params["result"]  # the round ran in a worker: its gate result is kept here, in the app
+            return self.record_round(result["round"], job.params.get("version"), result)
         number = job.params.get("version") if job and job.kind in VERSION_JOBS else None
         if not number:
             return

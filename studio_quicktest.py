@@ -131,9 +131,13 @@ def run(current_spec, draft_spec, dataset='stories', minutes=1, shrink=False, em
 CHECK_IDS = ['starts_near_uniform', 'finite', 'memorises_one_batch', 'error_falls']
 
 
+def _root(services):
+    return getattr(services, 'root', None) or getattr(getattr(services, 'workspace', None), 'root', None)
+
+
 def _finish(result, emit, services):
     result = json.loads(json.dumps(result, default=float))
-    root = getattr(getattr(services, 'workspace', None), 'root', None)
+    root = _root(services)
     if root:
         path = Path(root).joinpath(*LAST)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +148,7 @@ def _finish(result, emit, services):
 
 def load_last(services, since=0.):
     """The newest finished result if it finished after `since` (seconds since the epoch), else None."""
-    root = getattr(getattr(services, 'workspace', None), 'root', None)
+    root = _root(services)
     try:
         result = json.loads(Path(root).joinpath(*LAST).read_text())
     except (OSError, ValueError, TypeError):
