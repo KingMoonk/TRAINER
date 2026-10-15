@@ -14,6 +14,7 @@ macOS / Linux:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 python app.py
 ```
 
@@ -22,23 +23,23 @@ Windows (PowerShell):
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe app.py
 ```
 
 On Windows you can instead double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
 
 
-## Lint and git hooks
+## Lint and tests
 
-Run once per clone:
+CI runs `ruff check .` and every test on each push and pull request. The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced. To lint locally:
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
-git config core.hooksPath .githooks
+.venv/bin/python -m ruff check .
 ```
 
-- **pre-commit** lints the staged Python files with [ruff](https://docs.astral.sh/ruff/) and applies its safe fixes. The rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
-- **pre-push** runs `ruff check .` and the fast tests (about 3 seconds); a failure stops the push. The GUI, network and 3D viewer tests take about 40 seconds more and run in CI only. They open windows, so every `gui_*.py` skips itself unless `CI` is set (GitHub Actions does) or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`).
+Tests that open windows live in `gui_*.py` and skip themselves unless `CI` is set (GitHub Actions does) or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`).
 
 ## Launch
 

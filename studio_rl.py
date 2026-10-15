@@ -25,7 +25,6 @@ from studio_model import AdamW, LocalModel, ScratchTransformer, Tokenizer, batch
 from studio_rlhf import _encode_pair, _save, token_logps
 
 RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rule is always the minimum, 0
-MAX_TOKENS = 32
 MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measurement
 
 
@@ -86,7 +85,7 @@ def reinforce_loss(policy, rows, adv, backward=False):
 
 
 def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, learning_rate=1e-4, prompts_per_step=4,
-                         divide_by_std=True, rubric=None, max_tokens=MAX_TOKENS, temperature=.8, seed=7, device="auto",
+                         divide_by_std=True, rubric=None, max_tokens=None, temperature=.8, seed=7, device="auto",
                          emit=None, stop=None, pause=None):
     """Round 2. problems: [{"prompt", "rule", ...}]. rubric: optional callable (prompt, answer) -> 0..1, a smaller
     second reward that only counts for answers that pass the rule. Saves last.npz and best.npz (best mean reward)."""
@@ -112,7 +111,8 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
         for problem in rng.sample(problems, min(prompts_per_step, len(problems))):
             messages = _messages(problem)
             prompt = _prompt_text(messages)
-            answers = [local.generate(messages, max_tokens=max_tokens, temperature=temperature) for _ in range(group)]
+            budget = max_tokens or studio_rules.max_tokens(problem["rule"])  # sized by the rule unless the caller fixes it
+            answers = [local.generate(messages, max_tokens=budget, temperature=temperature) for _ in range(group)]
             passed = [studio_rules.check(problem["rule"], prompt, a, problem.get("params")) for a in answers]
             rewards = [float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.) for a, ok in zip(answers, passed)]
             flat = max(rewards) - min(rewards) < 1e-9   # all pass or all fail: nothing to learn
@@ -197,7 +197,7 @@ def reverse_kl(student, teacher, student_rows, teacher_rows, backward=False):
 
 
 def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learning_rate=1e-4, prompts_per_step=4,
-                       max_tokens=MAX_TOKENS, temperature=.8, probe=8, seed=7, device="auto", emit=None, stop=None, pause=None):
+                       max_tokens=None, temperature=.8, probe=8, seed=7, device="auto", emit=None, stop=None, pause=None):
     """Round 3. teacher: a checkpoint path (previous best, same word list) or privileged(checkpoint, correction).
 
     Before training it samples `probe` answers and keeps them; the heat map shows the teacher's surprise at each word,
@@ -226,7 +226,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
         with torch.no_grad():
             return reverse_kl(student, teacher.model, s_rows, t_rows)[1]
 
-    fixed = [encode(m, local.generate(m[0], max_tokens=max_tokens, temperature=temperature)) for m in prompts[:probe]]
+    fixed = [encode(m, local.generate(m[0], max_tokens=max_tokens or studio_rules.max_tokens(), temperature=temperature)) for m in prompts[:probe]]
     before = probe_gaps(fixed)
     words = [tokenizer.decode([t]) for t in fixed[0][0][1] if t != -100]
     emit({"type": "heat", "prompt": _prompt_text(prompts[0][0]), "words": words, "surprise": [float(-t) for t in before[0][1]]})
@@ -238,7 +238,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     while step < steps and not stop.is_set():
         while pause.is_set() and not stop.is_set():
             threading.Event().wait(.05)
-        pairs = [encode(m, local.generate(m[0], max_tokens=max_tokens, temperature=temperature))
+        pairs = [encode(m, local.generate(m[0], max_tokens=max_tokens or studio_rules.max_tokens(), temperature=temperature))
                  for m in rng.sample(prompts, min(prompts_per_step, len(prompts)))]
         student.zero_grad()
         kl, _ = reverse_kl(student, teacher.model, [p[0] for p in pairs], [p[1] for p in pairs], backward=True)
@@ -279,7 +279,7 @@ def measure(checkpoint, docs, problems):
     local = LocalModel(checkpoint, device="cpu")
     if len(problems) > MEASURE_PROBLEMS:  # imported sets hold back thousands; a fixed sample keeps before/after comparable
         problems = random.Random(0).sample(list(problems), MEASURE_PROBLEMS)
-    k = sum(studio_rules.check(q["rule"], q["prompt"], local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=MAX_TOKENS, temperature=0),
+    k = sum(studio_rules.check(q["rule"], q["prompt"], local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=studio_rules.max_tokens(q["rule"]), temperature=0),
                                q.get("params"))
             for q in problems)
     return {"bpc": studio_eval.bits_per_char(checkpoint, [_doc(d) for d in docs]) if docs else None, "pass_k": k, "pass_n": len(problems)}

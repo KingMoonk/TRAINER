@@ -41,6 +41,23 @@ ROUTES = {
 }
 
 
+def strip_lines(q, version=None):
+    """The machine strip's text for a QueueState: (now line, queued line, chat line, chat line is the Resume link).
+    Idle and paused by the user reads "Paused by you", and the chat line turns into the way out of it."""
+    waiting = len(q.up_next)
+    if q.job is None:
+        now = "Paused by you" if q.paused else "Nothing is training"
+        left = ""
+    else:
+        now = f"{q.job.label or q.job.kind} · {'paused' if q.paused else q.phase or 'training'}"
+        left = format_duration(q.eta_s) + " left · " if q.eta_s is not None else ""
+    if q.job is None and q.paused:
+        chat = "Resume ›"
+    else:
+        chat = f"Chat uses version {version.number} · best so far" if version else "Chat has no trained version yet"
+    return now, f"{left}{waiting} queued", chat, q.job is None and q.paused
+
+
 class Studio(tk.Tk):
     def __init__(self, services=None):
         super().__init__()
@@ -84,6 +101,7 @@ class Studio(tk.Tk):
         self.services.start_queue()  # jobs saved as waiting by the last session start again
         self.refresh_strip()
         self.show("builder")
+        self.quietly(self.services.refresh_downloads, lambda _rebuilt: None)  # downloads an older app converted get rebuilt once
 
     # sidebar ----------------------------------------------------------------
     def _build_sidebar(self):
@@ -113,6 +131,10 @@ class Studio(tk.Tk):
         self.strip_bar = Progress(strip)
         self.strip_next = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self.strip_chat = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
+        self._strip_pending = False
+        self._strip_resume = False  # the chat line is the "Resume" link only while the queue is paused by the user and idle
+        for seq in ("<Button-1>", "<Return>", "<space>"):
+            self.strip_chat.bind(seq, self._strip_chat_click)
         self.strip_link = tk_label(strip, "Open the queue ›", 12, "violet", "panel", cursor="hand2", takefocus=1,
                                    highlightthickness=1, highlightbackground=C["panel"], highlightcolor=C["violet"])
         self.strip_now.pack(fill="x", pady=(6, 4))
@@ -129,22 +151,27 @@ class Studio(tk.Tk):
 
     def refresh_strip(self):
         q = self.services.queue()
-        waiting = len(q.up_next)
-        if q.job is None:
-            self.strip_now.configure(text="Nothing is training")
-            self.strip_bar.set(None)
-            left = ""
-        else:
-            state = "paused" if q.paused else (q.phase or "training")
-            self.strip_now.configure(text=f"{q.job.label or q.job.kind} · {state}")
-            self.strip_bar.set(q.step / q.total if q.total else None)
-            left = format_duration(q.eta_s) + " left · " if q.eta_s is not None else ""
-        self.strip_next.configure(text=f"{left}{waiting} queued")
         try:
             v = self.services.best_version() or self.services.current_version()
         except NotImplementedError:
             v = None
-        self.strip_chat.configure(text=f"Chat uses version {v.number} · best so far" if v else "Chat has no trained version yet")
+        now, queued, chat, resume = strip_lines(q, v)
+        self.strip_now.configure(text=now)
+        if q.job is None:
+            self.strip_bar.set(None)
+        else:
+            self.strip_bar.set(q.step / q.total if q.total else None)
+        self.strip_next.configure(text=queued)
+        self.strip_chat.configure(text=chat, fg=C["violet"] if resume else C["muted"], cursor="hand2" if resume else "", takefocus=int(resume))
+        self._strip_resume = resume
+
+    def _strip_tick(self):
+        self._strip_pending = False
+        self.refresh_strip()
+
+    def _strip_chat_click(self, _event=None):
+        if self._strip_resume:
+            self.services.resume()
 
     def _highlight(self, area):
         for key, (row, stripe, inner, title) in self._area_rows.items():
@@ -300,8 +327,11 @@ class Studio(tk.Tk):
             self.after(60, self._poll)
 
     def on_event(self, kind, payload):
-        if kind == "queue":
+        if kind in ("queue", "job", "blocked"):
             self.refresh_strip()
+        elif kind == "train" and not self._strip_pending:  # steps arrive several times a second: redraw the strip once a second
+            self._strip_pending = True
+            self.after(1000, self._strip_tick)
         if self.route:
             self.pages[self.route].on_event(kind, payload)
 

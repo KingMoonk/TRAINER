@@ -89,7 +89,7 @@ class SourceConversionTests(unittest.TestCase):
 
     def test_openassistant_preserves_branches_and_filters_rejected_subtrees(self):
         entry = next(e for e in CATALOG if e["id"] == "oasst1")
-        tree = {"message_tree_id": "tree-1", "prompt": {"role": "prompter", "text": "hello", "replies": [
+        tree = {"message_tree_id": "tree-1", "prompt": {"role": "prompter", "lang": "en", "text": "hello", "replies": [
             {"role": "assistant", "text": "hi", "message_id": "a", "replies": [
                 {"role": "prompter", "text": "more", "replies": [{"role": "assistant", "text": "yes", "message_id": "b", "synthetic": True}]}]},
             {"role": "assistant", "text": "bad", "review_result": False, "replies": []}]}}
@@ -273,7 +273,7 @@ class CheckableProblemTests(unittest.TestCase):
         self.assertEqual(self._problem("qasc_check", {"id": "q", "question": "Rain?", "answerKey": "B",
                                                       "choices": {"label": ["A", "B"], "text": ["dust", "water"]}})[0]["assistant"], "B) water")
         self.assertEqual(self._problem("hellaswag_check", {"activity_label": "Cooking", "ctx": "He stirs", "label": "1",
-                                                           "endings": ["the sky.", "the soup."]})[0]["assistant"], "B) the soup.")
+                                                           "endings": ["the sky.", "the soup."]})[0]["assistant"], "B) The soup.")
         boolq = self._problem("boolq_check", {"question": "is water wet", "passage": "Water is wet.", "answer": False})[0]
         self.assertEqual(boolq["assistant"], "B) no")
         self.assertIn("Question: Is water wet?", boolq["user"])

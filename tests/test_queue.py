@@ -103,6 +103,27 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(wait(lambda: self.fake.steps > frozen + 3))
         self.fake.gate.set()
 
+    def test_pause_persists_and_is_reported_when_idle(self):
+        r = self.runner()
+        events = []
+        r.subscribe(lambda kind, payload: events.append((kind, payload)))
+        r.pause()  # nothing is running
+        self.assertIsNone(r.state().job)
+        self.assertTrue(r.state().paused)
+        self.assertIn(("queue", {"paused": True}), events)
+        r.enqueue(self.job("a"))
+        r.start()
+        time.sleep(.15)
+        self.assertEqual(self.fake.ran, [])  # a paused queue starts nothing
+        again = Runner(self.path, self.handlers, tick=.01)  # an app restart
+        self.assertTrue(again.state().paused)
+        self.assertTrue(again.pause_event.is_set())
+        events.clear()
+        r.resume()
+        self.assertIn(("queue", {"paused": False}), events)
+        self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
+        self.assertFalse(Runner(self.path, self.handlers).state().paused)
+
     def test_move_up_and_remove(self):
         r = self.runner()
         a, b, c = (r.enqueue(self.job(n)) for n in "abc")
@@ -139,6 +160,56 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(r.state().blocked, "outside hours")
         r.clock = lambda: datetime(2026, 1, 1, 23)
         self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
+
+    def test_gate_carries_the_next_start(self):
+        plan = Plan(hours="nights", idle_only=False, pause_on_battery=False)
+        r = self.runner(plan, clock=lambda: datetime(2026, 1, 1, 12))
+        r.enqueue(self.job("a"))
+        r.start()
+        self.assertTrue(wait(lambda: r.state().gate.reason == "outside hours"))
+        gate = r.state().gate
+        self.assertEqual((gate.resumes_at, gate.supported, r.state().blocked), (datetime(2026, 1, 1, 22), True, "outside hours"))
+        r.clock = lambda: datetime(2026, 1, 1, 23)
+        self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
+        self.assertEqual(r.state().gate, studio_queue.Gate())
+
+    def test_unsupported_idle_detection_is_reported_and_does_not_block(self):
+        with mock.patch.object(studio_queue, "idle_seconds", lambda: None):
+            r = self.runner(Plan(hours="any", idle_only=True, pause_on_battery=False))
+            r.enqueue(self.job("a"))
+            r.start()
+            self.assertTrue(wait(lambda: self.fake.ran == ["a"]))  # the setting is ignored, not silently "idle"
+            self.assertEqual(r.state().gate, studio_queue.Gate(None, None, False))
+            r.set_plan(Plan(hours="any", idle_only=False, pause_on_battery=False))
+            self.assertTrue(wait(lambda: r.state().gate.supported))
+
+    def test_next_start_across_the_midnight_wrap(self):
+        nights, evening = Plan(hours="nights"), Plan(hours="set", start_hour=22, end_hour=7)
+        for plan in (nights, evening):
+            self.assertIsNone(studio_queue.next_start(Plan(hours="any"), datetime(2026, 1, 1, 12)))
+            self.assertEqual(studio_queue.next_start(plan, datetime(2026, 1, 1, 12, 34, 56)), datetime(2026, 1, 1, 22))
+            self.assertEqual(studio_queue.next_start(plan, datetime(2026, 1, 1, 7)), datetime(2026, 1, 1, 22))  # window ends at 7:00 sharp
+            inside = datetime(2026, 1, 1, 23, 30)
+            self.assertEqual(studio_queue.next_start(plan, inside), inside)  # already open
+            inside = datetime(2026, 1, 2, 3)  # after midnight, still the same window
+            self.assertEqual(studio_queue.next_start(plan, inside), inside)
+        day = Plan(hours="set", start_hour=9, end_hour=17)
+        self.assertEqual(studio_queue.next_start(day, datetime(2026, 1, 1, 23)), datetime(2026, 1, 2, 9))  # opens tomorrow
+        self.assertEqual(studio_queue.next_start(day, datetime(2026, 1, 1, 6)), datetime(2026, 1, 1, 9))
+
+    def test_idle_seconds_by_platform(self):
+        with mock.patch.object(studio_queue.sys, "platform", "linux"):
+            self.assertIsNone(studio_queue.idle_seconds())
+        windll = mock.Mock()
+        windll.user32.GetLastInputInfo.side_effect = lambda info: setattr(info._obj, "dwTime", 1000) or 1
+        windll.kernel32.GetTickCount.return_value = 4500
+        with mock.patch.object(studio_queue.sys, "platform", "win32"), mock.patch("ctypes.windll", windll, create=True):
+            self.assertEqual(studio_queue.idle_seconds(), 3.5)
+            windll.kernel32.GetTickCount.return_value = 500  # the 32-bit tick counter wrapped past the last input
+            self.assertEqual(studio_queue.idle_seconds(), (500 - 1000 + 2 ** 32) / 1000)
+            windll.user32.GetLastInputInfo.side_effect = None
+            windll.user32.GetLastInputInfo.return_value = 0
+            self.assertIsNone(studio_queue.idle_seconds())
 
     def test_battery_and_idle_pause_then_resume(self):
         plan = Plan(hours="any", idle_only=True, idle_after_s=30, pause_on_battery=True)
