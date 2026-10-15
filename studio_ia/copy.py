@@ -13,7 +13,7 @@ BUILDER = {
     "thinking_room_gloss": "thinking room: works on each word by itself (MLP)",
     "what_costs": "WHAT YOUR CHANGES COST",
     "training_memory": "Training memory:",
-    "training_memory_fits": "[fits / doesn't fit]",
+    "training_memory_fits": "unknown (memory size not reported)",
     "training_memory_desc": "on this computer at 16 rows per step. The bars compare weights, gradients and optimizer state (16 bytes per parameter at 32-bit); the engine adds activations, which grow with rows per step.",
     "what_expect": "WHAT TO EXPECT",
     "quick_test_first": "Quick test first",
