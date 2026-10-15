@@ -13,6 +13,7 @@ from pathlib import Path
 
 import studio_passive_watch as platform_helpers  # battery + keep-awake live there; never duplicated
 from studio_core import atomic_json
+from studio_timing import timed
 
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
@@ -318,6 +319,7 @@ class Runner:
     def _sync_pause(self):
         (self.pause_event.set if self.user_paused or self.blocked else self.pause_event.clear)()
 
+    @timed("queue._gate")
     def _gate(self):
         """The plan's verdict right now. Idle detection that this computer cannot do is reported (supported=False) and the
         idle_only setting is then ignored, rather than silently passing as if the computer were idle."""
@@ -389,7 +391,8 @@ class Runner:
                 outcome["error"] = short
                 return
             try:
-                handler(job, self.services, emit, self.stop_event, self.pause_event)
+                with timed(f"job {getattr(handler, '__name__', job.kind)}"):
+                    handler(job, self.services, emit, self.stop_event, self.pause_event)
             except Exception as exc:  # noqa: BLE001
                 outcome["error"] = str(exc) or type(exc).__name__
         worker = threading.Thread(target=work, daemon=True)

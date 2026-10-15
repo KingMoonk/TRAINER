@@ -44,6 +44,13 @@ python tasks.py test:ci:e2e                       # + a real training run (tests
 
 CI runs `test:ci:e2e` on each push and pull request. `test:ci` and `test:ci:e2e` refuse to run unless `CI` is set (GitHub Actions does), because the window tests open real Tk and 3D windows. Those tests live in `gui_*.py` and skip themselves unless `CI` is set or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
 
+## Finding hot spots
+
+Measure before optimizing. Both tools are opt-in and work the same on macOS and Windows.
+
+- **Timings.** Set `GROUNDWORK_TIMINGS=1` and start the app. The timed calls print `name: 123.4 ms [thread]` to the terminal: the workspace reads behind the pages (`services.best_version`, `services._summaries`, `services._heldout`, `services.draft_count`, `services.references`, `services.run_curve`), the queue's gate (`queue._gate`, which runs about every 50 ms, so expect many lines), each job the queue runs (`job pretrain`, and so on) and the startup steps (`shell.*`). Wrap more code with `with timed("name"):` or `@timed("name")` from `studio_timing.py`; it does nothing unless the variable is set.
+- **Profile.** Install py-spy into the project environment once with `.venv/bin/python -m pip install py-spy` (on Windows, `.venv\Scripts\python.exe -m pip install py-spy`). Then run `.venv/bin/python tasks.py profile`. It launches the app under py-spy with timings on, child processes included. Use the app as you normally would, then close it: `profile.svg` (git-ignored) is written at exit. Open it in a browser; the wider a bar, the more time was spent there. The app is launched rather than attached to, so no admin rights or sudo are needed.
+
 ## Launch
 
 On Windows, double-click **start_studio.bat**. It creates a virtual environment if needed, installs the two dependencies, and opens the desktop window.

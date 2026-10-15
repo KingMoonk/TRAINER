@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from studio_timing import timed
 from studio_versions import NoCheckpoint
 
 
@@ -223,6 +224,7 @@ class Services:
             return (f"{after}; the queue opens {when}{plan}" if after else f"Starts {when}{plan}") if when else f"Waiting: {reason}"
         return after or "Starts now"
 
+    @timed("services.next_step")
     def next_step(self):
         """The single "what next" answer (studio_ia.next_step.NextStep) from this workspace's data, versions and queue."""
         from studio_ia.next_step import next_step
@@ -888,6 +890,7 @@ class WorkspaceServices(Services):
         rows = self._rows()
         return self._version(rows[-1]) if rows else None
 
+    @timed("services.best_version")
     def best_version(self):
         """The version Chat follows: a later version takes over only when its held-back error is below the noise band of
         the one it replaces (studio_gate.moves_chat), so a difference inside the noise never moves Chat."""
@@ -940,6 +943,7 @@ class WorkspaceServices(Services):
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
 
+    @timed("services.refresh_downloads")
     def refresh_downloads(self):
         import studio_catalog as cat
         rebuilt = cat.refresh_downloads(self.workspace)
@@ -1048,6 +1052,7 @@ class WorkspaceServices(Services):
                 return None
         return [stat(self.workspace.path), stat(db), stat(db.with_name(db.name + "-wal"))]
 
+    @timed("services._summaries")
     def _summaries(self):
         """{kind: DataSummary with the first page of sample rows, "example": the first training conversation, "takes": what
         a search reads}. Kept per dataset in data/summaries.sqlite beside each dataset's `rev`, so a change to one dataset
@@ -1443,6 +1448,7 @@ class WorkspaceServices(Services):
                 rows.append({**row, "quality": "Review", "synthetic": True})
         return self.workspace.add(dk.ensure_dataset(self.workspace, self._DRAFT_SETS[kind]), rows, "synthetic")[0]
 
+    @timed("services.draft_count")
     def draft_count(self):
         names = set(self._DRAFT_SETS.values())
         return sum(1 for d in self.workspace.state["datasets"] if d["name"] in names
@@ -1487,6 +1493,7 @@ class WorkspaceServices(Services):
         except OSError:
             return None
 
+    @timed("services._heldout")
     def _heldout(self):
         """The held-back documents, read once per version of data/heldout.json (it is tens of MB)."""
         stamp = self._heldout_stamp()
@@ -1509,6 +1516,7 @@ class WorkspaceServices(Services):
                 self._cache[key] = make()
             return self._cache[key]
 
+    @timed("services.references")
     def references(self, version):
         """Reference lines for the run page. Cached per checkpoint and held-back file: the run page asks every 1.5 s."""
         import studio_eval
@@ -1532,6 +1540,7 @@ class WorkspaceServices(Services):
                self._heldout_stamp())
         return self._cached(key, make)
 
+    @timed("services.run_curve")
     def run_curve(self, run_dir):
         import studio_eval
         from studio_model import read_metrics

@@ -3,16 +3,21 @@
     python tasks.py test [tests.test_x ...]   ruff + window-free unit tests (all, or just the modules named). Run this locally.
     python tasks.py test:ci                   test + compileall + the window tests (tests/gui_*.py). CI only.
     python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). CI only.
+    python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
 
 Each level includes the one before it. The window tests open real Tk and Panda3D windows, so test:ci and test:ci:e2e refuse
 to run unless CI is set (GitHub Actions sets it). Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
 """
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 PY = sys.executable
 VERBOSE = ["-v"] if os.environ.get("CI") else []  # CI logs list every test so a skip is visible
+APP = Path(__file__).with_name("app.py")
+PROFILE = Path(__file__).with_name("profile.svg")
 
 
 def run(*cmd):
@@ -46,7 +51,19 @@ def test_ci_e2e():
     run(PY, "-m", "unittest", "tests.e2e_train", *VERBOSE)  # a real training run on a committed sample, about 1 s of compute
 
 
-TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e}
+def profile():
+    """Launch the app under py-spy rather than attaching to it: launching needs no sudo on macOS. The timed() logs go to
+    the terminal too, and profile.svg is written when the app exits. py-spy comes from this environment's Scripts or bin folder."""
+    spy = shutil.which("py-spy", path=os.pathsep.join([os.path.dirname(PY), os.environ.get("PATH", "")]))
+    if not spy:
+        sys.exit(f'py-spy is not installed. Install it into this environment with:\n  "{PY}" -m pip install py-spy\n'
+                 "It is a dev tool, not a runtime dependency.")
+    os.environ["GROUNDWORK_TIMINGS"] = "1"
+    run(spy, "record", "-o", str(PROFILE), "--subprocesses", "--", PY, str(APP))
+    print(f"wrote {PROFILE}; open it in a browser", flush=True)
+
+
+TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
