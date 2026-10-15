@@ -1442,8 +1442,8 @@ class WorkspaceServices(Services):
         teacher.model = models[0]
         rng, rows = random.Random(), []
         if kind == "conversations":
-            pool = [e for d in self.workspace.state["datasets"] for e in self.workspace.iter_examples(d["id"])
-                    if dk.classify(e) == "conversations" and e.get("quality") == "Good"]
+            pool = [e for d in self.workspace.state["datasets"]  # up to n good conversations from each dataset, picked by rowid, not read whole
+                    for e in self.workspace.sample(d["id"], n, rng.getrandbits(32), reviewed_only=True, kind="conversations")]
             if not pool:
                 raise RuntimeError("There are no good conversations to rewrite yet.")
             work = [(json.dumps({"user": e["user"], "assistant": e["assistant"]}), True) for e in rng.sample(pool, min(n, len(pool)))]
@@ -1467,8 +1467,7 @@ class WorkspaceServices(Services):
     @timed("services.draft_count")
     def draft_count(self):
         names = set(self._DRAFT_SETS.values())
-        return sum(1 for d in self.workspace.state["datasets"] if d["name"] in names
-                   for e in self.workspace.iter_examples(d["id"]) if e.get("quality") == "Review")
+        return sum(self.workspace.review_count(d["id"]) for d in self.workspace.state["datasets"] if d["name"] in names)
 
     def review_data(self, example_id, keep):
         if keep:
