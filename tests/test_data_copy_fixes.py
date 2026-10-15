@@ -30,7 +30,7 @@ class BuilderCopy(unittest.TestCase):
         verdict = BUILDER["training_memory_fits"]
         self.assertNotIn("[", verdict)
         self.assertIn("unknown", verdict)
-        with patch("os.sysconf", side_effect=OSError):  # the case the text covers: this computer does not report its memory
+        with patch("os.sysconf", side_effect=OSError, create=True):  # the case the text covers: this computer does not report its memory
             self.assertIsNone(B.fits({}))
 
     def test_7_no_version_yet_is_not_version_0(self):
