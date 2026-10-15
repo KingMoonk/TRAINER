@@ -458,7 +458,7 @@ class Studio(tk.Tk):
         self.after_cancel(self._pump_id)
         self.unsubscribe()
         for pending in self.tk.splitlist(self.tk.call("after", "info")):
-            self.after_cancel(pending)  # an `after` left behind fires in the next app's update() into deleted commands
+            self.tk.call("after", "cancel", pending)  # left behind, it fires in the next app's update() into deleted commands
         close = getattr(self.services, "close", None)
         if close:
             close()  # stops the queue runner; a job cut short goes back to the front of the queue
