@@ -11,7 +11,7 @@ from studio_ia.copy import HEAD_ZOOM
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, HeatGrid, Kicker, Segmented, button
+from studio_ia.widgets import Card, HeatGrid, Kicker, Segmented, _activate, button
 
 MAX_TOKENS = 12
 TOLERANCE = 1e-4
@@ -271,5 +271,4 @@ class HeadZoomPage(Page):
         tk_label(side, HEAD_ZOOM["result_is"].format(dim=d["d_head"], token=show_tok(t[int(np.argmax(d["weights"][:, last]))]), d=self.forward["hooks"]["embed"].shape[-1]), 12, "muted", "panel", wraplength=300).pack(anchor="w", pady=(6, 0))
         link = tk_label(side, HEAD_ZOOM["where_meet"] + " ›", 13, "violet", "panel", cursor="hand2", takefocus=1)
         link.pack(anchor="w", pady=(6, 0))
-        for seq in ("<Button-1>", "<Return>", "<space>"):
-            link.bind(seq, lambda _e: self.navigate("value_map"))
+        _activate(link, lambda: self.navigate("value_map"))

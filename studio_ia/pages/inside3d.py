@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+import tkinter as tk
 from tkinter import ttk
 
 from studio_ia.copy import INSIDE3D as T
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI
-from studio_ia.theme import GUTTER, tk_label
+from studio_ia.theme import C, GUTTER, tk_label
 from studio_ia.widgets import Card, Kicker, Segmented, button
 from studio_scene import SceneModel
 from studio_spec import upgrade
@@ -176,17 +177,21 @@ class Inside3DPage(Page):
         self.moves = Card(self.body)
         self.moves.pack(fill="x", pady=(GUTTER, 0))
         Kicker(self.moves, T["step_through"], bg="panel").pack(anchor="w", pady=(0, 6))
+        steps, weights = (tk.Frame(self.moves, bg=C["panel"]) for _ in range(2))
+        steps.pack(anchor="w")
+        Kicker(self.moves, T["weights"], bg="panel").pack(anchor="w", pady=(GUTTER, 6))
+        weights.pack(anchor="w")
         self.move_buttons = [
-            button(self.moves, T["step_back"], lambda: self.send_view({"type": "step", "delta": -1})),
-            button(self.moves, T["step_next"], lambda: self.send_view({"type": "step", "delta": 1})),
-            button(self.moves, T["step_action_1"], lambda: self.send_view({"type": "step", "stage": "scores"})),
-            button(self.moves, T["step_action_2"], lambda: self.send_view({"type": "step", "stage": "values"})),
-            button(self.moves, T["show_weights"], lambda: self.send_view({"type": "show", "what": "weight"})),
-            button(self.moves, T["weights_action_1"], lambda: self.send_view({"type": "show", "what": "gradient"})),
-            button(self.moves, T["weights_action_2"], lambda: self.send_view({"type": "show", "what": "update"})),
+            button(steps, T["step_back"], lambda: self.send_view({"type": "step", "delta": -1})),
+            button(steps, T["step_next"], lambda: self.send_view({"type": "step", "delta": 1})),
+            button(steps, T["step_action_1"], lambda: self.send_view({"type": "step", "stage": "scores"})),
+            button(steps, T["step_action_2"], lambda: self.send_view({"type": "step", "stage": "values"})),
+            button(weights, T["show_weights"], lambda: self.send_view({"type": "show", "what": "weight"})),
+            button(weights, T["weights_action_1"], lambda: self.send_view({"type": "show", "what": "gradient"})),
+            button(weights, T["weights_action_2"], lambda: self.send_view({"type": "show", "what": "update"})),
         ]
-        for b in self.move_buttons:
-            b.pack(anchor="w", pady=2)
+        for i, b in enumerate(self.move_buttons):
+            b.grid(row=(i % 4) // 2, column=i % 2, sticky="w", padx=(0, 8), pady=2)
         self.scrub_label = tk_label(self.moves, "", 13, "muted", "panel")
         self.scrub_label.pack(anchor="w", pady=(8, 0))
         self.scrubber = ttk.Scale(self.moves, from_=0, to=0, command=self._scrub)

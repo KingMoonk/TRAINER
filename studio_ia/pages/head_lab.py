@@ -1,6 +1,7 @@
 """Head lab: heads as tiles on prepared text, rank them by importance, switch some off, test their attention patterns."""
 from __future__ import annotations
 
+import gc
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -12,7 +13,7 @@ from studio_ia.copy import HEAD_LAB
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, current, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, button
+from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, _activate, button
 
 TESTS = (("previous", "previous_word", "previous_desc"), ("first", "parks_first", "parks_desc"), ("induction", "copying_pattern", "copying_desc"))
 THRESHOLD = .5  # a share of attention above this counts as "passes"; a description of where it looks, not a verdict
@@ -28,6 +29,15 @@ def best_pattern(values, threshold=THRESHOLD):
     return name if values[name] >= threshold else None
 
 
+PATTERN_WORDS = {"previous": "looks at the previous word", "first": "parks on the first word", "induction": "copying pattern"}
+NO_PATTERN = "no clear pattern"
+
+
+def head_pattern(stats, head):
+    """Words for where one head looks, from head_tests() output ({test: per-head scores}); NO_PATTERN when no test reaches the threshold."""
+    return PATTERN_WORDS.get(best_pattern({t[0]: float(stats[t[0]][head]) for t in TESTS}), NO_PATTERN)
+
+
 def top_relied(rises, k=3):
     """The k heads whose switch-off raises the error most: [((block, head), rise)] largest first."""
     return sorted(rises.items(), key=lambda kv: -kv[1])[:k]
@@ -37,10 +47,11 @@ class HeadLabPage(Page):
     title = HEAD_LAB["h1"]
     lead = HEAD_LAB["lead"]
     crumb = (*LI, "Head lab")
+    _workers = 0  # worker threads running; the collector stays off while any is
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
-        self.sel, self.off, self.rises, self.tested, self.ranked = None, set(), None, {}, False
+        self.sel, self.off, self.rises, self.tested, self.ranked = None, set(), None, set(), False
         self.guess, self.changed, self._token, self.mode, self.notice = None, None, 0, "mean", None
 
     # data -------------------------------------------------------------------
@@ -118,8 +129,7 @@ class HeadLabPage(Page):
         tk_label(how.body, HEAD_LAB["mean_exact"], 13, "muted", "bg", wraplength=760).pack(anchor="w", pady=2)
         link = tk_label(how.body, HEAD_LAB["step_through"] + " ›", 13, "violet", "bg", cursor="hand2", takefocus=1)
         link.pack(anchor="w", pady=2)
-        for seq in ("<Button-1>", "<Return>", "<space>"):
-            link.bind(seq, lambda _e: self._open_zoom())
+        _activate(link, self._open_zoom)
 
     def _open_zoom(self):
         page = self.navigate("head_zoom")
@@ -131,9 +141,7 @@ class HeadLabPage(Page):
             return HEAD_LAB["head_off"], "amber"
         if self.ranked and self.rises and key in self.rises:
             return HEAD_LAB["rank_unit"].format(rise=self.rises[key]), "text2"
-        if key in self.tested:
-            return self.tested[key], "text2"
-        return "no pattern yet", "muted"
+        return head_pattern(self.stats[key[0]], key[1]), "text2"  # from the stats refresh() already has: no button first
 
     def _tile(self, grid, row, b, h, pattern):
         key = (b, h)
@@ -151,10 +159,9 @@ class HeadLabPage(Page):
         tk_label(frame, f"Head {h + 1}", 12, "text", "panel2" if on else "bg").pack(anchor="w")
         tk_label(frame, sub, 11, color, "panel2" if on else "bg").pack(anchor="w")
         self.tiles[key] = frame
-        for w in (frame, *frame.winfo_children()):
+        _activate(frame, lambda k=key: self._pick(k))
+        for w in frame.winfo_children():
             w.bind("<Button-1>", lambda _e, k=key: self._pick(k))
-        frame.bind("<Return>", lambda _e, k=key: self._pick(k))
-        frame.bind("<space>", lambda _e, k=key: self._pick(k))
 
     def _pick(self, key):
         self.sel = key
@@ -188,7 +195,7 @@ class HeadLabPage(Page):
         self.toggle_button.pack(side="left")
         self.test_button = button(row, HEAD_LAB["test_pattern"], self.test)
         self.test_button.pack(side="left", padx=8)
-        if self.sel in self.tested or getattr(self, "_show_tests", None) == self.sel:
+        if self.sel in self.tested:
             self._tests(card)
 
     def _tests(self, card):
@@ -237,11 +244,7 @@ class HeadLabPage(Page):
         self._update()
 
     def test(self):
-        b, h = self.sel
-        name = best_pattern({t[0]: float(self.stats[b][t[0]][h]) for t in TESTS})
-        self.tested[self.sel] = {"previous": "looks at the previous word", "first": "parks on the first word",
-                                 "induction": "copying pattern"}.get(name, "no clear pattern")
-        self._show_tests = self.sel
+        self.tested.add(self.sel)  # opens this head's card of the three tests
         self._draw()
 
     def _update(self):
@@ -291,14 +294,19 @@ class HeadLabPage(Page):
 
         def run():
             box["value"] = fn()
+        # Tk objects may only be freed on the Tk thread and the collector runs on whichever thread allocates: hold it.
+        HeadLabPage._workers += 1
+        gc.disable()
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
 
         def poll():
-            if token != self._token or not self.winfo_exists():
-                return
-            if thread.is_alive():
+            if thread.is_alive() and self.winfo_exists():
                 self.after(60, poll)
-            else:
+                return
+            HeadLabPage._workers -= 1
+            if not HeadLabPage._workers:
+                gc.enable()
+            if token == self._token and self.winfo_exists():
                 done(box["value"])
         self.after(60, poll)

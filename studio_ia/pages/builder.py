@@ -15,9 +15,9 @@ from studio_versions import _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia.copy import BUILDER as T
 from studio_ia.pages.base import Page
-from studio_ia.services import Job, plain_error
+from studio_ia.services import Job, if_added, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, StateTray, button
+from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2")
@@ -218,6 +218,13 @@ def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
                        "output_dir": None, "user_text": False, "version": number})
 
 
+def queued_outlook(services, job_id):
+    """When the queued job `job_id` starts (services.queue_outlook), or "" once it has left the queue."""
+    q = services.queue()
+    job = next((j for j in [q.job, *q.up_next] if j is not None and j.id == job_id), None)
+    return services.queue_outlook(job) if job else ""
+
+
 def text_sets(summary):
     """Ids of the plain-text datasets from services.data('text') (a dict or a DataSummary)."""
     sets = summary.get("sets", []) if isinstance(summary, dict) else getattr(summary, "sets", [])
@@ -335,6 +342,8 @@ class BuilderPage(Page):
                 and not any(j.id == self.job_id for j in q.up_next):
             self.load_chart()  # our job left the queue: it finished or was removed
             return self.render()
+        if self.phase == "queued" and self.outlook() not in self.tray_text:  # paused, held, or the job ahead finished
+            return self.render()
         if self.pill_bar is not None:  # progress only: do not rebuild the page for every step
             self._paint_pill(q)
             if self.phase == "training" and time.time() - self._curve_at > 2:
@@ -434,6 +443,9 @@ class BuilderPage(Page):
                 break
             self.services.move_up(self.job_id)
         self.render()
+
+    def outlook(self):
+        return queued_outlook(self.services, self.job_id)
 
     def position(self):
         return next((i for i, j in enumerate(self.services.queue().up_next) if j.id == self.job_id), None)
@@ -572,20 +584,13 @@ class BuilderPage(Page):
         tk_label(parent, T["thinking_room_gloss"], 12, "blue").pack(anchor="w")
 
     def _seg(self, parent, options, was, key, values, bg="panel"):
-        row = tk.Frame(parent, bg=C[bg])
-        row.pack(anchor="w", padx=12 if bg == "panel2" else 0, pady=4)
-        for opt, val in zip(options, values):
-            col = tk.Frame(row, bg=C[bg])
-            col.pack(side="left", padx=(0, 4))
-            on = self.draft[key] == val
-            lab = tk.Label(col, text=opt, font=font(14), padx=12, pady=8, takefocus=1, cursor="hand2", highlightthickness=1,
-                           bg=C["violet"] if on else C["panel2"] if bg == "panel" else C["bg"], fg=C["bg"] if on else C["text"],
-                           highlightbackground=C["violet"] if (was == val and not on) else C["border"])
-            lab.pack()
-            for seq in ("<Button-1>", "<Return>", "<space>"):
-                lab.bind(seq, lambda _e, v=val: self.edit(**{key: v}))
-            # ponytail: Tk borders cannot be dashed, so the old choice gets a violet outline and a small "was".
-            tk_label(col, "was" if (was == val and not on) else " ", 11, "violet", bg, anchor="center").pack()
+        label, value = dict(zip(values, options)), dict(zip(options, values))
+        seg = Segmented(parent, options, label.get(self.draft[key]), lambda opt: self.edit(**{key: value[opt]}), bg=bg)
+        seg.pack(anchor="w", padx=12 if bg == "panel2" else 0, pady=4)
+        # ponytail: Tk borders cannot be dashed, so the old choice gets a violet outline and a "was" in its label.
+        if was != self.draft[key] and was in label:
+            old = seg.buttons[label[was]]
+            old.configure(highlightbackground=C["violet"], text=f"{old.cget('text')} · was")
 
     def _controls(self, parent):
         for name, hint, color, opts, key, values in (
@@ -664,14 +669,14 @@ class BuilderPage(Page):
             state = "needs_training"
             kicker = T["saved_text_needs_training" if scratch else "saved_text_needs_catchup"].format(new_version=nv)
             text = T["saved_text"].format(startNote=self.start_note(), current_version=f"version {n}", new_version=nv) if n else self.start_note()
+            text += f" {if_added(self.services.queue_outlook())}."
             actions = [(T["add_training" if scratch else "add_catchup"], lambda: self.queue_it(False), True)]
             if not scratch:
                 actions.append((T["start_from_scratch"], lambda: self.queue_it(True), False))
         elif ph == "queued":
-            q = self.services.queue()
             state, kicker, text = "live", T["queued"], T["queued_text"].format(new_version=Nv)
-            if q.blocked:
-                text += f" Training may not start yet: {q.blocked}."
+            when = self.outlook()
+            text += f" {when}." if when else ""
             if self.position():
                 actions = [(T["move_to_front"], self.to_front, True)]
         else:
@@ -745,5 +750,4 @@ class BuilderPage(Page):
             link = tk_label(row, T[key], 14, "violet" if route not in ("compare", "quicktest") else "muted", cursor="hand2", takefocus=1)
             link.pack(side="left", padx=(0, 16))
             self.links[route] = link
-            for seq in ("<Button-1>", "<Return>", "<space>"):
-                link.bind(seq, lambda _e, r=route: self.navigate(r))
+            _activate(link, lambda r=route: self.navigate(r))
