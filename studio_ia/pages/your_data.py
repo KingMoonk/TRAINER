@@ -139,7 +139,7 @@ class YourDataPage(Page):
         self.make_button = ttk.Button(buttons, command=self.make)
         self.make_button.pack(side="left", padx=8)
         card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
-        card.pack(fill="x", pady=(GUTTER, 0))
+        card.pack(fill="x", pady=(GUTTER, 0), before=self.entry.master)  # above search and the table, so it is in view
         tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)).pack(anchor="w")
         self.collection_desc = tk_label(card, "", 13, "muted", "panel", wraplength=760)
         self.collection_desc.pack(anchor="w")
@@ -221,15 +221,15 @@ class YourDataPage(Page):
             child.destroy()
         for row in rows:
             line = tk.Frame(self.collection_rows, bg=C["panel"])
-            line.pack(fill="x", pady=3)
+            line.pack(fill="x", pady=1)
             tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
             tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
             label, action = source_action(row)
             if action:
                 label = T["download_add"] if action == "download" and kind != "text" else label
                 button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
-            tk_label(self.collection_rows, source_status(row, self.notes.get(row["id"], "")), 12,
-                     "coral" if row.get("error") else "muted", "panel", wraplength=720).pack(anchor="w")
+            tk_label(line, source_status(row, self.notes.get(row["id"], "")), 12,
+                     "coral" if row.get("error") else "muted", "panel").pack(side="right", padx=10)
         if any(source_action(r)[1] == "download" for r in rows):
             button(self.collection_rows, T["download_add_all"] if kind != "text" else T["download_all"],
                    lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
