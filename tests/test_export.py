@@ -255,7 +255,7 @@ class HuggingFaceExport(unittest.TestCase):
         self.assertEqual((report["architecture"], report["huggingface_loadable"], report["tokenizer_loadable"]), ("gpt2", True, True))
         out = self.root / "hf"
         self.assertEqual(sorted(path.name for path in out.iterdir()), report["files"])
-        config = json.loads((out / "config.json").read_text())
+        config = json.loads((out / "config.json").read_text(encoding="utf-8"))
         expected = dict(model_type="gpt2", architectures=["GPT2LMHeadModel"], vocab_size=263, n_positions=32, n_embd=32, n_layer=2, n_head=4,
                         n_inner=96, activation_function="gelu_new", tie_word_embeddings=True)
         self.assertEqual({key: config[key] for key in expected}, expected)
@@ -268,7 +268,7 @@ class HuggingFaceExport(unittest.TestCase):
         np.testing.assert_array_equal(tensors["transformer.h.0.attn.c_attn.weight"], weights["block0.qkv.w"])
         ids = [1, 3, 10, 40, 77, 120, 200, 9, 262, 4]
         np.testing.assert_allclose(gpt2_reference(tensors, ids, 2, 4), engine_logits(self.root / "m.npz", ids), atol=2e-4, rtol=1e-4)
-        readme = (out / "README.md").read_text()
+        readme = (out / "README.md").read_text(encoding="utf-8")
         self.assertIn("GPT2LMHeadModel", readme)
         self.assertNotIn("cannot load this design", readme)
 
@@ -283,7 +283,7 @@ class HuggingFaceExport(unittest.TestCase):
         self.assertTrue(tensors["transformer.h.1.ln_2.bias"].any())   # LayerNorm's own shift is a real parameter
         ids = [1, 3, 10, 40, 77, 120, 200, 9, 262, 4]
         np.testing.assert_allclose(gpt2_reference(tensors, ids, 2, 4), engine_logits(self.root / "m.npz", ids), atol=2e-4, rtol=1e-4)
-        self.assertIn("written as zeros", (self.root / "hf" / "README.md").read_text())
+        self.assertIn("written as zeros", (self.root / "hf" / "README.md").read_text(encoding="utf-8"))
 
     def test_byte_tokenizer_files_spell_every_byte_as_the_engine_does(self):
         write_checkpoint(self.root / "m.npz", gpt2_spec(), Tokenizer("byte"))
@@ -294,8 +294,8 @@ class HuggingFaceExport(unittest.TestCase):
         table, tokenizer = bytes_to_unicode(), Tokenizer("byte")
         text = "Hi, héllo ☃\n"
         self.assertEqual([vocab[table[byte]] for byte in text.encode("utf-8")], tokenizer.encode(text))
-        self.assertEqual((self.root / "hf" / "merges.txt").read_text(), "#version: 0.2\n")
-        config = json.loads((self.root / "hf" / "tokenizer_config.json").read_text())
+        self.assertEqual((self.root / "hf" / "merges.txt").read_text(encoding="utf-8"), "#version: 0.2\n")
+        config = json.loads((self.root / "hf" / "tokenizer_config.json").read_text(encoding="utf-8"))
         self.assertEqual((config["tokenizer_class"], config["bos_token"], config["eos_token"]), ("GPT2Tokenizer", "<|bos|>", "<|eos|>"))
 
     def test_bpe_files_rebuild_the_same_tokenizer(self):
@@ -303,7 +303,7 @@ class HuggingFaceExport(unittest.TestCase):
         write_checkpoint(self.root / "m.npz", gpt2_spec(tokenizer="bpe_gpt2"), tokenizer)
         export.export_hf(self.root / "m.npz", self.root / "hf")
         vocab = json.loads((self.root / "hf" / "vocab.json").read_text(encoding="utf-8"))
-        merges = [tuple(line.split(" ")) for line in (self.root / "hf" / "merges.txt").read_text().splitlines()[1:]]
+        merges = [tuple(line.split(" ")) for line in (self.root / "hf" / "merges.txt").read_text(encoding="utf-8").splitlines()[1:]]
         self.assertEqual(len(vocab), tokenizer.vocab_size)
         rebuilt = GPT2Tokenizer({symbol: index - OFFSET for symbol, index in vocab.items() if index >= OFFSET}, merges)
         for text in ("hello hello", "the hell hat", "héllo ☃"):
@@ -326,9 +326,9 @@ class HuggingFaceExport(unittest.TestCase):
         for key, value in weights.items():
             np.testing.assert_array_equal(tensors[key], value)
         self.assertEqual(json.loads(metadata["groundwork_spec"]), spec)
-        config = json.loads((out / "config.json").read_text())
+        config = json.loads((out / "config.json").read_text(encoding="utf-8"))
         self.assertEqual((config["model_type"], config["architectures"], config["groundwork_spec"]), ("groundwork", [], spec))
-        readme = (out / "README.md").read_text()
+        readme = (out / "README.md").read_text(encoding="utf-8")
         self.assertIn("Hugging Face cannot load this design directly", readme)
         self.assertIn("does not use learned positions", readme)   # names what differs from GPT-2
 
@@ -348,7 +348,7 @@ class HuggingFaceExport(unittest.TestCase):
                 self.assertEqual((data["kind"], data["vocab_size"], len(data["vocabulary"])), (kind, tokenizer.vocab_size, tokenizer.vocab_size))
                 self.assertEqual(data["vocabulary"][:OFFSET], list(export.SPECIAL_TOKENS))
                 self.assertEqual(len(set(data["vocabulary"])), len(data["vocabulary"]))
-                self.assertIn("cannot load it", (out / "README.md").read_text())
+                self.assertIn("cannot load it", (out / "README.md").read_text(encoding="utf-8"))
                 if kind == "bpe_custom":
                     self.assertEqual(data["merges"], [[left[0], right[0]] for left, right in tokenizer.merges])
                 # the model itself is still a GPT-2 design
