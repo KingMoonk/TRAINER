@@ -632,6 +632,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     atomic_json(directory / "run.json", record)
     if model.backend.reason:
         emit({"type": "info", "text": model.backend.reason + " · using CPU"})
+    if model.precision_note:
+        emit({"type": "info", "text": model.precision_note})
     if split["note"]:
         emit({"type": "info", "text": split["note"]})
     emit({"type": "info", "text": f"{model.backend.name} · {model.parameter_count:,} parameters · {tokenizer.vocab_size} tokens · {len(train_samples)} training windows ({cfg['windowing']}, "
