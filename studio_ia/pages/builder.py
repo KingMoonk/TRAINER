@@ -264,6 +264,7 @@ class BuilderPage(Page):
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
         self.old_curve = self.new_curve = self.refs = None
         self.plot_args, self.plot = {}, None
+        self._chart_token = None
         self.answers, self.answer_q, self.answer_stop, self.answer_labels, self.workers = {}, queue.Queue(), threading.Event(), {}, []
         self.pill_bar = self.pill_label = None
         self._curve_at = 0.
@@ -326,14 +327,30 @@ class BuilderPage(Page):
         self.job_id, self.phase = (job.id, phase) if job else (None, "saved")
 
     def load_chart(self):
-        """Curves and reference lines from the real run files; nothing invented when there are none."""
-        self.old_curve = self.curve_of(self.base)
-        self.new_curve = self.curve_of(self.version(self.n + 1)) if self.phase != "edit" else None
-        try:
-            self.refs = self.services.references(self.base) if self.base and self.base.best_checkpoint else None
-        except (OSError, ValueError, KeyError, StopIteration):
-            self.refs = None
-        self.plot_args = chart_args(self.old_curve, self.new_curve, self.refs)
+        """Curves and reference lines from the real run files; nothing invented when there are none. Scoring the held-back text
+        can take a while the first time: that read runs on the shell's worker and the page redraws when it arrives."""
+        base = self.base
+        newer = self.version(self.n + 1) if self.phase != "edit" else None
+        self._chart_token = token = object()  # a later load_chart supersedes one still on the worker
+
+        def work():
+            try:
+                refs = self.services.references(base) if base and base.best_checkpoint else None
+            except (OSError, ValueError, KeyError, StopIteration):
+                refs = None
+            return self.curve_of(base), self.curve_of(newer), refs
+
+        def apply(chart, late):
+            if self._chart_token is not token:
+                return
+            self.old_curve, self.new_curve, self.refs = chart
+            self.plot_args = chart_args(self.old_curve, self.new_curve, self.refs)
+            if late:
+                self.render()
+        if self.services.ready(work):
+            apply(work(), False)
+        else:
+            self.quietly(work, lambda chart: apply(chart, True))
 
     def curve_of(self, version):
         runs = getattr(version, "runs", None) or ([str(Path(version.best_checkpoint).parent)] if version and version.best_checkpoint else [])

@@ -143,6 +143,8 @@ class Studio(tk.Tk):
         self.strip_next = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self.strip_chat = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self._strip_pending = False
+        self._strip_version, self._strip_loaded = None, False  # the version the chat line names, once it has been read
+        self._strip_loading, self._strip_again = False, False  # a read of it is on the worker; another was asked for meanwhile
         self._strip_resume = False  # the chat line is the "Resume" link only while the queue is paused by the user and idle
         for seq in ("<Button-1>", "<Return>", "<space>"):
             self.strip_chat.bind(seq, self._strip_chat_click)
@@ -214,19 +216,52 @@ class Studio(tk.Tk):
         return "\n".join(w.cget("text") for w in (self.strip_now, self.strip_next, self.strip_chat))
 
     def refresh_strip(self):
+        """Repaint the strip now from the queue; the version the chat line names is read where it is cheap (scored bands are
+        kept), and otherwise on the worker, the line keeping its last text until it arrives."""
+        def work():
+            try:
+                return self.services.best_version() or self.services.current_version()
+            except NotImplementedError:
+                return None
+        if self.services.ready(work):
+            self._strip_version, self._strip_loaded = work(), True
+        elif self._strip_loading:
+            self._strip_again = True
+        else:
+            self._strip_loading = True
+
+            def load():
+                try:
+                    return work(), None
+                except Exception as error:  # noqa: BLE001 - reported on the Tk thread below
+                    return None, error
+
+            def done(result):
+                version, error = result
+                self._strip_loading = False
+                if error is None:
+                    self._strip_version, self._strip_loaded = version, True
+                again, self._strip_again = self._strip_again, False
+                if again:
+                    self.refresh_strip()
+                else:
+                    self._paint_strip()
+                if error is not None:
+                    self.report_callback_exception(type(error), error, error.__traceback__)
+            self.quietly(load, done)
+        self._paint_strip()
+
+    def _paint_strip(self):
         q = self.services.queue()
-        try:
-            v = self.services.best_version() or self.services.current_version()
-        except NotImplementedError:
-            v = None
-        now, queued, chat, resume = strip_lines(q, v)
+        now, queued, chat, resume = strip_lines(q, self._strip_version)
         self.strip_now.configure(text=now)
         if q.job is None:
             self.strip_bar.set(None)
         else:
             self.strip_bar.set(q.step / q.total if q.total else None)
         self.strip_next.configure(text=queued)
-        self.strip_chat.configure(text=chat, fg=C["violet"] if resume else C["muted"], cursor="hand2" if resume else "", takefocus=int(resume))
+        if self._strip_loaded or resume:
+            self.strip_chat.configure(text=chat, fg=C["violet"] if resume else C["muted"], cursor="hand2" if resume else "", takefocus=int(resume))
         self._strip_resume = resume
 
     def _strip_tick(self):
