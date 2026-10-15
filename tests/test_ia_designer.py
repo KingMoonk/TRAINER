@@ -9,6 +9,7 @@ from studio_ia.services import FakeServices, Job, QueueState, Version
 from studio_ia.theme import C
 from studio_ia.widgets import plot_series
 from studio_model import validate_config
+from studio_estimate import estimate
 from studio_spec import default_spec, validate_spec
 
 
@@ -51,20 +52,22 @@ class Builder(unittest.TestCase):
         self.assertEqual((scratch["kind"], scratch["carries"]), ("scratch", False))  # word list beats every other change
 
     def test_cost_formulas_and_words(self):
-        a, b = B.cfg(dict(choices(), L=2)), B.cfg(dict(choices(), L=4))
-        self.assertGreater(B.P(b), B.P(a))
-        self.assertEqual(B.TM(a), 16 * B.P(a))
-        self.assertEqual(B.say(B.P(a), B.P(a), "bigger", "smaller"), "about the same")
+        a, b = (B.sizes(B.write_spec(default_spec(), choices(L=n)), 0) for n in (2, 4))
+        self.assertGreater(b["params"], a["params"])
+        self.assertGreater(b["time"], a["time"])
+        self.assertEqual(a["memory"], 16 * a["params"])
+        self.assertEqual(B.say(a["params"], a["params"], "bigger", "smaller"), "about the same")
         self.assertEqual(B.say(100, 150, "bigger", "smaller"), "about 1.5× bigger")
         self.assertEqual(B.say(150, 100, "bigger", "smaller"), "about 1.5× smaller")
         self.assertEqual(B.bar(50, 100), (50, 100))
-        # time per step: C = 6*(L*(4d^2+2d*ff) + V*d) + 6*L*T*d
-        c = dict(V=10, d=4, T=8, L=2, H=1, ff=16)
-        self.assertEqual(B.C_(c), 6 * (2 * (64 + 128) + 40) + 6 * 2 * 8 * 4)
+        # time per step is the modules' own training work plus the output scores, for every piece of a row
+        spec = B.write_spec(default_spec(), choices())
+        e, d, t = estimate(spec, 256), spec["dims"]["d_model"], spec["dims"]["n_ctx"]
+        self.assertEqual(B.sizes(spec, 0)["time"], (e["train_flops_per_token"] + 6 * 256 * d) * t)
 
     def test_memory_fit_is_a_comparison_with_ram(self):
-        c = B.cfg(choices())
-        need = B.TM(c) + B.ROWS * B.activations(c)
+        c = B.sizes(B.write_spec(default_spec(), choices()), 0)
+        need = c["memory"] + B.ROWS * c["activations"]
         self.assertTrue(B.fits(c, ram=need))
         self.assertFalse(B.fits(c, ram=need - 1))
 

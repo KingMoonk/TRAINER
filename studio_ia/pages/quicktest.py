@@ -7,7 +7,7 @@ import uuid
 
 import studio_quicktest
 from studio_ia.copy import QUICKTEST as T
-from studio_ia.pages.builder import C_, WIDTHS, P, cfg, read_spec, say, text_sets
+from studio_ia.pages.builder import WIDTHS, read_spec, say, sizes, text_sets
 from studio_ia.pages.base import Page
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -39,9 +39,9 @@ def describe(spec):
 
 
 def cost_sentence(current, draft):
-    """'same size · same work per step', or how much bigger/slower, from the exact cost formulas."""
-    a, b = cfg(read_spec(current)), cfg(read_spec(draft))
-    size, work = say(P(a), P(b), "bigger", "smaller"), say(C_(a), C_(b), "slower", "faster")
+    """'same size · same work per step', or how much bigger/slower, from the Builder's cost estimates."""
+    a, b = (sizes(spec, read_spec(spec)["V"]) for spec in (current, draft))
+    size, work = say(a["params"], b["params"], "bigger", "smaller"), say(a["time"], b["time"], "slower", "faster")
     same = "about the same"
     return f"{'same size' if size == same else size} · {'same work per step' if work == same else work}"
 
