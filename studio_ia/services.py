@@ -123,6 +123,13 @@ def if_added(outlook):
     return f"If you add it: {outlook[:1].lower()}{outlook[1:]}"
 
 
+def queued_outlook(services, job_id):
+    """When the queued job `job_id` starts (services.queue_outlook), or "" once it has left the queue."""
+    q = services.queue()
+    job = next((j for j in [q.job, *q.up_next] if j is not None and j.id == job_id), None)
+    return services.queue_outlook(job) if job else ""
+
+
 class Services:
     """Synchronous façade; long work runs through the queue. Subclasses override; scopes add methods, never rename."""
 

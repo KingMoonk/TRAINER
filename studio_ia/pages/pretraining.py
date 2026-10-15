@@ -8,7 +8,7 @@ import uuid
 from studio_ia.copy import PRETRAINING as T
 from studio_ia.expectation import expectation, table_params
 from studio_ia.pages.base import Page, Throttle
-from studio_ia.services import Job
+from studio_ia.services import Job, if_added, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon, tip
 
@@ -60,6 +60,13 @@ def source_status(row, note=""):
     if row["state"] == "downloading":
         return note or T["state_downloading"]
     return T["state_" + row["state"]]
+
+
+def queue_line(services, job_id):
+    """The line under "Add to the queue": when the job this page added starts, or, before one is added (or once it has
+    left the queue), what adding one now would do. The same services.queue_outlook text as every other add-to-queue surface."""
+    when = queued_outlook(services, job_id) if job_id else ""
+    return f"Queued. {when}." if when else f"{if_added(services.queue_outlook())}."
 
 
 def held_out(dataset_id):
@@ -135,6 +142,7 @@ class PretrainingPage(Page):
         self.preview, self.notes = {}, {}  # notes: latest progress line per source being fetched
         self.painted, self.status_labels = None, {}  # collection_view on screen; each source's status label
         self.throttle, self.dirty, self.flush_timer = Throttle(PROGRESS_EVERY), set(), None
+        self.job_id = None  # the last job "Add to the queue" added, for the line under the button
         self.build()
 
     def build(self):
@@ -215,6 +223,8 @@ class PretrainingPage(Page):
         self.footer_tip = ""
         self.add_btn = tip(button(card, T["add_queue"], self.add_to_queue, primary=True), lambda: self.footer_tip)
         self.add_btn.pack(anchor="w")
+        self.queue_line = tk_label(card, "", 13, "muted", "panel")
+        self.queue_line.pack(anchor="w", pady=(6, 0))
 
     # helpers ------------------------------------------------------------
     def _card(self, kicker, gloss=""):
@@ -362,6 +372,11 @@ class PretrainingPage(Page):
             self.paint_collection()  # cheap: manifests and the set list only
         elif kind == "downloads_finished":
             self.quiet_reload()  # re-counting every row is slow; the page stays usable while it runs
+        elif kind in ("queue", "job", "blocked"):
+            self.paint_queue_line()
+
+    def paint_queue_line(self):
+        self.queue_line.configure(text=queue_line(self.services, self.job_id))
 
     def _flush_soon(self):
         if self.flush_timer is not None:
@@ -455,6 +470,7 @@ class PretrainingPage(Page):
         self.need.configure(text=f"version {v.number} needs catch-up training" if v else "")
         self.footer_tip = (T["queue_note"].format(parent=f"version {pn}" if pn else "its current version", version=vn))
         self.add_btn.state(["!disabled" if v and self.chosen() and self.steps() else "disabled"])
+        self.paint_queue_line()
 
     def pick_mode(self, key):
         v, parent = self.v, self.parent_v
@@ -472,8 +488,10 @@ class PretrainingPage(Page):
         self.mode = forced_mode(v, self.parent_v, self.mode)
         init = self.parent_v.best_checkpoint if self.mode == "catch_up" else None
         label = f"Version {v.number} {'catch-up' if self.mode == 'catch_up' else 'from scratch'}"
-        self.services.enqueue(Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=label, params={
+        self.job_id = uuid.uuid4().hex[:8]
+        self.services.enqueue(Job(id=self.job_id, kind="pretrain", label=label, params={
             "config": cfg, "datasets": self.chosen(), "mode": self.mode, "init_from": init, "output_dir": None,
             "user_text": self.user_text(), "previous_best": self.parent_v.best_checkpoint if self.parent_v else None,
             "version": v.number, "heldout_fraction": cfg["validation"],
             "pieces_per_pass": self.preview.get("pieces")}))
+        self.paint_queue_line()
