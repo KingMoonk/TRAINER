@@ -14,10 +14,12 @@ import tempfile
 import time
 import threading
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import orjson
 import pandas as pd
 
 SCHEMA_VERSION = 2   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns)
@@ -70,14 +72,124 @@ def atomic_json(path, value):
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     temporary = Path(name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(value, ensure_ascii=False, indent=2))
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(orjson.dumps(value, option=_JSON))
             stream.flush()
             os.fsync(stream.fileno())  # a renamed file must not come back empty after a power loss
         replace_file(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+_JSON = orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY  # stdlib's indent=2, int keys and numpy scalars as before
+
+
+def read_json(path):
+    return orjson.loads(Path(path).read_bytes())
+
+
+# Files a run is still writing (metrics.jsonl, samples.jsonl) are polled every refresh. Each is parsed once: a later read
+# stats it, and if it grew parses only the new bytes. Keyed on size and mtime, reset when the file shrank or was replaced.
+_TAILS = OrderedDict()
+_TAILS_KEPT = 256
+_TAILS_LOCK = threading.Lock()  # the shell's workers read the same runs at once
+_CHECK = 64  # bytes before the saved offset that must still match, or the file was replaced by a longer one
+
+
+def _jsonl_row(line):
+    try:
+        row = orjson.loads(line)
+    except orjson.JSONDecodeError:
+        try:
+            row = json.loads(line)  # a diverged run logs NaN, which json reads and orjson refuses
+        except ValueError:
+            return None
+    return row if isinstance(row, dict) else None
+
+
+def _remember(key, entry):  # call with _TAILS_LOCK held
+    _TAILS[key] = entry
+    _TAILS.move_to_end(key)
+    while len(_TAILS) > _TAILS_KEPT:
+        _TAILS.popitem(last=False)
+
+
+def _jsonl_rows(data):
+    return [row for row in map(_jsonl_row, filter(bytes.strip, data.split(b"\n"))) if row is not None]
+
+
+def jsonl_rows(path):
+    """The rows of a JSONL file a run appends to. Lines that do not parse (a crash or a write in progress) are skipped."""
+    key = str(path)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        with _TAILS_LOCK:
+            _TAILS.pop(key, None)
+        return []
+    with _TAILS_LOCK:
+        seen = _TAILS.get(key)
+        if seen and (seen["size"], seen["mtime"]) == (stat.st_size, stat.st_mtime_ns):
+            _TAILS.move_to_end(key)
+            return seen["rows"] + seen["last"]
+        try:
+            with open(path, "rb") as stream:
+                if seen and stat.st_size >= seen["offset"]:
+                    stream.seek(max(0, seen["offset"] - _CHECK))
+                    if stream.read(min(_CHECK, seen["offset"])) != seen["check"]:
+                        seen = None
+                else:
+                    seen = None
+                if seen is None:
+                    stream.seek(0)
+                data = stream.read()
+        except OSError:
+            _TAILS.pop(key, None)
+            return []
+        base = seen or {"offset": 0, "rows": [], "check": b""}
+        whole = data[:data.rfind(b"\n") + 1]  # the unfinished last line waits for its newline
+        rows = base["rows"] + _jsonl_rows(whole)
+        offset = base["offset"] + len(whole)
+        check = (base["check"] + whole)[-_CHECK:]
+        # a last line that parses is a row even without its newline; it is kept apart so the offset stays on a line start
+        last = _jsonl_rows(data[len(whole):])
+        _remember(key, {"size": stat.st_size, "mtime": stat.st_mtime_ns, "offset": offset, "rows": rows, "check": check, "last": last})
+        return rows + last
+
+
+def jsonl_tail(path, count):
+    """The last `count` rows of a JSONL file whose lines can be long (samples.jsonl), reading only its end."""
+    key = (str(path), count)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return []
+    with _TAILS_LOCK:
+        seen = _TAILS.get(key)
+        if seen and (seen["size"], seen["mtime"]) == (stat.st_size, stat.st_mtime_ns):
+            _TAILS.move_to_end(key)
+            return list(seen["rows"])
+        try:
+            with open(path, "rb") as stream:
+                size, chunk = stream.seek(0, 2), 1 << 16
+                while True:
+                    start = max(0, size - chunk)
+                    stream.seek(start)
+                    data = stream.read(size - start)
+                    if start:
+                        data = data[data.find(b"\n") + 1:]  # the first line is probably cut
+                    if start and data.count(b"\n") <= count:
+                        chunk *= 2  # not enough whole lines yet; do not parse until there are
+                        continue
+                    rows = _jsonl_rows(data)
+                    if len(rows) >= count or not start:
+                        break
+                    chunk *= 2
+        except OSError:
+            return []
+        _remember(key, {"size": stat.st_size, "mtime": stat.st_mtime_ns, "rows": rows[-count:]})
+        return rows[-count:]
 
 
 def replace_file(source, target, attempts=40):
