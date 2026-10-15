@@ -7,7 +7,7 @@ import studio_gate
 from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
-from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
+from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, live_view, spread_text, step_line, teacher_options
 from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import size_text, storage_state
@@ -96,7 +96,7 @@ class PageLogic(unittest.TestCase):
         self.assertIn("conversations", blocker(0, {}))
         self.assertIn("2 pairs", blocker(3, {"pairs": 1}))
         self.assertIsNone(blocker(3, {"pairs": 2}))
-        self.assertIn("earlier version", blocker(2, {}, 0, False))
+        self.assertIn("other trained version", blocker(2, {}, 0, False))
         self.assertIn("correction", blocker(2, {}, 1, True))
         self.assertEqual(step_line(QueueState(step=5, total=20, eta_s=600)), "step 5 of 20 · about 10 min left")
         self.assertEqual(step_line(QueueState()), "starting")
@@ -368,12 +368,33 @@ def _problems():
     return generate("copy", random.Random(1), 6)
 
 
+class PostTrainingHonesty(unittest.TestCase):
+    def test_spread_text(self):
+        self.assertEqual(spread_text(12, 40), "12 of 40 groups had both a better and a worse answer; only those teach the model.")
+        self.assertEqual(spread_text(1, 1), "1 of 1 group had both a better and a worse answer; only those teach the model.")
+        self.assertIn("None of the 40 groups", spread_text(0, 40))
+        self.assertEqual(spread_text(0, 0), "")
+
+    def test_teachers_share_the_word_list_and_window(self):
+        def v(n, tokenizer=BYTE, n_ctx=32, checkpoint=True):
+            return SimpleNamespace(number=n, spec={"tokenizer": tokenizer, "dims": {"n_ctx": n_ctx}}, best_checkpoint=f"v{n}.npz" if checkpoint else None)
+        current = v(2)
+        versions = [v(1), current, v(3), v(4, BPE), v(5, n_ctx=64), v(6, checkpoint=False)]
+        options = teacher_options(versions, current)
+        self.assertEqual([o.number for o in options], [1, 3])          # not itself, other word list, other window, untrained
+        self.assertEqual(default_teacher(options, current).number, 1)   # the previous best
+        self.assertEqual(default_teacher(options[1:], current).number, 3)
+        self.assertIsNone(default_teacher([], current))
+        self.assertEqual(teacher_options(versions, None), [])
+
+
 class PostTrainingLive(unittest.TestCase):
     """Live events must not rebuild the page for every one of them, nor when the open round shows nothing new."""
 
     def page(self):
         page = PostTrainingPage.__new__(PostTrainingPage)  # no window: only the event logic is used
         page.selected, page.group, page.heat, page.moved, page.live_gate = 1, None, None, None, {}
+        page.spread = None
         page.gates, page._ticking, page._pending, page._step, page.services = {}, False, False, None, FakeServices()
         page.timers, page.redraws, page.reloads = [], [], []
         page.after = lambda ms, fn: page.timers.append((ms, fn))
@@ -407,6 +428,14 @@ class PostTrainingLive(unittest.TestCase):
         self.assertEqual(page.redraws, [1])
         page.on_event("train", {"type": "gate", "round": 2, "ok": True, "checks": []})
         self.assertEqual(page.redraws, [1, 1])
+
+    def test_round_2_step_metrics_redraw_only_when_the_count_changes(self):
+        page = self.page()
+        step = {"type": "metric", "step": 1, "groups": 4, "taught": 1, "groups_total": 4, "taught_total": 1}
+        page.on_event("train", step)
+        self.assertEqual((page.spread["taught_total"], len(page.redraws)), (1, 1))
+        page.on_event("train", {"type": "metric", "step": 1, "loss": 2.})   # another round's metric: not round 2's count
+        self.assertEqual(page.spread["taught_total"], 1)
 
     def test_queue_job_and_version_events_still_reload(self):
         page = self.page()
