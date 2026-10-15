@@ -5,6 +5,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
+from studio_ui_guard import slow
 from studio_modules.tokenizer.bpe_custom import texts_of
 from studio_registry import ModuleSpec, register
 from studio_slots import OFFSET, UNK
@@ -30,6 +31,7 @@ class WordTokenizer:
         self.vocab_size = len(self.words) + OFFSET
 
     @classmethod
+    @slow("train a tokenizer")
     def fit(cls, examples, vocab_size):
         """Keep the vocab_size - OFFSET most frequent pieces; ties break alphabetically so the fit is deterministic.
 

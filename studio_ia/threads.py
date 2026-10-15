@@ -70,6 +70,21 @@ def start(target, *args):
     return thread
 
 
+class _Spent:
+    """Stands in for a finished thread, so the next settle() gives a hold back."""
+
+    def is_alive(self):
+        return False
+
+
+def hold_until_settled():
+    """Any thread: keep the collector off until the Tk thread's next settle(), for a thread that outlives its work (the stall
+    watcher) and must allocate now and then without ever collecting a dead page's Tk objects itself."""
+    if hold():
+        with _lock:
+            _done.append(_Spent())
+
+
 def done():
     """Called by a held thread as it finishes: its hold is released by the next settle() on the Tk thread."""
     with _lock:

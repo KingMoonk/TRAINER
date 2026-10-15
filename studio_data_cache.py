@@ -10,6 +10,7 @@ import json
 import sqlite3
 from contextlib import closing
 
+from studio_ui_guard import slow
 import studio_data_kinds as dk
 
 PAGE = 200  # sample rows shown at once
@@ -52,6 +53,7 @@ class SummaryCache:
         except (sqlite3.Error, ValueError, KeyError, TypeError):
             return {}, None, None
 
+    @slow("save the data summary", when=lambda self, datasets, *args, **kwargs: sum(d.get("recordCount") or 0 for d in datasets) > 5000)
     def save(self, datasets, entries, stamp, scan_limit=20000):
         """Keep `entries` (the ones just read still carry their `rows`) and make the view. Rows past an entry's turn in the
         budget are dropped, so the file never holds more than `scan_limit` per kind. Returns the view."""

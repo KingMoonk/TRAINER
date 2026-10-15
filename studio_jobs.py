@@ -1,4 +1,5 @@
 """Job handlers: (job, services, emit, stop, pause). Only pretrain and the checkpoint cool-down are real so far."""
+import functools
 import json
 import shutil
 import tempfile
@@ -84,5 +85,17 @@ def not_built(job, services, emit, stop, pause):
     emit({"type": "info", "text": "not built yet"})
 
 
-HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
-            "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained}
+def _capped(handler):
+    """The handler, run with torch's thread pool capped (studio_backend.cap_threads): a job runs on a thread of the app's process,
+    so left alone torch takes every core and the Tk thread waits behind it for the GIL."""
+    @functools.wraps(handler)
+    def run(*args):
+        from studio_backend import cap_threads
+        cap_threads()
+        return handler(*args)
+    return run
+
+
+HANDLERS = {name: _capped(handler) for name, handler in {
+    "pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
+    "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained}.items()}

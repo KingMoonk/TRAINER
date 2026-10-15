@@ -16,6 +16,7 @@ import numpy as np
 import torch
 from torch.utils.checkpoint import checkpoint
 
+from studio_ui_guard import slow
 import studio_registry as registry
 from studio_backend import Backend, get_backend
 from studio_modules.precision.policy import LossScaler, plan
@@ -52,6 +53,7 @@ class Tape:
 class CompiledModel:
     """A ModelSpec made runnable. `p` and `g` map full parameter names to the layers' own tensors."""
 
+    @slow("build a model")
     def __init__(self, spec, vocabulary, seed=42, device="auto", batch_size=4):
         self.spec = spec = validate_spec(spec)
         problems = errors(spec, vocabulary)
@@ -163,6 +165,7 @@ class CompiledModel:
             return ids.to(device=self.device, dtype=torch.long)
         return torch.as_tensor(np.asarray(ids), dtype=torch.long, device=self.device)
 
+    @slow("run a model forward")
     def forward(self, ids, training=False, tape=False, hooks=None, patches=None, attention_summary=None, trace=False, cache=None):
         """Logits [B, T, V]. tape=True also returns the Tape backward() needs.
 
@@ -336,6 +339,7 @@ class CompiledModel:
         from studio_modules.objective.ce import cross_entropy
         return float(cross_entropy(self.forward(x), y))
 
+    @slow("run a model forward and backward")
     def loss_and_backward(self, ids, targets, scale=1.0):
         hooks = None
         if self.keep_tape:
