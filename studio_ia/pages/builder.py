@@ -21,6 +21,7 @@ from studio_ux import step_seconds
 from studio_validate import errors, validate
 from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
+from studio_ia import pieces as cut
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
@@ -446,14 +447,28 @@ def expectations(cur, draft, versions=(), issues=()):
     return out or [T["change_something"]]
 
 
-def pieces_for(v):
-    """(chips, count line) for the board's example sentence under word list v."""
-    if v == 0:
-        return [("␣" if c == " " else c) for c in PROMPT], f"{len(PROMPT)} pieces, one per character"
-    if v == 2:
-        words = PROMPT.split()
-        return [words[0]] + [" " + w for w in words[1:]], f"{len(words)} pieces"
-    return ["pieces depend on your data"], "built from your data when you save"
+MISSING = {1: "Built from your text: add some in Your data to see these pieces.",
+           2: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
+           3: "Built from your text: add some in Your data to see these pieces."}
+
+
+def pieces_for(v, lists):
+    """([(label, state)], count line) for the example sentence under word list v. `lists` = services.word_lists(), or None
+    while it is still being read. The count line puts every list's count side by side, in the order of the buttons."""
+    if lists is None:
+        lists = {"tokenizers": (cut.Tokenizer("byte"), None, None, None), "sentence": cut.EXAMPLE}
+        note = "Reading your text…"
+    else:
+        note = MISSING.get(v)
+    line = " · ".join("–" if n is None else f"{n:,}" for n in cut.counts(lists)) + " pieces"
+    tok = lists["tokenizers"][v]
+    if tok is None:
+        return [(note, "neutral")], line
+    chips = [(label, "pieces" if known else "attention") for label, known in cut.chips(tok, lists["sentence"])]
+    lost = sum(state == "attention" for _, state in chips)
+    if lost:
+        line += f", {lost} word{'s' if lost > 1 else ''} lost to “unknown”"
+    return chips, line
 
 
 def chart_args(old, new, refs):
@@ -530,10 +545,12 @@ class BuilderPage(Page):
         self.anchor = None  # (spec, choices) when a design from another page was reopened here
         self._staged, self.dismissed = None, None
         self.tray = self.chips = self.costs = self.expect = None
+        self.pieces_box = None
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
         self.guide_text = self.guide_details = self.hover_text = ""
         self.old_curve = self.new_curve = self.refs = None
+        self.lists = None  # services.word_lists(), read on the slow lane
         self.plot_args, self.plot = {}, None
         self._chart_token = None
         self.answers, self.answer_q, self.answer_stop, self.answer_labels, self.workers = {}, queue.Queue(), threading.Event(), {}, []
@@ -588,6 +605,7 @@ class BuilderPage(Page):
             self._staged = staged
         self.load_chart()
         self.render()
+        self.load_lists()
 
     def _restore_saved(self, current):
         """A saved version nobody has trained yet shows its coral tray, wherever it was saved (e.g. from Quick test)."""
@@ -626,6 +644,22 @@ class BuilderPage(Page):
             apply(work(), False)
         else:
             self.quietly(work, lambda chart: apply(chart, True))
+
+    def load_lists(self):
+        """The four word lists fitted on your text, for the pieces card. Fitting reads a sample of the text (and fetches
+        GPT-2's list once), so it runs on the slow lane; services keep the result until the stored data changes."""
+        def work():
+            try:
+                return self.services.word_lists()
+            except (OSError, ValueError):
+                return None
+
+        def apply(lists):
+            if lists is not None and lists is not self.lists:
+                self.lists = lists
+                if self.pieces_box is not None and self.pieces_box.winfo_exists():
+                    self._paint_pieces()
+        self.quietly(work, apply, lane="slow")
 
     def curve_of(self, version):
         runs = getattr(version, "runs", None) or ([str(Path(version.best_checkpoint).parent)] if version and version.best_checkpoint else [])
@@ -1038,17 +1072,21 @@ class BuilderPage(Page):
             self._paint_detail(i, detail, bg, removed)
         self.blocks_label.configure(text=str(dr["L"]), fg=C["amber"] if dr["L"] != cur["L"] else C["text"])
         self.blocks_was.configure(text=f"  was {cur['L']}" if dr["L"] != cur["L"] else "")
-        pieces, count = pieces_for(dr["V"])
+        self._paint_pieces()
+
+    def _paint_pieces(self):
+        v = self.draft["V"]
+        chips, count = pieces_for(v, self.lists)
         self.pieces_count.configure(text=f"  {count}")
-        if dr["V"] != self.pieces_shown:
-            self.pieces_shown = dr["V"]
+        if (v, id(self.lists)) != self.pieces_shown:
+            self.pieces_shown = v, id(self.lists)
             for child in self.pieces_box.winfo_children():
                 child.destroy()
-            for k in range(0, len(pieces), 14):  # wrap long piece lists
+            for k in range(0, len(chips), 14):  # wrap long piece lists
                 line = tk.Frame(self.pieces_box, bg=C["panel2"])
                 line.pack(anchor="w")
-                for p in pieces[k:k + 14]:
-                    Chip(line, p, "pieces").pack(side="left", padx=1, pady=1)
+                for label, state in chips[k:k + 14]:
+                    Chip(line, label, state).pack(side="left", padx=1, pady=1)
 
     def toggle(self, i):
         self.open ^= {i}
@@ -1094,10 +1132,10 @@ class BuilderPage(Page):
     def _paint_seg(self, key):
         seg, label = self.segs[key]
         seg.set(label.get(self.draft[key]))
-        # ponytail: Tk borders cannot be dashed, so the old choice gets a violet outline and a "was" in its label.
+        # ponytail: Tk borders cannot be dashed, so the saved choice gets a violet outline and a "saved" in its label.
         was = label.get(self.cur[key]) if self.cur[key] != self.draft[key] else None
         for opt, b in seg.buttons.items():
-            b.configure(highlightbackground=C["violet"] if opt == was else C["border"], text=f"{opt} · was" if opt == was else opt)
+            b.configure(highlightbackground=C["violet"] if opt == was else C["border"], text=f"{opt} · saved" if opt == was else opt)
 
     def _start_from(self, parent):
         """Pick a ready-made design, read what it costs on this computer and its recipe, then load it into the draft."""

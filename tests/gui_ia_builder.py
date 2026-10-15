@@ -105,7 +105,7 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(blocks.cget("text"), "3")
         self.assertEqual([r[2].cget("text") for r in self.page.block_rows], ["●" * 8] * 3)
         seg = self.page.segs["H"][0]
-        self.assertEqual((seg.value, seg.buttons["4"].cget("text")), ("8", "4 · was"))
+        self.assertEqual((seg.value, seg.buttons["4"].cget("text")), ("8", "4 · saved"))
         self.page.discard()
         self.assertEqual(len(self.page.block_rows), 2)
         self.assertEqual(seg.buttons["4"].cget("text"), "4")

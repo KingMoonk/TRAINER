@@ -24,11 +24,12 @@ def passes(before, after, band=None):
     return all(c["ok"] for c in checks), checks
 
 
-def moves_chat(new_bpc, best_bpc, band):
-    """Chat follows the best checkpoint only when the new held-back error is below the previous best's noise band
-    (its lower edge); with no band or no earlier measurement it moves only if the new error is lower."""
+def moves_chat(new_bpc, best_bpc, paired=None):
+    """Chat follows the best checkpoint only when the new version is clearly better than the previous best: paired is
+    studio_eval.paired_gain on the same held-back documents, and its "better" decides. Without it (no held-back text to
+    pair on) the new held-back error moves Chat only if it is lower, or if nothing was measured before."""
     if new_bpc is None or not math.isfinite(new_bpc):
         return False
     if best_bpc is None:
         return True
-    return new_bpc < (band[0] if band else best_bpc)
+    return bool(paired["better"]) if paired is not None else new_bpc < best_bpc

@@ -1,11 +1,14 @@
 """Rounds 2 and 3 (studio_rl), the gate, and the post_round handler through a Runner, on a tiny trained model."""
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
+import torch
 
 import studio_gate
 import studio_rl
@@ -80,6 +83,47 @@ class RLChecks(unittest.TestCase):
         self.assertTrue(np.allclose(studio_rl.advantages([1, 1, 1]), 0))
         self.assertTrue(np.allclose(studio_rl.advantages([1, 0], divide_by_std=False), [.5, -.5]))
 
+    def test_share_of_groups_with_spread(self):
+        self.assertEqual(studio_rl.group_spread([[1., 0., 0.], [0., 0., 0.], [1., 1., 1.], [.5, .8]]), (2, 4))
+        self.assertEqual(studio_rl.group_spread([]), (0, 0))
+
+    def test_all_fail_and_all_pass_groups_teach_nothing(self):
+        self.assertFalse(studio_rl.has_spread([0., 0., 0., 0.]))
+        self.assertFalse(studio_rl.has_spread([1., 1.]))
+        self.assertTrue(studio_rl.has_spread([0., 0., 1.]))
+        self.assertEqual(studio_rl.group_spread([[0.] * 6] * 5), (0, 5))
+
+    def test_loss_is_a_mean_over_tokens_so_length_does_not_scale_it(self):
+        def loss(lengths, per_token):
+            width = max(lengths)
+            valid = torch.tensor([[i < n for i in range(width)] for n in lengths])
+            logp = valid.to(torch.float32) * per_token
+            return float(studio_rl.length_normalised(logp, valid, torch.tensor([1., -.5][:len(lengths)])))
+        self.assertAlmostEqual(loss([2, 2], -.7), loss([20, 20], -.7))
+        self.assertAlmostEqual(loss([2, 20], -.7), loss([20, 2], -.7))   # which answer is the long one does not matter
+        short, long = loss([3, 3], -1.), loss([30, 30], -1.)
+        self.assertAlmostEqual(short, long)
+        self.assertAlmostEqual(short, -(1. * -1. + -.5 * -1.) / 2)    # -(advantage * mean token log-prob), averaged over answers
+
+    def test_practice_with_checks_reports_groups_that_taught_something(self):
+        events = []
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:4]]
+        record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2spread", group=4, steps=3, learning_rate=1e-3,
+                                                emit=events.append)
+        metrics = [e for e in events if e["type"] == "metric"]
+        self.assertEqual(sum(m["groups"] for m in metrics), record["groups"])
+        self.assertEqual(sum(m["taught"] for m in metrics), record["taught"])
+        self.assertEqual((metrics[-1]["groups_total"], metrics[-1]["taught_total"]), (record["groups"], record["taught"]))
+        self.assertEqual(record["taught"], sum(1 for e in events if e["type"] == "group" and not e["skipped"]))
+        self.assertLessEqual(record["taught"], record["groups"])
+
+    def test_pass_at_k_counts_solved_problems(self):
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:3]]
+        probe = studio_rl.pass_at_k(self.ckpt, problems, count=3, k=2)
+        self.assertEqual((probe["problems"], probe["k"], probe["answers"]), (3, 2, 6))
+        self.assertLessEqual(probe["solved"], probe["problems"])
+        self.assertLessEqual(probe["solved"], probe["passed"])
+
     def test_practice_with_checks_runs_and_saves(self):
         events = []
         problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:4]]
@@ -111,6 +155,30 @@ class RLChecks(unittest.TestCase):
         t_rows = [_encode_pair(tokenizer, teacher.messages(USER), "yes", 32)]
         kl, _ = studio_rl.reverse_kl(student, teacher.model, self.rows(tokenizer, ["yes"]), t_rows)
         self.assertTrue(np.isfinite(kl))
+
+    def test_a_teacher_with_another_word_list_is_rejected(self):
+        train({**TINY, "steps": 2, "tokenizer": "character"}, EXAMPLES, self.dir / "letters")
+        teacher = studio_rl.Teacher(self.dir / "letters" / "last.npz")
+        student, tokenizer = self.model()
+        with self.assertRaisesRegex(ValueError, "different word list"):
+            studio_rl.check_teacher(tokenizer, 32, teacher)
+        with self.assertRaisesRegex(ValueError, "different word list"):
+            studio_rl.learn_from_teacher(self.ckpt, ["Copy: yes"], self.dir / "letters" / "last.npz", self.dir / "r3bad", steps=1)
+        self.assertFalse((self.dir / "r3bad").exists())
+
+    def test_a_teacher_with_another_reading_window_is_rejected(self):
+        _, tokenizer = self.model()
+        teacher = studio_rl.Teacher(self.ckpt)
+        studio_rl.check_teacher(tokenizer, 32, teacher)                       # the same checkpoint is a fine teacher
+        with self.assertRaisesRegex(ValueError, "reads 32 tokens"):
+            studio_rl.check_teacher(tokenizer, 64, teacher)
+
+    def test_another_version_with_the_same_word_list_can_teach(self):
+        other = train({**TINY, "steps": 3, "seed": 5}, EXAMPLES, self.dir / "stronger")
+        self.assertTrue(other)
+        record = studio_rl.learn_from_teacher(self.ckpt, [f"Copy: {w}" for w in WORDS[:2]], self.dir / "stronger" / "last.npz",
+                                              self.dir / "r3other", steps=2, learning_rate=1e-3)
+        self.assertEqual((record["status"], record["privileged"]), ("completed", False))
 
     def test_learn_from_teacher_runs(self):
         events = []
@@ -144,6 +212,25 @@ class RLChecks(unittest.TestCase):
         self.assertTrue(run(3., 2.9, 0, 0, n0=0, n1=0)[0])          # no problems: nothing can have fallen
 
     # ------------------------------------------------------------------ handler through a Runner
+    def test_round_2_is_skipped_when_the_model_solves_nothing(self):
+        problems = _generate_problems(10, __import__("random").Random(42))
+        recorded, events = [], []
+        services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,
+                                   best_version=lambda: None, post_rows=lambda kind: [],
+                                   record_round=lambda number, version, result: recorded.append((number, result)))
+        job = SimpleNamespace(id="skip", params={"round": 2, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "skipped"),
+                                                 "problems": problems})
+        none_solved = {"problems": 8, "k": 4, "solved": 0, "passed": 0, "answers": 32}
+        with mock.patch.object(studio_rl, "pass_at_k", return_value=none_solved):
+            done = studio_rl.run_round(2, job, services, events.append, threading.Event(), threading.Event())
+        self.assertEqual((done["ok"], done["checkpoint"]), (False, str(self.ckpt)))
+        self.assertFalse((self.dir / "skipped").exists())                    # nothing trained
+        gate = next(e for e in events if e["type"] == "gate")
+        self.assertTrue(gate["skipped"] and not gate["ok"])
+        self.assertIn("teach nothing", gate["verdict"])
+        self.assertEqual(gate["checks"][0]["detail"], "0 of 32 sampled answers passed, on 8 problems")
+        self.assertEqual((recorded[0][0], recorded[0][1]["checkpoint"]), (2, str(self.ckpt)))   # recorded, and it never moves Chat
+
     def test_post_round_handler_completes_through_a_runner(self):
         problems = _generate_problems(10, __import__("random").Random(42))
         services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,
@@ -156,13 +243,15 @@ class RLChecks(unittest.TestCase):
         job = runner.enqueue(Job("post_round", "Round 2", params={
             "round": 2, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "queued"), "problems": problems[:6], "group": 3,
             "steps": 2, "heldout_problems": problems[6:], "heldout_docs": [{"user": "Copy: yes", "assistant": "yes"}, "Copy: no no"]}))
-        runner.start()
-        end = time.time() + 120
-        while time.time() < end and job.status in ("waiting", "running"):
-            time.sleep(.05)
+        with mock.patch.object(studio_rl, "pass_at_k", return_value={"problems": 8, "k": 4, "solved": 1, "passed": 1, "answers": 32}):
+            runner.start()
+            end = time.time() + 120
+            while time.time() < end and job.status in ("waiting", "running"):
+                time.sleep(.05)
         self.assertEqual((job.status, job.error), ("done", ""))
         gate = next(e for e in events if e.get("type") == "gate")
         self.assertEqual(gate["round"], 2)
+        self.assertLessEqual(gate["taught"], gate["groups"])
         self.assertEqual(len(gate["checks"]), 2)
         self.assertEqual(gate["after"]["pass_n"], 4)
         self.assertIsInstance(gate["ok"], bool)
