@@ -20,6 +20,17 @@ from pathlib import Path
 
 import pandas as pd
 
+SCHEMA_VERSION = 2   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns)
+MIGRATE_BATCH = 5000
+_COLUMNS = "id,dataset_id,fingerprint,payload,user,assistant,intent,quality,characters,kind,holdout"
+_READ = "payload,user,assistant"  # what _row_to_example needs
+_CREATE_RECORDS = """CREATE TABLE IF NOT EXISTS records (
+    id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+    payload TEXT NOT NULL, user TEXT NOT NULL, assistant TEXT NOT NULL,
+    intent TEXT NOT NULL, quality TEXT NOT NULL, characters INTEGER NOT NULL,
+    kind TEXT, holdout INTEGER,
+    UNIQUE(dataset_id, fingerprint))"""
+_PICK_INDEX = "CREATE INDEX IF NOT EXISTS records_pick ON records(kind, holdout, quality, dataset_id)"
 
 
 def _root():
@@ -207,6 +218,8 @@ class Workspace:
         self.run_dir = self.root / "runs"
         self.db_path = self.root / "data" / "records.sqlite"
         self.lock = threading.RLock()
+        self._migrate_lock = threading.Lock()
+        self.progress = None  # optional callback(text, fraction): told how far a schema migration has got
         self.revision = 0  # goes up with every change to the stored data, so a reader can cache what a full read costs
         if self.path.exists():
             self.state = json.loads(self.path.read_text(encoding="utf-8"))
@@ -261,13 +274,13 @@ class Workspace:
     def _connect(self):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.db_path, timeout=30)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("""CREATE TABLE IF NOT EXISTS records (
-            id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
-            payload TEXT NOT NULL, user TEXT NOT NULL, assistant TEXT NOT NULL,
-            intent TEXT NOT NULL, quality TEXT NOT NULL, characters INTEGER NOT NULL,
-            UNIQUE(dataset_id, fingerprint))""")
-        connection.execute("CREATE INDEX IF NOT EXISTS records_dataset ON records(dataset_id)")
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+                self._migrate(connection)
+        except BaseException:
+            connection.close()
+            raise
         try:
             with connection:
                 yield connection
@@ -275,6 +288,60 @@ class Workspace:
             if connection.total_changes:
                 self.revision += 1
             connection.close()
+
+    def schema_pending(self):
+        """True when records.sqlite exists and still has to be brought to the current schema (a launch can start that early)."""
+        if not self.db_path.exists():
+            return False
+        connection = sqlite3.connect(self.db_path, timeout=30)
+        try:
+            return connection.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION
+        finally:
+            connection.close()
+
+    def ensure_schema(self):
+        with self._connect():
+            pass
+
+    def _migrate(self, connection):
+        """Bring records.sqlite to SCHEMA_VERSION (0 = every database made before the version was recorded).
+
+        Safe to interrupt and to repeat: columns are added only when missing, the fill commits every MIGRATE_BATCH rows
+        and picks up at the rows still without a kind, and user_version moves only after everything else is done.
+        Payloads are not rewritten here (new and edited rows write the lean form; _row_to_example reads both)."""
+        import studio_data_kinds as dk
+        with self._migrate_lock:
+            if connection.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+                return  # another thread did it while this one waited
+            connection.execute(_CREATE_RECORDS)  # a no-op on an older table: its columns are added below
+            connection.execute("CREATE INDEX IF NOT EXISTS records_dataset ON records(dataset_id)")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(records)")}
+            for name, kind in (("kind", "TEXT"), ("holdout", "INTEGER")):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE records ADD COLUMN {name} {kind}")
+            connection.commit()
+            total = connection.execute("SELECT COUNT(*) FROM records WHERE kind IS NULL").fetchone()[0]
+            done, last = 0, 0
+            while True:
+                batch = connection.execute("SELECT rowid, fingerprint, payload FROM records WHERE kind IS NULL AND rowid > ? "
+                                           "ORDER BY rowid LIMIT ?", (last, MIGRATE_BATCH)).fetchall()
+                if not batch:
+                    break
+                updates = []
+                for rowid, key, payload in batch:
+                    try:
+                        kind = dk.classify(json.loads(payload))
+                    except ValueError:
+                        kind = "conversations"  # an unreadable payload fails where it is read, not here
+                    updates.append((kind, int(dk.held_key(key)), rowid))
+                connection.executemany("UPDATE records SET kind=?, holdout=? WHERE rowid=?", updates)
+                connection.commit()
+                done, last = done + len(batch), batch[-1][0]
+                if self.progress:
+                    self.progress(f"Updating your stored data ({done:,} of {total:,})", done / max(total, done))
+            connection.execute(_PICK_INDEX)
+            connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            connection.commit()
 
     @staticmethod
     def _where(dataset_id, query=""):
@@ -285,9 +352,29 @@ class Workspace:
 
     @staticmethod
     def _db_row(example):
-        return (example["id"], example["datasetId"], fingerprint(example), json.dumps(example, ensure_ascii=False),
+        """One records row, in _COLUMNS order. The payload leaves out user/assistant (their columns hold them) and the
+        in-memory kind/holdout stamps; _row_to_example puts the first two back."""
+        import studio_data_kinds as dk
+        key = fingerprint(example)
+        payload = {k: v for k, v in example.items() if k not in ("kind", "holdout") and not (k in ("user", "assistant") and isinstance(v, str))}
+        return (example["id"], example["datasetId"], key, json.dumps(payload, ensure_ascii=False),
                 example.get("user") or "", example.get("assistant") or "", example.get("intent") or "general",
-                example.get("quality") or "Review", len(example.get("user", "")) + len(example.get("assistant", "")))
+                example.get("quality") or "Review", len(example.get("user", "")) + len(example.get("assistant", "")),
+                dk.classify(example), int(dk.held_key(key)))
+
+    @staticmethod
+    def _insert_rows(connection, rows, ignore=True):
+        """The one INSERT into records. rows are _db_row tuples; returns how many were stored (ignore=True skips duplicates)."""
+        return connection.executemany(f"INSERT {'OR IGNORE ' if ignore else ''}INTO records ({_COLUMNS}) VALUES ({','.join('?' * 11)})",
+                                      rows).rowcount
+
+    @staticmethod
+    def _row_to_example(row):
+        """(payload, user, assistant) as stored -> the example dict. Rows written before schema 2 still carry user/assistant in the payload."""
+        example = json.loads(row[0])
+        example.setdefault("user", row[1])
+        example.setdefault("assistant", row[2])
+        return example
 
     def set_dataset_metadata(self, dataset_id, **fields):
         dataset = self._dataset(dataset_id)
@@ -306,8 +393,7 @@ class Workspace:
         with self.lock:
             rows = self.examples(dataset_id)
         with self._connect() as connection:  # the copy runs without the lock: a save on the UI thread never waits on it
-            for row in rows:
-                connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", self._db_row(row))
+            self._insert_rows(connection, (self._db_row(row) for row in rows))
             count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
             if count < len({fingerprint(row) for row in rows}):
                 raise ValueError("Some records could not be moved to disk storage; nothing was changed.")
@@ -323,9 +409,9 @@ class Workspace:
         if dataset.get("storage") == "sqlite":
             where, parameters = self._where(dataset_id, query)
             with self._connect() as connection:
-                cursor = connection.execute(f"SELECT payload FROM records WHERE {where} ORDER BY rowid LIMIT ? OFFSET ?",
+                cursor = connection.execute(f"SELECT {_READ} FROM records WHERE {where} ORDER BY rowid LIMIT ? OFFSET ?",
                                             parameters + [-1 if limit is None else max(0, int(limit)), max(0, int(offset))])
-                return [json.loads(row[0]) for row in cursor]
+                return [self._row_to_example(row) for row in cursor]
         rows = [e for e in self.state["examples"] if e.get("datasetId") == dataset_id]
         if query.strip():
             needle = query.casefold().strip()
@@ -342,12 +428,25 @@ class Workspace:
     def iter_examples(self, dataset_id):
         if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
             with self._connect() as connection:
-                cursor = connection.execute("SELECT payload FROM records WHERE dataset_id=? ORDER BY rowid", (dataset_id,))
+                cursor = connection.execute(f"SELECT {_READ} FROM records WHERE dataset_id=? ORDER BY rowid", (dataset_id,))
                 while batch := cursor.fetchmany(2000):  # a read never holds more than one batch; WAL keeps writers unblocked
                     for row in batch:
-                        yield json.loads(row[0])
+                        yield self._row_to_example(row)
         else:
             yield from self.examples(dataset_id)
+
+    def pick(self, kind, holdout, dataset_ids):
+        """{dataset_id: examples in storage order} of one kind and holdout flag among SQLite datasets: one query on the records_pick index."""
+        found = {dataset_id: [] for dataset_id in dataset_ids}
+        if not found:
+            return found
+        with self._connect() as connection:
+            cursor = connection.execute(f"SELECT dataset_id,{_READ} FROM records INDEXED BY records_pick WHERE kind=? AND holdout=? AND dataset_id IN ({','.join('?' * len(found))}) "
+                                        "ORDER BY rowid", (kind, int(holdout), *found))
+            while batch := cursor.fetchmany(2000):
+                for dataset_id, *row in batch:
+                    found[dataset_id].append(self._row_to_example(row))
+        return found
 
     def sample(self, dataset_id, limit=20000, seed=42, reviewed_only=False):
         """Uniform deterministic sampling with O(limit) record memory, including disk datasets."""
@@ -371,8 +470,8 @@ class Workspace:
             values = {}
             for start in range(0, len(chosen), 800):
                 ids = chosen[start:start + 800]
-                for rowid, payload in connection.execute("SELECT rowid,payload FROM records WHERE rowid IN (" + ",".join("?" for _ in ids) + ")", ids):
-                    values[rowid] = json.loads(payload)
+                for rowid, *row in connection.execute(f"SELECT rowid,{_READ} FROM records WHERE rowid IN (" + ",".join("?" for _ in ids) + ")", ids):
+                    values[rowid] = self._row_to_example(row)
         rng.shuffle(chosen)
         return [values[i] for i in chosen]
 
@@ -383,8 +482,8 @@ class Workspace:
         if not self.db_path.exists():
             return None
         with self._connect() as connection:
-            row = connection.execute("SELECT payload FROM records WHERE id=?", (example_id,)).fetchone()
-            return json.loads(row[0]) if row else None
+            row = connection.execute(f"SELECT {_READ} FROM records WHERE id=?", (example_id,)).fetchone()
+            return self._row_to_example(row) if row else None
 
     def update_example(self, example):
         old = self.get_example(example.get("id"))
@@ -399,14 +498,15 @@ class Workspace:
             row = self._db_row(value)
             try:
                 with self._connect() as connection:
-                    connection.execute("UPDATE records SET dataset_id=?,fingerprint=?,payload=?,user=?,assistant=?,intent=?,quality=?,characters=? WHERE id=?", row[1:] + (row[0],))
+                    connection.execute("UPDATE records SET dataset_id=?,fingerprint=?,payload=?,user=?,assistant=?,intent=?,quality=?,characters=?,kind=?,holdout=? WHERE id=?", row[1:] + (row[0],))
             except sqlite3.IntegrityError as exc:
                 raise ValueError("This edit duplicates another example in this dataset.") from exc
         else:
             if any(e["id"] != value["id"] and fingerprint(e) == fingerprint(value) for e in self.examples(dataset_id)):
                 raise ValueError("This edit duplicates another example in this dataset.")
+            import studio_data_kinds as dk
             old.clear()
-            old.update(value)
+            old.update(dk.stamp(value, fingerprint(value)))
             self.save()
         return value
 
@@ -455,12 +555,13 @@ class Workspace:
                     if example is None:
                         invalid += 1
                         continue
-                    cursor = connection.execute("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?,?,?)", self._db_row(example))
-                    added += cursor.rowcount
-                    duplicate += 1 - cursor.rowcount
+                    stored = self._insert_rows(connection, [self._db_row(example)])
+                    added += stored
+                    duplicate += 1 - stored
                 dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
             self.save()
             return added, duplicate, invalid
+        import studio_data_kinds as dk
         known = {fingerprint(e) for e in self.examples(dataset_id)}
         added, duplicate, invalid = 0, 0, 0
         for row in rows:
@@ -473,7 +574,7 @@ class Workspace:
                 duplicate += 1
                 continue
             known.add(key)
-            self.state["examples"].append(example)
+            self.state["examples"].append(dk.stamp(example, key))
             added += 1
         self.save()
         return added, duplicate, invalid
@@ -552,7 +653,7 @@ class Workspace:
         else:
             with path.open("w", encoding="utf-8") as stream:
                 for e in examples:
-                    record = {key: value for key, value in e.items() if key not in {"id", "datasetId", "updatedAt", "user", "assistant"}}
+                    record = {key: value for key, value in e.items() if key not in {"id", "datasetId", "updatedAt", "user", "assistant", "kind", "holdout"}}
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def runs(self):

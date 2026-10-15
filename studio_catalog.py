@@ -845,7 +845,6 @@ def register_download(workspace, result, stop=None, emit=None):
     if count != result["records"] or stale:
         # One transaction swaps the old rows for the new ones: WAL readers keep seeing the old set until the commit,
         # and a cancel or failure rolls back to it. No staging copy to rename and one sync instead of one per batch.
-        insert = "INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)"
         with workspace._connect() as connection:
             connection.execute("PRAGMA synchronous=NORMAL")  # WAL stays consistent; a power cut may lose this import only
             try:
@@ -863,11 +862,11 @@ def register_download(workspace, result, stop=None, emit=None):
                         batch.append(workspace._db_row(row))
                         count += 1
                         if len(batch) >= 5000:
-                            connection.executemany(insert, batch)
+                            workspace._insert_rows(connection, batch, ignore=False)
                             batch.clear()
                         if emit and count % 5000 == 0:
                             emit({"text": f"Indexing {result['name']} · {count:,}/{result['records']:,}", "completed": count, "total": result["records"]})
-                connection.executemany(insert, batch)
+                workspace._insert_rows(connection, batch, ignore=False)
                 if count != result["records"]:
                     raise ValueError("Catalogue record count does not match its manifest.")
                 connection.commit()
@@ -878,7 +877,7 @@ def register_download(workspace, result, stop=None, emit=None):
                 "createdAt": now(), "storage": "sqlite", "recordCount": count, "catalogId": catalog_id,
                 "license": result["license"], "source_url": result["source_url"], "revision": result["revision"],
                 "manifestPath": result["manifest_path"], "split": result["split"], "sourceSha256": result["sha256"]}
-    # ponytail: Workspace.apply does not exist yet; hold the lock just for the in-memory swap and save.
+    # the lock covers only the in-memory swap and the save
     with workspace.lock:
         workspace.state["datasets"] = [entry for entry in workspace.state["datasets"] if entry["id"] != dataset_id] + [metadata]
         workspace.save()
