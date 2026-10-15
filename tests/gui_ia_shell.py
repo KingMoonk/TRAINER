@@ -1,5 +1,6 @@
 """Shell check: all 16 routes render their h1, and a queue event updates the machine strip."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import time
 import unittest
 import tkinter as tk
 from tkinter import ttk
@@ -30,6 +31,14 @@ class ShellTest(unittest.TestCase):
             self.assertIn(spec.title, texts(page), route)
             self.assertIn(spec.lead, texts(page), route)
 
+    def test_sidebar_rows_for_queue_and_data_follow_the_page(self):
+        from studio_ia.theme import C
+        for route, area in (("queue", "machine"), ("your_data", "data"), ("make_data", "data"), ("builder", "designer")):
+            self.app.show(route)
+            self.app.update()
+            on = [key for key, (row, *_rest) in self.app._area_rows.items() if row.cget("bg") == C["violet_bg"]]
+            self.assertEqual(on, [area], route)
+
     def test_queue_event_updates_machine_strip(self):
         self.assertIn("Nothing is training", self.app.strip_text)
         self.fake.set_queue(QueueState(job=Job("1", "pretrain", "Version 5 catch-up"), step=50, total=200,
@@ -38,6 +47,27 @@ class ShellTest(unittest.TestCase):
         self.assertIn("Version 5 catch-up", self.app.strip_text)
         self.assertIn("1 queued", self.app.strip_text)
         self.assertAlmostEqual(self.app.strip_bar.fraction, 0.25)
+
+    def wait_for(self, what):
+        """Pump Tk until `what()` holds: the Next row is filled in by the worker thread."""
+        for _ in range(100):
+            self.app.update()
+            if what():
+                return
+            time.sleep(.02)
+        self.fail("timed out")
+
+    def test_next_row_follows_the_workspace_and_opens_its_page(self):
+        self.wait_for(lambda: "Design your first model" in self.app.next_text)
+        self.fake.save_version({}, "")
+        self.wait_for(lambda: "Queue the training" in self.app.next_text)
+        self.app._next_click()
+        self.assertEqual(self.app.route, "builder")
+        self.fake._rows()["text"].clear()
+        self.fake.emit("data")
+        self.wait_for(lambda: "Add some text" in self.app.next_text)
+        self.app._next_click()
+        self.assertEqual(self.app.route, "your_data")
 
     def test_widgets_render(self):
         from studio_ia import widgets as w

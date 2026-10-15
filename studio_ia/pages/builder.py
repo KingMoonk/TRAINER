@@ -15,7 +15,7 @@ from studio_versions import _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia.copy import BUILDER as T
 from studio_ia.pages.base import Page
-from studio_ia.services import Job, plain_error
+from studio_ia.services import Job, if_added, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, StateTray, button
 
@@ -218,6 +218,13 @@ def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
                        "output_dir": None, "user_text": False, "version": number})
 
 
+def queued_outlook(services, job_id):
+    """When the queued job `job_id` starts (services.queue_outlook), or "" once it has left the queue."""
+    q = services.queue()
+    job = next((j for j in [q.job, *q.up_next] if j is not None and j.id == job_id), None)
+    return services.queue_outlook(job) if job else ""
+
+
 def text_sets(summary):
     """Ids of the plain-text datasets from services.data('text') (a dict or a DataSummary)."""
     sets = summary.get("sets", []) if isinstance(summary, dict) else getattr(summary, "sets", [])
@@ -335,6 +342,8 @@ class BuilderPage(Page):
                 and not any(j.id == self.job_id for j in q.up_next):
             self.load_chart()  # our job left the queue: it finished or was removed
             return self.render()
+        if self.phase == "queued" and self.outlook() not in self.tray_text:  # paused, held, or the job ahead finished
+            return self.render()
         if self.pill_bar is not None:  # progress only: do not rebuild the page for every step
             self._paint_pill(q)
             if self.phase == "training" and time.time() - self._curve_at > 2:
@@ -434,6 +443,9 @@ class BuilderPage(Page):
                 break
             self.services.move_up(self.job_id)
         self.render()
+
+    def outlook(self):
+        return queued_outlook(self.services, self.job_id)
 
     def position(self):
         return next((i for i, j in enumerate(self.services.queue().up_next) if j.id == self.job_id), None)
@@ -664,14 +676,14 @@ class BuilderPage(Page):
             state = "needs_training"
             kicker = T["saved_text_needs_training" if scratch else "saved_text_needs_catchup"].format(new_version=nv)
             text = T["saved_text"].format(startNote=self.start_note(), current_version=f"version {n}", new_version=nv) if n else self.start_note()
+            text += f" {if_added(self.services.queue_outlook())}."
             actions = [(T["add_training" if scratch else "add_catchup"], lambda: self.queue_it(False), True)]
             if not scratch:
                 actions.append((T["start_from_scratch"], lambda: self.queue_it(True), False))
         elif ph == "queued":
-            q = self.services.queue()
             state, kicker, text = "live", T["queued"], T["queued_text"].format(new_version=Nv)
-            if q.blocked:
-                text += f" Training may not start yet: {q.blocked}."
+            when = self.outlook()
+            text += f" {when}." if when else ""
             if self.position():
                 actions = [(T["move_to_front"], self.to_front, True)]
         else:

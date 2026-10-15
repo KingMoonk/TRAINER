@@ -16,6 +16,15 @@ from studio_spec import default_spec, validate_spec
 from studio_versions import change_text
 
 LOOKS = ("Pick your guess first.", "Add a variant first.")
+
+
+def queue_block(plan, error, variants, guess):
+    """Why "Queue the runs" cannot work yet, in words; "" when it can. Checked on every change, so the button is only live when a click will queue."""
+    if plan is None:
+        return error
+    return LOOKS[1] if not variants else LOOKS[0] if not guess else ""
+
+
 NO_TEXT = "Your data has no plain text yet. Add some in Your data, then queue the runs."
 
 MODE_KEYS = (("params", "params_mode", "params_note", "x_axis_text"), ("compute", "compute_mode", "compute_note", "x_axis_compute"),
@@ -234,7 +243,9 @@ class ComparePage(Page):
             self.error = ""
         except ValueError as error:
             self.plan, self.error = None, str(error)
-        self.problem.configure(text=self.error or next((f"Variant {r['variant']}: {r['reason']}" for r in self.plan["variants"] if not r["matched"]), ""))
+        block = queue_block(self.plan, self.error, self.variants, self.guess.value)
+        self.problem.configure(text=self.error or next((f"Variant {r['variant']}: {r['reason']}" for r in self.plan["variants"] if not r["matched"]), block))
+        self.queue_btn.state(["disabled"] if block else ["!disabled"])
         runs, sweeps = (self.plan["n_runs"], self.plan["n_sweeps"]) if self.plan else (0, 0)
         self.queue_btn.configure(text=T["queue_runs"].format(count=runs, sweeps=sweeps) if sweeps else T["queue_runs_no_sweep"].format(count=runs))
         self.draw_table(lr_on)
@@ -311,9 +322,10 @@ class ComparePage(Page):
         label = f"Compare runs: {self.plan['n_runs']} runs" + (f" + {self.plan['n_sweeps']} short sweeps" if self.plan["n_sweeps"] else "")
         self.job_id = uuid.uuid4().hex[:8]
         self.live, self.results, self.done_guess = {}, None, self.guess.value
-        self.services.enqueue(Job(id=self.job_id, kind="compare", label=label, note=exp.question,
-                                  params={"experiment": asdict(exp), "dataset_kind": "text", "datasets": sets, "guess": self.guess.value}))
-        self.status.configure(text=f"Queued: {label}.")
+        job = Job(id=self.job_id, kind="compare", label=label, note=exp.question,
+                  params={"experiment": asdict(exp), "dataset_kind": "text", "datasets": sets, "guess": self.guess.value})
+        self.services.enqueue(job)
+        self.status.configure(text=f"Queued: {label}. {self.services.queue_outlook(job)}.")
         self.draw_table(self.retune.value)
         self.draw_curves()
 

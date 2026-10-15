@@ -28,6 +28,15 @@ def best_pattern(values, threshold=THRESHOLD):
     return name if values[name] >= threshold else None
 
 
+PATTERN_WORDS = {"previous": "looks at the previous word", "first": "parks on the first word", "induction": "copying pattern"}
+NO_PATTERN = "no clear pattern"
+
+
+def head_pattern(stats, head):
+    """Words for where one head looks, from head_tests() output ({test: per-head scores}); NO_PATTERN when no test reaches the threshold."""
+    return PATTERN_WORDS.get(best_pattern({t[0]: float(stats[t[0]][head]) for t in TESTS}), NO_PATTERN)
+
+
 def top_relied(rises, k=3):
     """The k heads whose switch-off raises the error most: [((block, head), rise)] largest first."""
     return sorted(rises.items(), key=lambda kv: -kv[1])[:k]
@@ -40,7 +49,7 @@ class HeadLabPage(Page):
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
-        self.sel, self.off, self.rises, self.tested, self.ranked = None, set(), None, {}, False
+        self.sel, self.off, self.rises, self.tested, self.ranked = None, set(), None, set(), False
         self.guess, self.changed, self._token, self.mode, self.notice = None, None, 0, "mean", None
 
     # data -------------------------------------------------------------------
@@ -131,9 +140,7 @@ class HeadLabPage(Page):
             return HEAD_LAB["head_off"], "amber"
         if self.ranked and self.rises and key in self.rises:
             return HEAD_LAB["rank_unit"].format(rise=self.rises[key]), "text2"
-        if key in self.tested:
-            return self.tested[key], "text2"
-        return "no pattern yet", "muted"
+        return head_pattern(self.stats[key[0]], key[1]), "text2"  # from the stats refresh() already has: no button first
 
     def _tile(self, grid, row, b, h, pattern):
         key = (b, h)
@@ -188,7 +195,7 @@ class HeadLabPage(Page):
         self.toggle_button.pack(side="left")
         self.test_button = button(row, HEAD_LAB["test_pattern"], self.test)
         self.test_button.pack(side="left", padx=8)
-        if self.sel in self.tested or getattr(self, "_show_tests", None) == self.sel:
+        if self.sel in self.tested:
             self._tests(card)
 
     def _tests(self, card):
@@ -237,11 +244,7 @@ class HeadLabPage(Page):
         self._update()
 
     def test(self):
-        b, h = self.sel
-        name = best_pattern({t[0]: float(self.stats[b][t[0]][h]) for t in TESTS})
-        self.tested[self.sel] = {"previous": "looks at the previous word", "first": "parks on the first word",
-                                 "induction": "copying pattern"}.get(name, "no clear pattern")
-        self._show_tests = self.sel
+        self.tested.add(self.sel)  # opens this head's card of the three tests
         self._draw()
 
     def _update(self):

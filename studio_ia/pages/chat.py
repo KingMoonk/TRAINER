@@ -6,6 +6,7 @@ import threading
 import tkinter as tk
 
 from studio_ia.copy import CHAT as T
+from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -156,6 +157,7 @@ class ChatPage(Page):
         _activate(self.build_link, lambda: self.navigate("builder"))
         self.cmp_btn = button(row, "", self.toggle_compare)
         self.cmp_btn.pack(side="right")
+        self.empty = tk_label(head, "", 13, "muted", "panel", wraplength=720)  # what to do when no version has trained
         self.panes_row = tk.Frame(body, bg=C["bg"])
         self.panes_row.pack(fill="x", pady=(0, GUTTER))
         self.pane_frames, self.pane_tags, self.pane_texts, self.pane_better = [], [], [], []
@@ -213,6 +215,12 @@ class ChatPage(Page):
         cur, best = vs.get(self.use), self._best()
         self.using.configure(text=T["head_using"].format(version=name(cur)) if cur else T["no_trained"])
         (self.build_link.pack_forget if cur else lambda: self.build_link.pack(side="left", padx=10))()
+        line = "" if cur else empty_line(self.services)
+        self.empty.configure(text=line)
+        if line:
+            self.empty.pack(anchor="w", pady=(6, 0))
+        else:
+            self.empty.pack_forget()
         ready = cur is not None  # nothing to talk to until a version has trained
         self.entry.configure(state="normal" if ready else "disabled")
         self.send_btn.state(["!disabled" if ready else "disabled"])
