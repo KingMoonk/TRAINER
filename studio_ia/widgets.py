@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from studio_ia.theme import C, GUTTER, STATES, font, tk_label
+from studio_widgets import Tooltip
 
 
 def _activate(widget, command):
@@ -17,6 +18,21 @@ def _activate(widget, command):
     widget.configure(highlightcolor=C["violet"])
     for seq in ("<Button-1>", "<Return>", "<space>"):
         widget.bind(seq, lambda _e: command())
+
+
+def info_icon(parent, text, bg="panel"):
+    """A small ⓘ that shows `text` (a string, or a function returning one) on hover, click or keyboard focus."""
+    icon = tk.Label(parent, text="ⓘ", font=font(14), fg=C["muted"], bg=C[bg], cursor="question_arrow", takefocus=1, padx=3,
+                    highlightthickness=1, highlightbackground=C[bg], highlightcolor=C["violet"])
+    tip = Tooltip(icon, text, wrap=440)
+    toggle = lambda _e: tip.hide() if tip.window else tip.show()  # noqa: E731
+    for seq in ("<Button-1>", "<Return>", "<space>"):
+        icon.bind(seq, toggle, add="+")
+    icon.bind("<FocusIn>", tip.show, add="+")
+    icon.bind("<FocusOut>", tip.hide, add="+")
+    icon.bind("<Escape>", tip.hide, add="+")
+    icon.tip = tip
+    return icon
 
 
 class Card(tk.Frame):

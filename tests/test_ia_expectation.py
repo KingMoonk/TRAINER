@@ -2,11 +2,16 @@
 import unittest
 
 from studio_ia.copy import EXPECTATION as T
-from studio_ia.expectation import expectation, table_params
+from studio_ia.expectation import expectation as both, table_params
 from studio_ia.pages import builder as B
 from studio_ia.pages.pretraining import version_expectation
 from studio_spec import default_spec, validate_spec
 from studio_estimate import estimate
+
+
+def expectation(*args, **kw):
+    """The details (hover) text of a design's expectation."""
+    return both(*args, **kw)[1]
 
 
 class Tiers(unittest.TestCase):
@@ -58,7 +63,7 @@ class WordLists(unittest.TestCase):
     def test_gpt2_at_a_small_width_is_all_word_table(self):
         s = dict(B.read_spec(default_spec()), V=2)
         self.assertEqual(s["d"], 64)
-        text = B.design_expectation(s)
+        text = B.design_expectation(s)[1]
         self.assertIn(T["bpe_gpt2"], text)
         self.assertIn(T["table_heavy"], text)
         self.assertIn(T["letters"], text)  # the table is not thinking capacity, so 3 million parameters still read as small
@@ -67,6 +72,19 @@ class WordLists(unittest.TestCase):
         total = 120_000_000
         self.assertNotIn(T["table_heavy"], expectation(total, "bpe_gpt2", embedding_params=table_params("bpe_gpt2", 768)))
 
+    def test_whole_words_are_described_and_lose_rare_words(self):
+        text = expectation(100_000, "word")
+        self.assertIn(T["word"], text)
+        self.assertIn("lost", T["word"])
+        self.assertIn("unknown", T["word"])
+
+    def test_whole_words_reach_sentences_like_other_word_lists_and_are_sized_by_the_data(self):
+        self.assertIn(T["sentences"], expectation(20_000_000, "word", tokens_seen=500_000_000))
+        self.assertNotIn(T["custom_pieces"], expectation(5_000_000, "word", tokens_seen=10_000_000))
+        self.assertIsNone(table_params("word", 64))
+        self.assertEqual(table_params("word", 64, vocab=3000), 3000 * 64)
+        self.assertEqual(B.design_expectation(dict(B.read_spec(default_spec()), V=3))[0].split(":")[0], "Expect")
+
     def test_table_size(self):
         self.assertEqual(table_params("bpe_gpt2", 64), 50257 * 64)
         self.assertEqual(table_params("byte", 64), 256 * 64)
@@ -74,18 +92,36 @@ class WordLists(unittest.TestCase):
         self.assertEqual(table_params("bpe_custom", 64, vocab=700), 700 * 64)
 
 
+class Headline(unittest.TestCase):
+    def test_one_short_line_and_the_long_text_behind_it(self):
+        for tokenizer in ("byte", "bpe_custom", "bpe_gpt2", "word"):
+            line, details = both(5_000_000, tokenizer, tokens_seen=10_000_000)
+            self.assertTrue(line.startswith("Expect: "))
+            self.assertLess(len(line), 50)
+            self.assertGreater(len(details), 150)
+            self.assertNotIn(line, details)
+
+    def test_each_tier_has_its_headline(self):
+        self.assertEqual(both(100_000, "byte")[0], T["short_letters"])
+        self.assertEqual(both(5_000_000, "bpe_custom", tokens_seen=10_000_000)[0], T["short_words"])
+        self.assertEqual(both(20_000_000, "bpe_custom", tokens_seen=500_000_000)[0], T["short_sentences"])
+        self.assertEqual(both(20_000_000, "bpe_custom")[0], T["short_sentences_text"])
+        self.assertEqual(both(5_000_000, "byte")[0], T["short_words_text"])
+
+
 class Pages(unittest.TestCase):
     def test_builder_line_follows_the_draft_word_list(self):
         s = B.read_spec(default_spec())
-        lines = [B.design_expectation(dict(s, V=v)) for v in range(3)]
-        self.assertEqual(len(set(lines)), 3)
+        lines = [B.design_expectation(dict(s, V=v))[1] for v in range(4)]
+        self.assertEqual(len(set(lines)), 4)
 
     def test_pretraining_line_names_plain_text_and_waits_for_the_preview(self):
         spec = validate_spec(default_spec())
-        self.assertEqual(version_expectation(spec, {}, 2), "")
-        self.assertEqual(version_expectation(None, {"params": 1}, 2), "")
+        self.assertEqual(version_expectation(spec, {}, 2), ("", ""))
+        self.assertEqual(version_expectation(None, {"params": 1}, 2), ("", ""))
         preview = {"pieces": 2_000_000, "params": estimate(spec, 256)["total"]}
-        text = version_expectation(spec, preview, 2)
+        line, text = version_expectation(spec, preview, 2)
+        self.assertEqual(line, T["short_letters"])
         self.assertIn(T["letters"], text)
         self.assertIn(T["continues"], text)
         self.assertIn("Post-training round 1", text)
@@ -95,8 +131,8 @@ class Pages(unittest.TestCase):
         spec["tokenizer"] = {"id": "bpe_custom", "config": {}}
         spec["dims"]["d_model"] = 512
         preview = {"pieces": 10_000_000, "params": 20_000_000, "vocab": 8192}
-        self.assertIn(T["letters"], version_expectation(spec, preview, 0))  # no passes: nothing seen
-        self.assertIn(T["sentences"], version_expectation(spec, preview, 4))
+        self.assertIn(T["letters"], version_expectation(spec, preview, 0)[1])  # no passes: nothing seen
+        self.assertIn(T["sentences"], version_expectation(spec, preview, 4)[1])
 
 
 if __name__ == "__main__":

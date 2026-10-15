@@ -19,12 +19,12 @@ from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button
+from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
-TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2")
-VS = (256, 8192, 50257)  # word-list sizes behind letters / small / large
-WORDS = ("Letters", "Small word list", "Large word list")
+TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
+VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large / whole words (the cap; less on little data)
+WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
 WIDTHS = ("Narrow", "Normal", "Wide")
 HEADS = (1, 4, 8)
 PROMPT = "The largest planet in our solar system is"
@@ -40,6 +40,7 @@ EXPECT = dict(
     letters="Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.",
     small="Small word list: built from your own data. A much smaller table; text splits into somewhat more pieces.",
     large="Large word list: GPT-2’s list. A big table, short sequences.",
+    words="Whole words: one entry per frequent word in your own data. Short sequences, but a word that is not in the list is lost.",
 )
 WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.NOTES[kind]
     same=("weights carry over exactly", "live"), heads=("weights carry over, not exactly", "attention"),
@@ -88,7 +89,7 @@ def bar(x, y):
 def read_spec(spec):
     """ModelSpec -> the four editable choices plus d and T."""
     f = _facts(spec)
-    word = {"letters": 0, "small word list": 1, "large word list": 2}.get(f["words"], 1)
+    word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
     return dict(L=f["blocks"], H=f["heads"] or 4, W=0 if f["room"] < 4 else 1 if f["room"] == 4 else 2, V=word,
                 d=f["width"], T=f["context"])
 
@@ -152,7 +153,7 @@ def last_blocks_change(versions):
 
 
 def design_expectation(s):
-    """The rough-guide paragraph for the choices in `s`: what a design this size and word list can be expected to write."""
+    """(headline, details) for the choices in `s`: what a design this size and word list can be expected to write."""
     c = cfg(s)
     return expectation(P(c), TOKENIZERS[s["V"]], embedding_params=c["V"] * c["d"])
 
@@ -173,7 +174,7 @@ def expectations(cur, draft, versions=()):
     if b["W"] < a["W"]:
         out.append(EXPECT["narrower"])
     if b["V"] != a["V"]:
-        out.append(EXPECT[("letters", "small", "large")[b["V"]]])
+        out.append(EXPECT[("letters", "small", "large", "words")[b["V"]]])
     return out or [T["change_something"]]
 
 
@@ -270,7 +271,7 @@ class BuilderPage(Page):
         self.tray = self.chips = self.costs = self.expect = None
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
-        self.guide_text = ""
+        self.guide_text = self.guide_details = ""
         self.old_curve = self.new_curve = self.refs = None
         self.plot_args, self.plot = {}, None
         self._chart_token = None
@@ -617,7 +618,7 @@ class BuilderPage(Page):
         pieces, count = pieces_for(dr["V"])
         tk_label(head, T["your_text_title"], 14, "text", "panel2", font=font(14, bold=True)).pack(side="left")
         tk_label(head, f"  {count}", 12, "muted", "panel2").pack(side="left")
-        self._seg(text, list(WORDS), self.cur["V"], "V", (0, 1, 2), "panel2")
+        self._seg(text, list(WORDS), self.cur["V"], "V", (0, 1, 2, 3), "panel2")
         chips = tk.Frame(text, bg=C["panel2"])
         chips.pack(anchor="w", fill="x", padx=12, pady=(0, 8))
         for k in range(0, len(pieces), 14):  # wrap long piece lists
@@ -689,8 +690,11 @@ class BuilderPage(Page):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_expect"], bg="panel").pack(anchor="w")
-        self.guide_text = design_expectation(self.draft)
-        tk_label(card, self.guide_text, 14, "text", "panel", wraplength=780).pack(anchor="w", pady=(2, 6))
+        self.guide_text, self.guide_details = design_expectation(self.draft)
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(anchor="w", pady=(2, 6))
+        tk_label(row, self.guide_text, 14, "text", "panel").pack(side="left")
+        info_icon(row, self.guide_details).pack(side="left", padx=(6, 0))
         self.expect_texts = self.expectations()
         for x in self.expect_texts:
             tk_label(card, x, 14, "text2", "panel", wraplength=780).pack(anchor="w", pady=2)

@@ -38,8 +38,10 @@ class BuilderTest(unittest.TestCase):
         self.assertIn("Build your model", texts(self.page))
         self.assertEqual(self.page.tray_kicker, B.T["no_changes"])
         self.assertEqual(self.page.expect_texts, [B.T["change_something"]])
-        self.assertIn(EXPECTATION["letters"], self.page.guide_text)
-        self.assertIn(EXPECTATION["letters"], "\n".join(texts(self.page)))
+        self.assertEqual(self.page.guide_text, EXPECTATION["short_letters"])
+        self.assertIn(EXPECTATION["letters"], self.page.guide_details)  # the long text is behind the ⓘ, not on the card
+        self.assertIn(EXPECTATION["short_letters"], "\n".join(texts(self.page)))
+        self.assertNotIn(EXPECTATION["letters"], "\n".join(texts(self.page)))
         self.assertEqual(sorted(self.page.links), sorted(r for r, _ in B.LINKS))
 
     def test_first_design_can_be_saved_without_a_change(self):
