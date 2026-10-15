@@ -408,7 +408,8 @@ class BuilderPage(Page):
     def edit(self, **patch):
         if self.phase == "edit":
             self.draft.update(patch)
-            self.render()
+            self.stage()
+            self._paint_design()
 
     def spec_for(self, s):
         if self.anchor:
@@ -454,7 +455,8 @@ class BuilderPage(Page):
     # actions ----------------------------------------------------------------
     def discard(self):
         self.draft, self.anchor = dict(self.cur), None
-        self.render()
+        self.stage()
+        self._paint_design()
 
     def save(self):
         try:
@@ -545,8 +547,7 @@ class BuilderPage(Page):
         for child in self.body.winfo_children():
             child.destroy()
         self.stage()
-        self.answer_labels = {}
-        a, b = cfg(self.cur), cfg(self.draft)
+        self.answer_labels, self.segs = {}, {}
         self._pill()
         top = tk.Frame(self.body, bg=C["bg"])
         top.pack(fill="x", pady=(0, GUTTER))
@@ -556,11 +557,21 @@ class BuilderPage(Page):
         right.pack(side="left", fill="y")
         self._tower(left)
         self._controls(right)
-        self._costs(a, b)
+        self._costs()
         self._expect()
         self._tray()
         self._charts()
         self._look_inside()
+        self._paint_design()
+
+    def _paint_design(self):
+        """Everything the draft decides, repainted in place: rebuilding the page on each setting flashed it."""
+        self._paint_tower()
+        for key in self.segs:
+            self._paint_seg(key)
+        self._paint_costs()
+        self._paint_expect()
+        self._paint_tray()
 
     def _pill(self):
         q = self.services.queue()
@@ -582,57 +593,87 @@ class BuilderPage(Page):
         box.pack(fill="x")
         tip(tk_label(box, T["next_word"], 15, "text", "panel2", font=font(15, bold=True)), T["next_word_desc"]).pack(anchor="w", padx=12, pady=8)
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
-        cur, dr, editing = self.cur, self.draft, self.phase == "edit"
-        for i in range(max(cur["L"], dr["L"]) - 1, -1, -1):
-            added, removed = i >= cur["L"], i >= dr["L"]
-            tag = "new" if added else "removed" if removed else ("changed" if (dr["H"] != cur["H"] or dr["W"] != cur["W"]) else "")
-            row = tk.Frame(parent, bg=C["amber_bg"] if added else C["panel2"], highlightthickness=1,
-                           highlightbackground=C["amber"] if added else C["border"])
-            row.pack(fill="x", pady=2)
-            tk_label(row, f"Block {i + 1}", 13, "dim" if removed else "text", row["bg"], width=9).pack(side="left", padx=8, pady=8)
-            for _ in range(cur["H"] if removed else dr["H"]):
-                tk_label(row, "●", 13, "pink", row["bg"]).pack(side="left")
-            tk.Frame(row, bg=C["blue"], width=[36, 72, 144][cur["W"] if removed else dr["W"]], height=8).pack(side="left", padx=10)
-            if tag:
-                tk_label(row, tag, 12, "amber", row["bg"]).pack(side="right", padx=8)
+        self.block_box = tk.Frame(parent, bg=C["bg"])
+        self.block_box.pack(fill="x")
+        self.block_rows = []  # (row, name, heads, width, tag) per block, block 1 first; drawn top-down
         step = tk.Frame(parent, bg=C["bg"])
         step.pack(anchor="w", pady=8)
         tip(tk_label(step, f"{T['blocks']}  ", 14, "text", "bg"), T["blocks_desc"]).pack(side="left")
-        self.minus = button(step, "−", lambda: self.edit(L=max(1, dr["L"] - 1)))
-        self.plus = button(step, "+", lambda: self.edit(L=min(12, dr["L"] + 1)))
+        self.minus = button(step, "−", lambda: self.edit(L=max(1, self.draft["L"] - 1)))
+        self.plus = button(step, "+", lambda: self.edit(L=min(12, self.draft["L"] + 1)))
         self.minus.pack(side="left")
-        self.blocks_label = tk_label(step, str(dr["L"]), 18, "amber" if dr["L"] != cur["L"] else "text", "bg", width=3, anchor="center")
+        self.blocks_label = tk_label(step, "", 18, "text", "bg", width=3, anchor="center")
         self.blocks_label.pack(side="left")
         self.plus.pack(side="left")
-        if dr["L"] != cur["L"]:
-            tk_label(step, f"  was {cur['L']}", 13, "muted", "bg").pack(side="left")
+        self.blocks_was = tk_label(step, "", 13, "muted", "bg")
+        self.blocks_was.pack(side="left")
         for b in (self.minus, self.plus):
-            b.state(["!disabled"] if editing else ["disabled"])
+            b.state(["!disabled"] if self.phase == "edit" else ["disabled"])
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
         text = tk.Frame(parent, bg=C["panel2"], highlightthickness=1, highlightbackground=C["border"])
         text.pack(fill="x")
         head = tk.Frame(text, bg=C["panel2"])
         head.pack(fill="x", padx=12, pady=(8, 0))
-        pieces, count = pieces_for(dr["V"])
         tk_label(head, T["your_text_title"], 14, "text", "panel2", font=font(14, bold=True)).pack(side="left")
-        tk_label(head, f"  {count}", 12, "muted", "panel2").pack(side="left")
-        self._seg(text, list(WORDS), self.cur["V"], "V", (0, 1, 2, 3), "panel2")
-        chips = tk.Frame(text, bg=C["panel2"])
-        chips.pack(anchor="w", fill="x", padx=12, pady=(0, 8))
-        for k in range(0, len(pieces), 14):  # wrap long piece lists
-            line = tk.Frame(chips, bg=C["panel2"])
-            line.pack(anchor="w")
-            for p in pieces[k:k + 14]:
-                Chip(line, p, "pieces").pack(side="left", padx=1, pady=1)
+        self.pieces_count = tk_label(head, "", 12, "muted", "panel2")
+        self.pieces_count.pack(side="left")
+        self._seg(text, list(WORDS), "V", (0, 1, 2, 3), "panel2")
+        self.pieces_box = tk.Frame(text, bg=C["panel2"])
+        self.pieces_box.pack(anchor="w", fill="x", padx=12, pady=(0, 8))
+        self.pieces_shown = None
 
-    def _seg(self, parent, options, was, key, values, bg="panel"):
+    def _paint_tower(self):
+        cur, dr, rows = self.cur, self.draft, self.block_rows
+        while len(rows) < max(cur["L"], dr["L"]):  # a new block goes on top
+            row = tk.Frame(self.block_box, highlightthickness=1)
+            row.pack(fill="x", pady=2, **({"before": rows[-1][0]} if rows else {}))
+            name = tk_label(row, f"Block {len(rows) + 1}", 13, width=9)
+            name.pack(side="left", padx=8, pady=8)
+            heads = tk_label(row, "", 13, "pink")
+            heads.pack(side="left")
+            width = tk.Frame(row, bg=C["blue"], height=8)
+            width.pack(side="left", padx=10)
+            tag = tk_label(row, "", 12, "amber")
+            tag.pack(side="right", padx=8)
+            rows.append((row, name, heads, width, tag))
+        while len(rows) > max(cur["L"], dr["L"]):
+            rows.pop()[0].destroy()
+        changed = dr["H"] != cur["H"] or dr["W"] != cur["W"]
+        for i, (row, name, heads, width, tag) in enumerate(rows):
+            added, removed = i >= cur["L"], i >= dr["L"]
+            shown, bg = cur if removed else dr, C["amber_bg"] if added else C["panel2"]
+            row.configure(bg=bg, highlightbackground=C["amber"] if added else C["border"])
+            name.configure(fg=C["dim"] if removed else C["text"], bg=bg)
+            heads.configure(text="●" * shown["H"], bg=bg)
+            width.configure(width=[36, 72, 144][shown["W"]])
+            tag.configure(text="new" if added else "removed" if removed else "changed" if changed else "", bg=bg)
+        self.blocks_label.configure(text=str(dr["L"]), fg=C["amber"] if dr["L"] != cur["L"] else C["text"])
+        self.blocks_was.configure(text=f"  was {cur['L']}" if dr["L"] != cur["L"] else "")
+        pieces, count = pieces_for(dr["V"])
+        self.pieces_count.configure(text=f"  {count}")
+        if dr["V"] != self.pieces_shown:
+            self.pieces_shown = dr["V"]
+            for child in self.pieces_box.winfo_children():
+                child.destroy()
+            for k in range(0, len(pieces), 14):  # wrap long piece lists
+                line = tk.Frame(self.pieces_box, bg=C["panel2"])
+                line.pack(anchor="w")
+                for p in pieces[k:k + 14]:
+                    Chip(line, p, "pieces").pack(side="left", padx=1, pady=1)
+
+    def _seg(self, parent, options, key, values, bg="panel"):
         label, value = dict(zip(values, options)), dict(zip(options, values))
-        seg = Segmented(parent, options, label.get(self.draft[key]), lambda opt: self.edit(**{key: value[opt]}), bg=bg)
+        seg = Segmented(parent, options, None, lambda opt: self.edit(**{key: value[opt]}), bg=bg)
         seg.pack(anchor="w", padx=12 if bg == "panel2" else 0, pady=4)
+        self.segs[key] = seg, label
+
+    def _paint_seg(self, key):
+        seg, label = self.segs[key]
+        seg.set(label.get(self.draft[key]))
         # ponytail: Tk borders cannot be dashed, so the old choice gets a violet outline and a "was" in its label.
-        if was != self.draft[key] and was in label:
-            old = seg.buttons[label[was]]
-            old.configure(highlightbackground=C["violet"], text=f"{old.cget('text')} · was")
+        was = label.get(self.cur[key]) if self.cur[key] != self.draft[key] else None
+        for opt, b in seg.buttons.items():
+            b.configure(highlightbackground=C["violet"] if opt == was else C["border"], text=f"{opt} · was" if opt == was else opt)
 
     def _controls(self, parent):
         for name, hint, color, opts, key, values in (
@@ -644,62 +685,96 @@ class BuilderPage(Page):
             head.pack(anchor="w")
             tk_label(head, name, 15, color, "panel", font=font(15, bold=True)).pack(side="left")
             info_icon(head, hint).pack(side="left", padx=(4, 0))
-            self._seg(card, opts, self.cur[key], key, values)
+            self._seg(card, opts, key, values)
 
-    def _costs(self, a, b):
+    def _costs(self):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_costs"], bg="panel").pack(anchor="w")
-        self.cost_say = {}
+        self.cost_rows = []
         for name, f, more, less in ((T["size_label"], P, T["cost_bigger"], T["cost_smaller"]),
                                     (T["time_per_step"], C_, T["cost_slower"], T["cost_faster"]),
                                     (T["memory_while_training"], TM, T["cost_more"], T["cost_less"])):
-            x, y = f(a), f(b)
-            s = say(x, y, more, less)
-            self.cost_say[name] = s
-            same = s == T["about_same"]
             row = tk.Frame(card, bg=C["panel"])
             row.pack(fill="x", pady=4)
             tk_label(row, name, 14, "text", "panel", width=24).pack(side="left")
             bars = tk.Frame(row, bg=C["panel"])
             bars.pack(side="left", fill="x", expand=True)
-            for label, pct, color in (("now", bar(x, y)[0], "dim"), ("new", bar(x, y)[1], "violet" if same else "amber")):
+            drawn = []
+            for label in ("now", "new"):
                 line = tk.Frame(bars, bg=C["panel"])
                 line.pack(fill="x")
                 tk_label(line, label, 11, "dim", "panel", width=4).pack(side="left")
-                tk.Frame(line, bg=C[color], width=max(2, pct * 3), height=7).pack(side="left", pady=1)
-            tk_label(row, s, 13, "muted" if same else "amber", "panel", width=22).pack(side="left")
-        warm = warm_outlook(self.cur, self.draft)
-        self.warm = warm
+                drawn.append(tk.Frame(line, bg=C["dim"], height=7))
+                drawn[-1].pack(side="left", pady=1)
+            said = tk_label(row, "", 13, "muted", "panel", width=22)
+            said.pack(side="left")
+            self.cost_rows.append((name, f, more, less, *drawn, said))
         row = tk.Frame(card, bg=C["panel"])
         row.pack(fill="x", pady=(8, 2))
         tk_label(row, "Can the old weights carry over?", 14, "text", "panel", width=24).pack(side="left")
+        self.warm_chip = Chip(row)
+        self.warm_none = tk_label(row, "nothing to carry over: no change yet", 13, "muted", "panel")
+        self.warm_text = tk_label(card, "", 12, "muted", "panel", wraplength=780)
+        self.fits_row = tk.Frame(card, bg=C["panel"])
+        self.fits_row.pack(anchor="w", pady=(6, 0))
+        self.fits_label = tk_label(self.fits_row, "", 12, "muted", "panel")
+        self.fits_label.pack(side="left")
+        info_icon(self.fits_row, lambda: self.fits_text).pack(side="left", padx=(4, 0))
+
+    def _paint_costs(self):
+        a, b = cfg(self.cur), cfg(self.draft)
+        self.cost_say = {}
+        for name, f, more, less, now, new, said in self.cost_rows:
+            x, y = f(a), f(b)
+            s = self.cost_say[name] = say(x, y, more, less)
+            same = s == T["about_same"]
+            old_pct, new_pct = bar(x, y)
+            now.configure(width=max(2, old_pct * 3))
+            new.configure(width=max(2, new_pct * 3), bg=C["violet"] if same else C["amber"])
+            said.configure(text=s, fg=C["muted"] if same else C["amber"])
+        self.warm = warm = warm_outlook(self.cur, self.draft)
         if warm:
-            Chip(row, warm["chip"], warm["state"]).pack(side="left")
-            tk_label(card, warm["text"], 12, "muted", "panel", wraplength=780).pack(anchor="w")
+            self.warm_none.pack_forget()
+            self.warm_chip.set(warm["chip"], warm["state"])
+            self.warm_chip.pack(side="left")
+            self.warm_text.configure(text=warm["text"])
+            self.warm_text.pack(anchor="w", before=self.fits_row)
         else:
-            tk_label(row, "nothing to carry over: no change yet", 13, "muted", "panel").pack(side="left")
+            self.warm_chip.pack_forget()
+            self.warm_text.pack_forget()
+            self.warm_text.configure(text="")
+            self.warm_none.pack(side="left")
         ok = fits(b)
         verdict = T["training_memory_fits"] if ok is None else ("fits" if ok else "doesn't fit")
         self.fits_text = f"{T['training_memory']} {verdict} {T['training_memory_desc']}"
-        row = tk.Frame(card, bg=C["panel"])
-        row.pack(anchor="w", pady=(6, 0))
-        tk_label(row, f"{T['training_memory']} {verdict}", 12, "muted", "panel").pack(side="left")
-        info_icon(row, self.fits_text).pack(side="left", padx=(4, 0))
+        self.fits_label.configure(text=f"{T['training_memory']} {verdict}")
 
     def _expect(self):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_expect"], bg="panel").pack(anchor="w")
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(anchor="w", pady=(2, 0))
+        self.guide_label = tk_label(row, "", 14, "text", "panel")
+        self.guide_label.pack(side="left")
+        info_icon(row, lambda: self.hover_text).pack(side="left", padx=(6, 0))
+
+    def _paint_expect(self):
         self.guide_text, self.guide_details = design_expectation(self.draft)
         self.expect_texts = self.expectations()
         self.hover_text = "\n\n".join([self.guide_details, *self.expect_texts])  # the card itself is one line
-        row = tk.Frame(card, bg=C["panel"])
-        row.pack(anchor="w", pady=(2, 0))
-        tk_label(row, self.guide_text, 14, "text", "panel").pack(side="left")
-        info_icon(row, self.hover_text).pack(side="left", padx=(6, 0))
+        self.guide_label.configure(text=self.guide_text)
 
     def _tray(self):
+        self.tray_box = tk.Frame(self.body, bg=C["bg"])
+        self.tray_box.pack(fill="x", pady=(0, GUTTER))
+        self.tray = StateTray(self.tray_box)
+        self.tray.pack(fill="x", pady=(0, 8))
+        self.chips = tk.Frame(self.tray_box, bg=C["bg"])
+        self.buttons, self.actions = None, {}
+
+    def _paint_tray(self):
         ph, n, nv = self.phase, self.n, self.nv
         Nv = nv[0].upper() + nv[1:]
         scratch = self.needs_scratch()
@@ -738,20 +813,29 @@ class BuilderPage(Page):
         if self.note:
             text += " " + self.note
             self.note = None
-        self.tray = StateTray(self.body, state, kicker, text)
-        self.tray.pack(fill="x", pady=(0, 8))
+        self.tray.set(state, kicker, text)
         self.tray_kicker = kicker
         self.tray_text = text
-        row = tk.Frame(self.body, bg=C["bg"])
-        row.pack(fill="x", pady=(0, GUTTER))
-        self.chips = tk.Frame(row, bg=C["bg"])
-        self.chips.pack(anchor="w", pady=(0, 6))
-        for c in self.chip_texts:
-            Chip(self.chips, c, "unsaved").pack(side="left", padx=(0, 6))
-        self.actions = {}
-        for label, cmd, primary in actions:
-            self.actions[label] = btn = button(row, label, cmd, primary)
-            btn.pack(side="left", padx=(0, 8))
+        chips = self.chips.winfo_children()
+        for chip in chips[len(self.chip_texts):]:
+            chip.destroy()
+        for i, c in enumerate(self.chip_texts):
+            if i < len(chips):
+                chips[i].set(c, "unsaved")
+            else:
+                Chip(self.chips, c, "unsaved").pack(side="left", padx=(0, 6))
+        if self.chip_texts:
+            self.chips.pack(anchor="w", pady=(0, 6), after=self.tray)
+        else:
+            self.chips.pack_forget()  # an emptied frame keeps its last size
+        if [label for label, _, _ in actions] != list(self.actions):
+            if self.buttons:
+                self.buttons.destroy()
+            self.buttons, self.actions = tk.Frame(self.tray_box, bg=C["bg"]), {}
+            self.buttons.pack(anchor="w")
+            for label, cmd, primary in actions:
+                self.actions[label] = btn = button(self.buttons, label, cmd, primary)
+                btn.pack(side="left", padx=(0, 8))
 
     def _charts(self):
         card = Card(self.body)
