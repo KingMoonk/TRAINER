@@ -555,9 +555,12 @@ class Services(unittest.TestCase):
             self.assertTrue(Path(row["best_checkpoint"]).exists())
             self.assertEqual(Path(row["best_checkpoint"]).name, "last.npz")
 
-    def import_with(self, tmp, fetch):
-        """Workspace services whose GPT-2 download is `fetch`."""
-        svc = FixtureServices(str(Path(tmp) / "workspace"))
+    def import_with(self, fetch):
+        """Workspace services whose GPT-2 download is `fetch`. The services close before their folder is removed (cleanups
+        run last-in first-out), since Windows cannot remove a folder a running job still has files open in."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        svc = FixtureServices(str(Path(tmp.name) / "workspace"))
         self.addCleanup(svc.close)
         patch = mock.patch("studio_import.fetch_gpt2", fetch)
         patch.start()
@@ -573,13 +576,12 @@ class Services(unittest.TestCase):
     def test_a_failed_download_removes_the_empty_version(self):
         def failing(*args, **kwargs):
             raise ValueError("Could not download GPT-2.")
-        with tempfile.TemporaryDirectory() as tmp:
-            svc = self.import_with(tmp, failing)
-            before = len(svc.versions())
-            svc.import_pretrained("gpt2")
-            self.wait_for(lambda: svc.runner.jobs and svc.runner.jobs[-1].status == "failed")
-            self.wait_for(lambda: len(svc.versions()) == before)
-            self.assertEqual(len(svc.versions()), before)
+        svc = self.import_with(failing)
+        before = len(svc.versions())
+        svc.import_pretrained("gpt2")
+        self.wait_for(lambda: svc.runner.jobs and svc.runner.jobs[-1].status == "failed")
+        self.wait_for(lambda: len(svc.versions()) == before)
+        self.assertEqual(len(svc.versions()), before)
 
     def test_a_stopped_import_removes_the_empty_version(self):
         started = threading.Event()
@@ -588,14 +590,13 @@ class Services(unittest.TestCase):
             started.set()
             stop.wait(30)
             return None
-        with tempfile.TemporaryDirectory() as tmp:
-            svc = self.import_with(tmp, waits)
-            before = len(svc.versions())
-            svc.import_pretrained("gpt2")
-            self.assertTrue(started.wait(30))
-            self.assertEqual(len(svc.versions()), before + 1)   # listed at once, as the copy says
-            svc.remove(svc.runner.jobs[-1].id)                  # stops the running job
-            self.wait_for(lambda: len(svc.versions()) == before)
+        svc = self.import_with(waits)
+        before = len(svc.versions())
+        svc.import_pretrained("gpt2")
+        self.assertTrue(started.wait(30))
+        self.assertEqual(len(svc.versions()), before + 1)   # listed at once, as the copy says
+        svc.remove(svc.runner.jobs[-1].id)                  # stops the running job
+        self.wait_for(lambda: len(svc.versions()) == before)
 
     def test_an_older_empty_version_is_marked_because_numbers_cannot_be_reused(self):
         release = threading.Event()
@@ -603,34 +604,34 @@ class Services(unittest.TestCase):
         def failing(*args, **kwargs):
             release.wait(30)
             raise ValueError("Could not download GPT-2.")
-        with tempfile.TemporaryDirectory() as tmp:
-            svc = self.import_with(tmp, failing)
-            version = svc.import_pretrained("gpt2")
-            later = svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
-            release.set()
-            self.wait_for(lambda: svc.store.get(version.number)["status"] == "saved")
-            kept = svc.store.get(version.number)
-            self.assertIn("no weights", kept["change"])
-            self.assertIn("did not finish", kept["change"])
-            self.assertEqual(svc.store.get(later.number)["change"], "A later design")
-            self.assertEqual(len(svc.versions()), later.number)
+        svc = self.import_with(failing)
+        version = svc.import_pretrained("gpt2")
+        later = svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
+        release.set()
+        self.wait_for(lambda: svc.store.get(version.number)["status"] == "saved")
+        kept = svc.store.get(version.number)
+        self.assertIn("no weights", kept["change"])
+        self.assertIn("did not finish", kept["change"])
+        self.assertEqual(svc.store.get(later.number)["change"], "A later design")
+        self.assertEqual(len(svc.versions()), later.number)
 
     def test_a_second_import_is_refused_while_one_is_waiting_or_running(self):
         release = threading.Event()
 
         def slow(dest, progress=None, stop=None, **kwargs):
-            release.wait(30)
+            deadline = time.time() + 30
+            while not (release.is_set() or stop.is_set()) and time.time() < deadline:
+                release.wait(.05)
             return None
-        with tempfile.TemporaryDirectory() as tmp:
-            svc = self.import_with(tmp, slow)
-            self.addCleanup(release.set)
+        svc = self.import_with(slow)
+        self.addCleanup(release.set)
+        svc.import_pretrained("gpt2")
+        count = len(svc.versions())
+        with self.assertRaises(ValueError) as caught:
             svc.import_pretrained("gpt2")
-            count = len(svc.versions())
-            with self.assertRaises(ValueError) as caught:
-                svc.import_pretrained("gpt2")
-            self.assertIn("already being imported", str(caught.exception))
-            self.assertEqual(len(svc.versions()), count)   # and it saved no second version
-            self.assertEqual(len([j for j in svc.runner.jobs if j.kind == "import_pretrained"]), 1)
+        self.assertIn("already being imported", str(caught.exception))
+        self.assertEqual(len(svc.versions()), count)   # and it saved no second version
+        self.assertEqual(len([j for j in svc.runner.jobs if j.kind == "import_pretrained"]), 1)
 
     def test_the_saved_design_fine_tunes_gently(self):
         version = FakeServices().import_pretrained("gpt2")
