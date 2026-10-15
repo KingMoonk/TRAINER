@@ -42,6 +42,8 @@ class BuilderTest(unittest.TestCase):
         self.assertIn(EXPECTATION["letters"], self.page.guide_details)  # the long text is behind the ⓘ, not on the card
         self.assertIn(EXPECTATION["short_letters"], "\n".join(texts(self.page)))
         self.assertNotIn(EXPECTATION["letters"], "\n".join(texts(self.page)))
+        self.assertNotIn(B.T["change_something"], "\n".join(texts(self.page)))  # per-change lines are in the hover text too
+        self.assertEqual(self.page.hover_text, self.page.guide_details + "\n\n" + B.T["change_something"])
         self.assertEqual(sorted(self.page.links), sorted(r for r, _ in B.LINKS))
 
     def test_first_design_can_be_saved_without_a_change(self):
@@ -87,7 +89,9 @@ class BuilderTest(unittest.TestCase):
         self.assertIn("Save as version 2", self.page.actions)
         self.assertEqual(len(self.fake.versions()), 1)  # draft stays on the page
         self.assertEqual(self.fake.draft_spec()["dims"]["n_layer"], 4)  # but Quick test and Compare runs can see it
-        self.assertEqual(sum("Different look-back heads" in t for t in self.page.expect_texts), 1)
+        self.assertEqual(self.page.hover_text.count("Different look-back heads"), 1)
+        self.assertIn(B.EXPECT["more"], self.page.hover_text)
+        self.assertNotIn("Different look-back heads", "\n".join(texts(self.page)))
         self.page.discard()
         self.assertEqual(self.page.tray_kicker, B.T["no_changes"])
         self.assertIsNone(self.fake.draft_spec())
@@ -167,13 +171,13 @@ class BuilderTest(unittest.TestCase):
 
     def test_last_change_sentence_only_with_history(self):
         self.page.edit(L=4)
-        self.assertFalse(any(t.startswith("Last time") for t in self.page.expect_texts))
+        self.assertNotIn("Last time", self.page.hover_text)
         spec4 = B.write_spec(default_spec(), dict(self.page.cur, L=4))
         self.assertEqual(spec_diff(default_spec(), spec4), ["more blocks (2 → 4)"])
         self.fake.save_version(spec4, "more blocks (2 → 4)")
         self.page.refresh()
         self.page.edit(L=6)
-        self.assertTrue(any(t.startswith("Last time blocks changed (2 → 4, version 1 → 2)") for t in self.page.expect_texts))
+        self.assertIn("\n\nLast time blocks changed (2 → 4, version 1 → 2)", self.page.hover_text)
 
 
 if __name__ == "__main__":

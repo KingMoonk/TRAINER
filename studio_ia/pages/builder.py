@@ -271,7 +271,7 @@ class BuilderPage(Page):
         self.tray = self.chips = self.costs = self.expect = None
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
-        self.guide_text = self.guide_details = ""
+        self.guide_text = self.guide_details = self.hover_text = ""
         self.old_curve = self.new_curve = self.refs = None
         self.plot_args, self.plot = {}, None
         self._chart_token = None
@@ -691,13 +691,12 @@ class BuilderPage(Page):
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_expect"], bg="panel").pack(anchor="w")
         self.guide_text, self.guide_details = design_expectation(self.draft)
-        row = tk.Frame(card, bg=C["panel"])
-        row.pack(anchor="w", pady=(2, 6))
-        tk_label(row, self.guide_text, 14, "text", "panel").pack(side="left")
-        info_icon(row, self.guide_details).pack(side="left", padx=(6, 0))
         self.expect_texts = self.expectations()
-        for x in self.expect_texts:
-            tk_label(card, x, 14, "text2", "panel", wraplength=780).pack(anchor="w", pady=2)
+        self.hover_text = "\n\n".join([self.guide_details, *self.expect_texts])  # the card itself is one line
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(anchor="w", pady=(2, 0))
+        tk_label(row, self.guide_text, 14, "text", "panel").pack(side="left")
+        info_icon(row, self.hover_text).pack(side="left", padx=(6, 0))
 
     def _tray(self):
         ph, n, nv = self.phase, self.n, self.nv
