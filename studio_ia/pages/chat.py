@@ -5,6 +5,7 @@ import queue
 import threading
 import tkinter as tk
 
+from studio_ia import threads
 from studio_ia.copy import CHAT as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
@@ -340,7 +341,7 @@ class ChatPage(Page):
             self.replies[i] = self.base[i]
             self._set_text(i, self.replies[i])
             self.pending += 1
-            threading.Thread(target=self._work, args=(i, num, list(self.messages)), daemon=True).start()
+            threads.start(self._work, i, num, list(self.messages))
         self.after(30, self._pump)
 
     def _work(self, i, num, messages):

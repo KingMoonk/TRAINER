@@ -13,6 +13,7 @@ from pathlib import Path
 from studio_spec import config_from_spec, default_spec, validate_spec
 from studio_versions import _facts, spec_diff
 from studio_warmstart import NOTES
+from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error
@@ -467,8 +468,7 @@ class BuilderPage(Page):
             v = self.version(number)
             if v and v.best_checkpoint:
                 self.answers[number] = ""
-                self.workers.append(threading.Thread(target=self._reply, args=(v, stop), daemon=True))
-                self.workers[-1].start()
+                self.workers.append(threads.start(self._reply, v, stop))
         self.render()
         self._pump()
 
