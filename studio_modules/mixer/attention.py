@@ -17,11 +17,45 @@ class AttentionConfig:
     bias: bool = field(default=True, metadata=dict(help="Bias terms on the QKV and output projections (GPT-2 has them; many later models drop them)."))
 
 
+HALF = (torch.bfloat16, torch.float16)
+INSPECTED = ("attn.scores", "attn.logits", "attn.pattern")  # the intermediates only the hand-written path can show
+
+
+def fused_attention(ctx, q, k, v, scale, position, heads):
+    """PyTorch's fused kernel, or None when this call must take the exact path (see causal_softmax_attention)."""
+    length = q.shape[-2]
+    if k.shape[-2] != length or any(ctx.wants(name) for name in INSPECTED):
+        return None   # a KV-cache offset, or an inspection page is listening for the scores, logits or pattern
+    p = ctx.dropout if ctx.training else 0.
+    if p and ctx.device not in ("cpu", "cuda"):
+        return None   # the fused kernel has no dropout on Apple GPUs
+    bias = position.score_bias(length, heads)
+    mask = None
+    if bias is not None:
+        if q.dtype in HALF or torch.is_autocast_enabled(q.device.type):
+            return None   # a bias such as ALiBi's reaches hundreds and loses its meaning in half precision; the exact path adds it in float32
+        mask = (bias + torch.zeros_like(bias).masked_fill(ctx.mask(length), -torch.inf))[None]
+    seed = ctx.attention_seed(q.device) if p else 0
+    cuda = [q.device.index if q.device.index is not None else torch.cuda.current_device()] if q.device.type == "cuda" else []
+    with torch.random.fork_rng(devices=cuda, enabled=bool(p), device_type=q.device.type):
+        if p:
+            torch.manual_seed(seed)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p, is_causal=mask is None, scale=scale)
+    return out
+
+
 def causal_softmax_attention(ctx, q, k, v, scale, position, heads):
-    """Scores → scale → bias → emit logits → mask → softmax → dropout → weighted values. Shared by attention and GQA."""
+    """Scores → scale → bias → emit logits → mask → softmax → dropout → weighted values. Shared by attention and GQA.
+
+    Takes PyTorch's fused kernel whenever nothing needs the intermediates (fused_attention); otherwise every step is explicit,
+    so inspection pages can read attn.scores, attn.logits and attn.pattern. Both paths give the same outputs and gradients.
+    """
+    fused = fused_attention(ctx, q, k, v, scale, position, heads)
+    if fused is not None:
+        return merge_heads(ctx.emit("attn.head_out", fused))
     length, offset = q.shape[-2], ctx.offset
     raw = ctx.emit("attn.scores", q @ k.transpose(-1, -2))
-    scores = raw * scale
+    scores = (raw.float() if raw.dtype in HALF else raw) * scale  # scores, mask and softmax stay in float32 under mixed precision
     bias = position.score_bias(length, heads) if not offset or not hasattr(position, "score_bias_rows") else position.score_bias_rows(offset, offset + length, k.shape[-2], heads)
     if bias is not None:
         scores = scores + bias

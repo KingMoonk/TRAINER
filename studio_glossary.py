@@ -157,6 +157,17 @@ MODULE_TERMS = {
     "head": {"tied": "tied_head", "untied": "untied_head"},
 }
 
+# every module the registry offers (studio_registry.for_slot), by slot, -> its GLOSSARY entry
+MODULE_TERMS = {
+    "embedding": {"learned": "embedding", "factorized": "factorized_embedding"},
+    "position": {"learned": "learned_position", "sinusoidal": "sinusoidal", "rope": "rope", "alibi": "alibi", "none": "nope"},
+    "norm": {"layernorm": "layernorm", "rmsnorm": "rmsnorm", "none": "no_norm"},
+    "mixer": {"attention": "attention", "gqa": "gqa", "linear": "linear_attention", "ssm": "ssm", "gru": "gru", "lstm": "lstm",
+              "conv": "conv", "none": "no_mixer"},
+    "channel": {"mlp_gelu": "mlp_gelu", "swiglu": "swiglu", "moe": "moe", "none": "no_channel"},
+    "head": {"tied": "tied_head", "untied": "untied_head"},
+}
+
 
 def glossary_text(key):
     term, text = GLOSSARY[key]

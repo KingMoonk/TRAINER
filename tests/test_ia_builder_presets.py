@@ -77,6 +77,17 @@ class Cost(unittest.TestCase):
         self.assertLess(gpu["step"], cpu["step"])
         self.assertTrue(gpu["lines"][2].startswith("With the GPU"))
 
+    def test_gpu_is_only_read_from_an_earlier_check_never_probed(self):
+        with mock.patch.dict("sys.modules", {"studio_backend": None}):
+            self.assertEqual(B.gpu_kind(), "")  # torch not loaded here: no import, no Metal/CUDA work
+        status = mock.Mock(return_value={"available": True, "kind": "mps"})
+        status.cache_info.return_value.currsize = 0
+        with mock.patch.dict("sys.modules", {"studio_backend": mock.Mock(gpu_status=status)}):
+            self.assertEqual(B.gpu_kind(), "")
+            status.cache_info.return_value.currsize = 1
+            self.assertEqual(B.gpu_kind(), "mps")
+        self.assertEqual(status.call_count, 1)
+
     def test_unknown_memory_is_said_plainly(self):
         with mock.patch.object(B, "ram_bytes", return_value=None):
             cost = B.preset_cost(preset("starter"))

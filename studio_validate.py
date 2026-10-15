@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 
 import studio_registry as registry
+from studio_modules.precision.policy import likely_device, plan
 from studio_slots import BLOCK_SLOTS, TRAIN_SLOTS, Issue
 from studio_spec import block_at, dims_of, module_of, set_block, validate_spec, vocab_of
 
@@ -27,6 +28,10 @@ def validate(spec, vocab=None):
     head = check("head", spec["head"])
     for slot in TRAIN_SLOTS:
         check(slot, spec["train"][slot])
+    precision = module_of("precision", spec["train"]["precision"])[0]
+    _, note = plan(precision, likely_device((spec["train"].get("run") or {}).get("device", "auto")))
+    if note:
+        issues.append(Issue("WARN", note, "precision"))
     tokenizer, tokenizer_cfg = module_of("tokenizer", spec["tokenizer"])
     for issue in tokenizer.validate(tokenizer_cfg, dims_of(spec, vocab)):
         issue.slot = "tokenizer"
