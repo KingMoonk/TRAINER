@@ -672,7 +672,8 @@ class Services(unittest.TestCase):
         version = svc.import_pretrained("gpt2")
         later = svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
         self.release(svc)
-        self.wait_for(lambda: svc.store.get(version.number)["status"] == "saved")
+        self.wait_for(lambda: "no weights" in svc.store.get(version.number)["change"])  # marked saved first, then described
+        self.assertEqual(svc.store.get(version.number)["status"], "saved")
         kept = svc.store.get(version.number)
         self.assertIn("no weights", kept["change"])
         self.assertIn("did not finish", kept["change"])

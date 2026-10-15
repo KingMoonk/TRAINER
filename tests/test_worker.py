@@ -155,8 +155,8 @@ class WorkerTests(unittest.TestCase):
     def test_the_worker_has_one_core_fewer_than_the_computer(self):
         job, _, _ = self.run_job(threads_seen)
         seen = job.params["result"]
-        self.assertEqual(seen["torch"], int(seen["env"]))  # torch takes the cap from the environment the worker starts with
-        self.assertLessEqual(seen["torch"], studio_worker.threads())  # studio_model's own lower default of 4 may stand
+        self.assertLessEqual(seen["torch"], int(seen["env"]))  # torch keeps under the cap it starts with (on Windows it may take fewer: physical cores)
+        self.assertLessEqual(int(seen["env"]), studio_worker.threads())  # studio_model's own lower default of 4 may stand
 
     def test_thread_env_caps_but_keeps_a_lower_setting(self):
         self.assertEqual(studio_worker.threads(1), 1)
