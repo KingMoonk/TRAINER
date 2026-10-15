@@ -229,7 +229,11 @@ class NonLayerContracts(unittest.TestCase):
         for module in registry.for_slot("precision"):
             with self.subTest(module=module.id):
                 dtype = module.build(module.parse(), DIMS, None)
-                self.assertEqual(str(dtype), "torch.float" + module.short[2:])
+                if module.compute is None:
+                    self.assertEqual(str(dtype), "torch.float" + module.short[2:])
+                else:   # mixed precision: float32 master weights, matrix multiplies in `compute`
+                    self.assertEqual(dtype, torch.float32)
+                    self.assertIn(module.compute, (torch.bfloat16, torch.float16))
         for module in registry.for_slot("init"):
             with self.subTest(module=module.id):
                 layer = registry.get("norm", "layernorm").build(registry.get("norm", "layernorm").parse(), DIMS, None)
