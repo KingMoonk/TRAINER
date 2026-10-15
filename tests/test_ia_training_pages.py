@@ -8,7 +8,7 @@ from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.copy import CHAT
 from studio_ia.pages.chat import against_chance, answering_version, few_shot_note, few_shot_rows, stream_reply, verdict_view
-from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, live_view, spread_text, step_line, teacher_options
+from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, is_mixed_precision, live_view, lora_blocker, lora_config, lora_default, spread_text, step_line, teacher_options
 from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import export_default_name, export_rows, export_run, size_text, storage_state
@@ -92,6 +92,30 @@ class PageLogic(unittest.TestCase):
         job = Job("a", "pretrain")
         self.assertIsNone(total_hours(QueueState(job=job, eta_s=None)))
         self.assertEqual(total_hours(QueueState(job=job, eta_s=3600, up_next=[Job("b", "compare", eta_s=1800)])), 1.5)
+
+    def test_lora_choice_follows_the_engine_refusals(self):
+        fp32, bf16 = default_spec(), default_spec()
+        bf16["train"]["precision"] = {"id": "bf16", "config": {}}
+        plain, mixed = SimpleNamespace(spec=fp32, best_checkpoint="c.npz"), SimpleNamespace(spec=bf16, best_checkpoint="c.npz")
+        self.assertFalse(is_mixed_precision(fp32))
+        self.assertTrue(is_mixed_precision(bf16))
+        self.assertFalse(is_mixed_precision({}))
+        self.assertIsNone(lora_blocker(plain))
+        self.assertIn("float32", lora_blocker(mixed))
+        self.assertIn("trained version", lora_blocker(SimpleNamespace(spec=fp32, best_checkpoint=None)))
+        self.assertIn("trained version", lora_blocker(None))
+        self.assertEqual(lora_config(True, 16, plain), {"lora": {"rank": 16}})
+        self.assertEqual(lora_config(False, 16, plain), {"lora": None})
+        self.assertEqual(lora_config(True, 16, mixed), {})
+        self.assertEqual(lora_config(True, 16, None), {})
+        self.assertEqual(validate_config({"lora": lora_config(True, 16, plain)["lora"]})["lora"]["rank"], 16)
+
+    def test_lora_default_is_the_versions_own_setting(self):
+        spec = default_spec()
+        self.assertFalse(lora_default(SimpleNamespace(spec=spec)))
+        self.assertFalse(lora_default(None))
+        spec["train"]["run"] = {"lora": {"rank": 4}}
+        self.assertTrue(lora_default(SimpleNamespace(spec=spec)))
 
     def test_post_blockers_and_step_line(self):
         self.assertIn("Pretraining", blocker(0, {"conversations": 5}, checkpoint=False))
