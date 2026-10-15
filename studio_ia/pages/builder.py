@@ -45,7 +45,6 @@ WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.
 TRAINING_TEXT = "Chat switches to {new} only when it beats version {n} on held-back text, or when you pick it."
 NO_PARENT = "Version {n} has no trained weights to start from, so the next version trains from scratch."
 NO_CURVE = "No error curve yet: version {n} has not trained on this computer. It appears here once it has."
-TRAINED_NOT = "has no trained weights yet"
 
 
 def cfg(s):
@@ -198,6 +197,24 @@ def version_name(n):
     return f"version {n}" if n else "no version yet"
 
 
+def curve_note(n, phase):
+    """The one line shown in place of the chart while there is no curve to draw."""
+    if phase == "training":
+        return T["no_curve_starting"]
+    if n:
+        return NO_CURVE.format(n=n)
+    return T["no_curve_first"] if phase == "edit" else T["no_curve_waiting"]
+
+
+def answer_rows(n, trained, phase):
+    """[(version number, why it cannot answer or "")] for the 'when answering' card; [] while neither version has trained.
+    `trained` = the numbers among n and n + 1 that have trained weights. Version 0 is not a version, so it never gets a row."""
+    if not trained:
+        return []
+    return [(k, "" if k in trained else T["compare_later"] if phase == "edit" and k == n + 1 else T["not_trained"])
+            for k in (n, n + 1) if k]
+
+
 def pill_text(job, base):
     """Header pill: what is training now, else where the current version stands."""
     if job:
@@ -246,7 +263,7 @@ class BuilderPage(Page):
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
         self.old_curve = self.new_curve = self.refs = None
-        self.plot_args = {}
+        self.plot_args, self.plot = {}, None
         self._chart_token = None
         self.answers, self.answer_q, self.answer_stop, self.answer_labels, self.workers = {}, queue.Queue(), threading.Event(), {}, []
         self.pill_bar = self.pill_label = None
@@ -373,7 +390,10 @@ class BuilderPage(Page):
                     except (OSError, ValueError, KeyError, StopIteration):
                         return
                     self.plot_args = chart_args(self.old_curve, self.new_curve, self.refs)
-                    self.plot.set(**self.plot_args)
+                    if self.plot:
+                        self.plot.set(**self.plot_args)
+                    elif self.plot_args["steps"] or self.plot_args["smooth"]:
+                        self.render()  # the first points have arrived: the note becomes a chart
 
     def edit(self, **patch):
         if self.phase == "edit":
@@ -723,39 +743,44 @@ class BuilderPage(Page):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["while_training"], bg="panel").pack(anchor="w")
-        self.plot = BpcPlot(card, 640, 200)
-        self.plot.pack(anchor="w", pady=6)
-        self.plot.set(**self.plot_args)
-        has = bool(self.plot_args.get("smooth") or self.plot_args.get("steps"))
-        legend = tk.Frame(card, bg=C["panel"])
-        legend.pack(anchor="w")
-        if has:
-            tk_label(legend, version_name(self.n).capitalize(), 12, "violet", "panel").pack(side="left", padx=(0, 16))
-            if self.new_curve:
-                tk_label(legend, f"faint line: {self.nv}, continuing from version {self.n}'s end", 12, "amber", "panel").pack(side="left")
+        old, new = bool(self.plot_args.get("smooth")), bool(self.plot_args.get("steps"))
+        self.plot = self.ask_btn = None
+        if old or new:
+            self.plot = BpcPlot(card, 640, 200)
+            self.plot.pack(anchor="w", pady=6)
+            self.plot.set(**self.plot_args)
+            legend = tk.Frame(card, bg=C["panel"])
+            legend.pack(anchor="w")
+            if old:
+                tk_label(legend, version_name(self.n).capitalize(), 12, "violet", "panel").pack(side="left", padx=(0, 16))
+            if new:
+                faint = f"faint line: {self.nv}" + (f", continuing from version {self.n}'s end" if old else "")
+                tk_label(legend, faint, 12, "amber", "panel").pack(side="left")
         else:
-            self.no_curve = NO_CURVE.format(n=self.n) if self.n else "No error curve yet: save a design and train it in Pretraining."
-            tk_label(legend, self.no_curve, 12, "muted", "panel").pack(side="left")
+            self.no_curve = curve_note(self.n, self.phase)
+            tk_label(card, self.no_curve, 13, "muted", "panel").pack(anchor="w", pady=6)
         Kicker(card, T["when_answering"], bg="panel").pack(anchor="w", pady=(8, 0))
+        trained = {k for k in (self.n, self.n + 1) if self.version(k) and self.version(k).best_checkpoint}
+        rows = answer_rows(self.n, trained, self.phase)
+        if not rows:  # nothing can answer, so no prompt, rows or button
+            self.nothing_to_ask = T["nothing_to_ask"].format(n=self.n) if self.n else T["nothing_to_ask_first"]
+            tk_label(card, self.nothing_to_ask, 13, "muted", "panel", wraplength=780).pack(anchor="w", pady=6)
+            return
         tk_label(card, T["example_prompt"], 14, "text", "panel", font=font(14, serif=True)).pack(anchor="w")
-        for number in (self.n, self.n + 1):
-            v = self.version(number)
-            trained = bool(v and v.best_checkpoint)
+        for number, why_not in rows:
             if number in self.answers:
                 text = self.answers[number] or "…"
-            elif trained:
-                text = T["its_answer_appears"]
             else:
-                text = ("save your changes and train them to compare" if self.phase == "edit" and number == self.n + 1 else TRAINED_NOT)
+                text = why_not or T["its_answer_appears"]
             row = tk.Frame(card, bg=C["panel"])
             row.pack(anchor="w", fill="x")
             tk_label(row, version_name(number), 13, "violet" if number == self.n else "amber", "panel", width=14).pack(side="left")
-            label = tk_label(row, text, 13, "text" if number in self.answers else "muted", "panel", font=font(13, serif=True), wraplength=640)
+            label = tk_label(row, text, 13, "text" if number in self.answers else "muted", "panel", font=font(13, serif=number in self.answers), wraplength=640)  # serif is for model text only
             label.pack(side="left")
             self.answer_labels[number] = label
-        self.ask_btn = button(card, "Ask both versions", self.ask_both)
+        both = len(trained) == 2
+        self.ask_btn = button(card, "Ask both versions" if both else f"Ask {version_name(next(iter(trained)))}", self.ask_both)
         self.ask_btn.pack(anchor="w", pady=(6, 0))
-        self.ask_btn.state(["!disabled"] if any((self.version(k) and self.version(k).best_checkpoint) for k in (self.n, self.n + 1)) else ["disabled"])
         tk_label(card, T["answering_note"], 12, "dim", "panel", wraplength=780).pack(anchor="w", pady=(6, 0))
 
     def _look_inside(self):

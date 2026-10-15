@@ -3,7 +3,6 @@
 Problems are ordinary workspace examples with an extra "rule" (and "params"); both are mirrored into "metadata"
 because studio_core.normalize drops unknown keys when an example is edited.
 """
-import base64
 import hashlib
 import itertools
 import re
@@ -93,27 +92,35 @@ def make_problem(item, quality="Good"):
 def add_problems(workspace, dataset_id, items, quality="Good"):
     """Store problems (rule + params kept on each example). Returns (added, duplicate)."""
     added = duplicate = 0
-    known = {studio_core.fingerprint(e) for e in workspace.iter_examples(dataset_id)}
+    dataset = workspace._dataset(dataset_id)
+    on_disk = dataset.get("storage") == "sqlite"
+    known = set() if on_disk else {studio_core.fingerprint(e) for e in workspace.iter_examples(dataset_id)}
+    examples = []
     for item in items:
         row = make_problem(item, quality)
         example = studio_core.normalize(row, dataset_id, "synthetic")
-        if example is None or studio_core.fingerprint(example) in known:
+        if example is None:
             duplicate += 1
             continue
-        known.add(studio_core.fingerprint(example))
         example["rule"], example["params"] = row["rule"], row["params"]
-        dataset = workspace._dataset(dataset_id)
-        if dataset.get("storage") == "sqlite":
-            with workspace._connect({dataset_id}) as connection:
-                workspace._insert_rows(connection, [workspace._db_row(example)])
-        else:
-            workspace.state["examples"].append(stamp(example, studio_core.fingerprint(example)))
+        examples.append(example)
+    if on_disk:
+        with workspace._connect({dataset_id}) as connection:  # one transaction; UNIQUE(dataset_id, fingerprint) rejects the duplicates
+            for example in examples:
+                stored = workspace._insert_rows(connection, [workspace._db_row(example)])
+                added, duplicate = added + stored, duplicate + 1 - stored
+            if added:
+                dataset["recordCount"] = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+    else:
+        for example in examples:
+            key = studio_core.fingerprint(example)
+            if key in known:
+                duplicate += 1
+                continue
+            known.add(key)
+            workspace.state["examples"].append(stamp(example, key))
             workspace._bump(dataset_id)
-        added += 1
-    if added and workspace._dataset(dataset_id).get("storage") == "sqlite":
-        with workspace._connect() as connection:
-            workspace._dataset(dataset_id)["recordCount"] = connection.execute(
-                "SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
+            added += 1
     workspace.save()
     return added, duplicate
 
@@ -146,16 +153,16 @@ def signature(text):
 
 
 def pack_signature(sig, sketch):
-    """A signature as a short text (little-endian uint32s: the 16 min-hashes, then the sketch) so a summary file can keep it."""
+    """A signature as bytes (little-endian uint32s: the 16 min-hashes, then the sketch) so the summary cache can keep it."""
     values = array("I", [*sig, *sorted(sketch)])
     if sys.byteorder == "big":
         values.byteswap()
-    return base64.b64encode(values.tobytes()).decode("ascii")
+    return values.tobytes()
 
 
 def unpack_signature(packed):
     values = array("I")
-    values.frombytes(base64.b64decode(packed))
+    values.frombytes(packed)
     if sys.byteorder == "big":
         values.byteswap()
     return list(values[:len(PERMS)]), frozenset(values[len(PERMS):])
@@ -318,6 +325,31 @@ def matching(rows, query="", limit=200):
     return [r for r in rows if not needle or needle in f"{r['a']} {r['b']}".casefold()][:limit]
 
 
+def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=()):
+    """(rows, next cursor) of one page of `kind` rows read from storage, not from the summary's sample: every row of
+    `sets` ((dataset id, name) in order) whose text holds `query` can be reached. cursor None = the first page; the
+    next cursor is None when nothing follows. `dups` = ids to show as near-duplicates. Disk datasets match in SQL, which
+    folds case for ASCII letters only; others match in Python."""
+    needle = query.strip().casefold()
+    rules = [key for key, label in LABELS.items() if needle in f"{key} {label}".casefold()] if needle and kind == "problems" else []
+    index, after = cursor or (0, 0)
+    found = []  # (set index, position in the set, row)
+    while index < len(sets) and len(found) <= limit:
+        dataset_id, name = sets[index]
+        want = limit + 1 - len(found)
+        if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            examples = workspace.kind_rows(dataset_id, kind, query, after, want, rules)
+        else:
+            examples = [(i, e) for i, e in enumerate(workspace.examples(dataset_id), 1) if i > after and classify(e) == kind and (
+                not needle or rule_of(e) in rules or needle in " ".join(str(e.get(k) or "") for k in ("user", "assistant", "intent", "text")).casefold())][:want]
+        for position, example in examples:
+            a, b = _columns(kind, example, name)
+            found.append((index, position, {"id": example["id"], "a": a, "b": b, "status": _status(kind, example, example["id"] in dups), "dataset": name}))
+        index, after = index + 1, 0
+    more = len(found) > limit
+    return [row for *_, row in found[:limit]], (found[limit - 1][:2] if more else None)
+
+
 def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_ids=None, scanned=None, progress=None):
     """Counts, sets and up to `limit` sample rows of one kind. Near-duplicates are looked for in the first
     `scan_limit` examples of the kind only (bounded cost). `scanned` reuses an earlier scan() instead of reading again."""
@@ -341,12 +373,14 @@ def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_id
 
 
 # ---- one dataset's share of the summaries -------------------------------------------------------------------
-# A summary of the whole workspace is the sum of one entry per dataset. An entry is JSON (data/summaries.json keeps it
-# beside the dataset's `rev`), so only a dataset whose rev moved is read again. Order matters: the near-duplicate check
-# and the sample rows cover the first `scan_limit` examples of a kind across datasets in workspace order, so an entry
-# keeps as many rows (and signatures) as that budget could ever take from it.
+# A summary of the whole workspace is the sum of one entry per dataset. An entry is a small JSON of counts beside the
+# dataset's `rev` (studio_data_cache keeps it in data/summaries.sqlite), so only a dataset whose rev moved is read again.
+# The sample rows and near-duplicate signatures are not in the entry: the cache keeps them apart, a row each, so a launch
+# or a page read never loads them. Order matters: the near-duplicate check and the sample rows cover the first
+# `scan_limit` examples of a kind across datasets in workspace order, so an entry keeps as many rows as that budget
+# could take from it, and no more.
 
-def _budgets(datasets, entries, scan_limit):
+def budgets(datasets, entries, scan_limit):
     """Yield (dataset, entry, {kind: rows this dataset contributes}) in order, spending the per-kind budget as it goes."""
     left = dict.fromkeys(KINDS, scan_limit)
     for dataset in datasets:
@@ -358,22 +392,21 @@ def _budgets(datasets, entries, scan_limit):
 
 
 def dataset_entry(workspace, dataset, scan_limit, progress=None):
-    """{kind_counts, chars, holdout, rules, rows, signatures, example, limit} for one dataset: counts of everything in it,
-    sample rows and near-duplicate signatures for its first `scan_limit` examples of each kind."""
+    """{kind_counts, chars, holdout, rules, example, limit, kept, rows} for one dataset: counts of everything in it, and for
+    its first `scan_limit` examples of each kind a row [id, a, b, status, can, signature] in `rows` (`kept` says how many)."""
     summaries, pairs = scan(workspace, scan_limit, [dataset["id"]], progress)
-    entry = {"limit": scan_limit, "rules": summaries["problems"].rules, "rows": {}, "signatures": {},
+    entry = {"limit": scan_limit, "rules": summaries["problems"].rules, "rows": {}, "kept": {},
              "kind_counts": {k: summaries[k].count for k in KINDS}, "chars": {k: summaries[k].characters for k in KINDS},
              "holdout": {k: summaries[k].held_back for k in KINDS}}
     for kind in KINDS:
-        rows, signatures = [], []
-        for i, (example, name) in enumerate(pairs[kind]):
+        rows = []
+        for example, name in pairs[kind]:
             a, b = _columns(kind, example, name)
             status = _status(kind, example, False)
-            rows.append([example["id"], a, b, status, int(_status(kind, example, True) != status)])  # last: a near-copy would change it
             found = signature(normalized_text(example)) if kind != "problems" else None
-            if found:
-                signatures.append([i, pack_signature(*found)])
-        entry["rows"][kind], entry["signatures"][kind] = rows, signatures
+            # can: a near-copy would change the status
+            rows.append((example["id"], a, b, status, int(_status(kind, example, True) != status), pack_signature(*found) if found else None))
+        entry["rows"][kind], entry["kept"][kind] = rows, len(rows)
     first = next((e for e, _ in pairs["conversations"] if not held_back(e)), None)  # the first of post_rows("conversations")
     entry["example"] = {"user": first.get("user", ""), "assistant": first.get("assistant", "")} if first else None
     return entry
@@ -381,13 +414,14 @@ def dataset_entry(workspace, dataset, scan_limit, progress=None):
 
 def refresh(workspace, cached, scan_limit=20000, rescan_all=False, progress=None):
     """Bring per-dataset entries up to date: ({dataset_id: entry}, [ids read again]). `cached` entries are kept while their
-    dataset's `rev` is the entry's and they hold the rows the budget asks of them; the rest are read with scan(dataset_ids=[id])."""
+    dataset's `rev` is the entry's and they hold the rows the budget asks of them; the rest are read with scan(dataset_ids=[id])
+    and carry their `rows` until the cache takes them."""
     entries, reread, left = {}, [], dict.fromkeys(KINDS, scan_limit)
     for dataset in list(workspace.state["datasets"]):
         rev = dataset.get("rev", 0)  # read before the scan: a write during it leaves the entry behind the rev, so the next refresh rereads
         entry = None if rescan_all else cached.get(dataset["id"])
         # an entry also has to hold the rows this dataset's turn in the budget asks for (an earlier dataset may have shrunk)
-        if entry is None or entry.get("rev") != rev or any(len(entry["rows"][k]) < min(entry["kind_counts"][k], left[k]) for k in KINDS):
+        if entry is None or entry.get("rev") != rev or any(entry["kept"][k] < min(entry["kind_counts"][k], left[k]) for k in KINDS):
             entry = dataset_entry(workspace, dataset, max(left.values()), progress)
             entry["rev"] = rev
             reread.append(dataset["id"])
@@ -397,14 +431,13 @@ def refresh(workspace, cached, scan_limit=20000, rescan_all=False, progress=None
     return entries, reread
 
 
-def assemble(datasets, entries, scan_limit=20000):
-    """({kind: DataSummary with every sample row}, the first training conversation as {prompt, answer}) from entries:
-    what summarize() reads over the whole workspace, without reading it."""
+def assemble(datasets, entries, view, scan_limit=20000):
+    """({kind: DataSummary with the first page of sample rows}, the first training conversation as {prompt, answer}):
+    what summarize() reads over the whole workspace, without reading it. `view` is what the cache made of the rows
+    ({"duplicates": {kind: n}, "rows": {kind: [row]}})."""
     out = {kind: DataSummary(kind, used_by=USED_BY[kind]) for kind in KINDS}
-    rows = {kind: [] for kind in KINDS}
-    items = {kind: [] for kind in KINDS}
     example = None
-    for dataset, entry, take in _budgets(datasets, entries, scan_limit):
+    for dataset, entry, take in budgets(datasets, entries, scan_limit):
         for kind in KINDS:
             summary, n = out[kind], entry["kind_counts"][kind]
             if n:
@@ -412,19 +445,12 @@ def assemble(datasets, entries, scan_limit=20000):
                 summary.count += n
             summary.characters += entry["chars"][kind]
             summary.held_back += entry["holdout"][kind]
+            summary.scanned += take[kind]
             if kind == "problems":
                 for rule, count in entry["rules"].items():
                     summary.rules[rule] = summary.rules.get(rule, 0) + count
-            base = len(rows[kind])
-            rows[kind] += [(*row, dataset["name"]) for row in entry["rows"][kind][:take[kind]]]
-            for i, packed in entry["signatures"][kind]:
-                if i < take[kind]:
-                    items[kind].append((rows[kind][base + i][0], *unpack_signature(packed)))
         if example is None and entry["example"] is not None:
             example = entry["example"]
     for kind in KINDS:
-        dups = match_signatures(items[kind])
-        out[kind].near_duplicates, out[kind].scanned = len(dups), len(rows[kind])
-        out[kind].rows = [{"id": id, "a": a, "b": b, "status": "Near-duplicate" if can and id in dups else status, "dataset": name}
-                          for id, a, b, status, can, name in rows[kind]]
+        out[kind].near_duplicates, out[kind].rows = view["duplicates"][kind], list(view["rows"][kind])
     return out, ({"prompt": example["user"], "answer": example["assistant"]} if example and example["user"] else {})

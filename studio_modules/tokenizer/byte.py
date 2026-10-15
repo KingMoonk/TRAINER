@@ -1,6 +1,8 @@
 """Byte tokenizer: one token per UTF-8 byte. Also home of the Tokenizer class the character tokenizer shares."""
 from __future__ import annotations
 
+import numpy as np
+
 from studio_core import messages_of
 from studio_registry import ModuleSpec, register
 from studio_slots import OFFSET, UNK
@@ -32,8 +34,14 @@ class Tokenizer:
 
     def encode(self, text):
         if self.kind == "byte":
-            return [int(b) + OFFSET for b in text.encode("utf-8")]
+            return self.encode_array(text).tolist()
         return [self.lookup.get(char, UNK) for char in text]
+
+    def encode_array(self, text):
+        """encode() as an int64 array; bytes never become one Python int per token on the way."""
+        if self.kind == "byte":
+            return np.frombuffer(text.encode("utf-8"), dtype=np.uint8).astype(np.int64) + OFFSET
+        return np.array(self.encode(text), dtype=np.int64)
 
     def decode(self, tokens):
         if self.kind == "byte":
