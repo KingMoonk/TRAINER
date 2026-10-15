@@ -13,7 +13,8 @@ from panda3d.core import (Filename, Geom, GeomNode, GeomTriangles, GeomVertexDat
                           GeomVertexWriter, LineSegs, TextNode, TransparencyAttrib, Vec3,
                           loadPrcFileData)
 
-from studio_scene import HEAD_STAGES, LEVELS, MODES, TILE_KINDS, SceneModel, clamp_index, next_stage, stats_line
+import studio_viewer_ui as ui
+from studio_scene import HEAD_STAGES, MODES, TILE_KINDS, SceneModel, clamp_index, next_stage, stats_line
 from studio_spec import block_at, default_spec, to_legacy_view, upgrade
 
 
@@ -28,12 +29,6 @@ def sample_spec(n=6):
 
 def normalize_spec(spec):
     return to_legacy_view(upgrade(spec))
-
-
-def valid_heads(width, current, direction):
-    values = [h for h in range(1, 17) if width % h == 0]
-    candidates = [h for h in values if h > current] if direction > 0 else [h for h in values if h < current]
-    return (min(candidates) if direction > 0 else max(candidates)) if candidates else None
 
 
 def synth_telemetry(spec, step, total, t):
@@ -80,45 +75,29 @@ class BrainApp:
 
 class _SceneRenderer:
     def initialize_scene(self, link, demo):
-        from direct.gui.DirectGui import DirectButton, DirectCheckButton, DirectOptionMenu, DirectLabel
         self.link, self.demo = link, demo
         self.disableMouse()
-        self.setBackgroundColor(.025, .04, .065)
+        self.setBackgroundColor(*ui.rgba('bg'))
         self.scene = SceneModel(sample_spec(6) if demo else default_spec())
+        self.scene.level = 'Model'
         self.ids, self.sel_id = [], None
         self.cam_h, self.cam_p, self.cam_d = 25., 30., 28.
         self.cam_t = self.render.attachNewNode('target')
         self.cam_t.setPos(0, -8, 1)
-        self.auto_orbit, self.playing = demo, False
+        self.auto_orbit, self.playing, self.probing = demo, False, False
         self.last_mouse, self.dragging = None, False
         self.keys = set()
         self.geometry = self.render.attachNewNode('scene')
         self.cube = _cube()
-        self.gate_nodes = {}
+        self.gate_nodes, self.gate_labels = {}, {}
         self.weight_kind, self.head_stage = 'weight', 'pattern'
-        self.cell = [0, 0]  # the edited weight, relative to the visible 16x16 tile
-        self.edit_pending = False
+        self.cell = [0, 0]  # the highlighted weight, relative to the visible 16x16 tile
+        self.matrix_rows = 16
         self.link_lost = False
         self.snapshot_paths, self.snapshot_index = [], -1
-        self.stats, self.info = {}, ''
+        self.stats, self.info, self.note = {}, '', ''
         self.animation_elapsed = 0.
-        self.hud = DirectLabel(text='', scale=.043, pos=(-.05, 0, .86), frameColor=(0, 0, 0, 0), text_fg=(.85, .92, 1, 1))
-        self.level_menu = DirectOptionMenu(items=list(LEVELS), initialitem=1, scale=.04, pos=(-1.28, 0, .9), command=self.set_level)
-        self.mode_menu = DirectOptionMenu(items=list(MODES), initialitem=0, scale=.04, pos=(-1.28, 0, .77), command=self.set_mode)
-        DirectCheckButton(text='Reduce motion', scale=.04, pos=(-1.12, 0, -.8), command=self.motion)
-        DirectCheckButton(text='Show numbers', indicatorValue=True, scale=.04, pos=(-.5, 0, -.8), command=self.numbers)
-        DirectButton(text='Play / pause', scale=.04, pos=(.3, 0, -.8), command=self.toggle_play)
-        DirectButton(text='Previous', scale=.04, pos=(.75, 0, -.8), command=lambda: self.scrub(-1))
-        DirectButton(text='Next', scale=.04, pos=(1.08, 0, -.8), command=lambda: self.scrub(1))
-        DirectButton(text='Load replay', scale=.04, pos=(1.08, 0, .84), command=lambda: self.send({'type': 'load_replay'}))
-        DirectButton(text='1 real step', scale=.04, pos=(1.08, 0, .7), command=lambda: self.send({'type': 'probe_step'}))
-        self.tile_menu = DirectOptionMenu(items=list(TILE_KINDS), scale=.04, pos=(-1.28, 0, .64), command=self.set_weight_kind)
-        self.step_menu = DirectOptionMenu(items=list(HEAD_STAGES), initialitem=HEAD_STAGES.index('pattern'),
-                                          scale=.04, pos=(-1.28, 0, .51), command=self.set_head_stage)
-        import studio_registry as registry
-        self.module_menu = DirectOptionMenu(items=[m.short for m in registry.for_slot('mixer')], scale=.04,
-                                            pos=(-1.28, 0, .38), command=self.swap_mixer)
-        self.matrix_menu = DirectOptionMenu(items=['Choose matrix'], scale=.035, pos=(-1.28, 0, .25), command=self.select_matrix)
+        self.build_controls()
         for key in 'wasdqe':
             self.accept(key, self.key, [key, True])
             self.accept(key + '-up', self.key, [key, False])
@@ -145,20 +124,172 @@ class _SceneRenderer:
         self.accept('k', self.move_cell, [1, 0])
         self.accept('j', self.move_cell, [0, -1])
         self.accept('l', self.move_cell, [0, 1])
-        self.accept('-', self.edit_weight, [-.01])
-        self.accept('+', self.edit_weight, [.01])
-        self.accept('=', self.edit_weight, [.01])
         self.accept('window-event', self.window_event)
         self.set_spec(self.scene.spec, fit=True)
         self.taskMgr.add(self.tick, 'scene-events')
 
+    # controls: flat panels in the app's colours, anchored to the window's corners so a resize keeps them in place ---
+    def label(self, parent, text='', scale=ui.SMALL, color='muted', align=TextNode.ALeft, **kw):
+        from direct.gui.DirectGui import DirectLabel
+        kw.setdefault('frameColor', (0, 0, 0, 0))
+        return DirectLabel(parent=parent, text=text, scale=scale, text_fg=ui.rgba(color), text_align=align, **kw)
+
+    def panel(self, parent, pos):
+        from direct.gui import DirectGuiGlobals as DGG
+        from direct.gui.DirectGui import DirectFrame
+        return DirectFrame(parent=parent, pos=pos, relief=DGG.FLAT, frameColor=ui.rgba('panel', .94), frameSize=(0, ui.PANEL_W, -.1, 0))
+
+    def button(self, parent, text, command, width=ui.CONTROL_W, primary=False):
+        from direct.gui import DirectGuiGlobals as DGG
+        from direct.gui.DirectGui import DirectButton
+        ready, pressed, hover, disabled = ui.text_colors(primary)
+        return DirectButton(parent=parent, text=text, command=command, scale=ui.TEXT, relief=DGG.FLAT, pressEffect=0,
+                            frameColor=ui.button_colors(primary), frameSize=ui.button_frame(width),
+                            text0_fg=ready, text1_fg=pressed, text2_fg=hover, text3_fg=disabled)
+
+    def menu(self, parent, items, index, command):
+        from direct.gui import DirectGuiGlobals as DGG
+        from direct.gui.DirectGui import DirectOptionMenu
+        return DirectOptionMenu(parent=parent, items=list(items), initialitem=index, command=command, scale=ui.TEXT,
+                                relief=DGG.FLAT, pressEffect=0, frameSize=ui.menu_frame(), frameColor=ui.button_colors(),
+                                text_fg=ui.rgba('text'), highlightColor=ui.rgba('border'),
+                                popupMarker_relief=DGG.FLAT, popupMarker_frameColor=ui.rgba('violet'),
+                                popupMenu_relief=DGG.FLAT, popupMenu_frameColor=ui.rgba('panel2'),
+                                item_relief=DGG.FLAT, item_frameColor=ui.rgba('panel2'), item_text_fg=ui.rgba('text'),
+                                item_pressEffect=0)
+
+    def build_controls(self):
+        import studio_registry as registry
+        self.mixers = [m.short for m in registry.for_slot('mixer')]
+        self.hud = self.label(self.a2dTopCenter, scale=ui.TEXT, color='text', align=TextNode.ACenter, pos=(0, 0, -.08),
+                              text_wordwrap=34, frameColor=ui.rgba('panel', .85), pad=(.5, .35))
+        # left: what the scene shows, one labelled menu per row; a row is hidden where it would do nothing
+        self.view_panel = self.panel(self.a2dTopLeft, (.04, 0, -.04))
+        menus = {'level': (ui.LEVELS, ui.LEVELS.index('Model'), self.set_level),
+                 'mode': (MODES, 0, self.set_mode),
+                 'mixer': (self.mixers, 0, self.swap_mixer),
+                 'stage': (HEAD_STAGES, HEAD_STAGES.index('pattern'), self.set_head_stage),
+                 'tile': (TILE_KINDS, 0, self.set_weight_kind),
+                 'matrix': (['none'], 0, self.select_matrix)}
+        self.rows = {name: [self.label(self.view_panel), self.menu(self.view_panel, items, index, command)]
+                     for name, (items, index, command) in menus.items()}
+        self.level_menu, self.mode_menu, self.module_menu = (self.rows[n][1] for n in ('level', 'mode', 'mixer'))
+        self.step_menu, self.tile_menu = self.rows['stage'][1], self.rows['tile'][1]
+        # right: the two requests answered by the studio (a demo viewer has no studio, so it says so instead)
+        self.snap_panel = self.panel(self.a2dTopRight, (-.04 - ui.PANEL_W, 0, -.04))
+        self.load_button = self.button(self.snap_panel, 'Load snapshots', self.load_snapshots, primary=True)
+        self.probe_button = self.button(self.snap_panel, 'Run one real step', self.probe_step)
+        self.snap_note = self.label(self.snap_panel, text_wordwrap=ui.CONTROL_W / ui.SMALL, pos=(ui.PAD, 0, -ui.PAD - ui.SMALL))
+        # bottom: the replay of loaded snapshots
+        self.play_panel = self.panel(self.a2dBottomCenter, (-.3, 0, .2))
+        self.position = self.label(self.play_panel, align=TextNode.ACenter, color='text2', pos=(.3, 0, -ui.PAD - ui.SMALL))
+        self.previous_button = self.button(self.play_panel, 'Previous', lambda: self.scrub(-1), width=.17)
+        self.play_button = self.button(self.play_panel, 'Play', self.toggle_play, width=.17, primary=True)
+        self.next_button = self.button(self.play_panel, 'Next', lambda: self.scrub(1), width=.17)
+        for x, b in zip((.115, .3, .485), (self.previous_button, self.play_button, self.next_button)):
+            b.setPos(x, 0, -ui.PAD - ui.SMALL - .025 - 1.1 * ui.TEXT)
+        # bottom left: on/off switches, shown only where they change something
+        self.toggle_panel = self.panel(self.a2dBottomLeft, (.04, 0, .04))
+        self.toggles = {'motion': self.button(self.toggle_panel, '', self.toggle_motion),
+                        'numbers': self.button(self.toggle_panel, '', self.toggle_numbers)}
+        self.keys_hint = self.label(self.a2dBottomRight, text=ui.KEYS, align=TextNode.ARight, color='dim', text_wordwrap=22)
+        self.keys_hint.setPos(-.04, 0, .04 - self.keys_hint.getBounds()[2] * ui.SMALL)  # its last line sits just above the edge
+
+    def sync_controls(self):
+        """Make every control show the scene's real state: the menus' choices (set without running their commands),
+        which rows and buttons exist, the labels of Play and the switches, and the panels' sizes."""
+        from direct.gui import DirectGuiGlobals as DGG
+        if not hasattr(self, 'rows'):
+            return
+        layer = self.scene.selection.layer
+        names = self.matrix_names()
+        if names and list(self.rows['matrix'][1]['items']) != names:  # a new list: a fresh menu keeps its styled items
+            self.rows['matrix'][1].destroy()
+            self.rows['matrix'][1] = self.menu(self.view_panel, names, 0, self.select_matrix)
+        mixer = self.scene.gates[layer]['entry']['mixer']['id'] if self.scene.gates else None
+        for name, value in (('level', self.scene.level), ('mode', self.scene.mode), ('mixer', mixer),
+                            ('stage', self.head_stage), ('tile', self.weight_kind), ('matrix', self.scene.selection.weight)):
+            widget = self.rows[name][1]
+            if value in widget['items'] and widget.get() != value:
+                widget.set(widget['items'].index(value), fCommand=0)
+        shown = ui.view_rows(self.scene.level, self.scene.mode, names)
+        places, bottom = ui.view_layout(len(shown))
+        text = ui.captions(layer)
+        for name, (caption, widget) in self.rows.items():
+            if name not in shown:
+                caption.hide()
+                widget.hide()
+                continue
+            caption_z, control_z = places[shown.index(name)]
+            caption['text'] = text[name]
+            caption.setPos(ui.PAD, 0, caption_z)
+            widget.setPos(ui.PAD + .4 * ui.TEXT, 0, control_z)
+            caption.show()
+            widget.show()
+        self.view_panel['frameSize'] = (0, ui.PANEL_W, bottom, 0)
+        snap = ui.snapshot_buttons(self.link is not None, self.probing)
+        if snap['show']:
+            self.snap_note.hide()
+            places, bottom = ui.stack_layout(2)
+            for z, b in zip(places, (self.load_button, self.probe_button)):
+                b.setPos(ui.PANEL_W / 2, 0, z)
+                b.show()
+            self.probe_button['text'] = snap['probe']
+            self.probe_button['state'] = DGG.NORMAL if snap['probe_enabled'] else DGG.DISABLED
+        else:
+            self.load_button.hide()
+            self.probe_button.hide()
+            self.snap_note['text'] = snap['note']
+            self.snap_note.resetFrameSize()
+            self.snap_note.show()
+            bottom = self.snap_note.getBounds()[2] * ui.SMALL + self.snap_note.getZ() - ui.PAD
+        self.snap_panel['frameSize'] = (0, ui.PANEL_W, bottom, 0)
+        play = ui.playback(len(self.snapshot_paths), self.snapshot_index, self.playing)
+        self.position['text'] = play['position']
+        for b, on in ((self.previous_button, play['previous']), (self.next_button, play['next']), (self.play_button, True)):
+            b.show() if play['show'] else b.hide()
+            b['state'] = DGG.NORMAL if on else DGG.DISABLED
+        self.play_button['text'] = play['play']
+        self.play_panel['frameSize'] = (0, .6, -(2 * ui.PAD + ui.SMALL + (.025 + ui.CONTROL_H if play['show'] else 0)), 0)
+        self.play_panel.setZ(.04 - self.play_panel['frameSize'][2])
+        shown = ui.toggles(self.scene.level, self.snapshot_paths, self.auto_orbit)
+        places, bottom = ui.stack_layout(len(shown))
+        for name, b in self.toggles.items():
+            b.show() if name in shown else b.hide()
+        for z, name in zip(places, shown):
+            self.toggles[name].setPos(ui.PANEL_W / 2, 0, z)
+        self.toggles['motion']['text'] = ui.toggle_text('Reduce motion', self.scene.reduce_motion)
+        self.toggles['numbers']['text'] = ui.toggle_text('Show numbers', self.scene.show_numbers)
+        self.toggle_panel.show() if shown else self.toggle_panel.hide()
+        self.toggle_panel['frameSize'] = (0, ui.PANEL_W, bottom, 0)
+        self.toggle_panel.setZ(.04 - bottom)
+
+    def matrix_names(self):
+        """The 2D weight matrices the loaded snapshot has that the matrix menu offers (the selected block's)."""
+        arrays = self.scene.snapshot['arrays'] if self.scene.snapshot else {}
+        names = sorted(key[8:] for key in arrays if key.startswith('weight::') and arrays[key].ndim == 2)
+        return ui.block_matrices(names, self.scene.selection.layer)
+
+    def follow_block_matrix(self):
+        arrays = self.scene.snapshot['arrays'] if self.scene.snapshot else {}
+        names = sorted(key[8:] for key in arrays if key.startswith('weight::') and arrays[key].ndim == 2)
+        chosen = ui.pick_matrix(names, self.scene.selection.layer, self.scene.selection.weight)
+        if chosen != self.scene.selection.weight:
+            self.scene.choose(weight=chosen)
+
     def window_event(self, window):
         if window and not window.getProperties().getOpen():
             self.close()
+            return
+        super().windowEvent(window)  # ShowBase's own handler: refits the corner anchors and the lens after a resize
 
     def send(self, message):
         if self.link:
             self.link.send(message)
+
+    def tell_scene(self):
+        """The studio's page mirrors the zoom and mode chosen here."""
+        self.send({'type': 'scene', 'level': self.scene.level, 'mode': self.scene.mode})
 
     def close(self):
         self.send({'type': 'closed'})
@@ -170,47 +301,55 @@ class _SceneRenderer:
     def drag(self, value):
         self.dragging, self.last_mouse = value, None
 
-    def motion(self, value):
-        self.scene.reduce_motion = bool(value)
+    def toggle_motion(self):
+        self.scene.reduce_motion = not self.scene.reduce_motion
+        self.sync_controls()
 
-    def numbers(self, value):
-        self.scene.show_numbers = bool(value)
+    def toggle_numbers(self):
+        self.scene.show_numbers = not self.scene.show_numbers
         self.rebuild()
 
-    def set_level(self, value):
+    def set_level(self, value, tell=True):
+        changed = value != self.scene.level
         self.scene.level = value
         self.rebuild()
+        if changed:
+            self.frame_camera()
+        if tell:
+            self.tell_scene()
 
-    def set_mode(self, value):
+    def set_mode(self, value, tell=True):
         self.scene.mode = value
         self.rebuild()
+        if tell:
+            self.tell_scene()
 
     def set_weight_kind(self, value):
         self.weight_kind = value
-        if hasattr(self, 'geometry'):
-            self.rebuild()
+        self.rebuild()
 
     def set_head_stage(self, value):
         self.head_stage = value
-        if hasattr(self, 'geometry'):
-            self.rebuild()
+        self.rebuild()
 
     def select_matrix(self, value):
-        if value == 'Choose matrix' or not hasattr(self, 'scene'):
-            return
         self.scene.choose(weight=value)
         self.rebuild()
 
+    def frame_camera(self):
+        """Point the camera at what the level draws, keeping the user's orbit angle and pitch."""
+        target, distance = ui.camera_view(self.scene.level, len(self.ids), self.matrix_rows)
+        self.cam_t.setPos(*target)
+        self.cam_d = distance
+
     def zoom(self, factor):
         self.cam_d = max(2., min(160., self.cam_d * factor))
-        level = 'Run' if self.cam_d > 70 else 'Model' if self.cam_d > 22 else 'Window' if self.cam_d > 10 else 'Head' if self.cam_d > 4 else 'Weights'
-        if self.scene.level != level:
-            self.set_level(level)
 
     def next_block(self):
         self.scene.choose(layer=(self.scene.selection.layer + 1) % len(self.scene.gates))
         self.sel_id = self.ids[self.scene.selection.layer]
-        self.send({'type': 'select', 'block_id': self.sel_id})
+        self.follow_block_matrix()
+        self.send({'type': 'select', 'block_id': self.sel_id, 'index': self.scene.selection.layer})
         self.rebuild()
 
     def select_token(self, delta):
@@ -225,7 +364,7 @@ class _SceneRenderer:
         self.rebuild()
 
     def set_spec(self, spec, selected=None, keep_selection=True, fit=False):
-        count = len(self.ids)
+        count, layer = len(self.ids), self.scene.selection.layer
         changed = self.scene.update_spec(spec)
         self.ids = [gate['id'] for gate in self.scene.gates]
         if selected in self.ids:
@@ -234,52 +373,44 @@ class _SceneRenderer:
         elif not keep_selection or self.sel_id not in self.ids:
             self.sel_id = self.ids[self.scene.selection.layer]
         if fit or count != len(self.ids):
-            self.cam_t.setY(-max(1, len(self.ids) - 1) * 1.5)
-            self.cam_d = max(22., len(self.ids) * 3.5)
+            self.frame_camera()
+        if layer != self.scene.selection.layer:  # both gates' highlight changes
+            changed = sorted(set(changed) | {layer, self.scene.selection.layer})
         self.rebuild(changed=changed)
 
     def _selected_block(self):
         return block_at(self.scene.spec, self.scene.selection.layer)
 
-    def cmd_step(self, name, direction):
-        block = self._selected_block()
-        heads = block['mixer']['config'].get('heads', 1)
-        value = valid_heads(self.scene.spec['dims']['d_model'], heads, direction) if name == 'heads' else None
-        if value is None:
-            return
-        config = dict(block['mixer']['config'], heads=value)
-        self.send({'type': 'module_swap', 'block_id': block['id'],
-                   'slot': 'mixer', 'entry': {'id': block['mixer']['id'], 'config': config}})
-        if self.demo:
-            self.scene.swap(self.scene.selection.layer, 'mixer', {'id': block['mixer']['id'], 'config': config})
-            self.rebuild()
-
-    def cmd_toggle(self, part):
-        block = self._selected_block()
-        slot = 'channel' if part == 'mlp' else 'mixer'
-        enabled = block[slot]['id'] == 'none'
-        entry = ({'id': 'mlp_gelu'} if part == 'mlp' else {'id': 'attention', 'config': {'heads': 4}}) if enabled else {'id': 'none'}
-        self.send({'type': 'module_swap', 'block_id': block['id'],
-                   'slot': slot, 'entry': entry})
-
-    def cmd_add(self):
-        self.send({'type': 'add_block', 'after': self.sel_id})
-
-    def cmd_remove(self):
-        self.send({'type': 'remove_block', 'block_id': self.sel_id})
-
     def swap_mixer(self, module):
-        if not hasattr(self, 'ids') or not self.ids:
+        """Put another token mixer in the selected block. The studio saves it as a new version and sends the design
+        back; until then (or if it refuses) the menu shows the block's real mixer."""
+        layer = self.scene.selection.layer
+        if not self.ids or module == self.scene.gates[layer]['entry']['mixer']['id']:
             return
-        bid = self.ids[self.scene.selection.layer]
-        self.send({'type': 'module_swap', 'block_id': bid,
-                   'slot': 'mixer', 'entry': {'id': module}})
+        self.send({'type': 'module_swap', 'block_id': self.ids[layer], 'slot': 'mixer', 'entry': {'id': module}})
         if self.demo:
             try:
-                changed = self.scene.swap(self.scene.selection.layer, 'mixer', {'id': module})
-                self.rebuild(changed)
+                self.rebuild(self.scene.swap(layer, 'mixer', {'id': module}))
             except ValueError as error:
-                self.hud['text'] = str(error)
+                self.note = str(error)
+                self.rebuild()
+        else:
+            self.note = f'Saving block {layer + 1} with {module} as a new version...'
+            self.rebuild()
+
+    def load_snapshots(self):
+        self.note = 'Asking the studio for this version\'s training snapshots...'
+        self.show_hud()
+        self.send({'type': 'load_replay'})
+
+    def probe_step(self):
+        if self.probing:
+            return
+        self.probing = True
+        self.note = 'Running one real training step on this version\'s checkpoint...'
+        self.sync_controls()
+        self.show_hud()
+        self.send({'type': 'probe_step'})
 
     def pan_tiles(self, row, column):
         self.scene.choose(row=max(0, self.scene.selection.row + row), column=max(0, self.scene.selection.column + column))
@@ -292,22 +423,15 @@ class _SceneRenderer:
         self.cell = [max(0, min(tile.shape[0] - 1, self.cell[0] + row)), max(0, min(tile.shape[1] - 1, self.cell[1] + column))]
         self.rebuild()
 
-    def edit_weight(self, delta):
-        """Edit the highlighted cell; one edit is saved at a time, the next waits for the studio's answer."""
-        frame = self.scene.frame('Weights')
-        if not frame.get('weight_name') or 'origin' not in frame:
-            self.hud['text'] = 'Load a snapshot with weights, then pick a cell (i/j/k/l) before editing.'
-            return
-        if self.edit_pending:
-            self.hud['text'] = 'Still saving the previous weight edit...'
-            return
-        self.edit_pending = True
-        top, left = frame['origin']
-        self.send({'type': 'edit_weight', 'weight': frame['weight_name'],
-                   'row': top + self.cell[0], 'column': left + self.cell[1], 'delta': delta})
-
     def toggle_play(self):
+        if not self.snapshot_paths:
+            self.note = 'Nothing to play yet: load snapshots first.'
+            self.show_hud()
+            return
+        if not self.playing and self.snapshot_index + 1 >= len(self.snapshot_paths):
+            self.scrub_to(0)  # at the end, Play starts over
         self.playing = not self.playing
+        self.sync_controls()
 
     def scrub(self, delta):
         self.scrub_to(self.snapshot_index + delta)
@@ -321,18 +445,19 @@ class _SceneRenderer:
 
     def show_hud(self):
         line = stats_line(self.stats)
-        self.hud['text'] = self.info + (f' | training: {line}' if line else '')
+        self.hud['text'] = self.info + (f' | training: {line}' if line else '') + (f'\n{self.note}' if self.note else '')
+        self.hud.resetFrameSize()  # DirectGUI sizes a frame once: refit the backdrop to the new text
 
     def read_snapshot(self, path):
         from studio_snapshot import load
         self.scene.load_snapshot(load(path))
+        ids = [gate['id'] for gate in self.scene.gates]
+        if ids != self.ids:  # the snapshot carries its own design: keep the block list in step with it
+            self.ids = ids
+            self.sel_id = ids[self.scene.selection.layer]
+            self.frame_camera()
         self.animation_elapsed = 0.
-        names = self.scene.frame('Weights')['available']
-        if names:
-            chosen = self.scene.selection.weight if self.scene.selection.weight in names else names[0]
-            self.matrix_menu['items'] = names
-            self.matrix_menu.set(names.index(chosen), fCommand=0)
-            self.scene.choose(weight=chosen)
+        self.follow_block_matrix()
         self.rebuild()
 
     def cube_at(self, parent, position, scale, color):
@@ -377,8 +502,9 @@ class _SceneRenderer:
             ratios = [value for key, value in self.scene.snapshot.get('update_ratios', {}).items() if key.startswith(f'block{index}.')]
             brightness = min(1., max(ratios, default=0.) * 20)
             self.cube_at(root, (0, 0, .05), (6, .21, .04), (brightness, .25 + brightness * .5, .3, .8))
-        title = f"{index + 1} | {gate['entry']['mixer']['id']} / {gate['entry']['channel']['id']}"
-        self.label_at(root, title, (0, 0, 3.5), .35)
+        self.gate_labels[index] = self.label(self.aspect2d, f"{index + 1}  {gate['entry']['mixer']['id']} / {gate['entry']['channel']['id']}",
+                                             color='violet' if selected else 'text2', align=TextNode.ACenter, pad=(.4, .25),
+                                             frameColor=ui.rgba('violet_bg' if selected else 'panel', .9))
         if frame['level'] == 'Model':
             bins = len(frame['edges']) - 1
             for bin_index in range(bins):
@@ -433,6 +559,8 @@ class _SceneRenderer:
             for index in changed:
                 if index in self.gate_nodes:
                     self.gate_nodes.pop(index).removeNode()
+                if index in self.gate_labels:
+                    self.gate_labels.pop(index).destroy()
             for gate in frame['gates']:
                 if gate['index'] in changed:
                     self.draw_gate(gate, frame)
@@ -440,25 +568,15 @@ class _SceneRenderer:
             self.geometry.removeNode()
             self.geometry = self.render.attachNewNode('scene')
             self.gate_nodes = {}
+            for chip in self.gate_labels.values():
+                chip.destroy()
+            self.gate_labels = {}
             self.pulse = None
             level = frame['level']
             if level in ('Model', 'Window'):
                 for gate in frame['gates']:
                     self.draw_gate(gate, frame)
                 self.pulse = self.cube_at(self.geometry, (0, 0, 1), (.15, .2, .15), (1, 1, 1, 1))
-            elif level == 'Run':
-                for index, path in enumerate(frame['paths']):
-                    points = path['points']
-                    if points:
-                        max_step = max(1, max(point[0] for point in points))
-                        self.lines(self.geometry, [(index * 3, -step / max_step * 30, loss * 3) for step, loss in points], thickness=2)
-                        self.label_at(self.geometry, Path(path['run']).name, (index * 3, 1, 1))
-                        for marker in path.get('markers', [])[:2000]:
-                            y = -marker['step'] / max_step * 30
-                            self.cube_at(self.geometry, (index * 3, y, 1), (.12, .12, .12), (1, .65, .2, 1))
-                            self.label_at(self.geometry, marker['kind'], (index * 3, y, 1.4), .16)
-                if not frame['paths']:
-                    self.label_at(self.geometry, 'Load a run to inspect its measured loss path.', (0, 0, 2))
             elif level in ('Head', 'Weights'):
                 matrix = np.asarray(frame.get(self.weight_kind if level == 'Weights' else self.head_stage, []))
                 if level == 'Head' and self.head_stage in ('scale', 'mask'):
@@ -470,6 +588,7 @@ class _SceneRenderer:
                             matrix = matrix / math.sqrt(self.scene.spec['dims']['d_model'] / heads)
                     if matrix.size and self.head_stage == 'mask':
                         matrix = np.where(frame['mask'], 0, matrix)
+                self.matrix_rows = matrix.shape[0] if matrix.ndim == 2 else 16
                 if matrix.size:
                     maximum = max(float(np.max(np.abs(matrix))), 1e-12)
                     for row in range(matrix.shape[0]):
@@ -487,10 +606,10 @@ class _SceneRenderer:
                             axes = 'rows = queries, columns = keys'
                         else:
                             cell = (min(self.cell[0], matrix.shape[0] - 1), min(self.cell[1], matrix.shape[1] - 1))
-                            axes = f'cell {cell[0]},{cell[1]} = {float(matrix[cell]):.4g} (i/j/k/l move, +/- edit)'
+                            axes = f'cell {cell[0]},{cell[1]} = {float(matrix[cell]):.4g} (i/j/k/l move)'
                         self.label_at(self.geometry, f'{matrix.shape[0]}x{matrix.shape[1]} | range {matrix.min():.3g} to {matrix.max():.3g} | {axes}', (0, 1, 1))
                 else:
-                    self.label_at(self.geometry, 'Load a snapshot with the selected hooks or matrix.', (0, 0, 2))
+                    self.label_at(self.geometry, 'Load snapshots, or run one real step, to see these values.', (0, 0, 2))
             self.drawn_level = level
         info = f"{self.scene.spec['name']} | {frame['level']} | {frame['mode']} | block {self.scene.selection.layer + 1}"
         if frame['step'] is not None:
@@ -503,7 +622,39 @@ class _SceneRenderer:
                 token = min(self.scene.selection.token, len(lens['ids']) - 1)
                 info += f" | predicted id {lens['ids'][token][0]} ({lens['probabilities'][token][0]:.3f})"
         self.info = info
+        self.sync_controls()
         self.show_hud()
+        self.place_block_labels()
+
+    def screen_point(self, point):
+        """Where a point of the 3D scene appears on screen, in aspect2d units; None when it is off screen."""
+        from panda3d.core import Point2, Point3
+        projected = Point2()
+        if not self.camLens.project(self.cam.getRelativePoint(self.render, Point3(*point)), projected):
+            return None
+        on_screen = self.aspect2d.getRelativePoint(self.render2d, Point3(projected.x, 0, projected.y))
+        return on_screen.x, on_screen.z
+
+    def place_block_labels(self):
+        """Each block's label floats above its gate, drawn flat on the screen so it stays readable from any angle;
+        where gates line up one behind the other, the farther labels stack upwards instead of overlapping."""
+        if not self.gate_labels:
+            return
+        camera = self.camera.getPos(self.render)
+        order = sorted(self.gate_labels, key=lambda i: (camera - Vec3(0, -i * 3, 3.5)).length())
+        items = []
+        for index in order:
+            spot = self.screen_point((0, -index * 3, 3.5))
+            chip = self.gate_labels[index]
+            items.append(None if spot is None else (spot[0], spot[1], chip.getWidth() * ui.SMALL))
+        height = max(chip.getHeight() for chip in self.gate_labels.values()) * ui.SMALL
+        for index, item, y in zip(order, items, ui.place_labels(items, height)):
+            chip = self.gate_labels[index]
+            if y is None:
+                chip.hide()
+            else:
+                chip.show()
+                chip.setPos(item[0], 0, y)
 
     def handle_message(self, message):
         kind = message.get('type')
@@ -512,50 +663,59 @@ class _SceneRenderer:
         elif kind == 'spec':
             self.set_spec(message['spec'], message.get('selected'))
         elif kind in ('viz_snapshot', 'snapshot'):
+            if kind == 'snapshot':  # the answer to Run one real step, loadable or not
+                self.probing = False
             try:
                 self.read_snapshot(message['path'])
                 # training keeps only the newest snapshots on disk; forget the pruned ones so scrubbing never opens a missing file
                 self.snapshot_paths = [p for p in self.snapshot_paths if p != message['path'] and os.path.exists(p)] + [message['path']]
                 self.snapshot_index = len(self.snapshot_paths) - 1
                 self.send({'type': 'replay_state', 'index': self.snapshot_index, 'count': len(self.snapshot_paths)})
-            except (OSError, ValueError, KeyError) as error:
-                self.hud['text'] = str(error)
+            except Exception as error:  # noqa: BLE001 - a truncated or foreign file is reported, and the viewer carries on
+                self.note = f'Could not load the snapshot: {error}'
+                self.show_hud()
+            self.sync_controls()
         elif kind == 'step':  # walk the head's forward pass: delta +1 / -1, or jump to a named stage
             stage = next_stage(self.head_stage, message.get('delta', 0), message.get('stage'))
-            self.step_menu.set(HEAD_STAGES.index(stage))  # also runs set_head_stage
+            self.set_head_stage(stage)
         elif kind == 'scrub':
             self.scrub_to(message['index'])
         elif kind == 'show':  # weight tile kind at the Weights level
             if message.get('what') in TILE_KINDS:
-                self.tile_menu.set(TILE_KINDS.index(message['what']))
+                self.set_weight_kind(message['what'])
         elif kind == 'stats':
             self.stats = message
             self.show_hud()
         elif kind == 'replay':
-            self.snapshot_paths = message.get('paths', [])
+            self.snapshot_paths = list(message.get('paths', []))
             self.snapshot_index = -1
+            self.playing = False
+            self.note = (f'Loaded {len(self.snapshot_paths)} snapshots. Play them, or step with Previous and Next.'
+                         if self.snapshot_paths else 'This version has no training snapshots yet.')
             self.scrub(1)
+            self.sync_controls()
+            self.show_hud()
         elif kind == 'summary':
             self.scene.paths = message.get('paths', self.scene.paths)
             self.scene.summaries = message.get('attention', self.scene.summaries)
             self.scene.stream_norms = message.get('stream_norms', self.scene.stream_norms)
             self.scene.summary_edges = message.get('edges', self.scene.summary_edges)
             self.rebuild()
-        elif kind == 'scene':
-            self.scene.level = message.get('level', self.scene.level)
-            self.scene.mode = message.get('mode', self.scene.mode)
+        elif kind == 'scene':  # the studio's page chose these: apply them without telling it back
             if message.get('selected'):
                 self.scene.choose(**message['selected'])
-            self.rebuild()
+                self.follow_block_matrix()
+            if message.get('mode') in MODES:
+                self.scene.mode = message['mode']
+            self.set_level(message['level'] if message.get('level') in ui.LEVELS else self.scene.level, tell=False)
         elif kind == 'selection':
             self.scene.choose(**message['selection'])
+            self.follow_block_matrix()
             self.rebuild()
-        elif kind == 'error':
-            self.edit_pending = False
-            self.hud['text'] = message.get('message', 'Viewer operation failed.')
-        elif kind == 'weight_edit_done':
-            self.edit_pending = False
-            self.hud['text'] = message.get('message', '')
+        elif kind in ('notice', 'error'):  # the studio's answer to a button here, said in the HUD
+            self.probing = self.probing and kind == 'notice'
+            self.note = message.get('message', '')
+            self.rebuild()  # also puts the mixer menu back on the block's real mixer after a refused swap
 
     def tick(self, task):
         from panda3d.core import ClockObject
@@ -582,14 +742,16 @@ class _SceneRenderer:
                 self.cam_t.setPos(token_x, -depth * 3, 1)
         if self.link and not self.link.connected and not self.link_lost:
             self.link_lost = True  # the studio is gone: say so, then leave instead of lingering as an orphan
-            self.hud['text'] = 'studio disconnected'
+            self.note = 'studio disconnected'
+            self.show_hud()
             self.taskMgr.doMethodLater(1.5, lambda _task: self.userExit(), 'studio-disconnected')
         if self.link:
             for message in self.link.poll():
                 try:
                     self.handle_message(message)
                 except Exception as error:  # one bad message must not take the viewer down
-                    self.hud['text'] = f"Ignored a {message.get('type') if isinstance(message, dict) else 'malformed'} message | {error}"
+                    self.note = f"Ignored a {message.get('type') if isinstance(message, dict) else 'malformed'} message | {error}"
+                    self.show_hud()
         if self.dragging and self.mouseWatcherNode.hasMouse():
             mouse = self.mouseWatcherNode.getMouse()
             if self.last_mouse:
@@ -605,12 +767,14 @@ class _SceneRenderer:
         target = self.cam_t.getPos()
         self.camera.setPos(target + Vec3(self.cam_d * math.sin(h) * math.cos(p), self.cam_d * math.cos(h) * math.cos(p), self.cam_d * math.sin(p)))
         self.camera.lookAt(target)
+        self.place_block_labels()
         if self.playing and task.time - getattr(self, 'last_play', 0.) > 1:
             self.last_play = task.time
             if self.snapshot_index + 1 < len(self.snapshot_paths):
                 self.scrub(1)
             else:
                 self.playing = False
+                self.sync_controls()
         return task.cont
 
 

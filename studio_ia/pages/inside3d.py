@@ -131,6 +131,46 @@ def stats_message(payload):
     return {"type": "stats", **{k: payload.get(k) for k in ("step", "total", "loss", "lr", "tokens_per_second")}}
 
 
+def replay_reply(services):
+    """The answer to the viewer's 'load_replay': (message for the viewer, sentence for this page). The viewer plays the
+    current version's training snapshots, or is told why there are none."""
+    version = services.current_version()
+    if version is None:
+        text = T["no_version_snapshots"]
+        return {"type": "notice", "message": text}, text
+    paths = services.viewer_snapshots()
+    if not paths:
+        text = T["no_snapshots"].format(n=version.number)
+        return {"type": "notice", "message": text}, text
+    return {"type": "replay", "paths": paths}, T["snapshots_loaded"].format(count=len(paths), n=version.number)
+
+
+def probe_reply(services):
+    """The answer to the viewer's 'probe_step' (slow: run it off the Tk thread): (message for the viewer, sentence).
+    The viewer loads the new snapshot, or shows why there is none."""
+    version = services.current_version()
+    try:
+        path = services.viewer_probe_step(T["probe_text"]) if version is not None else None
+    except Exception as error:  # noqa: BLE001 - an engine failure is reported to both windows, never raised on the worker
+        text = T["probe_failed"].format(reason=error)
+        return {"type": "error", "message": text}, text
+    if path is None:
+        return {"type": "error", "message": T["probe_no_checkpoint"]}, T["probe_no_checkpoint"]
+    return {"type": "snapshot", "path": path}, T["probe_done"].format(n=version.number)
+
+
+def follow_viewer(scene, message):
+    """Apply what the user chose in the viewer window ('scene': level and mode, 'select': block) to this page's state.
+    Levels the board does not show (Model) leave its zoom alone. Returns True when anything changed."""
+    before = (scene.level, scene.mode, scene.block)
+    if message.get("type") == "select" and isinstance(message.get("index"), int):
+        scene.block = message["index"] + 1
+    elif message.get("type") == "scene":
+        scene.level = next((v[0] for v in LEVELS if v[2] == message.get("level")), scene.level)
+        scene.mode = next((m[0] for m in MODES if m[2] == message.get("mode")), scene.mode)
+    return (scene.level, scene.mode, scene.block) != before
+
+
 def status_of(services):
     try:
         return services.viewer_status()
@@ -294,12 +334,32 @@ class Inside3DPage(Page):
             self.move_note.configure(text=text)
             if spec is not None:
                 self.send_view({"type": "spec", "spec": spec, "selected": message.get("block_id")})
+            self.send_view({"type": "notice", "message": text})
+        elif kind == "load_replay":
+            reply, text = replay_reply(self.services)
+            self.move_note.configure(text=text)
+            self.send_view(reply)
+        elif kind == "probe_step":
+            self.move_note.configure(text=T["probe_running"])
+            self.quietly(lambda: probe_reply(self.services), self._probe_done)
+        elif kind in ("scene", "select"):
+            if follow_viewer(self.scene, message):
+                self.modes.set(next(m[1] for m in MODES if m[0] == self.scene.mode))
+                self.levels.set(next(f"{i + 1} · {lv[1]}" for i, lv in enumerate(LEVELS) if lv[0] == self.scene.level))
+                self._paint()
+        elif kind == "send_error":
+            self.move_note.configure(text=message.get("message", ""))
         elif kind == "replay_state":
             self._scrubbing = True
             self.scrubber.configure(to=max(0, message["count"] - 1))
             self.scrubber.set(message["index"])
             self.scrub_label.configure(text=T["scrub_label"].format(n=message["index"] + 1, count=message["count"]))
             self._scrubbing = False
+
+    def _probe_done(self, result):
+        reply, text = result
+        self.move_note.configure(text=text)
+        self.send_view(reply)
 
     def pick_mode(self, label):
         self.scene.mode = label_to_id(MODES, label)
@@ -320,7 +380,7 @@ class Inside3DPage(Page):
         status = status_of(self.services) or {}
         if status.get("running"):
             try:
-                messages = self.services.viewer_poll()  # the viewer's own selection stays its own; only swaps and the replay position are read
+                messages = self.services.viewer_poll()
             except NotImplementedError:
                 return
             for message in messages:

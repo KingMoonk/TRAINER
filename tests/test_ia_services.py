@@ -73,6 +73,30 @@ class ServicesTest(unittest.TestCase):
         self.assertIn("queue", seen)
         unsub()
 
+    def test_viewer_snapshots_are_the_current_versions_training_snapshots(self):
+        version = self.svc.current_version()
+        made = []
+        for run in version.runs:
+            viz = Path(self.svc._abs(run)) / "viz"
+            viz.mkdir(parents=True, exist_ok=True)
+            for step in (20, 10):
+                made.append(viz / f"step_{step:08d}.npz")
+                made[-1].write_bytes(b"")
+        self.addCleanup(lambda: [path.unlink() for path in made])
+        paths = self.svc.viewer_snapshots()
+        self.assertEqual(sorted(paths), sorted(str(path) for path in made))
+        self.assertTrue(paths[0].endswith("step_00000010.npz"))  # each run's snapshots in step order
+
+    def test_viewer_probe_step_saves_one_real_snapshot(self):
+        from studio_snapshot import load
+        path = self.svc.viewer_probe_step("The cat sat on the mat because it was tired.")
+        self.assertTrue(Path(path).exists())
+        self.assertTrue(path.startswith(str(self.svc.workspace.run_dir)))
+        self.assertNotIn(path, self.svc.viewer_snapshots())  # a probe is not a training snapshot
+        self.assertTrue(any(key.startswith("weight::") for key in load(path)["arrays"]))
+        with self.assertRaises(ValueError):
+            self.svc.viewer_probe_step("a")
+
     def test_inspect(self):
         out = self.svc.inspect_forward(None, "hello")
         self.assertEqual(out["logits"].ndim, 3)

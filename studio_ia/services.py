@@ -456,6 +456,15 @@ class Services:
         """Messages the viewer sent back since the last call."""
         raise NotImplementedError
 
+    def viewer_snapshots(self) -> list:
+        """The current version's training snapshots (absolute paths of <run>/viz/step_*.npz), oldest first."""
+        raise NotImplementedError
+
+    def viewer_probe_step(self, text):
+        """Run one real training step of the current version's checkpoint on `text` without touching training, save it
+        as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
+        raise NotImplementedError
+
 
 class FakeServices(Services):
     """Empty, in-memory placeholder data so pages render before real services exist."""
@@ -466,6 +475,8 @@ class FakeServices(Services):
         self._queue = QueueState()
         self.viewer_log: list = []  # (action, payload): the fake viewer records calls and spawns nothing
         self._viewer_running = False
+        self.snapshot_paths: list = []  # what viewer_snapshots returns
+        self.probe_path = None  # what viewer_probe_step returns
 
     def viewer_status(self):
         return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
@@ -484,6 +495,13 @@ class FakeServices(Services):
 
     def viewer_poll(self):
         return []
+
+    def viewer_snapshots(self):
+        return list(self.snapshot_paths)
+
+    def viewer_probe_step(self, text):
+        self.viewer_log.append(("probe", text))
+        return self.probe_path
 
     def versions(self):
         return list(self._versions)
@@ -886,6 +904,30 @@ class WorkspaceServices(Services):
 
     def viewer_poll(self):
         return self._viz.poll() if self._viz is not None else []
+
+    def viewer_snapshots(self):
+        version = self.current_version()
+        if version is None:
+            return []
+        return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
+
+    def viewer_probe_step(self, text):
+        import numpy as np
+
+        from studio_core import uid
+        from studio_model import Tokenizer, load_checkpoint
+        from studio_snapshot import one_step, save
+        version = self.current_version()
+        source = version.best_checkpoint if version is not None else None
+        if not source or not Path(source).exists():
+            return None
+        data = load_checkpoint(source)
+        ids = np.asarray(Tokenizer.restore(data["tokenizer"]).encode(text), dtype=np.int64)[None, -data["config"]["context"]:]
+        if ids.shape[1] < 2:
+            raise ValueError("the probe text needs at least two tokens")
+        targets = np.roll(ids, -1, axis=1)
+        targets[:, -1] = -100  # the last position has no next token to predict
+        return str(save(self.workspace.run_dir / uid("probe"), one_step(source, ids, targets)))
 
     # versions ---------------------------------------------------------------
     def _rows(self):

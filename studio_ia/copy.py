@@ -640,6 +640,14 @@ INSIDE3D = {
     "step_next": "Step forward",
     "scrub_label": "Snapshot {n} of {count}",
     "values_note": "Values in the viewer are placeholders until a run has recorded snapshots; the shape of the mask is exact.",
+    "snapshots_loaded": "Loaded {count} training snapshots of version {n}.",
+    "no_snapshots": "Version {n} has no training snapshots yet. Train it, or run one real step.",
+    "no_version_snapshots": "There is no saved version yet, so there are no snapshots to load.",
+    "probe_text": "The cat sat on the mat because it was tired.",
+    "probe_running": "Running one real training step on this version's checkpoint...",
+    "probe_done": "One real step of version {n} is loaded. Training itself did not move.",
+    "probe_no_checkpoint": "Train this version first: one real step needs its checkpoint.",
+    "probe_failed": "The real step failed: {reason}",
 }
 
 PRETRAINING = {
