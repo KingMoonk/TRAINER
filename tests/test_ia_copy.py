@@ -13,7 +13,7 @@ class TestIACopy(unittest.TestCase):
         "BUILDER": "Build your model",
         "CHAT": "Chat",
         "COMPARE": "Compare runs",
-        "QUEUE": "This computer",
+        "QUEUE": "Queue",
         "QUICKTEST": "Quick test",
         "TRACE": "Trace a position",
         "TRAINING": "Pretraining · version 5 catching up",
@@ -48,6 +48,8 @@ class TestIACopy(unittest.TestCase):
             copy.FEEDBACK,
             copy.MAKEDATA,
             copy.YOURDATA,
+            copy.STORAGE,
+            copy.PASSIVE,
         ]
 
         for page_dict in page_dicts:
@@ -106,6 +108,8 @@ class TestIACopy(unittest.TestCase):
             copy.FEEDBACK,
             copy.MAKEDATA,
             copy.YOURDATA,
+            copy.STORAGE,
+            copy.PASSIVE,
             copy.NAV,
             copy.MACHINE_STRIP,
         ]

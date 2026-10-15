@@ -55,7 +55,7 @@ BUILDER = {
     "add_catchup": "Add catch-up to the queue",
     "start_from_scratch": "Start from scratch instead",
     "queued": "QUEUED ON THIS COMPUTER",
-    "queued_text": '{new_version} is in the queue. The sidebar and "This computer" show where it is.',
+    "queued_text": '{new_version} is in the queue. The sidebar and "Queue" show where it is.',
     "move_to_front": "Move it to the front",
     "training": "{new_version} {status}",
     "training_text": "Version {current}'s run is paused and can resume. Chat switches to {new_version} only when it beats version {current} on held-back text, or when you pick it.",
@@ -182,7 +182,7 @@ COMPARE = {
 }
 
 QUEUE = {
-    "h1": "This computer",
+    "h1": "Queue",
     "lead": "What it's training now, what's waiting, and when it's allowed to work. Every \"Train\" or \"Run\" button in the app adds to this queue.",
     "now": "NOW",
     "now_status": "{version} · {what}",
@@ -220,9 +220,14 @@ QUEUE = {
     "keep_awake_desc": "Otherwise it pauses when the computer sleeps.",
     "chat_follows_best": "Chat follows the best checkpoint",
     "chat_follows_desc": "Chat uses the checkpoint with the lowest error on held-back text, not simply the newest.",
-    "answering_note": "Answering in Chat never stops training. It shares the computer, so training slows while it answers.",
-    "storage": "Storage",
-    "storage_desc": "History is run folders, checkpoints, saved versions, logs, exports and backups. Settings and chat ratings are never deleted.",
+    "answering_note": "Answering in Chat never stops training. It shares the computer, so training slows while it answers."
+}
+
+STORAGE = {
+    "h1": "Storage",
+    "lead": "What the app keeps on this computer's disk, and what you can delete to free space.",
+    "kicker": "STORAGE",
+    "desc": "History is run folders, checkpoints, saved versions, logs, exports and backups. Settings and chat ratings are never deleted.",
     "storage_older": "Older than {days} days",
     "storage_all": "All history",
     "storage_data": "Also delete my datasets and downloads",
@@ -232,6 +237,32 @@ QUEUE = {
     "storage_freed": "Freed {size}",
     "storage_delete": "Delete…",
     "storage_confirm": "Delete {n} items and free {size}? This cannot be undone."
+}
+
+PASSIVE = {
+    "h1": "Passive training",
+    "lead": "Training that keeps going on its own, outside the queue, restarted by a watchdog. See it, stop it, or stop it starting when you sign in.",
+    "kicker": "SESSIONS",
+    "desc": "A passive session trains in the background until its plan says stop. A watchdog restarts it if it stops, and starts again when you sign in.",
+    "none": "No passive training on this computer.",
+    "status_queued": "Starting",
+    "status_running": "Running",
+    "status_paused": "Paused",
+    "status_stopped": "Stopped",
+    "status_finished": "Finished",
+    "status_failed": "Failed",
+    "started": "{status} · started {when}",
+    "facts": "Trainer: {trainer} · watchdog: {watchdog} · restarts: {restarts}",
+    "heard": " · last heard {ago} ago",
+    "stop": "Stop",
+    "stop_confirm": "Stop this passive training? It saves where it got to and does not start again.",
+    "stopping": "Asked it to stop. It stops at its next check.",
+    "competes": "The queue is training too. Both share this computer's processor, graphics card and memory, so each runs slower. Stop one for full speed.",
+    "signin_kicker": "START WHEN YOU SIGN IN",
+    "signin_on": "The watchdog starts when you sign in, so passive training carries on after a restart.",
+    "signin_off": "Nothing starts when you sign in.",
+    "signin_remove": "Don't start when I sign in",
+    "signin_removed": "Removed. Passive training no longer starts when you sign in.",
 }
 
 QUICKTEST = {
@@ -847,6 +878,8 @@ MAKEDATA = {
 
 YOURDATA = {
     "h1": "Your data",
+    "storage_link": "Storage: free up disk space ›",
+    "passive_link": "Passive training: see or stop it ›",
     "lead": "Three kinds, because each one trains a different stage.",
     "text_tab": "Text it reads",
     "text_used": "used by Pretraining",

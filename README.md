@@ -90,14 +90,16 @@ Weights, activations and optimizer state stay on the GPU during GPU training. In
 
 ## Workflow
 
-The window has four areas in the sidebar and a machine strip under them.
+The window has four areas in the sidebar, then Queue and Resources, and a machine strip under them.
 
 1. **Network designer:** change the model picture and see what it costs. **Quick test** tries a design idea for a few minutes on a tiny dataset before you save it. **Compare runs** changes one thing, holds the rest equal and runs several seeds; a difference counts only when it is larger than the spread across seeds. **Look inside** opens Trace a position, Inside a head, Value map, Loss, Head lab and the 3D view.
 2. **Pretraining:** feed the model text; it learns by predicting the next character or token. **Your data** holds three kinds (text, conversations and checkable problems), because each trains a different stage. **Make extra data** generates more and keeps what passes review. A run's page shows step, schedule phase and error so far.
 3. **Post-training:** four rounds, always in the same order, on the same design; only the weights change.
 4. **Chat:** talk to any trained version, or compare two side by side. Chat moves to a newer version only when its held-back score beats the current one by more than the measured noise band.
 
-**This computer** (the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
+**Queue** (or the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
+
+**Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it, and **Passive training**, which lists the sessions that train on their own outside the queue, with their trainer and watchdog status, a Stop button, and a way to stop the watchdog starting when you sign in.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 

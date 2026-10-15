@@ -1,4 +1,4 @@
-"""Queue page Storage card: the confirm dialog is patched; CI-only."""
+"""Storage page (Resources) and the Queue page's Up next list: the confirm dialog is patched; CI-only."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tkinter as tk
 import unittest
@@ -21,7 +21,7 @@ class StorageCardTest(unittest.TestCase):
         except tk.TclError as error:
             self.skipTest(f"no display: {error}")
         self.addCleanup(self.app.destroy)
-        self.page = self.app.show("queue")
+        self.page = self.app.show("storage")
         self.app.update()
 
     def test_delete_asks_then_cleans_default_30_days(self):
@@ -33,6 +33,43 @@ class StorageCardTest(unittest.TestCase):
             self.page._delete()
         self.assertEqual(self.fake.cleaned, (30, False))
 
+    def test_queue_page_has_no_storage_card(self):
+        page = self.app.show("queue")
+        self.app.update()
+        self.assertFalse(hasattr(page, "delete_btn"))
+
+    def test_your_data_links_to_storage(self):
+        self.app.show("your_data")
+        self.app.update()
+        self.app.pages["your_data"].navigate("storage")
+        self.app.update()
+        self.assertEqual(self.app.route, "storage")
+
+
+
+class PassivePageTest(unittest.TestCase):
+    def setUp(self):
+        self.fake = FakeServices()
+        self.fake.passive_sessions = [{"id": "p1", "status": "running", "created": "2026-10-15T08:30:00+00:00", "stop": "Stops after 8 hours.",
+                                       "trainer": "Running", "watchdog": "Running", "restarts": 0, "heard": 30.0, "error": ""}]
+        self.fake.passive_signin = True
+        try:
+            self.app = Studio(self.fake)
+        except tk.TclError as error:
+            self.skipTest(f"no display: {error}")
+        self.addCleanup(self.app.destroy)
+        self.page = self.app.show("passive")
+        self.app.update()
+
+    def test_stop_asks_first_and_sign_in_can_be_removed(self):
+        with mock.patch("tkinter.messagebox.askyesno", return_value=False):
+            self.page._stop("p1")
+        self.assertEqual(self.fake.passive()["sessions"][0]["status"], "running")
+        with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+            self.page._stop("p1")
+        self.assertEqual(self.fake.passive()["sessions"][0]["status"], "stopped")
+        self.page._remove_signin()
+        self.assertFalse(self.fake.passive()["signin"])
 
 class UpNextTest(unittest.TestCase):
     def setUp(self):

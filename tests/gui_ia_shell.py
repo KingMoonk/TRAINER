@@ -1,4 +1,4 @@
-"""Shell check: all 16 routes render their h1, and a queue event updates the machine strip."""
+"""Shell check: all 18 routes render their h1, and a queue event updates the machine strip."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import time
 import unittest
@@ -25,7 +25,7 @@ class ShellTest(unittest.TestCase):
         self.addCleanup(self.app.destroy)
 
     def test_all_routes_show_their_h1(self):
-        self.assertEqual(len(ROUTES), 16)
+        self.assertEqual(len(ROUTES), 18)
         for route, spec in ROUTES.items():
             page = self.app.show(route)
             self.app.update()
@@ -34,7 +34,7 @@ class ShellTest(unittest.TestCase):
 
     def test_sidebar_rows_for_queue_and_data_follow_the_page(self):
         from studio_ia.theme import C
-        for route, area in (("queue", "machine"), ("your_data", "data"), ("make_data", "data"), ("builder", "designer")):
+        for route, area in (("queue", "queue"), ("your_data", "resources"), ("make_data", "resources"), ("storage", "resources"), ("passive", "resources"), ("builder", "designer")):
             self.app.show(route)
             self.app.update()
             on = [key for key, (row, *_rest) in self.app._area_rows.items() if row.cget("bg") == C["violet_bg"]]
