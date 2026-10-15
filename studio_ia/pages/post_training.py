@@ -9,8 +9,9 @@ import tkinter as tk
 import uuid
 
 from studio_ia.copy import FEEDBACK as T
+from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
-from studio_ia.services import Job
+from studio_ia.services import Job, if_added
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import Card, Chip, HeatGrid, Kicker, KofN, Segmented, _activate, button
 
@@ -25,6 +26,17 @@ SAMPLE_GROUP = ("Sort these letters: d b a c", "sort", [("a b c d", 1.), ("a b d
 SAMPLE_HEAT = (["The", "capital", "of", "Australia", "is", "Sydney", ",", "which", "is", "on", "the", "coast"],
                [0, 0, 0, .1, 0, .95, .3, .2, .1, .1, 0, .4])
 ADD = "Add to the queue"
+
+
+def round_outlook(services, i, status):
+    """The line under round i+1's button: for a round already in the queue, when it starts; otherwise what adding it now would do."""
+    q = services.queue()
+    if status == "queued":
+        waiting = next((j for j in q.up_next if j.kind in ("post_round", "restore_answers")
+                        and (3 if j.kind == "restore_answers" else int(j.params.get("round", 0))) == i + 1), None)
+        return services.queue_outlook(waiting)
+    first = next((j for j in q.up_next if j.status != "held"), None) if i == 2 else None  # "Move to the front": starts when the head would
+    return if_added(services.queue_outlook(first))
 
 
 def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
@@ -109,7 +121,9 @@ class PostTrainingPage(Page):
             self.selected = next((i for i, s in enumerate(status) if s != "done"), 0)
         tk_label(self.body, T["starts_from"], 12, "muted").pack(anchor="w")
         starts = T["version_best"].replace("Version 4", f"Version {version.number}") if version else "No trained version yet"
-        tk_label(self.body, starts, 16, "text").pack(anchor="w", pady=(2, GUTTER))
+        tk_label(self.body, starts, 16, "text").pack(anchor="w", pady=(2, 0 if version else GUTTER))
+        if not version and (line := empty_line(self.services)):
+            tk_label(self.body, line, 13, "muted", wraplength=760).pack(anchor="w", pady=(2, GUTTER))
         self._stages(status, notes)
         row = tk.Frame(self.body, bg=C["bg"])
         row.pack(fill="x", pady=GUTTER)
@@ -177,6 +191,8 @@ class PostTrainingPage(Page):
         if why:
             add.state(["disabled"])
             tk_label(actions, why, 13, "amber", "panel").pack(side="left", padx=GUTTER)
+        if not why and status[i] != "running":
+            tk_label(card, round_outlook(self.services, i, status[i]), 13, "muted", "panel").pack(anchor="w", pady=(6, 0))
         link = {0: (T["add_conversations"], "your_data"), 1: (T["make_problems"], "make_data"), 3: (T["rate_pairs"], "chat")}.get(i)
         if link:
             go = tk_label(actions, link[0] + " ›", 14, "violet", "panel", cursor="hand2", takefocus=1)
