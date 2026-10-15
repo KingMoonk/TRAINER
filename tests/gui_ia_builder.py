@@ -38,6 +38,19 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(self.page.expect_texts, [B.T["change_something"]])
         self.assertEqual(sorted(self.page.links), sorted(r for r, _ in B.LINKS))
 
+    def test_first_design_can_be_saved_without_a_change(self):
+        fake = FakeServices()  # nothing saved yet
+        fake.data = self.has_text
+        app = Studio(fake)
+        self.addCleanup(app.destroy)
+        page = app.show("builder")
+        app.update()
+        self.assertEqual(page.tray_kicker, B.T["first_save"])
+        self.assertIn("Save as version 1", page.actions)
+        page.save()
+        app.update()
+        self.assertEqual([(v.number, v.change) for v in fake.versions()], [(1, "first design")])
+
     def test_edit_marks_not_saved_with_chips(self):
         self.page.edit(L=4, H=8)
         self.app.update()

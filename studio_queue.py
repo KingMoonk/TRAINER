@@ -20,7 +20,7 @@ SAMPLE_MB = 64  # ponytail: flat per-sample memory guess for the batch cap; jobs
 
 @dataclass
 class Plan:
-    hours: str = "nights"          # any | nights | set
+    hours: str = "any"             # any | nights | set; "any" so a first Train starts at once
     start_hour: int = 22           # window for "nights" (22-7) and "set"
     end_hour: int = 7
     memory: str = "most"           # half | most | all

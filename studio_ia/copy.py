@@ -37,6 +37,8 @@ BUILDER = {
     "no_changes_text": "Version {version} is the current design. Chat answers with the best checkpoint on held-back text.",
     "not_saved": "NOT SAVED · ONLY THIS PAGE SEES THESE",
     "not_saved_text": "Nothing else in the app sees these yet. Saving makes {version}.",
+    "first_save": "NOT SAVED YET",
+    "first_save_text": "Save this design as {version} so Pretraining can train it. Change it first if you like; you can always save a new version later.",
     "discard": "Discard",
     "saved_status": "{version} {status}",
     "saved_text": "{startNote} Chat keeps {current_version} until {new_version} beats it on held-back text, or you choose it.",

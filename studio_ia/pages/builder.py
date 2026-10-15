@@ -399,7 +399,7 @@ class BuilderPage(Page):
         except ValueError as error:
             self.note = str(error)
             return self.render()
-        self.saved = self.services.save_version(spec, ", ".join(self.changes()) or "no change")
+        self.saved = self.services.save_version(spec, ", ".join(self.changes()) or ("first design" if self.base is None else "no change"))
         self.phase, self._staged, self.anchor = "saved", None, None
         self.services.stage_draft(None)
         self.load_chart()
@@ -648,6 +648,9 @@ class BuilderPage(Page):
                 state, kicker, text = "unsaved", T["not_saved"], T["not_saved_text"].format(version=nv)
                 actions = [(T["quick_test_first"], lambda: self.navigate("quicktest"), False),
                            (f"Save as {nv}", self.save, True), (T["discard"], self.discard, False)]
+            elif self.base is None:  # nothing saved yet: the starting design itself can become version 1
+                state, kicker, text = "unsaved", T["first_save"], T["first_save_text"].format(version=nv)
+                actions = [(f"Save as {nv}", self.save, True), (T["quick_test_first"], lambda: self.navigate("quicktest"), False)]
             else:
                 state, kicker, text = "neutral", T["no_changes"], T["no_changes_text"].format(version=n)
         elif ph == "saved":
