@@ -134,8 +134,8 @@ Done: no `tkinter` import anywhere; CI is faster than today.
 - [ ] Version store interface: local folder (always) plus an S3-compatible bucket (Cloudflare R2 or Backblaze B2 free
       tier). "Publish" uploads bf16 weights only (no optimizer state); other nodes list it as "available, not local" and
       pull on demand or when a job needs it. LAN peers copy directly.
-- [ ] Device-agnostic checkpoints (`map_location`, weights on CPU in the file); a version records the device that trained
-      and scored it; a resume on the other device kind is a test.
+- [ ] Checkpoints are `.npz` NumPy archives (`studio_model.load_checkpoint`), so they already load on any device; a version
+      records the device that trained and scored it, and a resume on the other device kind is a test.
 - [ ] The web UI shows the merged queue and merged versions across nodes, with the node on each row.
 - [ ] `docs/cluster.md`: the tailnet, inviting a second user, ACL, bucket setup.
 
