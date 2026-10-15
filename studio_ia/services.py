@@ -141,6 +141,10 @@ class Services:
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
 
+    def refresh_downloads(self):
+        """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
+        return []
+
     def move(self, job_id, index):
         """Put a waiting job at `index` in Up next (0 = runs next)."""
         raise NotImplementedError
@@ -823,6 +827,13 @@ class WorkspaceServices(Services):
         """Start the runner when jobs are waiting from an earlier session; otherwise the first enqueue starts it."""
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
+
+    def refresh_downloads(self):
+        import studio_catalog as cat
+        rebuilt = cat.refresh_downloads(self.workspace)
+        if rebuilt:
+            self.emit("downloads_finished", {"ids": rebuilt})  # the Your data page reloads its summaries once
+        return rebuilt
 
     def move_up(self, job_id):
         self.runner.move_up(job_id)

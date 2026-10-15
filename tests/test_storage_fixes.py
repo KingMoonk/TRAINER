@@ -120,7 +120,7 @@ class CatalogFixes(unittest.TestCase):
 
     def test_oasst_synthetic_string_false(self):
         entry = next(e for e in studio_catalog.CATALOG if e["parser"] == "oasst")
-        raw = {"message_tree_id": "t", "prompt": {"role": "prompter", "text": "q", "synthetic": "False", "replies": [{"role": "assistant", "text": "a", "message_id": "m"}]}}
+        raw = {"message_tree_id": "t", "prompt": {"role": "prompter", "lang": "en", "text": "q", "synthetic": "False", "replies": [{"role": "assistant", "text": "a", "message_id": "m"}]}}
         self.assertFalse(list(studio_catalog.convert_record(raw, entry))[0]["synthetic"])
 
 
