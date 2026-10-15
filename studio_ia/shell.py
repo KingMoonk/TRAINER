@@ -1,8 +1,6 @@
 """Studio window: sidebar (four areas + machine strip) and the page router."""
 from __future__ import annotations
 
-import queue
-import threading
 import tkinter as tk
 import traceback
 from collections import namedtuple
@@ -108,7 +106,7 @@ class Studio(tk.Tk):
         self.refresh_strip()
         self.refresh_next()
         self.show("builder")
-        self.quietly(self.services.refresh_downloads, lambda _rebuilt: None)  # downloads an older app converted get rebuilt once
+        self.quietly(self.services.refresh_downloads, lambda _rebuilt: None, lane="slow")  # downloads an older app converted get rebuilt once
 
     # sidebar ----------------------------------------------------------------
     def _build_sidebar(self):
@@ -192,7 +190,7 @@ class Studio(tk.Tk):
             except Exception:  # a failed read must not leave the row waiting for an answer that never comes
                 traceback.print_exc()
                 return None
-        self.quietly(ask, self._paint_next)
+        self.quietly(ask, self._paint_next)  # a small read: never queued behind a scan
 
     def _paint_next(self, step):
         self._next_pending = False
@@ -284,7 +282,7 @@ class Studio(tk.Tk):
             self._reveal(route)
         elif route not in self._loading:  # events that arrive while it loads do not queue the same read again
             self._loading.add(route)
-            self.slow(warm, loaded, f"Opening {spec.title}")
+            self.slow(warm, loaded, f"Opening {spec.title}")  # a cold read of the stored data: the slow lane
         return page
 
     def _reveal(self, route):
@@ -304,13 +302,15 @@ class Studio(tk.Tk):
         def done(_none):
             if self.route == route:
                 page.refresh()
-        self.quietly(page.preload, done)
+        self.quietly(page.preload, done, lane="slow")  # re-counts the stored data
 
-    # long reads: one worker takes them from a queue; the Tk thread only polls for results ---------------------
+    # long reads: two lanes, each one worker thread taking jobs in order; the Tk thread only polls for results -------------
+    # The fast lane runs the small reads the sidebar and pages wait on; the slow lane runs scans, imports and anything that
+    # changes the stored data, so a scan never holds up a quick read. All jobs on the stored data share the slow lane, in order.
     def _build_loader(self):
-        self.jobs, self.results, self._waiting, self._wanted, self._loading = queue.Queue(), queue.Queue(), 0, None, set()
-        self._quiet = 0  # jobs from quietly(): on the worker, no panel
-        threading.Thread(target=self._work, daemon=True).start()
+        self.lanes = {"fast": threads.Lane(), "slow": threads.Lane()}
+        self._waiting, self._wanted, self._loading = 0, None, set()
+        self._quiet = 0  # jobs from quietly(): on a lane, no panel
         self.loader = tk.Frame(self.main, bg=C["bg"])
         box = tk.Frame(self.loader, bg=C["bg"])
         box.place(relx=.5, rely=.4, anchor="center", width=440)
@@ -321,40 +321,29 @@ class Studio(tk.Tk):
         self.load_text.pack(fill="x", pady=(6, 8))
         self.load_bar.pack(fill="x")
 
-    def _work(self):
-        while True:
-            work, then, quiet = self.jobs.get()
-            if work is None:
-                return
-            try:
-                self.results.put((then, work(), None, quiet))
-            except Exception as error:
-                self.results.put((then, None, error, quiet))
-
     def slow(self, work, then, title="Working"):
-        """then(work()) on the Tk thread. work() is service reads only; when one is not cached it runs on the worker
+        """then(work()) on the Tk thread. work() is service reads only; when one is not cached it runs on the slow lane
         behind the loading panel, which shows what services.note() says is being read and how far along it is."""
         if self.services.ready(work):
             return then(work())
         self.background(work, then, title)
 
     def background(self, work, then, title="Working"):
-        """then(work()) with work() always on the worker: for work that is long every time or changes data."""
+        """then(work()) with work() always on the slow lane: for work that is long every time or changes data."""
         self.services.note("")
         self.load_title.configure(text=title or "Working")
         self.loader.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.loader.lift()
-        self._submit(work, then, quiet=False)
+        self._submit(work, then, False, "slow")
 
-    def quietly(self, work, then):
-        """then(work()) with work() on the worker and no loading panel, for a refresh the page can wait for."""
-        self._submit(work, then, quiet=True)
+    def quietly(self, work, then, lane="fast"):
+        """then(work()) with work() on a lane and no loading panel, for a refresh the page can wait for. The fast lane unless
+        told: a slow job left unmarked costs the quick reads behind it what the single worker always did."""
+        self._submit(work, then, True, lane)
 
-    def _submit(self, work, then, quiet):
+    def _submit(self, work, then, quiet, lane):
         busy = self._waiting + self._quiet
-        if not busy:
-            threads.hold()  # Tk objects may only be freed on the Tk thread: see studio_ia/threads.py
-        self.jobs.put((work, then, quiet))
+        self.lanes[lane].submit(work, (then, quiet))
         if quiet:
             self._quiet += 1
         else:
@@ -367,23 +356,18 @@ class Studio(tk.Tk):
             text, fraction = self.services.loading
             self.load_text.configure(text=text or "Getting things ready")
             self.load_bar.set(fraction)
-        while self._waiting + self._quiet:
-            try:
-                then, value, error, quiet = self.results.get_nowait()
-            except queue.Empty:
-                break
-            if quiet:
-                self._quiet -= 1
-            else:
-                self._waiting -= 1
-                if not self._waiting:
-                    self.loader.place_forget()
-            if not self._waiting + self._quiet:
-                threads.release()
-            if error is None:
-                then(value)
-            else:
-                self.report_callback_exception(type(error), error, error.__traceback__)
+        for lane in self.lanes.values():  # a lane that drains gives its hold on the collector back here, on the Tk thread
+            for (then, quiet), value, error in lane.finished():
+                if quiet:
+                    self._quiet -= 1
+                else:
+                    self._waiting -= 1
+                    if not self._waiting:
+                        self.loader.place_forget()
+                if error is None:
+                    then(value)
+                else:
+                    self.report_callback_exception(type(error), error, error.__traceback__)
         if self._waiting + self._quiet:
             self.after(60, self._poll)
 
@@ -403,7 +387,8 @@ class Studio(tk.Tk):
             self.pages[self.route].on_event(kind, payload)
 
     def destroy(self):
-        self.jobs.put((None, None, False))
+        for lane in self.lanes.values():
+            lane.stop()
         threads.detach()
         self.after_cancel(self._settle_id)
         self.unsubscribe()

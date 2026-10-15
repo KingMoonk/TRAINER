@@ -43,7 +43,7 @@ class ThreadsTest(unittest.TestCase):
 
     def test_no_bare_thread_starts(self):
         """A thread started outside threads.start() can free Tk objects off the Tk thread: crashes CI at random."""
-        allowed = {"studio_ia/threads.py", "studio_ia/shell.py"}  # shell: its one long-lived worker holds per job
+        allowed = {"studio_ia/threads.py"}
         bare = [str(p.relative_to(ROOT)) for p in (ROOT / "studio_ia").rglob("*.py")
                 if str(p.relative_to(ROOT)) not in allowed and re.search(r"threading\.Thread\(", p.read_text(encoding="utf-8"))]
         self.assertEqual(bare, [], "start these with studio_ia.threads.start")

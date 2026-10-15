@@ -3,9 +3,10 @@
 Tk objects (StringVar, PhotoImage...) may only be freed on the Tk thread, and the cyclic collector runs on whichever
 thread allocates. A worker that triggers a collection which frees a dead page's variables aborts the process
 (Tcl_AsyncDelete). So the collector stays off while any worker runs, and the Tk thread collects once they are done.
-hold/release are counted, so the shell's worker, the page threads and the downloads compose.
+hold/release are counted, so the shell's lanes, the page threads and the downloads compose.
 """
 import gc
+import queue
 import threading
 
 _lock = threading.Lock()
@@ -73,3 +74,46 @@ def settle():
         finished, _done[:] = list(_done), []
     for _ in finished:
         release()
+
+
+class Lane:
+    """One long-lived worker thread that runs jobs in the order they were submitted. submit() and finished() are Tk thread only.
+    The lane holds the collector from its first queued job until finished() has handed back the last result, so two busy
+    lanes are two holds."""
+
+    def __init__(self):
+        self._jobs, self._done, self.pending = queue.Queue(), queue.Queue(), 0
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def _work(self):
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                return
+            work, tag = job
+            try:
+                self._done.put((tag, work(), None))
+            except Exception as error:
+                self._done.put((tag, None, error))
+
+    def submit(self, work, tag=None):
+        if not self.pending:
+            hold()
+        self.pending += 1
+        self._jobs.put((work, tag))
+
+    def finished(self):
+        """[(tag, value, error)] for the jobs that are done since the last call; the lane gives its hold back when it has none left."""
+        out = []
+        while self.pending:
+            try:
+                out.append(self._done.get_nowait())
+            except queue.Empty:
+                break
+            self.pending -= 1
+        if out and not self.pending:
+            release()
+        return out
+
+    def stop(self):
+        self._jobs.put(None)
