@@ -126,7 +126,8 @@ def attribute(old, new, facts_old, facts_new, compares=()):
     {change, also, unchecked, verdict, compare}: verdict is "clean" (only the block count differed, and the data, steps and
     starting weights were checked), "matched" (a Compare run on these two designs exists), "pending" (the run files have not
     been read yet: facts_old or facts_new is None) or "confounded"."""
-    change = signed_move(old.scorecard.get("bpc"), new.scorecard.get("bpc"))
+    same_scoring = old.scorecard.get("bpc_method") == new.scorecard.get("bpc_method")  # numbers from two methods are not a move
+    change = signed_move(old.scorecard.get("bpc"), new.scorecard.get("bpc")) if same_scoring else None
     if facts_old is None or facts_new is None:
         return dict(change=change, also=[], unchecked=[], verdict="pending", compare=None)
     unchecked = []
