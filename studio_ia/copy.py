@@ -876,6 +876,8 @@ YOURDATA = {
     "no_sets": "No sets yet",
     "import": "Import files",
     "shown": "Showing the first {shown} of {count:,}.",
+    "shown_matches": "Showing the first {shown:,} matches.",
+    "load_more": "Load more",
     "pick_row": "Select a row to read it in full.",
     "mark_good": "Mark Good",
     "discard": "Discard",

@@ -297,6 +297,11 @@ class Services:
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
 
+    def data_page(self, kind, query="", cursor=None, limit=200):
+        """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
+        reached; cursor None = the first page, a next cursor of None = nothing follows. Rows are shaped like DataSummary.rows."""
+        raise NotImplementedError
+
     def add_data(self, kind, fields):
         """fields: text -> {text}; conversations -> {user, assistant}; problems -> {prompt, rule}. True if added."""
         raise NotImplementedError
@@ -578,6 +583,10 @@ class FakeServices(Services):
         needle = query.casefold().strip()
         out.rows = [dict(r) for r in rows if needle in f"{r['a']} {r['b']}".casefold()]
         return out
+
+    def data_page(self, kind, query="", cursor=None, limit=200):
+        rows, start = self.data(kind, query).rows, cursor or 0
+        return rows[start:start + limit], start + limit if start + limit < len(rows) else None
 
     def _add_row(self, kind, a, b, status="Good", dataset="Your data", draft=False):
         rows = self._rows()[kind]
@@ -1304,6 +1313,12 @@ class WorkspaceServices(Services):
         import studio_data_kinds as dk
         full = self._summaries()[kind]
         return replace(full, rows=dk.matching(full.rows, query))
+
+    def data_page(self, kind, query="", cursor=None, limit=200):
+        import studio_data_kinds as dk
+        summary = self.data(kind)  # the sets and the near-duplicates; the rows come from storage
+        dups = {r["id"] for r in summary.rows if r["status"] == "Near-duplicate"}
+        return dk.page(self.workspace, kind, query, [(x["id"], x["name"]) for x in summary.sets], cursor, limit, dups)
 
     def has_text(self):
         """One indexed look at the first text row of each dataset, not the whole-store summary (a cold one reads every dataset)."""
