@@ -113,9 +113,15 @@ class PostTrainingPage(Page):
     def preload(self):
         self._state(self._version())
 
+    opens_at_once = True
+
     def refresh(self):
         for child in self.body.winfo_children():
             child.destroy()
+        if not self.warmed():  # the version, rounds and counts are being read: the page shows now, the rounds wait for them
+            self._drawn, self._step = None, None
+            tk_label(self.body, T["reading"], 13, "muted").pack(anchor="w", pady=(0, GUTTER))
+            return
         version = self._version()
         state = self._state(version)
         self.version, self.version_no = version, version.number if version else None

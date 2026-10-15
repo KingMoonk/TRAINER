@@ -1,5 +1,6 @@
 """Post-training page: renders on FakeServices, a click on a round changes the card kicker, buttons enqueue post_round jobs."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import time
 import tkinter as tk
 import unittest
 from tkinter import ttk
@@ -82,6 +83,19 @@ class PostTrainingTest(unittest.TestCase):
         text = labels(self.page)
         self.assertIn("RESULT · ROUND 2", [t.upper() for t in text])
         self.assertIn(T["result_kept"], text)
+
+    def test_opens_at_once_and_draws_the_rounds_once_read(self):
+        self.app.show("queue")
+        self.fake.ready = lambda work: False  # a large store: the rounds and counts are read in the background
+        page = self.app.show("post_training")
+        self.assertEqual(self.app.loader.winfo_manager(), "")  # no panel over the page
+        self.assertIsNotNone(find(page.body, T["reading"]))
+        deadline = time.monotonic() + 10
+        while page._warming and time.monotonic() < deadline:
+            self.app.update()
+            time.sleep(0.02)
+        self.assertIsNone(find(page.body, T["reading"]))
+        self.assertIn("optional · 5 pairs rated", labels(page.body))
 
     def test_add_to_the_queue_enqueues_post_round_jobs(self):
         self.click(find(self.page, "Your votes"))

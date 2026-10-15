@@ -286,7 +286,7 @@ class Studio(tk.Tk):
             self._loading.discard(route)
             if self._wanted == route:
                 self._reveal(route)
-        if type(page).preload is Page.preload:
+        if type(page).preload is Page.preload or page.opens_at_once:
             self._reveal(route)
         elif route not in self._loading:  # events that arrive while it loads do not queue the same read again
             self._loading.add(route)

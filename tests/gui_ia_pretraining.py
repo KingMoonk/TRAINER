@@ -7,7 +7,7 @@ from tkinter import ttk
 
 from studio_data_kinds import DataSummary
 from studio_spec import default_spec
-from studio_ia.copy import EXPECTATION
+from studio_ia.copy import EXPECTATION, PRETRAINING
 from studio_ia.services import FakeServices, Job, QueueState, Version
 from studio_ia.shell import Studio
 from studio_ia.widgets import tips_in
@@ -80,6 +80,21 @@ class PretrainingTest(unittest.TestCase):
         self.assertIs(page.status_labels["tinystories"], label)  # the rows were not rebuilt
         page.paint_collection()
         self.assertIs(page.status_labels["tinystories"], label)  # nor are they when nothing about them changed
+
+    def test_opens_at_once_and_waits_only_to_add_to_the_queue(self):
+        self.fake.ready = lambda work: False  # a large store: the set list is read in the background
+        page = self.app.show("pretraining")
+        self.assertEqual(self.app.loader.winfo_manager(), "")  # no panel over the page
+        self.assertIn(PRETRAINING["reading_text"], texts(page))
+        self.assertTrue(page.add_btn.instate(["disabled"]))
+        deadline = time.monotonic() + 10
+        while page._warming and time.monotonic() < deadline:
+            self.app.update()
+            time.sleep(0.02)
+        t = texts(page)
+        self.assertIn("Short stories", t)
+        self.assertNotIn(PRETRAINING["reading_text"], t)
+        self.assertFalse(page.add_btn.instate(["disabled"]))
 
     def test_add_to_queue_defaults_to_catch_up(self):
         page = self.app.show("pretraining")

@@ -259,10 +259,11 @@ class PretrainingPage(Page):
         return int(self.rows.value)
 
     # state ---------------------------------------------------------------
+    opens_at_once = True
+
     def preload(self):
-        """Only the set list: the size preview is read after the page shows (see _ask_preview), so opening never waits."""
-        for s in sets_of(self.services.data("text")):
-            self.use.setdefault(s["id"], not held_out(s["id"]))
+        """Only the set list: the size preview is read after the page shows (see _ask_preview)."""
+        self.services.data("text")
 
     def refresh(self):
         v = self.version()
@@ -272,6 +273,15 @@ class PretrainingPage(Page):
         self.model_line.configure(text=f"Version {n} · from the Network designer" if v else "No design saved yet")
         for child in self.tiles.winfo_children():
             child.destroy()
+        if not self.warmed():  # the set list is being read: the page shows now, adding to the queue waits for it
+            tk_label(self.tiles, T["reading_text"], 14, "muted", "panel").pack(anchor="w")
+            self.data_line.configure(text="")
+            self.preview, self.estimating = {}, True
+            self.update_numbers()
+            self.paint_modes(v, parent)
+            self.add_btn.state(["disabled"])
+            self.paint_collection()
+            return
         sets = sets_of(self.services.data("text"))
         for s in sets:
             self.use.setdefault(s["id"], not held_out(s["id"]))
