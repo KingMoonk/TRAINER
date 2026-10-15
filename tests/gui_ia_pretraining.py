@@ -1,5 +1,6 @@
 """Pretraining and Pretraining-run pages on FakeServices."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import time
 import unittest
 import tkinter as tk
 from tkinter import ttk
@@ -52,6 +53,24 @@ class PretrainingTest(unittest.TestCase):
         self.fake._collection[0]["error"] = "no network"
         page.on_event("download_failed", {"id": "tinystories", "error": "no network"})
         self.assertIn("Could not finish: no network.", "\n".join(texts(page)))
+
+    def test_download_progress_updates_the_status_line_in_place(self):
+        self.fake._collection = [{"id": "tinystories", "name": "TinyStories", "size": "64 MB", "records": "77,941 stories",
+                                  "state": "downloading", "completed": 0, "total": 0, "error": ""}]
+        page = self.app.show("pretraining")
+        self.app.update()
+        page.throttle.interval = .3
+        label = page.status_labels["tinystories"]
+        page.on_event("download", {"id": "tinystories", "text": "Downloading · 1 MB"})
+        page.on_event("download", {"id": "tinystories", "text": "Downloading · 2 MB"})
+        self.assertEqual(label.cget("text"), "Downloading · 1 MB")  # the first change is drawn at once
+        end = time.monotonic() + .6
+        while time.monotonic() < end:
+            self.app.update()
+        self.assertEqual(label.cget("text"), "Downloading · 2 MB")  # the burst's last one a tick later
+        self.assertIs(page.status_labels["tinystories"], label)  # the rows were not rebuilt
+        page.paint_collection()
+        self.assertIs(page.status_labels["tinystories"], label)  # nor are they when nothing about them changed
 
     def test_add_to_queue_defaults_to_catch_up(self):
         page = self.app.show("pretraining")
