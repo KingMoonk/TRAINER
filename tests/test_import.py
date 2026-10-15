@@ -556,15 +556,16 @@ class Services(unittest.TestCase):
             self.assertEqual(Path(row["best_checkpoint"]).name, "last.npz")
 
     def import_with(self, fetch):
-        """Workspace services whose GPT-2 download is `fetch`. The services close before their folder is removed (cleanups
-        run last-in first-out), since Windows cannot remove a folder a running job still has files open in."""
+        """Workspace services whose GPT-2 download is `fetch`. Cleanups run last-in first-out: the services close first,
+        then their folder is removed (Windows cannot remove a folder a running job still has files open in), and the fake
+        download is undone last, so a job the closing runner starts can never reach the real one."""
+        patch = mock.patch("studio_import.fetch_gpt2", fetch)
+        patch.start()
+        self.addCleanup(patch.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         svc = FixtureServices(str(Path(tmp.name) / "workspace"))
         self.addCleanup(svc.close)
-        patch = mock.patch("studio_import.fetch_gpt2", fetch)
-        patch.start()
-        self.addCleanup(patch.stop)
         return svc
 
     def wait_for(self, condition):
@@ -616,9 +617,10 @@ class Services(unittest.TestCase):
         self.assertEqual(len(svc.versions()), later.number)
 
     def test_a_second_import_is_refused_while_one_is_waiting_or_running(self):
-        release = threading.Event()
+        release, started = threading.Event(), threading.Event()
 
         def slow(dest, progress=None, stop=None, **kwargs):
+            started.set()
             deadline = time.time() + 30
             while not (release.is_set() or stop.is_set()) and time.time() < deadline:
                 release.wait(.05)
@@ -626,6 +628,7 @@ class Services(unittest.TestCase):
         svc = self.import_with(slow)
         self.addCleanup(release.set)
         svc.import_pretrained("gpt2")
+        self.assertTrue(started.wait(30))   # running, not just waiting, so the runner is busy with it when the test ends
         count = len(svc.versions())
         with self.assertRaises(ValueError) as caught:
             svc.import_pretrained("gpt2")
