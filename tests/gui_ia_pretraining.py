@@ -1,5 +1,6 @@
 """Pretraining and Pretraining-run pages on FakeServices."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
+import time
 import unittest
 import tkinter as tk
 from tkinter import ttk
@@ -36,8 +37,10 @@ class PretrainingTest(unittest.TestCase):
         self.assertIn("2.00 word pieces per parameter", t)  # 2,000,000 pieces / 1,000,000 params
         self.assertIn("rule of thumb", t)
         self.assertIn("about 10.0× more text", t)
-        self.assertIn(EXPECTATION["letters"], t)  # 2,000,000 pieces over two passes is little text
-        self.assertIn(EXPECTATION["continues"], t)
+        self.assertIn(EXPECTATION["short_letters"], t)  # 2,000,000 pieces over two passes is little text
+        self.assertNotIn(EXPECTATION["continues"], t)  # the detail is behind the ⓘ
+        self.assertIn(EXPECTATION["letters"], page.expect_details)
+        self.assertIn(EXPECTATION["continues"], page.expect_details)
         self.assertGreater(len(page.grid.find_all()), 100)  # cells of the real first rows
 
     def test_collection_buttons_call_the_services(self):
@@ -56,6 +59,24 @@ class PretrainingTest(unittest.TestCase):
         self.fake._collection[0]["error"] = "no network"
         page.on_event("download_failed", {"id": "tinystories", "error": "no network"})
         self.assertIn("Could not finish: no network.", "\n".join(texts(page)))
+
+    def test_download_progress_updates_the_status_line_in_place(self):
+        self.fake._collection = [{"id": "tinystories", "name": "TinyStories", "size": "64 MB", "records": "77,941 stories",
+                                  "state": "downloading", "completed": 0, "total": 0, "error": ""}]
+        page = self.app.show("pretraining")
+        self.app.update()
+        page.throttle.interval = .3
+        label = page.status_labels["tinystories"]
+        page.on_event("download", {"id": "tinystories", "text": "Downloading · 1 MB"})
+        page.on_event("download", {"id": "tinystories", "text": "Downloading · 2 MB"})
+        self.assertEqual(label.cget("text"), "Downloading · 1 MB")  # the first change is drawn at once
+        end = time.monotonic() + .6
+        while time.monotonic() < end:
+            self.app.update()
+        self.assertEqual(label.cget("text"), "Downloading · 2 MB")  # the burst's last one a tick later
+        self.assertIs(page.status_labels["tinystories"], label)  # the rows were not rebuilt
+        page.paint_collection()
+        self.assertIs(page.status_labels["tinystories"], label)  # nor are they when nothing about them changed
 
     def test_add_to_queue_defaults_to_catch_up(self):
         page = self.app.show("pretraining")

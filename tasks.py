@@ -43,7 +43,7 @@ def test_ci():
         sys.exit("test:ci opens real windows and runs in CI only. Run `python tasks.py test` locally.")
     run(PY, "-m", "compileall", "-q", ".")  # catches syntax errors in modules no test imports
     test()
-    run(PY, "-m", "unittest", "discover", "-s", "tests", "-p", "gui_*.py", *VERBOSE)
+    run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", "-p", "gui_*.py", *VERBOSE)  # a crash prints every thread's stack
 
 
 def test_ci_e2e():

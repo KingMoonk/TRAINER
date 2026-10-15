@@ -8,6 +8,22 @@ from studio_ia.theme import C, GUTTER, tk_label
 from studio_ia.widgets import _activate
 
 
+class Throttle:
+    """One pass per `interval` seconds: ready(now) is True (and starts the next interval) or False; wait(now) is the time left."""
+
+    def __init__(self, interval=1.0):
+        self.interval, self.last = interval, None
+
+    def ready(self, now):
+        if self.last is None or now - self.last >= self.interval:
+            self.last = now
+            return True
+        return False
+
+    def wait(self, now):
+        return 0.0 if self.last is None else max(0.0, self.interval - (now - self.last))
+
+
 class Page(ttk.Frame):
     """Subclass and set `title`, `lead`, optional `crumb` (tuple of path parts after the leading "‹ ")."""
 

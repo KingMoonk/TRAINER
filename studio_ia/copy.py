@@ -646,11 +646,14 @@ PRETRAINING = {
     "data_status_format": "{count}% · {mb} MB of {total} MB",
     "enough_text": "ENOUGH TEXT?",
     "text_estimate": "This model could use about {times}× more text than you have",
+    "text_about_right": "You have about as much text as the rule of thumb asks for",
+    "text_plenty": "You have plenty of text: about {times}× what the rule of thumb asks for",
     "text_unknown": "Choose some text to see whether it is enough for this model",
     "estimating": "Estimating how much text you have…",
     "steps_estimating": "Estimating steps and time…",
     "word_pieces_plain": "A common rule of thumb for the best use of compute is about 20 word pieces per parameter. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
     "word_pieces_rule": "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
+    "word_pieces_plenty": "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. One pass over your text is already more than that, so repeating it is not needed.",
     "text_only": "Plain text only. Conversations such as Dolly 15K and Alpaca belong to",
     "post_training_r1": "Post-training round 1",
     "post_training_r1_end": "; problems with a checkable answer to round 2. A model learns the language from plain text first.",
@@ -920,7 +923,12 @@ MACHINE_STRIP = {
     "format": "{now} · {what} · {eta} · {next} · Chat: {chat_version} · {queue_link}",
 }
 
-EXPECTATION = {
+EXPECTATION = {  # short_* is the one visible line; the rest is the hover text behind the ⓘ
+    "short_letters": "Expect: word-like gibberish",
+    "short_words": "Expect: real words, loose grammar",
+    "short_words_text": "Expect: real words, with enough text",
+    "short_sentences": "Expect: simple sentences",
+    "short_sentences_text": "Expect: simple sentences, with enough text",
     "guide": "A rough guide, not a promise:",
     "letters": "Letter patterns: common short words and word-shaped nonsense.",
     "words": "Real words, loose grammar; short phrases hang together.",
@@ -935,6 +943,7 @@ EXPECTATION = {
     "byte": "Letters (bytes) spell every word out letter by letter, so a small model mostly learns spelling-shaped output and its context covers fewer words.",
     "bpe_custom": "Custom word pieces come out as whole common words, so the same context covers about 3 to 4 times more text; the word list costs parameters (list size × width).",
     "bpe_gpt2": "GPT-2 word pieces give the same benefit, but the list has about 50,000 entries.",
+    "word": "Whole words are one token each, so the same context covers about 5 times more text than letters and each token carries more meaning; but a rare word, or one your data never shows, is lost (it becomes an unknown mark), and the word list costs parameters (list size × width).",
     "table_heavy": "More than half of the parameters sit in the word table rather than in the blocks that do the thinking, so only the rest counts toward what it can learn.",
     "continues": "Plain-text training makes it continue text rather than answer; Post-training round 1 teaches it to answer.",
 }

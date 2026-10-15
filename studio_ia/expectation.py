@@ -1,4 +1,4 @@
-"""What a design can be expected to write: one plain-English paragraph from its size, word list and the text it sees.
+"""What a design can be expected to write: a short headline and a plain-English paragraph, from its size, word list and the text it sees.
 
 Pure and window-free, so the Builder and Pretraining pages say the same thing. A rough guide, not a promise."""
 from __future__ import annotations
@@ -9,7 +9,7 @@ LITTLE_TEXT = 5_000_000  # word pieces seen: below this a model only picks up le
 ENOUGH_TEXT = 20_000_000  # about 80 MB of text as word pieces
 SMALL, MEDIUM = 1_000_000, 10_000_000  # parameters that do the thinking
 FIXED_WORD_LIST = {"byte": 256, "character": 256, "bpe_gpt2": 50257}  # custom word lists are sized by the data
-WORD_PIECES = ("bpe_custom", "bpe_gpt2")
+WORD_PIECES = ("bpe_custom", "bpe_gpt2", "word")
 
 
 def table_params(tokenizer, d_model, vocab=None):
@@ -19,9 +19,9 @@ def table_params(tokenizer, d_model, vocab=None):
 
 
 def expectation(params, tokenizer, tokens_seen=None, data_kind=None, embedding_params=None):
-    """The rough tier, what would move it up, the word list's effect and, for plain text, that it continues text.
+    """(headline, details): the headline names the tier; the details add what would move it up, the word list's effect and, for plain text, that it continues text.
 
-    params: all parameters. tokenizer: "byte" | "character" | "bpe_custom" | "bpe_gpt2". tokens_seen: word pieces it
+    params: all parameters. tokenizer: "byte" | "character" | "bpe_custom" | "bpe_gpt2" | "word". tokens_seen: word pieces it
     will read (None = not known yet). data_kind: "text" for a plain-text run, which adds that answering comes from
     post-training. embedding_params: the word table's parameters, if known; when that is over half the total, only
     the rest counts as thinking capacity."""
@@ -36,7 +36,8 @@ def expectation(params, tokenizer, tokens_seen=None, data_kind=None, embedding_p
         tier = 2
     else:
         tier = 1
-    out = [T["guide"] + " " + T[("letters", "words", "sentences")[tier] + ("_text" if tier and not known else "")]]
+    level = ("letters", "words", "sentences")[tier] + ("_text" if tier and not known else "")
+    out = [T["guide"] + " " + T[level]]
     need = []  # the smallest changes that reach the next tier
     if tier < 2 and thinking < (SMALL if tier == 0 else MEDIUM):
         need.append(T["wider_deeper"])
@@ -53,4 +54,4 @@ def expectation(params, tokenizer, tokens_seen=None, data_kind=None, embedding_p
         out.append(T["table_heavy"])
     if data_kind == "text":
         out.append(T["continues"])
-    return " ".join(out)
+    return T["short_" + level], " ".join(out)
