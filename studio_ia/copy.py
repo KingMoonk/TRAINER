@@ -243,6 +243,39 @@ COMPARE = {
     "lr_note_off": "Variants use the base's learning rate; a variant can lose only because that rate suits it badly.",
 }
 
+BENCH = {
+    "h1": "Benchmark",
+    "lead": "The same three checks on every trained version, charted against how much text it trained on. Use it to see whether more training or a different design really helped.",
+    "open": "Benchmark every version",
+    "fixed": "Every version gets the same {docs} passages, {questions} questions and {problems} problems, picked once and kept fixed, so the numbers can be compared. If your held-back data changes, the checks are asked again.",
+    "axis": "Text the version trained on (tokens). Further right is more training.",
+    "linked": "Versions of the same design are joined by a line.",
+    "design": "Design {letter}: versions {numbers}",
+    "bpc_title": "ERROR ON HELD-BACK TEXT",
+    "bpc_desc": "Bits per character on passages the model never trained on. Lower is better.",
+    "few_shot_title": "MULTIPLE-CHOICE QUESTIONS",
+    "few_shot_desc": "Questions answered right when {shots} solved examples come first, with no training on them. Higher is better. The dashed line is what guessing gets.",
+    "chance": "Guessing gets {chance}",
+    "problems_title": "CHECKED PROBLEMS",
+    "problems_desc": "Held-back problems whose answers the app can check by itself. The share it solves. Higher is better.",
+    "empty_metric": "Nothing to chart yet: no version has a number for this check.",
+    "no_versions": "No trained version yet. Train one from Build your model and its numbers appear here.",
+    "no_data": "There is no held-back text or problems yet, so there is nothing to check against. Add some in Your data.",
+    "no_metric_data": "This check has no held-back {what} yet, so it is left out. Add some in Your data.",
+    "what_bpc": "text",
+    "what_few_shot": "multiple-choice problems",
+    "what_problems": "checkable problems",
+    "waiting": "{n} of {total} trained versions have not been checked yet.",
+    "all_done": "Every trained version has been checked.",
+    "run": "Check the rest",
+    "checking": "Checking your versions",
+    "running": "Checking version {number} ({done} of {total})",
+    "failed": "Could not check version {number}: {error}",
+    "unplaced": "Left off the chart: version {numbers}. There is no record of how much text it trained on.",
+    "dropped": "{n} items were left out because they overlap the training text.",
+    "tip_point": "Version {number}: {value}"
+}
+
 QUEUE = {
     "h1": "Queue",
     "lead": "What it's training now, what's waiting, and when it's allowed to work. Every \"Train\" or \"Run\" button in the app adds to this queue.",

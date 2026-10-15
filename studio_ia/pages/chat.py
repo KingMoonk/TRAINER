@@ -7,7 +7,7 @@ import threading
 import tkinter as tk
 
 from studio_ia import threads
-from studio_ia.copy import CHAT as T
+from studio_ia.copy import BENCH, CHAT as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import plain_error
@@ -235,6 +235,7 @@ class ChatPage(Page):
         row.pack(fill="x")
         button(row, T["test_change"], lambda: self.navigate("compare"), True).pack(side="left", padx=(0, 8))
         button(row, T["open_designer"], lambda: self.navigate("builder")).pack(side="left")
+        button(row, BENCH["open"], lambda: self.navigate("benchmark")).pack(side="left", padx=(8, 0))
 
     # render -----------------------------------------------------------------
     def panes(self):

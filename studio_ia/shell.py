@@ -11,6 +11,7 @@ from studio_timing import timed
 from studio_ux import format_duration
 from studio_ia import services as services_module
 from studio_ia import threads
+from studio_ia.copy import BENCH
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, SIDEBAR_W, apply, font, tk_label
 from studio_ia.widgets import Progress, _activate
@@ -44,6 +45,7 @@ ROUTES = {
     "passive": Route("resources", "Passive training", "Training that keeps going on its own, outside the queue, restarted by a watchdog. See it, stop it, or stop it starting when you sign in.", ()),
     "post_training": Route("post", "Post-training", "Four rounds, always in this order. Same design throughout; only the weights shift.", ()),
     "chat": Route("chat", "Chat", "Talk to any trained version. Compare two to see what a change really did.", ()),
+    "benchmark": Route("chat", BENCH["h1"], BENCH["lead"], ()),
 }
 
 
@@ -98,6 +100,8 @@ class Studio(tk.Tk):
         self.factories["storage"] = StoragePage
         from studio_ia.pages.passive import PassivePage
         self.factories["passive"] = PassivePage
+        from studio_ia.pages.benchmark import BenchmarkPage
+        self.factories["benchmark"] = BenchmarkPage
         self.route = None
         self._area_rows = {}
         self._build_sidebar()
