@@ -219,8 +219,8 @@ class Workspace:
         self.db_path = self.root / "data" / "records.sqlite"
         self.lock = threading.RLock()
         self._migrate_lock = threading.Lock()
+        self._rev_lock = threading.Lock()
         self.progress = None  # optional callback(text, fraction): told how far a schema migration has got
-        self.revision = 0  # goes up with every change to the stored data, so a reader can cache what a full read costs
         if self.path.exists():
             self.state = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(self.state, dict) or any(not isinstance(self.state.get(k), list) for k in ("datasets", "examples")):
@@ -229,6 +229,7 @@ class Workspace:
             self.state = {"datasets": [], "examples": [], "generated": [], "runs": []}
         self.state.setdefault("generated", [])
         self.state.setdefault("studioConfig", {})
+        self.state.setdefault("revBase", 0)
         # External catalogue metadata survives saves made by an older running GUI.
         registry = self.root / "data" / "catalog_registry.json"
         if registry.exists():
@@ -241,8 +242,26 @@ class Workspace:
 
     def save(self):
         with self.lock:
-            self.revision += 1
             atomic_json(self.path, self.state)
+
+    # Each dataset carries a persisted `rev` that goes up with every change to its data. A reader that cached what a read of
+    # one dataset costs keeps that dataset's rev beside it and rereads only the datasets whose rev moved. The bump is in memory;
+    # the save that follows every write persists it.
+    @property
+    def revision(self):
+        """Goes up with every change to any dataset's data (and never down, even when a dataset is removed)."""
+        return self.state.get("revBase", 0) + sum(d.get("rev", 0) for d in list(self.state["datasets"]))  # no lock: a UI thread asks this while a worker holds self.lock
+
+    def _bump(self, *dataset_ids):
+        with self._rev_lock:  # held for nothing else, so two writers never lose a bump
+            for dataset_id in dataset_ids:
+                dataset = self._dataset(dataset_id)
+                if dataset is not None:
+                    dataset["rev"] = dataset.get("rev", 0) + 1
+
+    def next_rev(self, old=None):
+        """The rev of a dataset's metadata that is replaced as a whole: above the old one's, or above every rev a removed dataset had."""
+        return (old.get("rev", 0) if old else self.state.get("revBase", 0)) + 1
 
     def apply(self, mutate, save=True):
         """Run mutate(state) and the save under the lock; how worker threads change workspace state.
@@ -258,7 +277,7 @@ class Workspace:
     def create_dataset(self, name, description="", storage="json", **metadata):
         if not name.strip():
             raise ValueError("Enter a dataset name.")
-        dataset = {"id": uid("data"), "name": name.strip(), "description": description, "createdAt": now()}
+        dataset = {"id": uid("data"), "name": name.strip(), "description": description, "createdAt": now(), "rev": self.next_rev()}
         if storage == "sqlite":
             dataset.update(storage="sqlite", recordCount=0)
         dataset.update(metadata)
@@ -271,7 +290,9 @@ class Workspace:
         return next((d for d in self.state["datasets"] if d["id"] == dataset_id), None)
 
     @contextmanager
-    def _connect(self):
+    def _connect(self, touched=None):
+        """A connection that commits on exit. `touched` is the set of dataset ids this block writes to (the block may add to it
+        while it runs): their revs go up when it changes anything. Without it a write bumps every disk dataset, which is safe, not cheap."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.db_path, timeout=30)
         try:
@@ -281,13 +302,15 @@ class Workspace:
         except BaseException:
             connection.close()
             raise
+        baseline = connection.total_changes  # a migration changes rows without changing what they say
         try:
             with connection:
                 yield connection
         finally:
-            if connection.total_changes:
-                self.revision += 1
+            changed = connection.total_changes > baseline
             connection.close()
+            if changed:
+                self._bump(*(touched if touched is not None else [d["id"] for d in self.state["datasets"] if d.get("storage") == "sqlite"]))
 
     def schema_pending(self):
         """True when records.sqlite exists and still has to be brought to the current schema (a launch can start that early)."""
@@ -380,7 +403,10 @@ class Workspace:
         dataset = self._dataset(dataset_id)
         if dataset is None:
             raise ValueError("Dataset no longer exists.")
+        renamed = "name" in fields and fields["name"] != dataset.get("name")  # the name is in every row a summary shows
         dataset.update({key: value for key, value in fields.items() if key != "id"})
+        if renamed:
+            self._bump(dataset_id)
         self.save()
 
     def use_disk_storage(self, dataset_id):
@@ -392,7 +418,7 @@ class Workspace:
             return
         with self.lock:
             rows = self.examples(dataset_id)
-        with self._connect() as connection:  # the copy runs without the lock: a save on the UI thread never waits on it
+        with self._connect({dataset_id}) as connection:  # the copy runs without the lock: a save on the UI thread never waits on it
             self._insert_rows(connection, (self._db_row(row) for row in rows))
             count = connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=?", (dataset_id,)).fetchone()[0]
             if count < len({fingerprint(row) for row in rows}):
@@ -434,6 +460,28 @@ class Workspace:
                         yield self._row_to_example(row)
         else:
             yield from self.examples(dataset_id)
+
+    def iter_kind(self, dataset_id, kind):
+        """The examples of one dataset that are of `kind`, in storage order (disk datasets read the kind column; others filter in memory)."""
+        import studio_data_kinds as dk
+        if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            with self._connect() as connection:
+                cursor = connection.execute(f"SELECT {_READ} FROM records WHERE dataset_id=? AND kind=? ORDER BY rowid", (dataset_id, kind))
+                while batch := cursor.fetchmany(2000):
+                    for row in batch:
+                        yield self._row_to_example(row)
+        else:
+            yield from (e for e in self.examples(dataset_id) if dk.classify(e) == kind)
+
+    def kind_stats(self, dataset_id):
+        """{kind: (records, characters, held back)} of one disk dataset from one GROUP BY on the kind column; None when some
+        row has no kind yet (then the caller reads the rows)."""
+        with self._connect() as connection:
+            groups = connection.execute("SELECT kind,COUNT(*),COALESCE(SUM(characters),0),COALESCE(SUM(holdout),0) "
+                                        "FROM records WHERE dataset_id=? GROUP BY kind", (dataset_id,)).fetchall()
+        if any(kind is None for kind, *_ in groups):
+            return None
+        return {kind: tuple(rest) for kind, *rest in groups}
 
     def pick(self, kind, holdout, dataset_ids):
         """{dataset_id: examples in storage order} of one kind and holdout flag among SQLite datasets: one query on the records_pick index."""
@@ -497,7 +545,7 @@ class Workspace:
         if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
             row = self._db_row(value)
             try:
-                with self._connect() as connection:
+                with self._connect({old.get("datasetId"), value["datasetId"]}) as connection:
                     connection.execute("UPDATE records SET dataset_id=?,fingerprint=?,payload=?,user=?,assistant=?,intent=?,quality=?,characters=?,kind=?,holdout=? WHERE id=?", row[1:] + (row[0],))
             except sqlite3.IntegrityError as exc:
                 raise ValueError("This edit duplicates another example in this dataset.") from exc
@@ -507,14 +555,21 @@ class Workspace:
             import studio_data_kinds as dk
             old.clear()
             old.update(dk.stamp(value, fingerprint(value)))
-            self.save()
+            self._bump(dataset_id)
+        self.save()
         return value
 
     def remove_examples(self, ids):
         ids = set(ids)
+        touched = {e.get("datasetId") for e in self.state["examples"] if e["id"] in ids}
         self.state["examples"] = [e for e in self.state["examples"] if e["id"] not in ids]
+        self._bump(*touched)
         if self.db_path.exists():
-            with self._connect() as connection:
+            with self._connect(touched) as connection:
+                for example_id in ids:
+                    row = connection.execute("SELECT dataset_id FROM records WHERE id=?", (example_id,)).fetchone()
+                    if row:
+                        touched.add(row[0])
                 connection.executemany("DELETE FROM records WHERE id=?", ((i,) for i in ids))
                 for dataset in self.state["datasets"]:
                     if dataset.get("storage") == "sqlite":
@@ -549,7 +604,7 @@ class Workspace:
             self.use_disk_storage(dataset_id)
         if dataset.get("storage") == "sqlite":
             added, duplicate, invalid = 0, 0, 0
-            with self._connect() as connection:
+            with self._connect({dataset_id}) as connection:
                 for row in rows:
                     example = normalize(row, dataset_id, source)
                     if example is None:
@@ -576,6 +631,8 @@ class Workspace:
             known.add(key)
             self.state["examples"].append(dk.stamp(example, key))
             added += 1
+        if added:
+            self._bump(dataset_id)
         self.save()
         return added, duplicate, invalid
 
@@ -624,8 +681,10 @@ class Workspace:
     def remove_dataset(self, dataset_id):
         dataset = self._dataset(dataset_id)
         if self.db_path.exists():
-            with self._connect() as connection:
+            with self._connect({dataset_id}) as connection:
                 connection.execute("DELETE FROM records WHERE dataset_id=?", (dataset_id,))
+        if dataset:  # what a later dataset of the same id starts above, and what keeps `revision` from ever going down
+            self.state["revBase"] = self.state.get("revBase", 0) + dataset.get("rev", 0) + 1
         self.state["datasets"] = [d for d in self.state["datasets"] if d["id"] != dataset_id]
         self.state["examples"] = [e for e in self.state["examples"] if e.get("datasetId") != dataset_id]
         registry = self.root / "data" / "catalog_registry.json"

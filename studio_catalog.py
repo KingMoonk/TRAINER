@@ -845,7 +845,7 @@ def register_download(workspace, result, stop=None, emit=None):
     if count != result["records"] or stale:
         # One transaction swaps the old rows for the new ones: WAL readers keep seeing the old set until the commit,
         # and a cancel or failure rolls back to it. No staging copy to rename and one sync instead of one per batch.
-        with workspace._connect() as connection:
+        with workspace._connect({dataset_id}) as connection:
             connection.execute("PRAGMA synchronous=NORMAL")  # WAL stays consistent; a power cut may lose this import only
             try:
                 connection.execute("DELETE FROM records WHERE dataset_id IN (?,?)", (dataset_id, dataset_id + ".importing"))  # + an older version's staging rows
@@ -879,6 +879,7 @@ def register_download(workspace, result, stop=None, emit=None):
                 "manifestPath": result["manifest_path"], "split": result["split"], "sourceSha256": result["sha256"]}
     # the lock covers only the in-memory swap and the save
     with workspace.lock:
+        metadata["rev"] = workspace.next_rev(workspace._dataset(dataset_id))  # whatever was cached for the old rows is now stale
         workspace.state["datasets"] = [entry for entry in workspace.state["datasets"] if entry["id"] != dataset_id] + [metadata]
         workspace.save()
     registry_path = workspace.root / "data" / "catalog_registry.json"
