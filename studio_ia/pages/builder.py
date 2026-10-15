@@ -15,6 +15,7 @@ from studio_versions import _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
+from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -150,6 +151,12 @@ def last_blocks_change(versions):
     return None
 
 
+def design_expectation(s):
+    """The rough-guide paragraph for the choices in `s`: what a design this size and word list can be expected to write."""
+    c = cfg(s)
+    return expectation(P(c), TOKENIZERS[s["V"]], embedding_params=c["V"] * c["d"])
+
+
 def expectations(cur, draft, versions=()):
     a, b, out = cur, draft, []
     if b["L"] > a["L"]:
@@ -263,6 +270,7 @@ class BuilderPage(Page):
         self.tray = self.chips = self.costs = self.expect = None
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
+        self.guide_text = ""
         self.old_curve = self.new_curve = self.refs = None
         self.plot_args, self.plot = {}, None
         self._chart_token = None
@@ -681,6 +689,8 @@ class BuilderPage(Page):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_expect"], bg="panel").pack(anchor="w")
+        self.guide_text = design_expectation(self.draft)
+        tk_label(card, self.guide_text, 14, "text", "panel", wraplength=780).pack(anchor="w", pady=(2, 6))
         self.expect_texts = self.expectations()
         for x in self.expect_texts:
             tk_label(card, x, 14, "text2", "panel", wraplength=780).pack(anchor="w", pady=2)
