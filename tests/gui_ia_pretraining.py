@@ -36,8 +36,10 @@ class PretrainingTest(unittest.TestCase):
         self.assertIn("2.00 word pieces per parameter", t)  # 2,000,000 pieces / 1,000,000 params
         self.assertIn("rule of thumb", t)
         self.assertIn("about 10.0× more text", t)
-        self.assertIn(EXPECTATION["letters"], t)  # 2,000,000 pieces over two passes is little text
-        self.assertIn(EXPECTATION["continues"], t)
+        self.assertIn(EXPECTATION["short_letters"], t)  # 2,000,000 pieces over two passes is little text
+        self.assertNotIn(EXPECTATION["continues"], t)  # the detail is behind the ⓘ
+        self.assertIn(EXPECTATION["letters"], page.expect_details)
+        self.assertIn(EXPECTATION["continues"], page.expect_details)
         self.assertGreater(len(page.grid.find_all()), 100)  # cells of the real first rows
 
     def test_collection_buttons_call_the_services(self):

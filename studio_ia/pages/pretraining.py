@@ -9,7 +9,7 @@ from studio_ia.expectation import expectation, table_params
 from studio_ia.pages.base import Page
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Segmented, button
+from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon
 
 ROWS = ("8", "16", "32")
 HOLD = ("2%", "5%", "10%")
@@ -60,10 +60,10 @@ def source_status(row, note=""):
 
 
 def version_expectation(spec, preview, passes):
-    """What to expect from this version after `passes` passes over the chosen text; "" until the size preview is known."""
+    """(headline, details) of what to expect from this version after `passes` passes over the chosen text; empty until the size preview is known."""
     params = (preview or {}).get("params")
     if not spec or not params:
-        return ""
+        return "", ""
     tokenizer = spec["tokenizer"]["id"]
     pieces = preview.get("pieces")
     return expectation(params, tokenizer, pieces * passes if pieces else None, "text",
@@ -114,8 +114,12 @@ class PretrainingPage(Page):
         self.enough.pack(anchor="w")
         self.enough_note = tk_label(card, "", 13, "muted", "panel", wraplength=720)
         self.enough_note.pack(anchor="w", pady=(4, 0))
-        self.expect_line = tk_label(card, "", 13, "text2", "panel", wraplength=720)
-        self.expect_line.pack(anchor="w", pady=(8, 0))
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(anchor="w", pady=(8, 0))
+        self.expect_line = tk_label(row, "", 13, "text2", "panel")
+        self.expect_line.pack(side="left")
+        self.expect_details = ""
+        self.expect_info = info_icon(row, lambda: self.expect_details)
         # batches
         card = self._card(T["batches"], T["batches_desc"])
         tk_label(card, T["rebuilt_auto"], 12, "dim", "panel").pack(anchor="w")
@@ -328,7 +332,11 @@ class PretrainingPage(Page):
         else:
             self.enough.configure(text=T["text_unknown"])
             self.enough_note.configure(text=T["word_pieces_plain"])
-        self.expect_line.configure(text=version_expectation(getattr(self, "v", None) and self.v.spec, p, LENGTHS[self.length.value]))
+        line, self.expect_details = version_expectation(getattr(self, "v", None) and self.v.spec, p, LENGTHS[self.length.value])
+        self.expect_line.configure(text=line)
+        self.expect_info.pack_forget()
+        if line:
+            self.expect_info.pack(side="left", padx=(6, 0))
         steps, tps = self.steps(), p.get("tokens_per_second")
         if steps and tps:
             self.steps_line.configure(text=T["steps_time"].format(steps=f"{steps:,}", minutes=f"{max(1, round(steps * per_step / tps / 60)):,}"))
