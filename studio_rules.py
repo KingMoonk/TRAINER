@@ -104,6 +104,16 @@ RULES = tuple(CHECKS)              # rules the app can make problems for
 KEYED = tuple(KEYED_CHECKS)        # rules that need an answer key: imported problems only
 CHECKABLE = RULES + KEYED
 
+# Tokens an answer may use before it is cut off. Most rules check a short answer; the rest (a sentence, a length
+# limit, an unknown rule or a free prompt) get room to finish, because a cut-off answer fails ends_cleanly and max_length.
+DEFAULT_MAX_TOKENS = 96
+MAX_TOKENS = {rule: 32 for rule in ("copy", "reverse", "sort", "count", "small_addition", "final_number", "choice")}
+
+
+def max_tokens(rule=None):
+    """The answer budget for problems checked by `rule` (the default when the rule is unknown or None)."""
+    return MAX_TOKENS.get(rule, DEFAULT_MAX_TOKENS)
+
 
 def check(rule, prompt, answer, params=None):
     if rule in KEYED_CHECKS:

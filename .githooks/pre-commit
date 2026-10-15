@@ -9,5 +9,8 @@ done
 files=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 [ -z "$files" ] && exit 0
 # ponytail: re-stages whole files, so unstaged edits in a staged file get committed too; stash-based isolation if that bites
-"$py" -m ruff check --fix $files || exit 1
+"$py" -m ruff check --fix $files || {
+    echo "pre-commit: ruff did not pass. Check that ruff is installed with \`python -m ruff --version\`; install with \`.venv/bin/python -m pip install -r requirements-dev.txt\`." >&2
+    exit 1
+}
 git add $files

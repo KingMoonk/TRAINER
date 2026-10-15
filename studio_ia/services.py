@@ -32,6 +32,12 @@ class Job:
     created_at: float = 0.0
 
 
+def _open_gate():
+    """A Gate that lets training run; imported late because studio_queue pulls in the heavy modules."""
+    from studio_queue import Gate
+    return Gate()
+
+
 @dataclass
 class QueueState:
     job: Job | None = None  # the running job, None when idle
@@ -40,8 +46,9 @@ class QueueState:
     phase: str = ""  # warm-up | steady | cool-down
     lr: float | None = None
     eta_s: float | None = None
-    paused: bool = False
-    blocked: str | None = None  # why the plan forbids training right now (hours / idle / battery)
+    paused: bool = False  # by the user; stays true with no job running ("Paused by you")
+    blocked: str | None = None  # == gate.reason (why the plan forbids training right now)
+    gate: Any = field(default_factory=_open_gate)  # studio_queue.Gate: reason, resumes_at, supported
     stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
@@ -60,6 +67,24 @@ def problem_report(items, added=0, duplicates=0):
     with_answer = [i for i in items if "answer" in i]
     return {"items": items, "added": added, "duplicates": duplicates, "checked": len(with_answer),
             "passed": sum(studio_rules.check(i["rule"], i["prompt"], i["answer"]) for i in with_answer)}
+
+
+def start_phrase(opens, now):
+    """"tonight at 22:00", "today at 09:00" or "tomorrow at 09:00" for a Gate.resumes_at; "" when there is none."""
+    if opens is None:
+        return ""
+    day = "tomorrow" if opens.date() > now.date() else "tonight" if opens.hour >= 18 else "today"
+    return f"{day} at {opens:%H:%M}"
+
+
+def plan_phrase(plan):
+    """" (plan: nights only)" / " (plan: 21:00 to 06:00)" for a plan dict whose hours are limited; "" for any time."""
+    hours = plan.get("hours", "any")
+    if hours == "nights":
+        return " (plan: nights only)"
+    if hours == "set":
+        return f" (plan: {plan.get('start_hour', 22):02d}:00 to {plan.get('end_hour', 7):02d}:00)"
+    return ""
 
 
 class Services:
@@ -138,8 +163,39 @@ class Services:
     def move_up(self, job_id):
         raise NotImplementedError
 
+    def queue_outlook(self, job=None, now=None) -> str:
+        """One sentence on when `job` (a queued Job; None = a job added to the end of the queue now) will start, from queue():
+        "Running now", "Held; release it to run", "Paused by you", "Waiting: on battery", "Starts tonight at 22:00 (plan: nights
+        only)", "Starts after <job> (about N min)" or "Starts now". Every "add to the queue" surface shows this one text."""
+        from datetime import datetime
+        q, now = self.queue(), now or datetime.now()
+        if job is not None and q.job is not None and job.id == q.job.id:
+            return "Running now"
+        if job is not None and getattr(job, "status", "waiting") == "held":
+            return "Held; release it to run"
+        if q.paused:
+            return "Paused by you"
+        reason = q.gate.reason or q.blocked
+        if reason and reason != "outside hours":
+            return f"Waiting: {reason}"
+        names = [j.id for j in q.up_next]
+        before = q.up_next[:names.index(job.id)] if job is not None and job.id in names else list(q.up_next)
+        ahead = ([q.job] if q.job is not None else []) + [j for j in before if getattr(j, "status", "waiting") != "held"]
+        etas = [q.eta_s if j is q.job else j.eta_s for j in ahead]
+        wait = f" (about {max(1, round(sum(etas) / 60))} min)" if ahead and None not in etas else ""
+        after = f"Starts after {ahead[-1].label or ahead[-1].kind}{wait}" if ahead else ""
+        if reason:  # outside hours
+            when = start_phrase(q.gate.resumes_at, now)
+            plan = plan_phrase(q.plan)
+            return (f"{after}; the queue opens {when}{plan}" if after else f"Starts {when}{plan}") if when else f"Waiting: {reason}"
+        return after or "Starts now"
+
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
+
+    def refresh_downloads(self):
+        """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
+        return []
 
     def move(self, job_id, index):
         """Put a waiting job at `index` in Up next (0 = runs next)."""
@@ -826,6 +882,13 @@ class WorkspaceServices(Services):
         """Start the runner when jobs are waiting from an earlier session; otherwise the first enqueue starts it."""
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
+
+    def refresh_downloads(self):
+        import studio_catalog as cat
+        rebuilt = cat.refresh_downloads(self.workspace)
+        if rebuilt:
+            self.emit("downloads_finished", {"ids": rebuilt})  # the Your data page reloads its summaries once
+        return rebuilt
 
     def move_up(self, job_id):
         self.runner.move_up(job_id)

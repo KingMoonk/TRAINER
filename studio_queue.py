@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import studio_passive_watch as platform_helpers  # battery + keep-awake live there; never duplicated
@@ -45,6 +45,14 @@ class Job:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class Gate:
+    """Whether the plan lets the machine train right now. Frozen, so two readings compare with == (the runner announces a change)."""
+    reason: str | None = None            # "outside hours" | "on battery" | "computer in use" | None (may train)
+    resumes_at: datetime | None = None   # for "outside hours": when the next window opens; None for every other reason
+    supported: bool = True               # False when idle_only is on but this computer cannot report idle time (the plan then ignores it)
+
+
 @dataclass
 class QueueState:
     job: Job | None = None         # the running job, None when idle
@@ -53,22 +61,48 @@ class QueueState:
     phase: str = ""
     lr: float | None = None
     eta_s: float | None = None
-    paused: bool = False           # by the user
-    blocked: str | None = None     # plan reason the machine may not train right now (hours / idle / battery)
+    paused: bool = False           # by the user; persisted, so true when idle too ("Paused by you")
+    blocked: str | None = None     # == gate.reason, kept for callers that only need the words
+    gate: Gate = field(default_factory=Gate)
     stopping: bool = False         # stop_after_cooldown in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)  # asdict(Plan)
 
 
-def idle_seconds():
-    """Seconds since last keyboard/mouse input, or None when unknown. macOS only (ioreg HIDIdleTime)."""
-    if sys.platform != "darwin":
-        return None
+def _idle_macos():
     try:
         out = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True, timeout=5).stdout
         return int(next(l for l in out.splitlines() if "HIDIdleTime" in l).split("=")[-1]) / 1e9
     except (OSError, StopIteration, ValueError, subprocess.SubprocessError):
         return None
+
+
+def _idle_windows():
+    import ctypes
+    from ctypes import wintypes
+
+    class LastInput(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    info = LastInput(ctypes.sizeof(LastInput), 0)
+    try:
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        kernel32.GetTickCount.restype = wintypes.DWORD
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        return ((kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000  # both are 32-bit millisecond ticks that wrap
+    except (OSError, AttributeError):
+        return None
+
+
+def idle_seconds():
+    """Seconds since last keyboard/mouse input, or None when this computer cannot say (Linux, or a failed lookup).
+    macOS reads ioreg's HIDIdleTime; Windows reads GetLastInputInfo."""
+    if sys.platform == "darwin":
+        return _idle_macos()
+    if sys.platform == "win32":
+        return _idle_windows()
+    return None
 
 
 def physical_memory():
@@ -87,19 +121,33 @@ def in_window(plan, hour):
     return start <= hour < end if start < end else hour >= start or hour < end
 
 
+def next_start(plan, now):
+    """When the plan next lets training start, as a whole hour: `now` when already inside the window, the next
+    opening otherwise, None when the plan has no hours limit ("any"). The single source for "Starts tonight at 22:00"."""
+    if plan.hours == "any":
+        return None
+    if in_window(plan, now.hour):
+        return now
+    start = (22 if plan.hours == "nights" else plan.start_hour) % 24
+    opens = now.replace(hour=start, minute=0, second=0, microsecond=0)
+    return opens if opens > now else opens + timedelta(days=1)
+
+
 class Runner:
     def __init__(self, path, handlers, services=None, tick=.05, clock=datetime.now):
         self.path, self.handlers, self.services, self.tick, self.clock = Path(path), handlers, services, tick, clock
         self.lock = threading.RLock()
         self.subscribers = []
         self.jobs, self.plan = [], Plan()
+        self.user_paused = False       # a user intent: restored from queue.json, so a pause survives a restart
         self._load()
         self.running = None            # Job on the runner thread
         self.progress = {}
-        self.user_paused = False
         self.stopping = False
+        self.gate = Gate()
         self.blocked = None
         self.pause_event, self.stop_event = threading.Event(), threading.Event()
+        self._sync_pause()
         self.closed = threading.Event()
         self.thread = None
 
@@ -111,6 +159,7 @@ class Runner:
         data = json.loads(self.path.read_text(encoding="utf-8"))
         self.plan = Plan(**{k: v for k, v in data.get("plan", {}).items() if k in Plan.__dataclass_fields__})
         self.jobs = [Job(**j) for j in data.get("jobs", [])]
+        self.user_paused = bool(data.get("user_paused", False))
         for job in self.jobs:          # a run cut short by a restart goes back to the front
             if job.status == "running":
                 job.status = "waiting"
@@ -119,7 +168,8 @@ class Runner:
         done = [j for j in self.jobs if j.status not in ("waiting", "running", "held")][-50:]
         live = [j for j in self.jobs if j.status in ("waiting", "running", "held")]
         self.jobs = done + live
-        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "jobs": [dataclasses.asdict(j) for j in self.jobs]})
+        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused,
+                                "jobs": [dataclasses.asdict(j) for j in self.jobs]})
 
     # ---- events
     def subscribe(self, callback):
@@ -186,12 +236,18 @@ class Runner:
         self._emit("queue", {"job": job_id})
 
     def pause(self):
-        self.user_paused = True
-        self._sync_pause()
+        """Stop starting jobs (and pause the running one) until resume(); saved, and announced as a "queue" event."""
+        self._set_paused(True)
 
     def resume(self):
-        self.user_paused = False
-        self._sync_pause()
+        self._set_paused(False)
+
+    def _set_paused(self, paused):
+        with self.lock:
+            self.user_paused = paused
+            self._sync_pause()
+            self._save()
+        self._emit("queue", {"paused": paused})
 
     def set_plan(self, plan):
         with self.lock:
@@ -227,11 +283,12 @@ class Runner:
             self.stop_event.set()
 
     def state(self):
+        gate = self.gate if self.thread else self._gate()  # the runner thread keeps the gate current; before it starts, read it fresh
         with self.lock:
             p = self.progress
             return QueueState(
                 job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), lr=p.get("lr"),
-                eta_s=p.get("eta_s"), paused=self.user_paused, blocked=self.blocked, stopping=self.stopping,
+                eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
                 up_next=self._queued(), plan=dataclasses.asdict(self.plan))
 
     def start(self):
@@ -249,24 +306,26 @@ class Runner:
         (self.pause_event.set if self.user_paused or self.blocked else self.pause_event.clear)()
 
     def _gate(self):
-        """Why the plan forbids training right now, or None."""
+        """The plan's verdict right now. Idle detection that this computer cannot do is reported (supported=False) and the
+        idle_only setting is then ignored, rather than silently passing as if the computer were idle."""
         plan = self.plan
-        if not in_window(plan, self.clock().hour):
-            return "outside hours"
+        idle = idle_seconds() if plan.idle_only else None
+        supported = not (plan.idle_only and idle is None)
+        now = self.clock()
+        if not in_window(plan, now.hour):
+            return Gate("outside hours", next_start(plan, now), supported)
         if plan.pause_on_battery and platform_helpers.on_battery():
-            return "on battery"
-        if plan.idle_only:
-            idle = idle_seconds()
-            if idle is not None and idle < plan.idle_after_s:
-                return "computer in use"
-        return None
+            return Gate("on battery", None, supported)
+        if idle is not None and idle < plan.idle_after_s:
+            return Gate("computer in use", None, supported)
+        return Gate(None, None, supported)
 
     def _watch(self):
-        reason = self._gate()
-        if reason != self.blocked:
-            self.blocked = reason
+        gate = self._gate()
+        if gate != self.gate:
+            self.gate, self.blocked = gate, gate.reason
             self._sync_pause()
-            self._emit("blocked", {"reason": reason})
+            self._emit("blocked", {"reason": gate.reason, "gate": gate})
 
     def _loop(self):
         while not self.closed.is_set():
