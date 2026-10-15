@@ -186,15 +186,23 @@ class TrainingRunPage(Page):
         self.samples_view(curve, q, n, pn)
 
     def samples_view(self, curve, q, n, pn):
+        every = curve.get("sample_every")
+        rows = sample_rows(curve, q.step if q.total else None, pn)
+        # The last label ("now · step N") moves every step; it is updated in place, so only new samples rebuild the card,
+        # which would otherwise flash on every 1.5 s refresh.
+        shown = (every, curve.get("prompt"), tuple(rows[:-1]), rows[-1][1])
+        if shown == getattr(self, "_samples_shown", None):
+            self._now_label.configure(text=rows[-1][0])
+            return
+        self._samples_shown = shown
         for child in self.samples.winfo_children():
             child.destroy()
-        every = curve.get("sample_every")
         Kicker(self.samples, T["what_writes_now"].format(every=f"{every:,}") if every else T["what_writes_now_plain"], bg="panel").pack(anchor="w")
         tk_label(self.samples, T["always_picks"], 12, "dim", "panel").pack(anchor="w")
         tk_label(self.samples, curve.get("prompt") or T["example_prompt"], 14, "text2", "panel", font=font(14, serif=True)).pack(anchor="w", pady=6)
-        rows = sample_rows(curve, q.step if q.total else None, pn)
         for label, text in rows:
             line = tk.Frame(self.samples, bg=C["panel"])
             line.pack(fill="x", pady=2)
-            tk_label(line, label, 12, "muted", "panel", width=14).pack(side="left", anchor="n")
+            self._now_label = tk_label(line, label, 12, "muted", "panel", width=14)
+            self._now_label.pack(side="left", anchor="n")
             tk_label(line, text, 14, "text", "panel", font=font(14, serif=True), wraplength=620).pack(side="left")

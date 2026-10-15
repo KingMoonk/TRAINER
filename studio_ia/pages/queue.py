@@ -55,7 +55,7 @@ class QueuePage(Page):
     choice, data = "Older than 30 days", False
 
     def refresh(self):
-        self.hour_boxes = {}
+        self.hour_boxes, self._live, self._ticking = {}, None, False
         for child in self.body.winfo_children():
             child.destroy()
         s = self.services.queue()
@@ -65,7 +65,33 @@ class QueuePage(Page):
         self._storage()
 
     def on_event(self, kind, payload):
-        self.refresh()
+        """Training steps arrive several times a second: they update the NOW card in place, at most twice a second.
+        Rebuilding the whole page for each one made it flash; only queue, job and plan changes rebuild it."""
+        if kind != "train":
+            return self.refresh()
+        if not getattr(self, "_ticking", False):
+            self._ticking = True
+            self.after(500, self._tick)
+
+    def _tick(self):
+        self._ticking = False
+        s, live = self.services.queue(), getattr(self, "_live", None)
+        if live is None or not s.job or live["job"] != s.job.id:
+            return self.refresh()
+        live["state"].configure(text=self._state_line(s))
+        live["progress"].configure(text=self._progress_line(s))
+        live["bar"].configure(maximum=max(1, s.total), value=s.step)
+
+    def _state_line(self, s):
+        state = "paused" if s.paused else f"waiting: {s.blocked}" if s.blocked else "running"
+        return f"{s.job.label or s.job.kind} · {state}"
+
+    def _progress_line(self, s):
+        lr = "auto" if s.lr is None else f"auto ({s.lr:.2g})"
+        phase = s.phase or self._phase(s)
+        parts = [f"step {s.step:,} of {s.total:,}" if s.total else "starting", f"schedule: {phase}" if phase else "",
+                 f"learning rate: {lr}", f"{minutes(s.eta_s)} left" if s.eta_s is not None else ""]
+        return " · ".join(p for p in parts if p)
 
     def _card(self, kicker):
         card = ttk.Frame(self.body, padding=GUTTER)
@@ -81,15 +107,13 @@ class QueuePage(Page):
         if not s.job:
             tk_label(card, "Nothing is training.", 15, "text2").pack(anchor="w")
             return
-        state = "paused" if s.paused else f"waiting: {s.blocked}" if s.blocked else "running"
-        tk_label(card, f"{s.job.label or s.job.kind} · {state}", 15).pack(anchor="w")
-        lr = "auto" if s.lr is None else f"auto ({s.lr:.2g})"
-        phase = s.phase or self._phase(s)
-        parts = [f"step {s.step:,} of {s.total:,}" if s.total else "starting", f"schedule: {phase}" if phase else "",
-                 f"learning rate: {lr}", f"{minutes(s.eta_s)} left" if s.eta_s is not None else ""]
-        tk_label(card, " · ".join(p for p in parts if p), 13, "muted").pack(anchor="w", pady=4)
+        state = tk_label(card, self._state_line(s), 15)
+        state.pack(anchor="w")
+        progress = tk_label(card, self._progress_line(s), 13, "muted")
+        progress.pack(anchor="w", pady=4)
         bar = ttk.Progressbar(card, maximum=max(1, s.total), value=s.step)
         bar.pack(fill="x", pady=4)
+        self._live = {"job": s.job.id, "state": state, "progress": progress, "bar": bar}
         row = ttk.Frame(card)
         row.pack(anchor="w", pady=4)
         self._button(row, "Resume" if s.paused else "Pause", self._call("resume" if s.paused else "pause"), style="Primary.TButton").pack(side="left")
@@ -102,7 +126,9 @@ class QueuePage(Page):
         from studio_ia.pages.training_run import phase_at
         run = s.job.params.get("output_dir")
         try:
-            return phase_at(self.services.run_curve(run)["phases"], s.step) if run else ""
+            if run and getattr(self, "_phases", (None,))[0] != (run, s.total):  # fixed for a run of a given length: read once
+                self._phases = ((run, s.total), self.services.run_curve(run)["phases"])
+            return phase_at(self._phases[1], s.step) if run else ""
         except (OSError, ValueError, KeyError, NotImplementedError):
             return ""
 

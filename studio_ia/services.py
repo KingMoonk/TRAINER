@@ -590,6 +590,7 @@ from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 SUMMARY_FORMAT = 2  # data/summaries.json layout; 2: text characters counted once. A saved summary of another format is rebuilt
+RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
 
@@ -623,6 +624,22 @@ def _doc(row):
     if row.get("messages"):
         return "\n".join(m["content"] for m in row["messages"])
     return "\n".join(s for s in (row.get("user"), row.get("assistant")) if s)
+
+
+def _run_docs(run, limit=RUN_DOC_CHARS):
+    """The first documents of a run's dataset.jsonl, up to about `limit` characters. That file is the whole training
+    set (gigabytes for large text), so reference numbers read a slice of it, never all of it."""
+    path, docs, chars = Path(run) / "dataset.jsonl", [], 0
+    if not path.exists():
+        return docs
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            if line.strip():
+                docs.append(_doc(json.loads(line)))
+                chars += len(docs[-1])
+                if chars >= limit:
+                    break
+    return docs
 
 
 class _Cold(BaseException):
@@ -1231,9 +1248,23 @@ class WorkspaceServices(Services):
             new.update(user=prompt, rule=rule, metadata={**(old.get("metadata") or {}), "rule": rule})
         self.workspace.update_example(new)
 
-    def _heldout(self):
+    def _heldout_stamp(self):
         path = self.root / "data" / "heldout.json"
-        return [_doc(r) for r in json.loads(path.read_text(encoding="utf-8"))] if path.exists() else []
+        try:
+            s = path.stat()
+            return s.st_mtime_ns, s.st_size
+        except OSError:
+            return None
+
+    def _heldout(self):
+        """The held-back documents, read once per version of data/heldout.json (it is tens of MB)."""
+        stamp = self._heldout_stamp()
+        if stamp is None:
+            return []
+        if getattr(self, "_heldout_hit", (None,))[0] != stamp:
+            path = self.root / "data" / "heldout.json"
+            self._heldout_hit = (stamp, [_doc(r) for r in json.loads(path.read_text(encoding="utf-8"))])
+        return self._heldout_hit[1]
 
     def _tokenizer(self, run_dir):
         from studio_model import Tokenizer, load_checkpoint
@@ -1248,23 +1279,27 @@ class WorkspaceServices(Services):
             return self._cache[key]
 
     def references(self, version):
+        """Reference lines for the run page. Cached per checkpoint and held-back file: the run page asks every 1.5 s."""
         import studio_eval
         v, best = self._as_version(version), self.best_version()
         out = {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None, "noise_band": None}
         docs = self._heldout()
         if v is None or not v.best_checkpoint or not docs:
             return out
-        run = Path(v.best_checkpoint).parent
-        tok = self._tokenizer(run)
-        train = [_doc(r) for r in map(json.loads, (run / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if (run / "dataset.jsonl").exists() else [])]
-        out["uniform_bpc"] = studio_eval.uniform_bpc(tok, docs)
-        out["unigram_bpc"] = studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs)
-        out["noise_band"] = self._cached(("band", v.best_checkpoint), lambda: studio_eval.noise_band(v.best_checkpoint, docs))
-        score = best.scorecard.get("bpc") if best else None
-        if score is None and best and best.best_checkpoint:
-            score = self._cached(("bpc", best.best_checkpoint), lambda: studio_eval.bits_per_char(best.best_checkpoint, docs))
-        out["best_so_far_bpc"] = score
-        return out
+
+        def make():
+            run = Path(v.best_checkpoint).parent
+            tok = self._tokenizer(run)
+            train = _run_docs(run)
+            score = best.scorecard.get("bpc") if best else None
+            if score is None and best and best.best_checkpoint:
+                score = self._cached(("bpc", best.best_checkpoint), lambda: studio_eval.bits_per_char(best.best_checkpoint, docs))
+            return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
+                    "noise_band": self._cached(("band", v.best_checkpoint), lambda: studio_eval.noise_band(v.best_checkpoint, docs)),
+                    "best_so_far_bpc": score}
+        key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
+               self._heldout_stamp())
+        return self._cached(key, make)
 
     def run_curve(self, run_dir):
         import studio_eval
@@ -1274,13 +1309,13 @@ class WorkspaceServices(Services):
         spec = json.loads((run / "spec.json").read_text(encoding="utf-8")) if (run / "spec.json").exists() else {}
         train = spec.get("train", {})
         total = train.get("run", {}).get("steps") or (rows[-1]["step"] if rows else 0)
-        docs = self._heldout()
-        if not docs and (run / "dataset.jsonl").exists():
-            docs = [_doc(json.loads(line)) for line in (run / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line]
         cpp = 1.0  # characters per piece; nats per piece / ln2 / cpp = bits per character
-        if docs and any((run / n).exists() for n in ("best.npz", "last.npz")):
-            tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
-            cpp = self._cached(("cpp", str(run)), lambda: sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)))
+        if any((run / n).exists() for n in ("best.npz", "last.npz")):
+            def chars_per_piece():  # once per run: the held-back text (or a bounded slice of the run's own text) is read only here
+                docs = self._heldout() or _run_docs(run)
+                tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
+                return sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)) if docs else 1.0
+            cpp = self._cached(("cpp", str(run), self._heldout_stamp()), chars_per_piece)
         bits = lambda nats: nats / LN2 / cpp  # noqa: E731
         steps = [(r["step"], bits(r["loss"])) for r in rows]
         sched = train.get("schedule", {})
