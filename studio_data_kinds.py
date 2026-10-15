@@ -3,9 +3,13 @@
 Problems are ordinary workspace examples with an extra "rule" (and "params"); both are mirrored into "metadata"
 because studio_core.normalize drops unknown keys when an example is edited.
 """
+import base64
 import hashlib
+import itertools
 import re
+import sys
 import zlib
+from array import array
 from dataclasses import dataclass, field, replace
 
 import studio_core
@@ -100,10 +104,11 @@ def add_problems(workspace, dataset_id, items, quality="Good"):
         example["rule"], example["params"] = row["rule"], row["params"]
         dataset = workspace._dataset(dataset_id)
         if dataset.get("storage") == "sqlite":
-            with workspace._connect() as connection:
+            with workspace._connect({dataset_id}) as connection:
                 workspace._insert_rows(connection, [workspace._db_row(example)])
         else:
             workspace.state["examples"].append(stamp(example, studio_core.fingerprint(example)))
+            workspace._bump(dataset_id)
         added += 1
     if added and workspace._dataset(dataset_id).get("storage") == "sqlite":
         with workspace._connect() as connection:
@@ -132,19 +137,38 @@ def _sketch(text):
     return hashes
 
 
-def near_duplicates(items, threshold=NEAR_DUPLICATE):
-    """items: iterable of (id, normalised text). Returns {id: earlier_id} for each later near-copy.
+def signature(text):
+    """(16 min-hashes, bottom-k sketch) of one normalised text, or None when it has no words to hash."""
+    hashes = _sketch(text)
+    if not hashes:
+        return None
+    return [min((h * a + b) & 0xFFFFFFFF for h in hashes) for a, b in PERMS], frozenset(sorted(hashes)[:SKETCH])
+
+
+def pack_signature(sig, sketch):
+    """A signature as a short text (little-endian uint32s: the 16 min-hashes, then the sketch) so a summary file can keep it."""
+    values = array("I", [*sig, *sorted(sketch)])
+    if sys.byteorder == "big":
+        values.byteswap()
+    return base64.b64encode(values.tobytes()).decode("ascii")
+
+
+def unpack_signature(packed):
+    values = array("I")
+    values.frombytes(base64.b64decode(packed))
+    if sys.byteorder == "big":
+        values.byteswap()
+    return list(values[:len(PERMS)]), frozenset(values[len(PERMS):])
+
+
+def match_signatures(items, threshold=NEAR_DUPLICATE):
+    """items: iterable of (id, signature, sketch), in order. Returns {id: earlier_id} for each later near-copy.
 
     LSH on 16 min-hashes (8 bands of 2) so only documents sharing a bucket are compared, each against at most
     BUCKET_CAP earlier ones per band: cost is linear in the number of documents, never pairwise over all.
     """
     buckets, kept, found = {}, {}, {}
-    for key, text in items:
-        hashes = _sketch(text)
-        if not hashes:
-            continue
-        sig = [min((h * a + b) & 0xFFFFFFFF for h in hashes) for a, b in PERMS]
-        sketch = frozenset(sorted(hashes)[:SKETCH])
+    for key, sig, sketch in items:
         kept[key] = sketch
         bands = [(i, sig[2 * i], sig[2 * i + 1]) for i in range(8)]
         for band in bands:
@@ -162,6 +186,16 @@ def near_duplicates(items, threshold=NEAR_DUPLICATE):
     return found
 
 
+def near_duplicates(items, threshold=NEAR_DUPLICATE):
+    """items: iterable of (id, normalised text). Returns {id: earlier_id} for each later near-copy."""
+    def signed():
+        for key, text in items:
+            found = signature(text)
+            if found:
+                yield key, *found
+    return match_signatures(signed(), threshold)
+
+
 # ---- summaries ----------------------------------------------------------------------------------------------
 
 @dataclass
@@ -173,6 +207,7 @@ class DataSummary:
     sets: list = field(default_factory=list)       # [{id, name, count}]
     rules: dict = field(default_factory=dict)      # problems: rule -> count
     near_duplicates: int = 0
+    held_back: int = 0                             # examples kept out of training (the holdout)
     scanned: int = 0                               # examples looked at for near-duplicates (bounded)
     rows: list = field(default_factory=list)       # [{id, a, b, status, dataset}]
 
@@ -226,27 +261,50 @@ def _status(kind, example, duplicate):
 
 def scan(workspace, scan_limit=20000, dataset_ids=None, progress=None):
     """One pass over the workspace for all three kinds: ({kind: DataSummary without rows}, {kind: the first
-    `scan_limit` (example, dataset name)}). progress(text, fraction) is told what is being read."""
+    `scan_limit` (example, dataset name)}). progress(text, fraction) is told what is being read.
+
+    A disk dataset whose rows all carry a kind is counted by one GROUP BY on that column and read only as far as the
+    first `scan_limit` examples of each kind; other datasets are read whole."""
     out = {kind: DataSummary(kind, used_by=USED_BY[kind]) for kind in KINDS}
     pairs = {kind: [] for kind in KINDS}
     datasets = [d for d in list(workspace.state["datasets"]) if dataset_ids is None or d["id"] in dataset_ids]
     total, seen = sum(d.get("recordCount") or 0 for d in datasets), 0
     for dataset in datasets:
         counts = dict.fromkeys(KINDS, 0)
-        for example in workspace.iter_examples(dataset["id"]):
-            if progress and seen % 2000 == 0:
+        stats = workspace.kind_stats(dataset["id"]) if dataset.get("storage") == "sqlite" else None
+        if stats is not None:
+            if progress:
                 progress(f"Reading {dataset['name']}", min(1, seen / total) if total else None)
-            seen += 1
-            kind = classify(example)
-            counts[kind] += 1
-            summary = out[kind]
-            # a text example repeats its text as "user", so it counts once
-            summary.characters += (len(example.get("text") or "") if kind == "text"
-                                   else len(example.get("user", "")) + len(example.get("assistant", "")))
-            if kind == "problems":
-                summary.rules[rule_of(example)] = summary.rules.get(rule_of(example), 0) + 1
-            if len(pairs[kind]) < scan_limit:
-                pairs[kind].append((example, dataset["name"]))
+            seen += sum(n for n, *_ in stats.values())
+            for kind, (n, characters, held) in stats.items():
+                counts[kind] = n
+                out[kind].characters += characters
+                out[kind].held_back += held
+                if kind == "problems" and n:
+                    for example in workspace.iter_kind(dataset["id"], kind):
+                        out[kind].rules[rule_of(example)] = out[kind].rules.get(rule_of(example), 0) + 1
+                        if len(pairs[kind]) < scan_limit:
+                            pairs[kind].append((example, dataset["name"]))
+                elif n and len(pairs[kind]) < scan_limit:
+                    for example in itertools.islice(workspace.iter_kind(dataset["id"], kind), scan_limit - len(pairs[kind])):
+                        pairs[kind].append((example, dataset["name"]))
+        else:
+            for example in workspace.iter_examples(dataset["id"]):
+                if progress and seen % 2000 == 0:
+                    progress(f"Reading {dataset['name']}", min(1, seen / total) if total else None)
+                seen += 1
+                kind = classify(example)
+                counts[kind] += 1
+                summary = out[kind]
+                # a text example repeats its text as "user", so it counts once
+                summary.characters += (len(example.get("text") or "") if kind == "text"
+                                       else len(example.get("user", "")) + len(example.get("assistant", "")))
+                held = example.get("holdout")
+                summary.held_back += int(held_back(example) if held is None else held)
+                if kind == "problems":
+                    summary.rules[rule_of(example)] = summary.rules.get(rule_of(example), 0) + 1
+                if len(pairs[kind]) < scan_limit:
+                    pairs[kind].append((example, dataset["name"]))
         for kind, n in counts.items():
             if n:
                 out[kind].sets.append({"id": dataset["id"], "name": dataset["name"], "count": n})
@@ -280,3 +338,93 @@ def summarize(workspace, kind, query="", limit=200, scan_limit=20000, dataset_id
         rows.append({"id": example["id"], "a": a, "b": b, "status": _status(kind, example, example["id"] in dups), "dataset": name})
     out.rows = matching(rows, query, limit)
     return out
+
+
+# ---- one dataset's share of the summaries -------------------------------------------------------------------
+# A summary of the whole workspace is the sum of one entry per dataset. An entry is JSON (data/summaries.json keeps it
+# beside the dataset's `rev`), so only a dataset whose rev moved is read again. Order matters: the near-duplicate check
+# and the sample rows cover the first `scan_limit` examples of a kind across datasets in workspace order, so an entry
+# keeps as many rows (and signatures) as that budget could ever take from it.
+
+def _budgets(datasets, entries, scan_limit):
+    """Yield (dataset, entry, {kind: rows this dataset contributes}) in order, spending the per-kind budget as it goes."""
+    left = dict.fromkeys(KINDS, scan_limit)
+    for dataset in datasets:
+        entry = entries[dataset["id"]]
+        take = {kind: min(entry["kind_counts"][kind], left[kind]) for kind in KINDS}
+        for kind in KINDS:
+            left[kind] -= take[kind]
+        yield dataset, entry, take
+
+
+def dataset_entry(workspace, dataset, scan_limit, progress=None):
+    """{kind_counts, chars, holdout, rules, rows, signatures, example, limit} for one dataset: counts of everything in it,
+    sample rows and near-duplicate signatures for its first `scan_limit` examples of each kind."""
+    summaries, pairs = scan(workspace, scan_limit, [dataset["id"]], progress)
+    entry = {"limit": scan_limit, "rules": summaries["problems"].rules, "rows": {}, "signatures": {},
+             "kind_counts": {k: summaries[k].count for k in KINDS}, "chars": {k: summaries[k].characters for k in KINDS},
+             "holdout": {k: summaries[k].held_back for k in KINDS}}
+    for kind in KINDS:
+        rows, signatures = [], []
+        for i, (example, name) in enumerate(pairs[kind]):
+            a, b = _columns(kind, example, name)
+            status = _status(kind, example, False)
+            rows.append([example["id"], a, b, status, int(_status(kind, example, True) != status)])  # last: a near-copy would change it
+            found = signature(normalized_text(example)) if kind != "problems" else None
+            if found:
+                signatures.append([i, pack_signature(*found)])
+        entry["rows"][kind], entry["signatures"][kind] = rows, signatures
+    first = next((e for e, _ in pairs["conversations"] if not held_back(e)), None)  # the first of post_rows("conversations")
+    entry["example"] = {"user": first.get("user", ""), "assistant": first.get("assistant", "")} if first else None
+    return entry
+
+
+def refresh(workspace, cached, scan_limit=20000, rescan_all=False, progress=None):
+    """Bring per-dataset entries up to date: ({dataset_id: entry}, [ids read again]). `cached` entries are kept while their
+    dataset's `rev` is the entry's and they hold the rows the budget asks of them; the rest are read with scan(dataset_ids=[id])."""
+    entries, reread, left = {}, [], dict.fromkeys(KINDS, scan_limit)
+    for dataset in list(workspace.state["datasets"]):
+        rev = dataset.get("rev", 0)  # read before the scan: a write during it leaves the entry behind the rev, so the next refresh rereads
+        entry = None if rescan_all else cached.get(dataset["id"])
+        # an entry also has to hold the rows this dataset's turn in the budget asks for (an earlier dataset may have shrunk)
+        if entry is None or entry.get("rev") != rev or any(len(entry["rows"][k]) < min(entry["kind_counts"][k], left[k]) for k in KINDS):
+            entry = dataset_entry(workspace, dataset, max(left.values()), progress)
+            entry["rev"] = rev
+            reread.append(dataset["id"])
+        entries[dataset["id"]] = entry
+        for kind in KINDS:
+            left[kind] -= min(entry["kind_counts"][kind], left[kind])
+    return entries, reread
+
+
+def assemble(datasets, entries, scan_limit=20000):
+    """({kind: DataSummary with every sample row}, the first training conversation as {prompt, answer}) from entries:
+    what summarize() reads over the whole workspace, without reading it."""
+    out = {kind: DataSummary(kind, used_by=USED_BY[kind]) for kind in KINDS}
+    rows = {kind: [] for kind in KINDS}
+    items = {kind: [] for kind in KINDS}
+    example = None
+    for dataset, entry, take in _budgets(datasets, entries, scan_limit):
+        for kind in KINDS:
+            summary, n = out[kind], entry["kind_counts"][kind]
+            if n:
+                summary.sets.append({"id": dataset["id"], "name": dataset["name"], "count": n})
+                summary.count += n
+            summary.characters += entry["chars"][kind]
+            summary.held_back += entry["holdout"][kind]
+            if kind == "problems":
+                for rule, count in entry["rules"].items():
+                    summary.rules[rule] = summary.rules.get(rule, 0) + count
+            base = len(rows[kind])
+            rows[kind] += [(*row, dataset["name"]) for row in entry["rows"][kind][:take[kind]]]
+            for i, packed in entry["signatures"][kind]:
+                if i < take[kind]:
+                    items[kind].append((rows[kind][base + i][0], *unpack_signature(packed)))
+        if example is None and entry["example"] is not None:
+            example = entry["example"]
+    for kind in KINDS:
+        dups = match_signatures(items[kind])
+        out[kind].near_duplicates, out[kind].scanned = len(dups), len(rows[kind])
+        out[kind].rows = [{"id": id, "a": a, "b": b, "status": "Near-duplicate" if can and id in dups else status, "dataset": name}
+                          for id, a, b, status, can, name in rows[kind]]
+    return out, ({"prompt": example["user"], "answer": example["assistant"]} if example and example["user"] else {})

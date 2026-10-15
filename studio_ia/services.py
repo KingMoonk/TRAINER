@@ -709,7 +709,7 @@ import threading  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-SUMMARY_FORMAT = 2  # data/summaries.json layout; 2: text characters counted once. A saved summary of another format is rebuilt
+SUMMARY_FORMAT = 3  # data/summaries.json layout; 3: one entry per dataset, each with its rev; 2: whole workspace, text characters counted once. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
@@ -1027,26 +1027,36 @@ class WorkspaceServices(Services):
         return [stat(self.workspace.path), stat(db), stat(db.with_name(db.name + "-wal"))]
 
     def _summaries(self):
-        """{kind: DataSummary with every sample row, "example": the first training conversation}. Read from
-        data/summaries.json when the stored files have not changed since it was written, so a launch reads nothing twice."""
+        """{kind: DataSummary with every sample row, "example": the first training conversation}. Kept per dataset in
+        data/summaries.json beside each dataset's `rev`, so a change to one dataset reads that dataset only and a launch
+        reads nothing the file still describes."""
         import studio_data_kinds as dk
         from studio_core import atomic_json
 
         def make():
             path, stamp = self.root / "data" / "summaries.json", self._stamp()
+            cached, unchanged = {}, False
             try:
                 saved = json.loads(path.read_text(encoding="utf-8"))
-                if saved["stamp"] == stamp and saved.get("format") == SUMMARY_FORMAT:
-                    return {**{k: dk.DataSummary(**saved[k]) for k in dk.KINDS}, "example": saved["example"]}
-            except (OSError, ValueError, KeyError, TypeError):
+                if saved.get("format") == SUMMARY_FORMAT:  # any other layout is stale: rebuilt once
+                    cached, unchanged = saved["datasets"], saved["stamp"] == stamp
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 pass
-            scanned = dk.scan(self.workspace, progress=self.note)
-            out = {k: dk.summarize(self.workspace, k, limit=None, scanned=scanned, progress=self.note) for k in dk.KINDS}
-            first = next((e for e, _ in scanned[1]["conversations"] if not dk.held_back(e)), None)  # the first of post_rows("conversations")
-            out["example"] = {"prompt": first["user"], "answer": first["assistant"]} if first and first.get("user") else {}
-            self.note("Saving the summary")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_json(path, {**{k: asdict(out[k]) for k in dk.KINDS}, "example": out["example"], "stamp": stamp, "format": SUMMARY_FORMAT})
+            datasets = list(self.workspace.state["datasets"])
+            # The files differ from what the summary was made of, yet no dataset's rev moved: an older app wrote them without
+            # counting, so nothing can be trusted.
+            moved = any(cached.get(d["id"], {}).get("rev") != d.get("rev", 0) for d in datasets)
+            rescan_all = bool(cached) and not unchanged and not moved
+            try:
+                entries, reread = dk.refresh(self.workspace, cached, rescan_all=rescan_all, progress=self.note)
+            except (KeyError, TypeError, IndexError, AttributeError):  # an entry that does not have the shape this version writes
+                entries, reread = dk.refresh(self.workspace, {}, progress=self.note)
+            out, example = dk.assemble(datasets, entries)
+            out["example"] = example
+            if reread or set(entries) != set(cached):
+                self.note("Saving the summary")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_json(path, {"format": SUMMARY_FORMAT, "stamp": stamp, "datasets": entries})
             return out
         return self._fresh("summaries", make)
 
