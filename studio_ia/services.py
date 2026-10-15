@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import errno
 import logging
+import queue
 import socket
+import threading
 import urllib.error
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -129,10 +131,11 @@ class Services:
     def __init__(self):
         self._subscribers: list[Callable[[str, Any], None]] = []
         self._ui = None  # a Tk widget; set by the shell so events hop onto the Tk thread
+        self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
 
     # events ---------------------------------------------------------------
     def bind_ui(self, widget):
-        self._ui = widget
+        self._ui, self._ui_thread = widget, threading.get_ident()
 
     def subscribe(self, callback):
         """callback(kind, payload) runs on the Tk thread. Returns an unsubscribe function."""
@@ -140,14 +143,27 @@ class Services:
         return lambda: self._subscribers.remove(callback) if callback in self._subscribers else None
 
     def emit(self, kind, payload=None):
-        """Safe from any thread: delivery is scheduled with `after` on the bound Tk widget."""
+        """Safe from any thread. On the Tk thread delivery is scheduled with `after`; another thread only queues the event
+        for pump(), because a Tk call from a worker can reach an app that is already destroyed and crash the process."""
         def deliver():
             for callback in list(self._subscribers):
                 callback(kind, payload)
         if self._ui is None:
             deliver()
-        else:
+        elif threading.get_ident() == self._ui_thread:
             self._ui.after(0, deliver)
+        else:
+            self._events.put((kind, payload))
+
+    def pump(self):
+        """Tk thread: deliver the events other threads emitted since the last call, in order."""
+        while True:
+            try:
+                kind, payload = self._events.get_nowait()
+            except queue.Empty:
+                return
+            for callback in list(self._subscribers):
+                callback(kind, payload)
 
     # slow reads: what one is doing right now, polled by the shell's loading panel ---------------------------------
     loading = ("", None)
@@ -738,7 +754,6 @@ class FakeServices(Services):
 
 import json  # noqa: E402
 import math  # noqa: E402
-import threading  # noqa: E402
 from studio_ia import threads  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
