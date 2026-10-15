@@ -7,15 +7,18 @@ so `p` and `g` are stable dicts that consumers (optimizers, telemetry, snapshots
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import math
 from dataclasses import dataclass, field
 
 import numpy as np
 import torch
+from torch.utils.checkpoint import checkpoint
 
 import studio_registry as registry
 from studio_backend import Backend, get_backend
+from studio_modules.precision.policy import LossScaler, plan
 from studio_slots import Ctx, Dims, as_tensor
 from studio_spec import block_at, module_of, validate_spec
 from studio_validate import errors
@@ -62,6 +65,11 @@ class CompiledModel:
             self.backend = Backend(torch, "cpu", "PyTorch / CPU", "float64 is not available on Apple GPUs; using the CPU")
         self.xp = torch
         self.device = self.backend.device
+        # Mixed precision: the weights stay `dtype`; matrix multiplies run in `compute` under autocast (None: plain `dtype`).
+        self.compute, self.precision_note = plan(precision, self.device)
+        self.scaler = LossScaler() if self.compute is not None and precision.scaled else None
+        self.overflowed = False     # a scaled backward pass produced inf or nan gradients; accept_gradients() reports it
+        self.checkpointing = bool(spec["train"].get("run", {}).get("checkpointing"))
         # Keeping the stochastic stream on CPU makes checkpoints and RNG state portable between devices.
         self.rng = np.random.default_rng(seed)
         self.dims = Dims(d["d_model"], d["n_layer"], d["n_ctx"], int(vocabulary), d["dropout"], 0, torch, dtype, self.device)
@@ -90,6 +98,8 @@ class CompiledModel:
                 block.channel = self._make("channel", entry["channel"], f"block{i}.", i)
             self.stack.append(block)
         self.blocks = [{"id": block.id, "index": block.index} for block in self.stack]
+        self._block_slots = {i: [(full, layer, name) for full, (layer, name) in self._slots.items() if self.owner[full][1] == i]
+                             for i in range(d["n_layer"])}
         self.final = self._make("norm", spec["block"]["norm"], "final.")
         self.head = self._make("head", spec["head"], "head.")
 
@@ -123,6 +133,18 @@ class CompiledModel:
     def zero_grad(self):
         for grad in self.g.values():
             grad.zero_()
+        self.overflowed = False
+
+    def accept_gradients(self):
+        """False when float16 loss scaling overflowed during backward: the optimizer must skip this step. Also adapts the loss scale."""
+        if self.scaler is None:
+            return True
+        overflowed, self.overflowed = self.overflowed, False
+        self.scaler.update(overflowed)
+        return not overflowed
+
+    def _autocast(self):
+        return torch.autocast(device_type=self.device, dtype=self.compute) if self.compute is not None else contextlib.nullcontext()
 
     def _ids(self, ids):
         if isinstance(ids, torch.Tensor):
@@ -151,8 +173,8 @@ class CompiledModel:
             for full, (layer, name) in self._slots.items():
                 live[full] = layer.params[name] = self.p[full].detach().requires_grad_(True)
         try:
-            with torch.enable_grad() if graph else torch.no_grad():
-                result = self._run(ids, ctx, trace, attention_summary is not None)
+            with torch.enable_grad() if graph else torch.no_grad(), self._autocast():
+                result = self._run(ids, ctx, trace, attention_summary is not None, live)
         finally:
             for full, (layer, name) in self._slots.items():
                 layer.params[name] = self.p[full]
@@ -170,8 +192,10 @@ class CompiledModel:
         """True when every mixer and the position module support a KV cache; otherwise generation re-runs the whole window."""
         return all(block.mixer is None or block.mixer.cacheable for block in self.stack) and (self.position is None or self.position.cacheable)
 
-    def _run(self, ids, ctx, trace, summary):
+    def _run(self, ids, ctx, trace, summary, live):
         values, backward_values = {}, {}
+        # Recomputing a block while backward runs is only sound when the pass has no side effects to repeat.
+        recompute = self.checkpointing and ctx.training and not (trace or summary or ctx.capture is not None or ctx.patches or ctx.cache is not None)
 
         def run(layer, x):
             name = self.layer_names[id(layer)]
@@ -187,11 +211,7 @@ class CompiledModel:
             x, _ = ctx.drop(x)
             return x
 
-        x = run(self.embedding, ids)
-        if self.position is not None:
-            x = run(self.position, x)
-        x = ctx.emit("embed", drop(x))
-        for block in self.stack:
+        def body(block, x):
             ctx.block = block.index
             x = ctx.emit("resid.pre", x)
             if block.mixer is not None:
@@ -207,7 +227,41 @@ class CompiledModel:
                     x = run(block.norm2, x) if block.norm2 is not None else x
                 else:
                     x = x + drop(run(block.channel, run(block.norm2, x) if block.norm2 is not None else x))
-            x = ctx.emit("resid.post", x)
+            return ctx.emit("resid.post", x)
+
+        def checkpointed(block, x):
+            """body(), whose activations are dropped after the forward pass and recomputed when backward reaches the block."""
+            state = ctx.rng_state(x.device) if ctx.dropout else None   # the recomputation must draw the same dropout masks
+            calls = []
+
+            def segment(h):
+                again = bool(calls)
+                calls.append(True)
+                kept, aux = {}, ctx.aux
+                try:
+                    if again:
+                        if state is not None:
+                            ctx.set_rng_state(state)
+                        for full, layer, name in self._block_slots[block.index]:   # forward() has restored the plain weights by now
+                            kept[full] = layer.params[name]
+                            layer.params[name] = live[full]
+                    with self._autocast():
+                        return body(block, h)
+                finally:
+                    for full, layer, name in self._block_slots[block.index]:
+                        if full in kept:
+                            layer.params[name] = kept[full]
+                    if again:
+                        ctx.aux = aux   # the first pass already counted this block's auxiliary loss
+
+            return checkpoint(segment, x, use_reentrant=False)
+
+        x = run(self.embedding, ids)
+        if self.position is not None:
+            x = run(self.position, x)
+        x = ctx.emit("embed", drop(x))
+        for block in self.stack:
+            x = checkpointed(block, x) if recompute else body(block, x)
             if summary:
                 from studio_summary import bin_edges
                 edges = bin_edges(ids.shape[1], ctx.attention_summary)
@@ -218,6 +272,8 @@ class CompiledModel:
             x = run(self.final, x)
         x = ctx.emit("final", x)
         logits = ctx.emit("logits", run(self.head, x))
+        if logits.dtype in (torch.bfloat16, torch.float16):
+            logits = logits.float()   # losses and softmax run in float32
         if summary:
             return logits, ctx.summaries
         return logits, values, backward_values
@@ -225,11 +281,19 @@ class CompiledModel:
     def _accumulate(self, outputs, grad_outputs, tape):
         names = [name for name, leaf in tape.live.items()]
         leaves = [tape.live[name] for name in names]
+        scale = self.scaler.scale if self.scaler is not None else 1.
+        if scale != 1.:   # float16: differentiate scale × loss so small gradients survive, then undo the scale below
+            grad_outputs = [torch.as_tensor(scale, dtype=out.dtype, device=out.device) if grad is None else grad * scale
+                            for out, grad in zip(outputs, grad_outputs)]
         grads = torch.autograd.grad(outputs, leaves, grad_outputs=grad_outputs, retain_graph=True, allow_unused=True)
         with torch.no_grad():
+            finite = [torch.isfinite(grad).all() for grad in grads if grad is not None] if self.scaler is not None else []
+            if finite and not bool(torch.stack(finite).all()):
+                self.overflowed = True
+                return
             for name, grad in zip(names, grads):
                 if grad is not None:
-                    self.g[name].add_(grad)
+                    self.g[name].add_(grad, alpha=1. / scale)
 
     def backward(self, dlogits, tape):
         """Accumulate parameter gradients for any loss expressed as d(loss)/d(logits).

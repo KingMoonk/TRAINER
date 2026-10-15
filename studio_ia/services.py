@@ -405,6 +405,11 @@ class Services:
     def references(self, version):
         raise NotImplementedError
 
+    def gate_result(self, version):
+        """How Chat weighed a version against the best version before it: {"better", "diff", "upper", "vs"} (diff and upper in
+        bits per character, version minus the earlier best; vs its number), or None when it was not weighed."""
+        raise NotImplementedError
+
     def run_curve(self, run_dir):
         raise NotImplementedError
 
@@ -464,7 +469,7 @@ class Services:
 
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
-        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n)}}}; missing keys are fine."""
+        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}}}; missing keys are fine."""
         raise NotImplementedError
 
     def post_rows(self, kind):
@@ -755,7 +760,10 @@ class FakeServices(Services):
         r["a"], r["b"] = a, b
 
     def references(self, version):
-        return {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None, "noise_band": None}
+        return {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None}
+
+    def gate_result(self, version):
+        return None
 
     def run_curve(self, run_dir):
         return {"steps": [], "smooth": [], "heldout": [], "lr": [], "phases": [], "total": 0}
@@ -1030,21 +1038,49 @@ class WorkspaceServices(Services):
 
     @timed("services.best_version")
     def best_version(self):
-        """The version Chat follows: a later version takes over only when its held-back error is below the noise band of
-        the one it replaces (studio_gate.moves_chat), so a difference inside the noise never moves Chat."""
+        """The version Chat follows: a later version takes over only when a paired test on the held-back text says it is
+        better than the one it replaces (studio_gate.moves_chat, studio_eval.paired_gain), so a gap that luck could produce
+        never moves Chat. One look per version, on its best checkpoint, when it has finished."""
+        best = self._weigh()[0]
+        return self._version(best) if best else None
+
+    def _weigh(self):
+        """(row Chat follows, {version number: how it was weighed against the best before it}), versions in order."""
         import studio_gate
-        rows, best = self._rows(), None
+        rows, best, weighed = self._rows(), None, {}
         for row in rows:
             bpc = row.get("scorecard", {}).get("bpc")
             if not row.get("best_checkpoint") or not isinstance(bpc, (int, float)):
                 continue
-            # the band of the version being replaced: with one scored version there is nothing to compare, so no held-back text is read
-            band = self._band(self._abs(best["best_checkpoint"])) if best else None
-            if studio_gate.moves_chat(bpc, best and best["scorecard"]["bpc"], band):
+            if best is None:  # with one scored version there is nothing to compare, so no held-back text is read
+                best = row
+                continue
+            gain = self._gate(self._abs(best["best_checkpoint"]), self._abs(row["best_checkpoint"]))
+            if gain is not None:
+                weighed[row["number"]] = {**gain, "vs": best["number"]}
+                self._rescored(best)
+                self._rescored(row)
+            if studio_gate.moves_chat(row["scorecard"]["bpc"], best["scorecard"]["bpc"], gain):
                 best = row
         if best is None:  # nothing scored yet: the newest version that has a checkpoint
             best = next((r for r in reversed(rows) if r.get("best_checkpoint")), None)
-        return self._version(best) if best else None
+        return best, weighed
+
+    def gate_result(self, version):
+        v = self._as_version(version)
+        return self._weigh()[1].get(v.number) if v else None
+
+    def _rescored(self, row):
+        """A scorecard made before the scoring method changed holds bits per character from the old method: swap in the new one."""
+        import studio_eval
+        if row["scorecard"].get("bpc_method") == studio_eval.SCORE_METHOD:
+            return
+        scores = self._held_scores(self._abs(row["best_checkpoint"]))
+        if scores is not None:
+            card = {**(self.store.get(row["number"]).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
+                    "bpc_method": studio_eval.SCORE_METHOD}
+            self.store.set_scorecard(row["number"], card)
+            row["scorecard"] = card
 
     def checkpoint_step(self, version):
         from studio_model import read_metrics
@@ -1377,9 +1413,10 @@ class WorkspaceServices(Services):
             import studio_eval
             self.store.add_run(number, out)
             self.store.set_best_checkpoint(number, ckpt)
-            docs = self._heldout()
-            if docs:
-                card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.bits_per_char(ckpt, docs)}
+            scores = self._held_scores(self._abs(ckpt))  # per document, so Chat's paired test later reads it from disk
+            if scores is not None:
+                card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
+                        "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
         self.emit("versions", None)
@@ -1398,12 +1435,14 @@ class WorkspaceServices(Services):
         if v is None:
             return
         done = self._json("post_training.json", {})
-        done.setdefault(str(v.number), {})[str(number)] = {k: result.get(k) for k in ("ok", "checks", "verdict", "before", "after", "band", "checkpoint")}
+        done.setdefault(str(v.number), {})[str(number)] = {k: result.get(k) for k in ("ok", "checks", "verdict", "before", "after", "band", "checkpoint", "groups", "taught", "skipped")}
         self._save_json("post_training.json", done)
         if result.get("ok"):
             card = dict(v.scorecard or {})
             after = result.get("after") or {}
-            card.update({"bpc": after.get("bpc", card.get("bpc")), "problems": [after.get("pass_k"), after.get("pass_n")] if after.get("pass_n") else card.get("problems")})
+            import studio_eval
+            card.update({"bpc": after.get("bpc", card.get("bpc")), **({"bpc_method": studio_eval.SCORE_METHOD} if after.get("bpc") is not None else {}),
+                         "problems": [after.get("pass_k"), after.get("pass_n")] if after.get("pass_n") else card.get("problems")})
             if number == 1:
                 card["answers"] = True
             self.store.set_best_checkpoint(v.number, result["checkpoint"])
@@ -1739,9 +1778,9 @@ class WorkspaceServices(Services):
                 self._cache[key] = make()
             return self._cache[key]
 
-    def _band(self, ckpt):
-        """(low, high) noise band of a checkpoint's held-back error, or None without held-back text. Kept in data/noise_bands.json
-        per checkpoint file and held-back stamp, so a new launch scores nothing it already scored."""
+    def _score_key(self, ckpt):
+        """(name, key) of a checkpoint's held-back scores: the file, the held-back text and the scoring method they were made
+        with, so any of the three changing makes them stale. None without held-back text."""
         import studio_eval
         stamp = self._heldout_stamp()
         if stamp is None:
@@ -1750,41 +1789,58 @@ class WorkspaceServices(Services):
             s = Path(ckpt).stat()
             file = [s.st_mtime_ns, s.st_size]
         except OSError:
-            file = None  # the scoring below says what is wrong with it
+            file = None  # the scoring says what is wrong with it
         name = str(Path(ckpt).relative_to(self.root)) if Path(ckpt).is_relative_to(self.root) else str(ckpt)
-        key = json.dumps([name, file, stamp])
-        store = self._bands()
-        if key in store:
-            return tuple(store[key])
+        return name, json.dumps([name, file, stamp, studio_eval.SCORE_METHOD])
+
+    def _held_scores(self, ckpt):
+        """(documents, 2) array of nats and characters per held-back document for a checkpoint, or None without held-back text.
+        Kept in data/held_back_scores/ per key (_score_key), so a new launch scores nothing it already scored."""
+        import hashlib
+        import studio_eval
+        got = self._score_key(ckpt)
+        if got is None:
+            return None
+        name, key = got
+        digest = lambda text: hashlib.sha1(text.encode()).hexdigest()[:16]  # noqa: E731
+        folder, prefix = self.root / "data" / "held_back_scores", digest(name)
+        file = folder / f"{prefix}-{digest(key)}.npy"
+        if ("scores", key) not in self._cache and file.exists():
+            try:
+                self._cache[("scores", key)] = np.load(file)
+            except (OSError, ValueError):
+                pass  # unreadable: scored again below
 
         def make():
             docs = self._heldout()
             if not docs:
                 return None
-            band = studio_eval.noise_band(ckpt, docs)
+            scores = np.array(studio_eval.score_docs(ckpt, docs), dtype=np.float64)
             with self._lock:
-                for old in [k for k in store if json.loads(k)[0] == name]:  # an older state of the same checkpoint is dead weight
-                    del store[old]
-                store[key] = list(band)
-                self._save_json("noise_bands.json", store)
-            return band
-        return self._cached(("band", key), make)
+                folder.mkdir(parents=True, exist_ok=True)
+                for old in folder.glob(f"{prefix}-*.npy"):  # an older state of the same checkpoint is dead weight
+                    old.unlink(missing_ok=True)
+                partial = folder / f".{file.name}"
+                np.save(partial, scores)
+                partial.replace(file)
+            return scores
+        return self._cached(("scores", key), make)
 
-    def _bands(self):
-        if getattr(self, "_band_store", None) is None:
-            try:
-                loaded = self._json("noise_bands.json", {})
-            except (OSError, ValueError):
-                loaded = {}
-            self._band_store = loaded if isinstance(loaded, dict) else {}
-        return self._band_store
+    def _gate(self, parent_ckpt, candidate_ckpt):
+        """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair."""
+        import studio_eval
+        parent, candidate = self._held_scores(parent_ckpt), self._held_scores(candidate_ckpt)
+        if parent is None or candidate is None:
+            return None
+        return self._cached(("gain", self._score_key(parent_ckpt)[1], self._score_key(candidate_ckpt)[1]),
+                            lambda: studio_eval.paired_gain(parent, candidate))
 
     @timed("services.references")
     def references(self, version):
         """Reference lines for the run page. Cached per checkpoint and held-back file: the run page asks every 1.5 s."""
         import studio_eval
         v, best = self._as_version(version), self.best_version()
-        out = {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None, "noise_band": None}
+        out = {"uniform_bpc": None, "unigram_bpc": None, "best_so_far_bpc": None}
         docs = self._heldout()
         if v is None or not v.best_checkpoint or not docs:
             return out
@@ -1793,12 +1849,9 @@ class WorkspaceServices(Services):
             run = Path(v.best_checkpoint).parent
             tok = self._tokenizer(run)
             train = _run_docs(run)
-            score = best.scorecard.get("bpc") if best else None
-            if score is None and best and best.best_checkpoint:
-                score = self._cached(("bpc", best.best_checkpoint), lambda: studio_eval.bits_per_char(best.best_checkpoint, docs))
+            scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
             return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
-                    "noise_band": self._band(v.best_checkpoint),
-                    "best_so_far_bpc": score}
+                    "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
         key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
                self._heldout_stamp())
         return self._cached(key, make)

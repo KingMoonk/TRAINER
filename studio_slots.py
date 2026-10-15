@@ -103,7 +103,7 @@ class Ctx:
         self.aux = 0.0              # auxiliary loss a module adds on top of the objective (MoE balance loss)
         self.scale = 1.0            # multiplier for the auxiliary loss in backward()
         self._mask = {}
-        self._gen = None
+        self._gen = self._seeds = None
 
     def mask(self, length):
         """[T, T] bool, True where key position > query position (the future, which must stay hidden)."""
@@ -111,14 +111,34 @@ class Ctx:
             self._mask[length] = torch.triu(torch.ones((length, length), dtype=torch.bool, device=self.device), 1)
         return self._mask[length]
 
+    def _generators(self, device):
+        """The two streams dropout draws from, both seeded from the model's NumPy stream the first time one is needed:
+        `_gen` makes masks on the tensor's device; `_seeds` (CPU) hands out seeds to the fused attention kernel."""
+        if self._gen is None or self._gen.device != device:
+            seed = int(self.rng.integers(2 ** 62))
+            self._gen = torch.Generator(device).manual_seed(seed)
+            self._seeds = torch.Generator("cpu").manual_seed(seed ^ 0x5DEECE66D)
+        return self._gen
+
+    def rng_state(self, device):
+        """The dropout streams' state, so a recomputed span (gradient checkpointing) can draw the same masks again."""
+        return self._generators(device).get_state(), self._seeds.get_state()
+
+    def set_rng_state(self, state):
+        self._gen.set_state(state[0])
+        self._seeds.set_state(state[1])
+
+    def attention_seed(self, device):
+        """A seed for one fused attention call's dropout."""
+        self._generators(device)
+        return int(torch.randint(0, 2 ** 62, (1,), generator=self._seeds))
+
     def drop(self, x):
         """Inverted dropout while training: (x * mask, mask). Outside training: (x, None)."""
         if self.training and self.dropout:
             # Masks are drawn on the tensor's own device from a generator seeded by the model's NumPy stream, so a run
             # is reproducible for a given seed and device, and resume (which restores that stream) stays deterministic.
-            if self._gen is None or self._gen.device != x.device:
-                self._gen = torch.Generator(x.device).manual_seed(int(self.rng.integers(2 ** 62)))
-            keep = torch.rand(x.shape, generator=self._gen, device=x.device) >= self.dropout
+            keep = torch.rand(x.shape, generator=self._generators(x.device), device=x.device) >= self.dropout
             mask = keep.to(x.dtype) / (1 - self.dropout)
             return x * mask, mask
         return x, None
@@ -135,7 +155,8 @@ class Ctx:
         if full in self.patches:
             value = as_tensor(self.patches[full](value), like=value)
         if self.capture is True or (self.capture is not None and full in self.capture):
-            self.captured[full] = value.detach()
+            kept = value.detach()
+            self.captured[full] = kept.float() if kept.dtype in (torch.bfloat16, torch.float16) else kept  # inspection reads full precision
         return value
 
 
@@ -199,7 +220,12 @@ class Optimizer:
 
     @torch.no_grad()
     def update(self, model, learning_rate, clip=1.0):
-        """Clip the global gradient norm, then step every parameter in place. Returns the pre-clip norm."""
+        """Clip the global gradient norm, then step every parameter in place. Returns the pre-clip norm.
+
+        A float16 step whose gradients overflowed (the model says so through accept_gradients) is skipped and returns 0.
+        """
+        if not getattr(model, "accept_gradients", lambda: True)():
+            return 0.
         grads = {key: as_tensor(value) for key, value in model.g.items()}
         squared = torch.stack([(grad.float() * grad.float()).sum() for grad in grads.values()]).sum()
         norm = math.sqrt(float(squared))
@@ -229,6 +255,8 @@ class ModuleSpec:
     requires = frozenset()   # position modules: capabilities every token mixer must provide
     hooks = ()         # (name, symbolic shape) pairs, e.g. ("attn.pattern", "B H T T")
     skip = False       # True for "none" modules: the compiler leaves the step out instead of building a layer
+    compute = None     # precision modules: the dtype matrix multiplies run in under torch.autocast (None: the weights' own dtype)
+    scaled = False     # precision modules: gradients need dynamic loss scaling (float16)
     backward = "PyTorch autograd · forward checked against finite differences in float64"
     glyph3d = None     # {"kind": "beams"|"ribbon"|"fan"|"tower", "hooks": [names]}; None = the slot's default glyph
 
