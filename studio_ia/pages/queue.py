@@ -18,6 +18,13 @@ TOGGLES = (("idle_only", "Only when I’m not using the computer", "Pauses withi
             "Chat uses the checkpoint with the lowest error on held-back text, not simply the newest."))
 
 
+def toggle_state(key, note, gate):
+    """(enabled, note) for a plan toggle. Idle detection the computer cannot do greys "Only when I'm not using the computer"."""
+    if key == "idle_only" and not gate.supported:
+        return False, "Not available on this computer"
+    return True, note
+
+
 def minutes(seconds):
     return "" if seconds is None else f"about {max(1, round(seconds / 60))} min"
 
@@ -61,7 +68,7 @@ class QueuePage(Page):
         s = self.services.queue()
         self._now(s)
         self._up_next(s)
-        self._plan(s.plan)
+        self._plan(s.plan, s.gate)
         self._storage()
 
     def on_event(self, kind, payload):
@@ -105,7 +112,9 @@ class QueuePage(Page):
     def _now(self, s):
         card = self._card("NOW")
         if not s.job:
-            tk_label(card, "Nothing is training.", 15, "text2").pack(anchor="w")
+            tk_label(card, "Paused by you. Nothing starts until you resume." if s.paused else "Nothing is training.", 15, "text2").pack(anchor="w")
+            self._button(card, "Resume" if s.paused else "Pause", self._call("resume" if s.paused else "pause"),
+                         style="Primary.TButton").pack(anchor="w", pady=4)
             return
         state = tk_label(card, self._state_line(s), 15)
         state.pack(anchor="w")
@@ -202,7 +211,7 @@ class QueuePage(Page):
         else:
             self.refresh()
 
-    def _plan(self, plan):
+    def _plan(self, plan, gate):
         card = self._card("WHEN IT MAY TRAIN")
 
         def segmented(title, key, options):
@@ -228,7 +237,11 @@ class QueuePage(Page):
             row.pack(fill="x", pady=4)
             text = ttk.Frame(row)
             text.pack(side="left")
-            Toggle(text, name, plan.get(key), lambda v, k=key: self._set(plan, k, v), bg="bg").pack(anchor="w")
+            enabled, note = toggle_state(key, note, gate)
+            if enabled:
+                Toggle(text, name, plan.get(key), lambda v, k=key: self._set(plan, k, v), bg="bg").pack(anchor="w")
+            else:
+                tk_label(text, name, 14, "muted").pack(anchor="w", padx=(46, 0))
             tk_label(text, note, 12, "muted").pack(anchor="w", padx=(46, 0))
         tk_label(card, "Answering in Chat never stops training. It shares the computer, so training slows while it answers.", 13, "dim").pack(anchor="w", pady=(8, 0))
 
