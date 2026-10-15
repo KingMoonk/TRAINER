@@ -1,11 +1,11 @@
-"""Page base class: standard header (breadcrumb, h1, lead) over a scrolling body."""
+"""Page base class: standard header (breadcrumb, h1 and its ⓘ lead) over a scrolling body."""
 from __future__ import annotations
 
 from tkinter import ttk
 
 from studio_widgets import ScrollPage
 from studio_ia.theme import C, GUTTER, tk_label
-from studio_ia.widgets import _activate
+from studio_ia.widgets import _activate, info_icon
 
 
 class Throttle:
@@ -49,12 +49,20 @@ class Page(ttk.Frame):
             link = tk_label(self.header, "‹ " + " / ".join(self.crumb), 13, "muted", cursor="hand2", takefocus=1)
             link.pack(anchor="w", pady=(0, GUTTER // 2))
             _activate(link, lambda: self.navigate("builder"))
-        self.h1 = ttk.Label(self.header, text=self.title, style="H1.TLabel")
-        self.h1.pack(anchor="w")
-        self.lead_label = ttk.Label(self.header, text=self.lead, style="Lead.TLabel", wraplength=760, justify="left")
-        self.lead_label.pack(anchor="w", pady=(GUTTER // 2, 0))
+        row = ttk.Frame(self.header)
+        row.pack(anchor="w")
+        self.h1 = ttk.Label(row, text=self.title, style="H1.TLabel")
+        self.h1.pack(side="left")
+        self.lead_icon = info_icon(row, lambda: self.lead, "bg")  # what the page is for: a hover, not a paragraph
+        self.set_lead(self.lead)
         self.body = ttk.Frame(outer)
         self.body.pack(fill="both", expand=True, pady=(2 * GUTTER, 0))
+
+    def set_lead(self, text):
+        self.lead = text
+        self.lead_icon.pack_forget()
+        if text:
+            self.lead_icon.pack(side="left", padx=(8, 0), pady=(10, 0))
 
     def refresh(self):
         """Re-read services and redraw. Called when the page is shown."""

@@ -7,6 +7,7 @@ from tkinter import ttk
 
 from studio_ia.services import FakeServices, Job, QueueState
 from studio_ia.shell import ROUTES, Studio
+from studio_ia.widgets import tips_in
 
 
 def texts(widget):
@@ -29,7 +30,7 @@ class ShellTest(unittest.TestCase):
             page = self.app.show(route)
             self.app.update()
             self.assertIn(spec.title, texts(page), route)
-            self.assertIn(spec.lead, texts(page), route)
+            self.assertIn(spec.lead, tips_in(page), route)  # the lead is the ⓘ hover
 
     def test_sidebar_rows_for_queue_and_data_follow_the_page(self):
         from studio_ia.theme import C

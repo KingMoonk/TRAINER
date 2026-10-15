@@ -10,7 +10,7 @@ from studio_ia.expectation import expectation, table_params
 from studio_ia.pages.base import Page, Throttle
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon
+from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon, tip
 
 ROWS = ("8", "16", "32")
 HOLD = ("2%", "5%", "10%")
@@ -144,8 +144,8 @@ class PretrainingPage(Page):
         card = self._card(T["enough_text"])
         self.enough = tk_label(card, "", 17, "text", "panel", font=font(17, bold=True))
         self.enough.pack(anchor="w")
-        self.enough_note = tk_label(card, "", 13, "muted", "panel", wraplength=720)
-        self.enough_note.pack(anchor="w", pady=(4, 0))
+        self.enough_tip = ""
+        tip(self.enough, lambda: self.enough_tip)
         row = tk.Frame(card, bg=C["panel"])
         row.pack(anchor="w", pady=(8, 0))
         self.expect_line = tk_label(row, "", 13, "text2", "panel")
@@ -153,19 +153,16 @@ class PretrainingPage(Page):
         self.expect_details = ""
         self.expect_info = info_icon(row, lambda: self.expect_details)
         # batches
-        card = self._card(T["batches"], T["batches_desc"])
-        tk_label(card, T["rebuilt_auto"], 12, "dim", "panel").pack(anchor="w")
+        card = self._card(T["batches"], f"{T['batches_desc'].capitalize()}; {T['rebuilt_auto']}.")
         self.step_line = tk_label(card, "", 13, "text2", "panel", wraplength=720)
         self.step_line.pack(anchor="w", pady=(4, 6))
         self.grid = tk.Canvas(card, height=20, bg=C["panel"], highlightthickness=0)
         self.grid.pack(fill="x")
         self.grid.bind("<Configure>", lambda _e: self.draw_rows())
-        tk_label(card, T["rows_per_step"], 14, "text", "panel").pack(anchor="w", pady=(10, 0))
-        tk_label(card, T["rows_desc"], 12, "dim", "panel").pack(anchor="w")
+        tip(tk_label(card, T["rows_per_step"], 14, "text", "panel"), T["rows_desc"].capitalize() + ".").pack(anchor="w", pady=(10, 0))
         self.rows = Segmented(card, ROWS, "16", command=lambda _v: self.update_numbers())
         self.rows.pack(anchor="w", pady=4)
-        tk_label(card, T["held_back"], 14, "text", "panel").pack(anchor="w", pady=(10, 0))
-        tk_label(card, T["held_back_desc"], 12, "dim", "panel").pack(anchor="w")
+        tip(tk_label(card, T["held_back"], 14, "text", "panel"), T["held_back_desc"].capitalize() + ".").pack(anchor="w", pady=(10, 0))
         self.hold = Segmented(card, HOLD, "5%")
         self.hold.pack(anchor="w", pady=4)
         self.per_step = tk_label(card, "", 13, "muted", "panel")
@@ -193,12 +190,10 @@ class PretrainingPage(Page):
         self.steps_line.pack(anchor="w")
         self.lr_line = tk_label(card, "", 13, "text2", "panel")
         self.lr_line.pack(anchor="w", pady=(8, 0))
-        tk_label(card, f"{T['schedule_label']} {T['schedule_value']} {T['schedule_note']}", 13, "text2", "panel").pack(anchor="w")
-        tk_label(card, T["schedule_desc"], 12, "dim", "panel", wraplength=720).pack(anchor="w", pady=(2, 10))
-        self.add_btn = button(card, T["add_queue"], self.add_to_queue, primary=True)
+        tip(tk_label(card, f"{T['schedule_label']} {T['schedule_value']} {T['schedule_note']}", 13, "text2", "panel"), T["schedule_desc"]).pack(anchor="w", pady=(0, 10))
+        self.footer_tip = ""
+        self.add_btn = tip(button(card, T["add_queue"], self.add_to_queue, primary=True), lambda: self.footer_tip)
         self.add_btn.pack(anchor="w")
-        self.footer = tk_label(card, "", 13, "muted", "panel", wraplength=720)
-        self.footer.pack(anchor="w", pady=(8, 0))
 
     # helpers ------------------------------------------------------------
     def _card(self, kicker, gloss=""):
@@ -208,7 +203,7 @@ class PretrainingPage(Page):
         head.pack(fill="x", pady=(0, 8))
         Kicker(head, kicker, bg="panel").pack(side="left")
         if gloss:
-            tk_label(head, "  " + gloss, 13, "muted", "panel").pack(side="left")
+            info_icon(head, gloss).pack(side="left", padx=(4, 0))
         return card
 
     def _link(self, parent, text, route):
@@ -382,15 +377,15 @@ class PretrainingPage(Page):
         if getattr(self, "estimating", False):
             self.per_step.configure(text=T["per_step_only"].format(pieces=f"{per_step:,}"))
             self.enough.configure(text=T["estimating"])
-            self.enough_note.configure(text=T["word_pieces_plain"])
+            self.enough_tip = T["word_pieces_plain"]
         elif pieces and params:
             ratio = pieces / params
             headline, verdict = enough_text(ratio)
             self.enough.configure(text=headline)
-            self.enough_note.configure(text=(T["word_pieces_plenty"] if verdict == "plenty" else T["word_pieces_rule"]).format(ratio=ratio_text(ratio)))
+            self.enough_tip = (T["word_pieces_plenty"] if verdict == "plenty" else T["word_pieces_rule"]).format(ratio=ratio_text(ratio))
         else:
             self.enough.configure(text=T["text_unknown"])
-            self.enough_note.configure(text=T["word_pieces_plain"])
+            self.enough_tip = T["word_pieces_plain"]
         line, self.expect_details = version_expectation(getattr(self, "v", None) and self.v.spec, p, LENGTHS[self.length.value])
         self.expect_line.configure(text=line)
         self.expect_info.pack_forget()
@@ -436,7 +431,7 @@ class PretrainingPage(Page):
             sub.configure(text=f"{why}, so {vn} must start from scratch." if blocked else texts[key][1])
             box.configure(highlightbackground=C["violet"] if on else C["border"], highlightthickness=2 if on else 1)
         self.need.configure(text=f"version {v.number} needs catch-up training" if v else "")
-        self.footer.configure(text=T["queue_note"].format(parent=f"version {pn}" if pn else "its current version", version=vn))
+        self.footer_tip = (T["queue_note"].format(parent=f"version {pn}" if pn else "its current version", version=vn))
         self.add_btn.state(["!disabled" if v and self.chosen() and self.steps() else "disabled"])
 
     def pick_mode(self, key):

@@ -10,6 +10,7 @@ from studio_ia.copy import YOURDATA as Y
 from studio_ia.pages import your_data
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
+from studio_ia.widgets import tips_in
 
 
 def labels(widget):
@@ -52,13 +53,15 @@ class DataPagesTest(unittest.TestCase):
         page = self.app.show("your_data")
         self.app.update()
         text = labels(page)
-        for want in (Y["h1"], Y["lead"], Y["text_tab"], Y["conversations_tab"], Y["problems_tab"], Y["conversations_lead"],
-                     Y["conversations_note"], "‹ " + Y["back_post"], Y["search"]):
+        for want in (Y["h1"], Y["text_tab"], Y["conversations_tab"], Y["problems_tab"], "‹ " + Y["back_post"], Y["search"]):
             self.assertIn(want, text)
+        tips = tips_in(page)  # the explanations are hovers now
+        for want in (Y["lead"], Y["text_lead"], Y["conversations_lead"], Y["problems_lead"], Y["conversations_note"]):
+            self.assertIn(want, tips)
+            self.assertNotIn(want, text)
         self.click(find(page, Y["problems_tab"]))
-        text = labels(page)
-        for want in (Y["problems_lead"], Y["problems_note"], "‹ " + Y["back_post"]):
-            self.assertIn(want, text)
+        self.assertIn(Y["problems_note"], tips_in(page))
+        self.assertIn("‹ " + Y["back_post"], labels(page))
         self.assertEqual(page.add_button.cget("text"), Y["problems_add"])
         self.assertEqual(page.make_button.cget("text"), Y["problems_make"])
         self.click(find(page, Y["text_tab"]))
@@ -71,7 +74,7 @@ class DataPagesTest(unittest.TestCase):
         page = self.app.show("your_data")
         self.click(find(page, Y["problems_tab"]))
         self.settle()  # the collection is read on the worker
-        self.assertIn(Y["problems_collection_desc"], labels(page))
+        self.assertIn(Y["problems_collection_desc"], tips_in(page))
         find(page, Y["download_add_all"], (ttk.Button,)).invoke()
         find(page, Y["download_add"], (ttk.Button,)).invoke()
         self.assertEqual(self.fake.calls, [("download_sources", None, "problems", True),
@@ -149,9 +152,12 @@ class DataPagesTest(unittest.TestCase):
         page = self.app.show("make_data")
         self.app.update()
         text = labels(page)
-        for want in (M["h1"], M["lead"], M["problems_rule"], M["rewrite_model"], M["prose_model"], M["kicker"], M["problems_example"],
-                     M["problems_where"], M["how_many"]):
+        for want in (M["h1"], M["problems_rule"], M["rewrite_model"], M["prose_model"], M["kicker"], M["problems_example"],
+                     M["how_many"]):
             self.assertIn(want, text)
+        self.assertIn(M["lead"], tips_in(page))
+        self.assertIn(M["problems_where"], tips_in(page))
+        self.assertIn(M["problems_note"], tips_in(page))
         self.invoke(page.try5)
         self.assertTrue(page.status.cget("text").startswith(M["preview"]))
         before = self.fake.data("problems").count

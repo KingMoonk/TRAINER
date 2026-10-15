@@ -16,7 +16,7 @@ from studio_ia.copy import YOURDATA as T
 from studio_ia.pages.base import Page, Throttle
 from studio_ia.pages.pretraining import source_action, source_status
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import _activate, button
+from studio_ia.widgets import _activate, button, tip
 
 KINDS = ("text", "conversations", "problems")
 PAGE = 200  # rows the table gains per read
@@ -153,14 +153,13 @@ class YourDataPage(Page):
             name, used, count = (tk_label(tab, "", s, c, "panel", font=font(s, bold=b)) for s, c, b in ((15, "text", True), (12, "muted", False), (13, "text2", False)))
             for w in (name, used, count):
                 w.pack(fill="x")
+            tip(tab, T[f"{k}_lead"])
             _activate(tab, lambda k=k: self.show(k))
             for w in (name, used, count):
                 w.bind("<Button-1>", lambda _e, k=k: self.show(k))
             self.tabs[k] = (tab, name, used, count)
-        self.lead_line = tk_label(body, "", 15, "text", wraplength=760)
-        self.lead_line.pack(fill="x")
         self.sets_line = tk_label(body, "", 13, "muted", wraplength=760)
-        self.sets_line.pack(fill="x", pady=(2, 0))
+        self.sets_line.pack(fill="x", pady=(GUTTER, 0))
         bar = tk.Frame(body, bg=C["bg"])
         bar.pack(fill="x", pady=GUTTER)
         tk_label(bar, T["search"], 13, "muted").pack(side="left")
@@ -193,10 +192,9 @@ class YourDataPage(Page):
         ttk.Button(self.review_row, text=T["mark_good"], style="Primary.TButton", command=lambda: self._review(True)).pack(side="left")
         ttk.Button(self.review_row, text=T["discard"], command=lambda: self._review(False)).pack(side="left", padx=8)
         self.edit_button = ttk.Button(self.detail, text=T["edit"], command=self.edit)
-        self.note = tk_label(body, "", 13, "muted", wraplength=760)
-        self.note.pack(fill="x", pady=GUTTER)
+        tip(self.detail, lambda: T[f"{self.kind}_note"])
         buttons = self.buttons = tk.Frame(body, bg=C["bg"])
-        buttons.pack(fill="x")
+        buttons.pack(fill="x", pady=(GUTTER, 0))
         self.add_button = ttk.Button(buttons, style="Primary.TButton", command=self.add)
         self.add_button.pack(side="left")
         ttk.Button(buttons, text=T["import"], command=self.import_files).pack(side="left", padx=8)
@@ -205,9 +203,7 @@ class YourDataPage(Page):
         self.make_button = ttk.Button(buttons, command=self.make)
         self.make_button.pack(side="left", padx=8)
         card = self.collection_card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
-        tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)).pack(anchor="w")
-        self.collection_desc = tk_label(card, "", 13, "muted", "panel", wraplength=760)
-        self.collection_desc.pack(anchor="w")
+        tip(tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)), lambda: T[f"{self.kind}_collection_desc"]).pack(anchor="w")
         self.collection_rows = tk.Frame(card, bg=C["panel"])
         self.collection_rows.pack(fill="x", pady=(6, 0))
         self.notes, self.collections, self.status_labels, self.painted = {}, {}, {}, None  # notes: source id -> latest progress line
@@ -298,11 +294,9 @@ class YourDataPage(Page):
             used.configure(text=sk.used_by, bg=bg)
             count.configure(text=sk.count_line, bg=bg)
         self.back.configure(text="‹ " + back_link(kind)[0])
-        self.lead_line.configure(text=T[f"{kind}_lead"])
         self.sets_line.configure(text=" · ".join(f"{x['name']} ({x['count']:,})" for x in s.sets) or T["no_sets"])
         self.table.heading("a", text=T[f"{kind}_col_a"])
         self.table.heading("b", text=T[f"{kind}_col_b"])
-        self.note.configure(text=T[f"{kind}_note"])
         self.add_button.configure(text=T[f"{kind}_add"])
         self.make_button.configure(text=T[f"{kind}_make"])
         self.dup_button.configure(text=dup_label(s.near_duplicates, self.only_dups), state="normal" if s.near_duplicates else "disabled")
@@ -338,7 +332,6 @@ class YourDataPage(Page):
         else:
             self.collection_card.pack_forget()
         rows = self.collections.get(kind, [])
-        self.collection_desc.configure(text=T[f"{kind}_collection_desc"])
         if self.painted == (kind, rows):  # only the status lines move while a download runs; they are updated in place
             return
         self.painted = (kind, rows)
