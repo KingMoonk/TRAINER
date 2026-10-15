@@ -20,8 +20,8 @@ def fake(**state):
 class Areas(unittest.TestCase):
     def test_queue_and_data_are_rows_of_their_own(self):
         names = dict(AREAS)
-        self.assertEqual((names["machine"], AREA_HOME["machine"]), ("This computer", "queue"))
-        self.assertEqual((names["data"], AREA_HOME["data"]), ("Your data", "your_data"))
+        self.assertEqual((names["machine"], AREA_HOME["machine"]), ("Queue", "queue"))
+        self.assertEqual((names["data"], AREA_HOME["data"]), ("Resources", "your_data"))
         self.assertLess([k for k, _ in AREAS].index("chat"), [k for k, _ in AREAS].index("machine"))
         self.assertEqual((ROUTES["queue"].area, ROUTES["your_data"].area, ROUTES["make_data"].area), ("machine", "data", "data"))
 

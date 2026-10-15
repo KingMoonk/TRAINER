@@ -1,4 +1,4 @@
-"""The Your data summaries on disk: data/summaries.sqlite.
+"""The Resources summaries on disk: data/summaries.sqlite.
 
 Three tables. `datasets` holds one small JSON entry per dataset (counts and the dataset's `rev`), `rows` one row per sample
 example (what the table shows, and the near-duplicate signature) and `meta` the format, the stamp of the files it describes

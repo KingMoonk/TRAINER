@@ -13,7 +13,7 @@ class TestIACopy(unittest.TestCase):
         "BUILDER": "Build your model",
         "CHAT": "Chat",
         "COMPARE": "Compare runs",
-        "QUEUE": "This computer",
+        "QUEUE": "Training queue",
         "QUICKTEST": "Quick test",
         "TRACE": "Trace a position",
         "TRAINING": "Pretraining · version 5 catching up",
@@ -25,7 +25,7 @@ class TestIACopy(unittest.TestCase):
         "PRETRAINING": "Pretraining",
         "FEEDBACK": "Post-training",
         "MAKEDATA": "Make extra data",
-        "YOURDATA": "Your data",
+        "YOURDATA": "Resources",
         "NAV": "Network designer",  # First item in NAV
     }
 

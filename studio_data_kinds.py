@@ -1,4 +1,4 @@
-"""Three kinds of workspace data (text, conversations, problems), summaries for the Your data page, near-duplicates.
+"""Three kinds of workspace data (text, conversations, problems), summaries for the Resources page, near-duplicates.
 
 Problems are ordinary workspace examples with an extra "rule" (and "params"); both are mirrored into "metadata"
 because studio_core.normalize drops unknown keys when an example is edited.

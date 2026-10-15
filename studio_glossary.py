@@ -96,7 +96,7 @@ GLOSSARY = {
     "loss_type": ("Loss type", "The maths used for feedback training. 'dpo' is the standard; 'ipo' is steadier when your judgements are noisy."),
     "arena": ("Compare checkpoints", "A fair contest: two models answer the same prompts and a judge picks the winner each time."),
     # ---- extra terms
-    "working_dataset": ("Working dataset", "The dataset the other pages act on: training, feedback prompts and saved corrections all use it. Pick it on the Your data page."),
+    "working_dataset": ("Working dataset", "The dataset the other pages act on: training, feedback prompts and saved corrections all use it. Pick it on the Resources page."),
     "sample_size": ("Source sample size", "How many of your existing examples are shown to the generator as raw material. More variety, but slower."),
     "attempts": ("Attempt multiplier", "The generator tries this many times more candidates than you asked for, because some are thrown away by the quality checks."),
     "teacher_batch": ("Examples per teacher call", "How many examples the teacher model writes in each request. Smaller batches are slower but easier for small teachers."),

@@ -41,7 +41,7 @@ def round_outlook(services, i, status):
 
 def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
     """Why a round cannot be queued yet (plain words), or None. counts = post_training()["counts"]; teacher 0 = previous best."""
-    need = {0: ("conversations", 1, "Add conversations in Your data first."),
+    need = {0: ("conversations", 1, "Add conversations in Resources first."),
             1: ("problems", 1, "Make problems a rule can check first."),
             3: ("pairs", 2, "Rate at least 2 pairs in Chat first.")}
     if not checkpoint:
@@ -245,7 +245,7 @@ class PostTrainingPage(Page):
     def _r1(self, card):
         pair = tk.Frame(card, bg=C["panel"])
         pair.pack(fill="x")
-        self._box(pair, T["prompt_scored"], self.example.get("prompt") or "No conversations yet: add some in Your data.")
+        self._box(pair, T["prompt_scored"], self.example.get("prompt") or "No conversations yet: add some in Resources.")
         self._box(pair, T["answer_learns"], self.example.get("answer") or "The answer from the same conversation appears here.")
         nums = tk.Frame(card, bg=C["panel"])
         nums.pack(fill="x", pady=(GUTTER, 6))

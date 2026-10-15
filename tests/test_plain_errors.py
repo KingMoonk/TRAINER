@@ -33,7 +33,7 @@ class PlainErrorTest(unittest.TestCase):
 
     def test_disk_full(self):
         self.assertEqual(plain_error(OSError(errno.ENOSPC, "No space left on device")),
-                         "The disk is full. Free space in This computer › Storage, then try again.")
+                         "The disk is full. Free space in Resources › Storage, then try again.")
 
     def test_other_oserror_is_not_called_disk_full(self):
         with self.assertLogs("studio_ia.services", logging.ERROR):
@@ -147,7 +147,7 @@ class DiskCheckTest(unittest.TestCase):
         self.assertEqual(job.status, "failed")
         self.assertEqual(self.ran, [])
         self.assertIn("Not enough disk space for this run: 200 MB free, about 2.0 GB needed.", job.error)
-        self.assertIn("This computer › Storage", job.error)
+        self.assertIn("Resources › Storage", job.error)
 
     def test_enough_room_runs_the_job(self):
         job = self.finish(free=50 * 2 ** 30)

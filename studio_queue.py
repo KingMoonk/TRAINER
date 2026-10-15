@@ -396,7 +396,7 @@ class Runner:
         if free >= need:
             return ""
         return (f"Not enough disk space for this run: {size_text(free)} free, about {size_text(need)} needed. "
-                "Free space in This computer › Storage.")
+                "Free space in Resources › Storage.")
 
     def _run(self, job):
         handler = self.handlers.get(job.kind)

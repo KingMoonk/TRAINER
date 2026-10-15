@@ -1,4 +1,4 @@
-"""Your data / Make extra data: decision logic and the data methods of the services (no Tk window)."""
+"""Resources / Make extra data: decision logic and the data methods of the services (no Tk window)."""
 import random
 import tempfile
 import unittest
@@ -86,7 +86,7 @@ class MakeDataLogicTest(unittest.TestCase):
         self.assertIn("(rule decides)", "".join(md.preview_lines(problem_report(problem_items("ends_cleanly", 2, random.Random(0))))))
 
     def test_summaries(self):
-        self.assertEqual(md.problems_summary({"added": 5, "duplicates": 0}), "Added 5 problems to Your data → Problems.")
+        self.assertEqual(md.problems_summary({"added": 5, "duplicates": 0}), "Added 5 problems to Resources → Problems.")
         self.assertIn("(2 duplicates skipped)", md.problems_summary({"added": 3, "duplicates": 2}))
         self.assertIn("Nothing is used until you mark it Good", md.drafts_summary("text", 4))
 

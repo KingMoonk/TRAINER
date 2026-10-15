@@ -473,7 +473,7 @@ class BuilderPage(Page):
 
     def _queue(self, sets, from_scratch):
         if not sets:
-            self.note = "There is no plain text to train on yet. Add some in Your data, then queue it."
+            self.note = "There is no plain text to train on yet. Add some in Resources, then queue it."
             return self.render()
         parent = self.base.best_checkpoint if self.base else None
         mode = "from_scratch" if from_scratch or self.needs_scratch() else "catch_up"

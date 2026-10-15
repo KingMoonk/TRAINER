@@ -111,7 +111,7 @@ class MakeDataPage(Page):
         self.show(CARDS[0]["makes"])
 
     def show(self, kind):
-        """Select the card that makes `kind` (links from Your data call this)."""
+        """Select the card that makes `kind` (links from Resources call this)."""
         self.k = card_for(kind)
         self.status.configure(text="")
         self.refresh()

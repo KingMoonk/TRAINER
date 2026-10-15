@@ -1,4 +1,5 @@
-"""Your data: three tabs (text, conversations, problems) with counts, search, a table with STATUS, review and actions.
+"""Resources: three data tabs (text, conversations, problems) with counts, search, a table with STATUS, review and actions,
+and a Storage tab that frees disk space.
 
 Reads and writes only through services (data, data_page, add_data, edit_data, import_data, review_data). Decision logic is in
 plain functions and classes at the top so it runs without Tk. The summaries give the counts; the table is read a page at a time
@@ -16,16 +17,33 @@ from studio_ia.copy import YOURDATA as T
 from studio_ia.pages.base import Page, Throttle
 from studio_ia.pages.pretraining import source_action, source_status
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import _activate, button, tip
+from studio_ia.widgets import _activate, button, info_icon, tip
 
 KINDS = ("text", "conversations", "problems")
+STORAGE = "storage"  # the fourth tab: not a kind of data
 PAGE = 200  # rows the table gains per read
 SEARCH_DELAY = 250  # ms after the last key before a search runs
 PROGRESS_EVERY = 1.0  # seconds between repaints of a download's status line
 CELL_PAD = 16  # px of a table cell that text cannot use
 CELL_READ = 2000  # characters of a cell looked at; the rest could never fit
+CHOICES = {"Older than 1 day": (1, False), "Older than 7 days": (7, False), "Older than 30 days": (30, False), "Older than 90 days": (90, False), "All history": (None, False)}
+ALL = "All history"
 STATUS_COLOR = {"In use": "text2", "Held back": "blue", "Near-duplicate": "amber", "Good": "violet", "Review": "muted",
                 "From Chat": "pink", "Ready": "text2"}
+
+
+def size_text(n):
+    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.1f} MB"
+
+
+def storage_state(services, choice, data=False):
+    """Window-free state of the Storage tab: (days, data, checkbox enabled, line text, button enabled).
+    `data` only counts with "All history"."""
+    days = CHOICES[choice][0]
+    data = bool(data) and choice == ALL
+    items, size = services.storage(days, data)
+    line = T["storage_frees"].format(size=size_text(size), n=items) if items else T["storage_nothing"]
+    return days, data, choice == ALL, line, items > 0
 
 
 def fit_cell(text, width, measure):
@@ -132,6 +150,7 @@ class YourDataPage(Page):
     def __init__(self, parent, services, navigate=None, **kw):
         super().__init__(parent, services, navigate, **kw)
         self.kind, self.only_dups, self.summaries, self.selected = "conversations", False, {}, None
+        self.storage_open, self.in_storage, self.freed = False, False, None  # Storage tab chosen, Storage view on screen, the "Freed" line a reload keeps
         self.rows, self.cursor, self.applied, self.loading_more = [], None, "", False  # the table: loaded rows, where the next page starts, the query they answer
         self.search = Search(self.after, self.after_cancel, lambda token: self._request(token, None))
         self.query = tk.StringVar()
@@ -144,9 +163,9 @@ class YourDataPage(Page):
         self.back = tk_label(body, "", 14, "violet", cursor="hand2", takefocus=1)
         self.back.pack(anchor="w")
         self.tabs = {}
-        row = tk.Frame(body, bg=C["bg"])
+        row = self.tab_row = tk.Frame(body, bg=C["bg"])
         row.pack(fill="x", pady=GUTTER)
-        for k in KINDS:
+        for k in (*KINDS, STORAGE):
             tab = tk.Frame(row, bg=C["panel"], takefocus=1, cursor="hand2", highlightthickness=1, highlightbackground=C["border"],
                            highlightcolor=C["violet"], padx=GUTTER, pady=10)
             tab.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -158,6 +177,9 @@ class YourDataPage(Page):
             for w in (name, used, count):
                 w.bind("<Button-1>", lambda _e, k=k: self.show(k))
             self.tabs[k] = (tab, name, used, count)
+        body = self.data_view = tk.Frame(self.body, bg=C["bg"])  # everything under the tabs except Storage
+        body.pack(fill="x")
+        self._build_storage()
         self.sets_line = tk_label(body, "", 13, "muted", wraplength=760)
         self.sets_line.pack(fill="x", pady=(GUTTER, 0))
         bar = tk.Frame(body, bg=C["bg"])
@@ -210,9 +232,67 @@ class YourDataPage(Page):
         self.throttle, self.dirty, self.flush_timer, self.resize_timer = Throttle(PROGRESS_EVERY), set(), None, None
         _activate(self.back, self.go_back)
 
+    # storage ------------------------------------------------------------------------
+    def _build_storage(self):
+        card = self.storage_view = ttk.Frame(self.body)  # packed in place of data_view while the Storage tab is open
+        top = tk.Frame(card, bg=C["bg"])
+        top.pack(anchor="w", pady=(GUTTER, 0))
+        self.free = tk_label(top, "", 14, "text2", bg="bg")
+        self.free.pack(side="left")
+        info_icon(top, T["storage_desc"], "bg").pack(side="left", padx=(4, 0))
+        self.choice, self.wipe = tk.StringVar(value="Older than 30 days"), tk.BooleanVar(value=False)
+        self.line = tk_label(card, "", 14, "text2")
+        self.delete_btn = ttk.Button(card, text=T["storage_delete"], command=self._delete)
+        self.data_box = ttk.Checkbutton(card, text=T["storage_data"], variable=self.wipe, command=self._paint_storage)
+        for label in CHOICES:
+            ttk.Radiobutton(card, text=T["storage_all"] if label == ALL else label,
+                            value=label, variable=self.choice, command=self._paint_storage).pack(anchor="w")
+        self.data_box.pack(anchor="w", pady=(6, 0))
+        self.line.pack(anchor="w", pady=6)
+        self.delete_btn.pack(anchor="w")
+
+    def _paint_storage(self, text=None):
+        _days, data, box, line, ok = storage_state(self.services, self.choice.get(), self.wipe.get())
+        if not box:
+            self.wipe.set(False)
+        self.free.configure(text=T["storage_free"].format(size=size_text(self.services.free_space())))
+        self.data_box.state(["!disabled" if box else "disabled"])
+        self.delete_btn.state(["!disabled" if ok else "disabled"])
+        self.line.configure(text=text or self.freed or line)
+        self.freed = None
+
+    def _delete(self):
+        days, data, _box, _line, _ok = storage_state(self.services, self.choice.get(), self.wipe.get())
+        items, size = self.services.storage(days, data)
+        if not messagebox.askyesno(T["storage"], T["storage_confirm"].format(n=items, size=size_text(size))):
+            return
+        try:
+            _n, freed = self.services.clean_storage(days, data)
+        except RuntimeError as error:
+            return self._paint_storage(str(error))
+        self.freed = T["storage_freed"].format(size=size_text(freed))
+        self.reload()  # deleting datasets changes the counts
+
+    def _show_view(self):
+        """Storage replaces everything under the tabs; the back link belongs to the three data tabs."""
+        if self.storage_open == self.in_storage:
+            return
+        self.in_storage = self.storage_open
+        if self.storage_open:
+            self.data_view.pack_forget()
+            self.back.pack_forget()
+            self.storage_view.pack(fill="x")
+        else:
+            self.storage_view.pack_forget()
+            self.back.pack(anchor="w", before=self.tab_row)
+            self.data_view.pack(fill="x")
+
     # navigation ---------------------------------------------------------------------
     def show(self, kind):
         """Open on one tab (links from other pages call this after navigating here)."""
+        self.storage_open = kind == STORAGE
+        if self.storage_open:
+            return self._render()  # no data to read
         self.kind, self.only_dups, self.selected = kind, False, None
         self.rows, self.cursor, self.applied = [], None, ""
         self.query.set("")
@@ -287,12 +367,13 @@ class YourDataPage(Page):
     def _render(self):
         kind, s = self.kind, self.summaries[self.kind]
         for k, (tab, name, used, count) in self.tabs.items():
-            on, sk = k == kind, self.summaries[k]
+            on = k == (STORAGE if self.storage_open else kind)
             bg = C["panel2"] if on else C["panel"]
             tab.configure(bg=bg, highlightbackground=C["violet"] if on else C["border"])
             name.configure(text=T[f"{k}_tab"], bg=bg)
-            used.configure(text=sk.used_by, bg=bg)
-            count.configure(text=sk.count_line, bg=bg)
+            used.configure(text=T["storage_used"] if k == STORAGE else self.summaries[k].used_by, bg=bg)
+            count.configure(text=T["storage_count"].format(size=size_text(self.services.free_space())) if k == STORAGE
+                            else self.summaries[k].count_line, bg=bg)
         self.back.configure(text="‹ " + back_link(kind)[0])
         self.sets_line.configure(text=" · ".join(f"{x['name']} ({x['count']:,})" for x in s.sets) or T["no_sets"])
         self.table.heading("a", text=T[f"{kind}_col_a"])
@@ -301,6 +382,9 @@ class YourDataPage(Page):
         self.make_button.configure(text=T[f"{kind}_make"])
         self.dup_button.configure(text=dup_label(s.near_duplicates, self.only_dups), state="normal" if s.near_duplicates else "disabled")
         self.paint_collection()
+        self._show_view()
+        if self.storage_open:
+            self._paint_storage()
 
     def _paint_rows(self, keep=0):
         """Show self.rows; the first `keep` of them are already in the table (a page was appended, or nothing changed)."""

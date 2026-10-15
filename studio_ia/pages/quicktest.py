@@ -29,7 +29,7 @@ LOOK_AT = {  # a failed check names the part to look at
     "memorises_one_batch": "Look at the parts you changed: the design cannot even fit one small batch, so something in it or its maths is broken.",
     "error_falls": "Look at the learning rate and schedule: the error did not fall by more than its wobble."}
 GUARD = "A design that never gets below counting word frequencies hasn't learned to use context."
-NO_TEXT = "Your data has no plain text yet. Add some in Your data, or pick another tiny dataset."
+NO_TEXT = "Your data has no plain text yet. Add some in Resources, or pick another tiny dataset."
 
 
 def describe(spec):

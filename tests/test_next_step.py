@@ -1,4 +1,4 @@
-"""One next-step model (ordered states), and the three guards that read it: Compare's queue button, Head lab tiles, Your data's collection card."""
+"""One next-step model (ordered states), and the three guards that read it: Compare's queue button, Head lab tiles, Resources' collection card."""
 import unittest
 from datetime import datetime
 

@@ -76,7 +76,7 @@ def plain_error(error, name=None):
     if isinstance(error, (urllib.error.URLError, socket.timeout, ConnectionError)):
         return "Could not reach the download server. Check the connection and try again."
     if isinstance(error, OSError) and error.errno == errno.ENOSPC:
-        return "The disk is full. Free space in This computer › Storage, then try again."
+        return "The disk is full. Free space in Resources › Storage, then try again."
     if isinstance(error, MemoryError):
         return f"Ran out of memory while reading {what}."
     if isinstance(error, (cat.DownloadCancelled, ValueError)) and str(error):
@@ -975,7 +975,7 @@ class WorkspaceServices(Services):
         import studio_catalog as cat
         rebuilt = cat.refresh_downloads(self.workspace)
         if rebuilt:
-            self.emit("downloads_finished", {"ids": rebuilt})  # the Your data page reloads its summaries once
+            self.emit("downloads_finished", {"ids": rebuilt})  # the Resources page reloads its summaries once
         return rebuilt
 
     def move_up(self, job_id):

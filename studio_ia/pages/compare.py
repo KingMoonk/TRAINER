@@ -25,7 +25,7 @@ def queue_block(plan, error, variants, guess):
     return LOOKS[1] if not variants else LOOKS[0] if not guess else ""
 
 
-NO_TEXT = "Your data has no plain text yet. Add some in Your data, then queue the runs."
+NO_TEXT = "Your data has no plain text yet. Add some in Resources, then queue the runs."
 
 MODE_KEYS = (("params", "params_mode", "params_note", "x_axis_text"), ("compute", "compute_mode", "compute_note", "x_axis_compute"),
              ("tokens", "tokens_mode", "tokens_note", "x_axis_text"), ("wall-clock", "time_mode", "time_note", "x_axis_time"))

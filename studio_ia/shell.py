@@ -19,7 +19,7 @@ from studio_ia.widgets import Progress, _activate
 Route = namedtuple("Route", "area title lead crumb")
 
 AREAS = [("designer", "Network designer"), ("pretraining", "Pretraining"), ("post", "Post-training"), ("chat", "Chat"),
-         ("machine", "This computer"), ("data", "Your data")]
+         ("machine", "Queue"), ("data", "Resources")]
 AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat", "machine": "queue", "data": "your_data"}
 UTILITY_AREAS = ("machine", "data")  # not stages of the pipeline: set off from the four above by a rule
 LI = ("Network designer", "Look inside")
@@ -30,7 +30,7 @@ ROUTES = {
     "builder": Route("designer", "Build your model", "", ()),
     "quicktest": Route("designer", "Quick test", "", ("Network designer",)),
     "compare": Route("designer", "Compare runs", "A difference counts only if it is larger than the spread across seeds.", ("Network designer",)),
-    "queue": Route("machine", "This computer", "", ()),
+    "queue": Route("machine", "Training queue", "", ()),
     "trace": Route("designer", "Trace a position", "", (*LI, "Trace a position")),
     "head_zoom": Route("designer", "Inside a head", "", (*LI, "Inside a head")),
     "value_map": Route("designer", "Value map", "", (*LI, "Value map")),
@@ -39,7 +39,7 @@ ROUTES = {
     "inside3d": Route("designer", "Inside the network", "", (*LI, "3D")),
     "pretraining": Route("pretraining", "Pretraining", "", ()),
     "training_run": Route("pretraining", "Pretraining", "", ()),
-    "your_data": Route("data", "Your data", "Three kinds, because each one trains a different stage.", ()),
+    "your_data": Route("data", "Resources", "Three kinds, because each one trains a different stage.", ()),
     "make_data": Route("data", "Make extra data", "", ()),
     "post_training": Route("post", "Post-training", "Always in this order. The design stays the same; only the weights shift.", ()),
     "chat": Route("chat", "Chat", "", ()),

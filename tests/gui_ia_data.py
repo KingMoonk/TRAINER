@@ -1,9 +1,10 @@
-"""Your data and Make extra data on FakeServices: board copy, tabs, review, generate/preview, navigation with a kind."""
+"""Resources (with its Storage tab) and Make extra data on FakeServices: board copy, tabs, review, generate/preview, navigation with a kind."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import time
 import tkinter as tk
 import unittest
 from tkinter import ttk
+from unittest import mock
 
 from studio_ia.copy import MAKEDATA as M
 from studio_ia.copy import YOURDATA as Y
@@ -53,7 +54,7 @@ class DataPagesTest(unittest.TestCase):
         page = self.app.show("your_data")
         self.app.update()
         text = labels(page)
-        for want in (Y["h1"], Y["text_tab"], Y["conversations_tab"], Y["problems_tab"], "‹ " + Y["back_post"], Y["search"]):
+        for want in (Y["h1"], Y["text_tab"], Y["conversations_tab"], Y["problems_tab"], Y["storage_tab"], "‹ " + Y["back_post"], Y["search"]):
             self.assertIn(want, text)
         tips = tips_in(page)  # the explanations are hovers now
         for want in (Y["lead"], Y["conversations_lead"], Y["problems_lead"], Y["conversations_note"]):
@@ -181,6 +182,27 @@ class DataPagesTest(unittest.TestCase):
         page._ask = lambda _prompt, initial="": next(answers)
         page.edit_button.invoke()
         self.assertEqual(self.fake.edits[-1], ("c1", {"user": "Name a prime.", "assistant": "11 is a prime number."}))
+
+    def test_storage_tab_replaces_the_data_view_and_deletes_after_asking(self):
+        self.fake.storage = lambda days=None, data=False: (2, 3_000_000)
+        page = self.app.show("your_data")
+        self.settle()
+        self.click(find(page, Y["storage_tab"]))
+        self.assertTrue(page.storage_view.winfo_ismapped())
+        self.assertFalse(page.table.winfo_ismapped())
+        self.assertIn(Y["storage_free"].format(size="120.0 GB"), labels(page))
+        with mock.patch("tkinter.messagebox.askyesno", return_value=False) as ask:
+            page.delete_btn.invoke()
+        self.assertIn("cannot be undone", ask.call_args.args[1])
+        self.assertFalse(hasattr(self.fake, "cleaned"))
+        with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+            page.delete_btn.invoke()
+        self.settle()
+        self.assertEqual(self.fake.cleaned, (30, False))
+        self.click(find(page, Y["text_tab"]))
+        self.settle()
+        self.assertTrue(page.table.winfo_ismapped())
+        self.assertFalse(page.storage_view.winfo_ismapped())
 
     def test_navigation_carries_the_kind(self):
         page = self.app.show("your_data")
