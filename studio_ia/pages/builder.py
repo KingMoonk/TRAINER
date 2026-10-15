@@ -19,7 +19,7 @@ from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon
+from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon, tip
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
@@ -580,8 +580,7 @@ class BuilderPage(Page):
     def _tower(self, parent):
         box = tk.Frame(parent, bg=C["panel2"], highlightthickness=1, highlightbackground=C["border"])
         box.pack(fill="x")
-        tk_label(box, T["next_word"], 15, "text", "panel2", font=font(15, bold=True)).pack(anchor="w", padx=12, pady=(8, 0))
-        tk_label(box, T["next_word_desc"], 12, "muted", "panel2").pack(anchor="w", padx=12, pady=(0, 8))
+        tip(tk_label(box, T["next_word"], 15, "text", "panel2", font=font(15, bold=True)), T["next_word_desc"]).pack(anchor="w", padx=12, pady=8)
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
         cur, dr, editing = self.cur, self.draft, self.phase == "edit"
         for i in range(max(cur["L"], dr["L"]) - 1, -1, -1):
@@ -598,7 +597,7 @@ class BuilderPage(Page):
                 tk_label(row, tag, 12, "amber", row["bg"]).pack(side="right", padx=8)
         step = tk.Frame(parent, bg=C["bg"])
         step.pack(anchor="w", pady=8)
-        tk_label(step, f"{T['blocks']}  ", 14, "text", "bg").pack(side="left")
+        tip(tk_label(step, f"{T['blocks']}  ", 14, "text", "bg"), T["blocks_desc"]).pack(side="left")
         self.minus = button(step, "−", lambda: self.edit(L=max(1, dr["L"] - 1)))
         self.plus = button(step, "+", lambda: self.edit(L=min(12, dr["L"] + 1)))
         self.minus.pack(side="left")
@@ -607,7 +606,6 @@ class BuilderPage(Page):
         self.plus.pack(side="left")
         if dr["L"] != cur["L"]:
             tk_label(step, f"  was {cur['L']}", 13, "muted", "bg").pack(side="left")
-        tk_label(step, f"  {T['blocks_desc']}", 12, "dim", "bg").pack(side="left")
         for b in (self.minus, self.plus):
             b.state(["!disabled"] if editing else ["disabled"])
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
@@ -626,8 +624,6 @@ class BuilderPage(Page):
             line.pack(anchor="w")
             for p in pieces[k:k + 14]:
                 Chip(line, p, "pieces").pack(side="left", padx=1, pady=1)
-        tk_label(parent, T["look_back_heads_gloss"], 12, "pink").pack(anchor="w", pady=(8, 0))
-        tk_label(parent, T["thinking_room_gloss"], 12, "blue").pack(anchor="w")
 
     def _seg(self, parent, options, was, key, values, bg="panel"):
         label, value = dict(zip(values, options)), dict(zip(options, values))
@@ -640,12 +636,14 @@ class BuilderPage(Page):
 
     def _controls(self, parent):
         for name, hint, color, opts, key, values in (
-                ("Look-back heads", "how many things each block looks for at once", "pink", [str(h) for h in HEADS], "H", HEADS),
-                ("Thinking room", "space to work on each word", "blue", list(WIDTHS), "W", (0, 1, 2))):
+                ("Look-back heads", T["look_back_heads_tip"], "pink", [str(h) for h in HEADS], "H", HEADS),
+                ("Thinking room", T["thinking_room_tip"], "blue", list(WIDTHS), "W", (0, 1, 2))):
             card = Card(parent)
             card.pack(fill="x", pady=(0, 8))
-            tk_label(card, name, 15, color, "panel", font=font(15, bold=True)).pack(anchor="w")
-            tk_label(card, hint, 12, "muted", "panel").pack(anchor="w")
+            head = tk.Frame(card, bg=C["panel"])
+            head.pack(anchor="w")
+            tk_label(head, name, 15, color, "panel", font=font(15, bold=True)).pack(side="left")
+            info_icon(head, hint).pack(side="left", padx=(4, 0))
             self._seg(card, opts, self.cur[key], key, values)
 
     def _costs(self, a, b):
@@ -684,7 +682,10 @@ class BuilderPage(Page):
         ok = fits(b)
         verdict = T["training_memory_fits"] if ok is None else ("fits" if ok else "doesn't fit")
         self.fits_text = f"{T['training_memory']} {verdict} {T['training_memory_desc']}"
-        tk_label(card, self.fits_text, 12, "muted", "panel", wraplength=780).pack(anchor="w", pady=(6, 0))
+        row = tk.Frame(card, bg=C["panel"])
+        row.pack(anchor="w", pady=(6, 0))
+        tk_label(row, f"{T['training_memory']} {verdict}", 12, "muted", "panel").pack(side="left")
+        info_icon(row, self.fits_text).pack(side="left", padx=(4, 0))
 
     def _expect(self):
         card = Card(self.body)
@@ -772,7 +773,10 @@ class BuilderPage(Page):
         else:
             self.no_curve = curve_note(self.n, self.phase)
             tk_label(card, self.no_curve, 13, "muted", "panel").pack(anchor="w", pady=6)
-        Kicker(card, T["when_answering"], bg="panel").pack(anchor="w", pady=(8, 0))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w", pady=(8, 0))
+        Kicker(head, T["when_answering"], bg="panel").pack(side="left")
+        info_icon(head, T["answering_note"]).pack(side="left", padx=(4, 0))
         trained = {k for k in (self.n, self.n + 1) if self.version(k) and self.version(k).best_checkpoint}
         rows = answer_rows(self.n, trained, self.phase)
         if not rows:  # nothing can answer, so no prompt, rows or button
@@ -794,7 +798,6 @@ class BuilderPage(Page):
         both = len(trained) == 2
         self.ask_btn = button(card, "Ask both versions" if both else f"Ask {version_name(next(iter(trained)))}", self.ask_both)
         self.ask_btn.pack(anchor="w", pady=(6, 0))
-        tk_label(card, T["answering_note"], 12, "dim", "panel", wraplength=780).pack(anchor="w", pady=(6, 0))
 
     def _look_inside(self):
         Kicker(self.body, T["look_inside"]).pack(anchor="w")

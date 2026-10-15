@@ -12,7 +12,7 @@ from studio_ia.copy import HEAD_LAB
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, current, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, _activate, button
+from studio_ia.widgets import Card, GuessChips, HeatGrid, HowItWorks, Kicker, Segmented, _activate, button, info_icon, tip
 
 TESTS = (("previous", "previous_word", "previous_desc"), ("first", "parks_first", "parks_desc"), ("induction", "copying_pattern", "copying_desc"))
 THRESHOLD = .5  # a share of attention above this counts as "passes"; a description of where it looks, not a verdict
@@ -89,18 +89,18 @@ class HeadLabPage(Page):
             intro = HEAD_LAB["checkpoint"].format(version=version.number, checkpoint=ckpt)
         else:
             intro = HEAD_LAB["no_checkpoint"]
-        tk_label(self.body, intro, 13, "muted", wraplength=760).pack(anchor="w")
+        tip(tk_label(self.body, intro, 13, "muted", wraplength=760), HEAD_LAB["checkpoint_tip"] if version and version.best_checkpoint else None).pack(anchor="w")
         top = tk.Frame(self.body, bg=C["bg"])
         top.pack(fill="x", pady=(GUTTER, 4))
         Kicker(top, f"{self.n_heads} HEADS · CLICK ONE").pack(side="left")
-        tk_label(self.body, HEAD_LAB["heads_note"], 13, "muted", wraplength=760).pack(anchor="w")
+        info_icon(top, HEAD_LAB["heads_note"] + "\n\n" + HEAD_LAB["grid_note_ranked" if self.ranked else "grid_note_normal"], "bg").pack(side="left", padx=(4, 0))
         bar = tk.Frame(self.body, bg=C["bg"])
         bar.pack(fill="x", pady=8)
         self.rank_button = button(bar, HEAD_LAB["hide_importance"] if self.ranked else HEAD_LAB["rank_heads"], self.rank, primary=True)
         self.rank_button.pack(side="left")
         if self.off:
             button(bar, HEAD_LAB["switch_all_on"], self.all_on).pack(side="left", padx=8)
-        tk_label(bar, HEAD_LAB["mode_label"], 13, "muted").pack(side="left", padx=(GUTTER, 6))
+        tip(tk_label(bar, HEAD_LAB["mode_label"], 13, "muted"), HEAD_LAB["replaces_output"][0].upper() + HEAD_LAB["replaces_output"][1:] + "\n\n" + HEAD_LAB["mean_exact"]).pack(side="left", padx=(GUTTER, 6))
         label = next(k for k, v in MODES.items() if v == self.mode)
         Segmented(bar, list(MODES), label, command=lambda v: self.set_mode(MODES[v]), bg="bg").pack(side="left")
         if self.notice:
@@ -112,7 +112,7 @@ class HeadLabPage(Page):
             tk_label(grid, f"Block {b + 1}", 13, "muted").grid(row=row, column=0, sticky="w", padx=(0, GUTTER))
             for h in range(p.shape[1]):
                 self._tile(grid, row, b, h, p[0, h])
-        tk_label(self.body, HEAD_LAB["grid_note_ranked"] if self.ranked else HEAD_LAB["grid_note_normal"], 13, "muted", wraplength=760).pack(anchor="w", pady=8)
+        grid.pack_configure(pady=(0, 8))
         if self.ranked and self.rises:
             Kicker(self.body, HEAD_LAB["most_relied"]).pack(anchor="w")
             for (b, h), rise in top_relied(self.rises):
@@ -180,7 +180,7 @@ class HeadLabPage(Page):
         pattern = self.patterns[b][0, h]
         heat.set([[None if k > q else float(min(1.0, pattern[q, k] * 1.5)) for k in range(T)] for q in range(T)], [show_tok(t)[:6] for t in self.tokens])
         heat.pack(side="left")
-        tk_label(card, HEAD_LAB["prepared_text"], 12, "muted", "panel", wraplength=640).pack(anchor="w")
+        tip(heat, HEAD_LAB["prepared_text"])
         if not off:
             tk_label(card, HEAD_LAB["before_switch"], 13, "text2", "panel").pack(anchor="w", pady=(8, 4))
             chips = GuessChips(card, GUESSES, command=lambda v: setattr(self, "guess", v))
@@ -198,16 +198,16 @@ class HeadLabPage(Page):
 
     def _tests(self, card):
         b, h = self.sel
-        Kicker(card, HEAD_LAB["three_tests"], bg="panel").pack(anchor="w", pady=(8, 4))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w", pady=(8, 4))
+        Kicker(head, HEAD_LAB["three_tests"], bg="panel").pack(side="left")
+        info_icon(head, HEAD_LAB["tests_caveat"]).pack(side="left", padx=(4, 0))
         for key, name, what in TESTS:
             value = float(self.stats[b][key][h])
             r = tk.Frame(card, bg=C["panel"])
             r.pack(fill="x", pady=2)
-            tk_label(r, f"{HEAD_LAB[name]}", 14, "text", "panel", width=28).pack(side="left")
+            tip(tk_label(r, f"{HEAD_LAB[name]}", 14, "text", "panel", width=28), HEAD_LAB[what]).pack(side="left")
             tk_label(r, f"{value:.2f}  " + ("passes" if value >= THRESHOLD else "no"), 14, "sage" if value >= THRESHOLD else "muted", "panel", font=font(14, mono=True)).pack(side="left")
-            tk_label(card, HEAD_LAB[what], 12, "muted", "panel", wraplength=640).pack(anchor="w")
-        tk_label(card, "These describe where the head looks, not what it does with what it sees. Switching it off shows how much the model relies on it, not why.",
-                 12, "dim", "panel", wraplength=640).pack(anchor="w", pady=(6, 0))
 
     def _changed(self):
         card = Card(self.body)
@@ -224,9 +224,8 @@ class HeadLabPage(Page):
             tk_label(card, reply if reply is not None else "—", 14, "text", "panel", wraplength=760).pack(anchor="w", pady=(0, 6))
         bits = c.get("bits")
         text = HEAD_LAB["to_bits"] if not bits else f"{bits['before']:.2f} → {bits['after']:.2f} bits/char"
-        tk_label(card, f"{HEAD_LAB['error_change']}: {text}", 14, "text", "panel", font=font(14, mono=True)).pack(anchor="w")
+        tip(tk_label(card, f"{HEAD_LAB['error_change']}: {text}", 14, "text", "panel", font=font(14, mono=True)), HEAD_LAB["big_rise"]).pack(anchor="w")
         tk_label(card, f"{HEAD_LAB['you_guessed']}: {self.guess.lower() if self.guess else 'no guess'}", 13, "pink", "panel").pack(anchor="w", pady=(4, 0))
-        tk_label(card, HEAD_LAB["big_rise"], 12, "muted", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
 
     # actions ----------------------------------------------------------------
     def flip(self):

@@ -5,7 +5,6 @@ import tkinter as tk
 from tkinter import ttk
 
 from studio_ia.theme import C, GUTTER, STATES, font, tk_label
-from studio_widgets import Tooltip
 
 
 def _activate(widget, command):
@@ -20,19 +19,123 @@ def _activate(widget, command):
         widget.bind(seq, lambda _e: command())
 
 
+TIP_DELAY, TIP_WRAP, TIP_GAP = 400, 360, 14  # ms before it shows, px width, px between pointer and box
+
+
+def tip_text(text):
+    """The help as a string: a function is asked each time it shows; None and blank give ""."""
+    value = text() if callable(text) else text
+    return str(value).strip() if value else ""
+
+
+def tip_place(pointer, size, screen, gap=TIP_GAP):
+    """Top-left of a `size` box near `pointer`: below and right of it, flipped above or left where the screen ends."""
+    (px, py), (w, h), (sw, sh) = pointer, size, screen
+    x = px + gap
+    if x + w > sw - 8:
+        x = max(8, px - gap - w)
+    y = py + gap + 8
+    if y + h > sh - 8:
+        y = max(8, py - gap - h)
+    return x, y
+
+
+class Tip:
+    """Hover help for one widget: shows `text` after TIP_DELAY ms near the pointer, hides on leave, click, unmap or destroy.
+
+    A plain override-redirect box that is never focused, so it takes no keystrokes and does not move the window below."""
+
+    def __init__(self, widget, text, delay=TIP_DELAY, wrap=TIP_WRAP):
+        self.widget, self.text, self.delay, self.wrap = widget, text, delay, wrap
+        self.window = self._job = None
+        self.pointer = (0, 0)
+        widget.tip = self
+        self.cover(widget)
+
+    def cover(self, widget):
+        """Listen on `widget`; a composite (a switch and its label) lists each part, since Tk does not bubble enters to a parent."""
+        widget.bind("<Enter>", self._enter, add="+")
+        widget.bind("<Motion>", self._move, add="+")
+        for seq in ("<Leave>", "<ButtonPress>", "<Unmap>", "<Destroy>"):
+            widget.bind(seq, self.hide, add="+")
+        for child in widget.winfo_children():
+            self.cover(child)
+
+    def _move(self, event):
+        self.pointer = (event.x_root, event.y_root)
+
+    def _enter(self, event):
+        self._move(event)
+        self._cancel()
+        if tip_text(self.text):
+            self._job = self.widget.after(self.delay, self.show)
+
+    def _cancel(self):
+        if self._job is not None:
+            try:
+                self.widget.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
+
+    def show(self, _event=None):
+        self._cancel()
+        text = tip_text(self.text)
+        if self.window is not None or not text:
+            return
+        try:
+            window = self.window = tk.Toplevel(self.widget)
+            window.withdraw()
+            window.wm_overrideredirect(True)
+            window.configure(bg=C["border"])
+            tk.Label(window, text=text, justify="left", wraplength=self.wrap, bg=C["panel2"], fg=C["text2"], font=font(13),
+                     padx=12, pady=9).pack(padx=1, pady=1)
+            window.update_idletasks()
+            if self.pointer == (0, 0):  # shown from the keyboard: sit under the widget
+                self.pointer = (self.widget.winfo_rootx(), self.widget.winfo_rooty() + self.widget.winfo_height() - TIP_GAP - 8)
+            x, y = tip_place(self.pointer, (window.winfo_reqwidth(), window.winfo_reqheight()),
+                             (window.winfo_screenwidth(), window.winfo_screenheight()))
+            window.wm_geometry(f"+{x}+{y}")
+            window.deiconify()
+        except tk.TclError:
+            self.window = None
+
+    def hide(self, _event=None):
+        self._cancel()
+        window, self.window = self.window, None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
+
+def tip(widget, text):
+    """Attach hover help to an existing widget (a heading, a button, a label, or a frame of them); returns the widget.
+
+    Call it after the widget's children exist: only those present now are covered."""
+    Tip(widget, text)
+    return widget
+
+
 def info_icon(parent, text, bg="panel"):
-    """A small ⓘ that shows `text` (a string, or a function returning one) on hover, click or keyboard focus."""
+    """A small ⓘ with hover help; also shows on keyboard focus, and Return or space toggles it."""
     icon = tk.Label(parent, text="ⓘ", font=font(14), fg=C["muted"], bg=C[bg], cursor="question_arrow", takefocus=1, padx=3,
                     highlightthickness=1, highlightbackground=C[bg], highlightcolor=C["violet"])
-    tip = Tooltip(icon, text, wrap=440)
-    toggle = lambda _e: tip.hide() if tip.window else tip.show()  # noqa: E731
-    for seq in ("<Button-1>", "<Return>", "<space>"):
+    hover = Tip(icon, text)
+    toggle = lambda _e: hover.hide() if hover.window else hover.show()  # noqa: E731
+    for seq in ("<Return>", "<space>"):
         icon.bind(seq, toggle, add="+")
-    icon.bind("<FocusIn>", tip.show, add="+")
-    icon.bind("<FocusOut>", tip.hide, add="+")
-    icon.bind("<Escape>", tip.hide, add="+")
-    icon.tip = tip
+    icon.bind("<FocusIn>", hover.show, add="+")
+    icon.bind("<FocusOut>", hover.hide, add="+")
+    icon.bind("<Escape>", hover.hide, add="+")
     return icon
+
+
+def tips_in(widget):
+    """Every help text attached under `widget`, for tests."""
+    own = [tip_text(widget.tip.text)] if isinstance(getattr(widget, "tip", None), Tip) else []
+    return own + [t for child in widget.winfo_children() for t in tips_in(child)]
 
 
 class Card(tk.Frame):

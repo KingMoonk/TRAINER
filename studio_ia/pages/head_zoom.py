@@ -11,7 +11,7 @@ from studio_ia.copy import HEAD_ZOOM
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask, prompt_text, show_tok
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, HeatGrid, Kicker, Segmented, _activate, button
+from studio_ia.widgets import Card, HeatGrid, Kicker, Segmented, _activate, button, tip
 
 MAX_TOKENS = 12
 TOLERANCE = 1e-4
@@ -135,10 +135,11 @@ class HeadZoomPage(Page):
                   command=lambda v: self.select(int(v.split()[1]) - 1, 0)).pack(side="left", padx=(0, GUTTER))
         Segmented(pick, [f"Head {h + 1}" for h in range(blocks[self.block])], f"Head {self.head + 1}", bg="bg",
                   command=lambda v: self.select(self.block, int(v.split()[1]) - 1)).pack(side="left")
-        tk_label(self.body, HEAD_ZOOM["head_label"].format(block=self.block + 1, head=self.head + 1, tokens=T), 14, "muted").pack(anchor="w")
+        label = tk_label(self.body, HEAD_ZOOM["head_label"].format(block=self.block + 1, head=self.head + 1, tokens=T), 14, "muted")
+        label.pack(anchor="w")
         self.banner = tk_label(self.body, "", 13, "amber", "amber_bg", wraplength=760, padx=GUTTER, pady=8)
         if self.d["error"] <= TOLERANCE:
-            tk_label(self.body, HEAD_ZOOM["checked"].format(error=self.d["error"], tol=TOLERANCE), 12, "dim", wraplength=760).pack(anchor="w")
+            tip(label, HEAD_ZOOM["checked"].format(error=self.d["error"], tol=TOLERANCE))
         else:
             self.banner.configure(text=f"The numbers derived here differ from the model's own attention pattern by {self.d['error']:.2g} "
                                        f"(allowed {TOLERANCE:g}). A hook may be wrong, so do not trust this picture.")
@@ -159,7 +160,7 @@ class HeadZoomPage(Page):
         self.grid_view.pack(side="left", anchor="n")
         self.side = Card(row)
         self.side.pack(side="left", fill="both", expand=True, padx=(GUTTER, 0), anchor="n")
-        tk_label(self.body, HEAD_ZOOM["rows_keys"], 11, "dim").pack(anchor="w", pady=(6, 0))
+        tip(self.grid_view, HEAD_ZOOM["rows_keys"])
         self._draw()
 
     def _fetch(self):
@@ -218,12 +219,15 @@ class HeadZoomPage(Page):
         sqrt_d = math.sqrt(d["d_head"])
         self.unit.configure(text=HEAD_ZOOM[key + "_unit"].format(sqrt_d=f"{sqrt_d:.3g}", token=show_tok(d["tokens"][-1])))
         Kicker(side, HEAD_ZOOM["step_label"].format(n=step), "violet", "panel").pack(anchor="w")
-        tk_label(side, HEAD_ZOOM[{"raw": "raw_scores"}.get(key, key + "_step")], 18, "text", "panel", font=font(18, bold=True)).pack(anchor="w")
-        tk_label(side, HEAD_ZOOM[key + "_formula"].format(d=d["d_head"], sqrt_d=f"{sqrt_d:.3g}"), 13, "text2", "panel", font=font(13, mono=True), wraplength=300).pack(anchor="w", pady=4)
-        tk_label(side, HEAD_ZOOM[key + "_why"].format(d=d["d_head"], sqrt_d=f"{sqrt_d:.3g}"), 13, "muted", "panel", wraplength=300).pack(anchor="w")
-        tk_label(side, self._note(), 12, "muted", "panel", wraplength=300).pack(anchor="w", pady=(6, 0))
+        why = HEAD_ZOOM[key + "_why"].format(d=d["d_head"], sqrt_d=f"{sqrt_d:.3g}")
+        if step <= 3:  # the fixed notes read the same every time: they join the explanation
+            why += " " + self._note()
         if step == 2 and not d["plain_scale"]:
-            tk_label(side, "These are the model's real pre-mask scores, so a position bias or a μP scale is included.", 12, "dim", "panel", wraplength=300).pack(anchor="w", pady=(4, 0))
+            why += " These are the model's real pre-mask scores, so a position bias or a μP scale is included."
+        tip(tk_label(side, HEAD_ZOOM[{"raw": "raw_scores"}.get(key, key + "_step")], 18, "text", "panel", font=font(18, bold=True)), why).pack(anchor="w")
+        tk_label(side, HEAD_ZOOM[key + "_formula"].format(d=d["d_head"], sqrt_d=f"{sqrt_d:.3g}"), 13, "text2", "panel", font=font(13, mono=True), wraplength=300).pack(anchor="w", pady=4)
+        if step > 3:
+            tk_label(side, self._note(), 12, "muted", "panel", wraplength=300).pack(anchor="w", pady=(6, 0))
         i, j = self.cell
         t = d["tokens"]
         Kicker(side, HEAD_ZOOM["selected_cell"], bg="panel").pack(anchor="w", pady=(GUTTER, 0))
@@ -258,7 +262,8 @@ class HeadZoomPage(Page):
     def _contributors(self, side):
         d, last = self.d, len(self.d["tokens"]) - 1
         t = d["tokens"]
-        Kicker(side, HEAD_ZOOM["output_at"].format(token=show_tok(t[last])), bg="panel").pack(anchor="w", pady=(GUTTER, 4))
+        result = HEAD_ZOOM["result_is"].format(dim=d["d_head"], token=show_tok(t[int(np.argmax(d["weights"][:, last]))]), d=self.forward["hooks"]["embed"].shape[-1])
+        tip(Kicker(side, HEAD_ZOOM["output_at"].format(token=show_tok(t[last])), bg="panel"), result).pack(anchor="w", pady=(GUTTER, 4))
         for i in np.argsort(d["weights"][:, last])[::-1][:5]:
             w = float(d["weights"][i, last])
             r = tk.Frame(side, bg=C["panel"])
@@ -268,7 +273,6 @@ class HeadZoomPage(Page):
             bar.create_rectangle(0, 0, 120 * w, 10, fill=C["text2"], width=0)
             bar.pack(side="left", padx=6)
             tk_label(r, f"{w:.2f} · {round(w * 100)}%", 12, "muted", "panel").pack(side="left")
-        tk_label(side, HEAD_ZOOM["result_is"].format(dim=d["d_head"], token=show_tok(t[int(np.argmax(d["weights"][:, last]))]), d=self.forward["hooks"]["embed"].shape[-1]), 12, "muted", "panel", wraplength=300).pack(anchor="w", pady=(6, 0))
         link = tk_label(side, HEAD_ZOOM["where_meet"] + " ›", 13, "violet", "panel", cursor="hand2", takefocus=1)
         link.pack(anchor="w", pady=(6, 0))
         _activate(link, lambda: self.navigate("value_map"))

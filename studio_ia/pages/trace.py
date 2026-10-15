@@ -6,7 +6,7 @@ from tkinter import ttk
 from studio_ia.copy import TRACE
 from studio_ia.pages.base import Page
 from studio_ia.theme import GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker
+from studio_ia.widgets import Card, Kicker, tip
 
 LI = ("Network designer", "Look inside")
 NO_NUMBERS = "Numbers appear when the engine has run your prompt."
@@ -61,8 +61,9 @@ class TracePage(Page):
         table = ttk.Frame(self.body)
         table.pack(fill="x", pady=GUTTER)
         heads = (TRACE["stage"], TRACE["size_norm"], TRACE["relative_change"], TRACE["direction_kept"], TRACE["top_guess"])
+        notes = {2: TRACE["relative_note"], 3: TRACE["relative_note"], 4: TRACE["approx_legend"]}
         for c, text in enumerate(heads):
-            tk_label(table, text, 12, "muted", wraplength=190).grid(row=0, column=c, sticky="w", padx=(0, GUTTER), pady=(0, 6))
+            tip(tk_label(table, text, 12, "muted", wraplength=190), notes.get(c)).grid(row=0, column=c, sticky="w", padx=(0, GUTTER), pady=(0, 6))
         what = {"embedding": TRACE["embedding_what"], "mixer": "mixer adds", "channel": "MLP adds", "output": TRACE["output_what"]}
         self.cells = []
         for r, row in enumerate(data["rows"], 1):
@@ -72,7 +73,7 @@ class TracePage(Page):
             self.cells.append(cells)
             for c, text in enumerate(cells):
                 color = "muted" if c == 4 and row["approximate"] else "text"
-                tk_label(table, text, 14, color, font=font(14, mono=c > 0)).grid(row=2 * r, column=c, sticky="w", padx=(0, GUTTER))
-            tk_label(table, what[row["kind"]], 12, "dim").grid(row=2 * r + 1, column=0, columnspan=5, sticky="w", pady=(0, 8))
-        tk_label(self.body, TRACE["relative_note"], 13, "muted", wraplength=760).pack(anchor="w")
-        tk_label(self.body, TRACE["approx_legend"], 13, "muted", wraplength=760).pack(anchor="w", pady=(6, 0))
+                cell = tk_label(table, text, 14, color, font=font(14, mono=c > 0))
+                cell.grid(row=r, column=c, sticky="w", padx=(0, GUTTER), pady=(0, 6))
+                if c == 0:
+                    tip(cell, what[row["kind"]])

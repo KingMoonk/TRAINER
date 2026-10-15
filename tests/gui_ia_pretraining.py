@@ -9,6 +9,7 @@ from studio_spec import default_spec
 from studio_ia.copy import EXPECTATION
 from studio_ia.services import FakeServices, Job, QueueState, Version
 from studio_ia.shell import Studio
+from studio_ia.widgets import tips_in
 
 
 def texts(widget):
@@ -33,8 +34,10 @@ class PretrainingTest(unittest.TestCase):
         self.app.update()
         t = "\n".join(texts(page))
         self.assertIn("Version 5 · from the Network designer", t)
-        self.assertIn("2.00 word pieces per parameter", t)  # 2,000,000 pieces / 1,000,000 params
-        self.assertIn("rule of thumb", t)
+        tips = "\n".join(tips_in(page))
+        self.assertIn("2.00 word pieces per parameter", tips)  # 2,000,000 pieces / 1,000,000 params; the rule of thumb is a tooltip
+        self.assertIn("rule of thumb", tips)
+        self.assertNotIn("rule of thumb", t)
         self.assertIn("about 10.0× more text", t)
         self.assertIn(EXPECTATION["short_letters"], t)  # 2,000,000 pieces over two passes is little text
         self.assertNotIn(EXPECTATION["continues"], t)  # the detail is behind the ⓘ

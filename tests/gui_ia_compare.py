@@ -10,6 +10,7 @@ from studio_ia.copy import COMPARE as T
 from studio_ia.copy import QUICKTEST as T_QT
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
+from studio_ia.widgets import tips_in
 from studio_spec import default_spec, validate_spec
 
 
@@ -117,8 +118,8 @@ class CompareGui(unittest.TestCase):
         for mode, note in (("params_mode", "params_note"), ("compute_mode", "compute_note"), ("tokens_mode", "tokens_note"), ("time_mode", "time_note")):
             page.modes.pick(T[mode])
             self.app.update()
-            self.assertEqual(page.mode_note.cget("text"), T[note])
-            notes.add(page.mode_note.cget("text"))
+            self.assertEqual(tips_in(page.modes), [T[note]])
+            notes.add(tips_in(page.modes)[0])
         self.assertEqual(len(notes), 4)
 
     def test_x_axis_choice_falls_back_to_steps_when_runs_lack_tokens_or_time(self):
