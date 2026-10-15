@@ -39,6 +39,8 @@ def sample_rows(curve, step, pn):
 def switch_note(running, last_held, best, gate):
     """(copy key, {gap}) for the line about Chat switching. While the run goes it is only a first look at the held-back curve against
     the earlier best; once it ends and Chat has weighed it (services.gate_result), the paired test's verdict."""
+    if not running and gate and gate.get("reason") == "few_docs":
+        return "gate_few_docs", {"docs": gate["docs"], "need": studio_eval.MIN_DOCS}
     if not running and gate and math.isfinite(gate["diff"]):
         gap = f"{abs(gate['diff']):.3f}"
         return ("gate_better" if gate["better"] else "gate_not_sure" if gate["diff"] < 0 else "gate_not_better"), {"gap": gap}

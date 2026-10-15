@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from studio_compile import CompiledModel
-from studio_eval import (LN2, band_from_scores, bits_per_char, corpus_bpc, heldout_split, memorise_one_batch, noise_band, paired_gain,
+from studio_eval import (LN2, MIN_DOCS, band_from_scores, bits_per_char, corpus_bpc, heldout_split, memorise_one_batch, noise_band, paired_gain,
                          run_status, sanity_checks, score_docs, score_windows, smooth, training_saved, uniform_bpc, unigram_bpc)
 from studio_model import LocalModel, Tokenizer
 from studio_registry import for_slot
@@ -286,6 +286,18 @@ class PairedGain(unittest.TestCase):
         with self.assertRaises(ValueError):
             paired_gain(parent, self.scores(base, chars=21))
         self.assertFalse(paired_gain(parent[:1], candidate[:1])["better"])  # one document says nothing about luck
+
+    def test_too_few_documents_are_never_better(self):
+        base = np.random.default_rng(7).uniform(1.5, 4., 40)
+        for n in (2, 5, MIN_DOCS - 1):  # a gain far bigger than luck, but on too little text to tell
+            got = paired_gain(self.scores(base[:n]), self.scores(base[:n] - 1.))
+            self.assertFalse(got["better"])
+            self.assertEqual((got["reason"], got["docs"]), ("few_docs", n))
+            self.assertAlmostEqual(got["diff"], -1., places=6)  # the measured gap is still reported
+            self.assertTrue(math.isnan(got["upper"]))
+        got = paired_gain(self.scores(base[:MIN_DOCS]), self.scores(base[:MIN_DOCS] - 1.))
+        self.assertTrue(got["better"])  # the same gain with MIN_DOCS documents is judged
+        self.assertNotIn("reason", got)
 
     def test_the_same_scores_give_the_same_answer(self):
         base = np.random.default_rng(6).uniform(1.5, 4., 50)

@@ -291,10 +291,14 @@ class SwitchNote(unittest.TestCase):
         self.assertEqual(switch_note(False, None, None, {"better": False, "diff": .03, "upper": .1})[0], "gate_not_better")
         self.assertEqual(switch_note(False, None, None, {"better": False, "diff": float("nan"), "upper": float("nan")})[0], "no_band_yet")
         self.assertEqual(switch_note(False, None, None, None)[0], "no_band_yet")
+        few = {"better": False, "diff": -.5, "upper": float("nan"), "docs": 5, "reason": "few_docs"}
+        self.assertEqual(switch_note(False, None, None, few), ("gate_few_docs", {"docs": 5, "need": 20}))  # however big the gap looks
+        self.assertEqual(T["gate_few_docs"].format(parent="version 1", **switch_note(False, None, None, few)[1]),
+                         "Not sure: only 5 held-back documents; at least 20 are needed to tell a real gain from luck. Chat keeps using version 1.")
 
     def test_every_note_fills_in_from_the_words_the_page_has(self):
-        words = {"Version": "Version 2", "version": "version 2", "parent": "version 1", "gap": "0.041"}
-        for key in ("held_back_below", "held_back_inside", "no_band_yet", "gate_better", "gate_not_sure", "gate_not_better"):
+        words = {"Version": "Version 2", "version": "version 2", "parent": "version 1", "gap": "0.041", "docs": 5, "need": 20}
+        for key in ("held_back_below", "held_back_inside", "no_band_yet", "gate_better", "gate_not_sure", "gate_not_better", "gate_few_docs"):
             self.assertNotIn("{", T[key].format(**words))
 
 

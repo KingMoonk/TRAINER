@@ -45,6 +45,7 @@ class ServicesTest(unittest.TestCase):
         import studio_eval
         store, cards = self.svc.store, [dict(v.scorecard) for v in self.svc.versions()]
         self.addCleanup(lambda: [store._update(n, scorecard=c) for n, c in enumerate(cards, 1)])
+        self.addCleanup(self.svc._cache.clear)   # the mocked verdicts must not outlive the test
         store._update(1, scorecard={"bpc": 3., "bpc_method": studio_eval.SCORE_METHOD})
         store._update(2, scorecard={"bpc": 2., "bpc_method": studio_eval.SCORE_METHOD})   # lower, whatever the test says
         for verdict, chat in ((False, 1), (True, 2)):
@@ -61,10 +62,10 @@ class ServicesTest(unittest.TestCase):
         self.addCleanup(lambda: [store._update(n, scorecard=c) for n, c in enumerate(cards, 1)])
         for n in (1, 2):
             store._update(n, scorecard={"bpc": 3.})   # an old-method number: weighing scores both checkpoints again
-        verdict = self.svc.gate_result(2)
-        self.assertEqual(set(verdict), {"diff", "upper", "better", "vs"})
-        self.assertTrue(math.isfinite(verdict["diff"]) and math.isfinite(verdict["upper"]))
-        self.assertEqual(verdict["better"], verdict["upper"] < 0)
+        verdict = self.svc.gate_result(2)   # the fixture holds back 5 documents: too few to judge on
+        self.assertEqual(set(verdict), {"diff", "upper", "better", "docs", "reason", "vs"})
+        self.assertEqual((verdict["better"], verdict["reason"], verdict["docs"], verdict["vs"]), (False, "few_docs", 5, 1))
+        self.assertTrue(math.isfinite(verdict["diff"]))
 
     def test_data(self):
         self.assertEqual(self.svc.data("problems").count, 10)
@@ -135,6 +136,20 @@ class BandTest(unittest.TestCase):
             self.assertEqual(self.svc.best_version().number, 1)
         self.assertFalse(self.scores.exists())
 
+    def test_with_enough_held_back_documents_the_paired_test_judges(self):
+        import json
+
+        import studio_eval
+        path = Path(self.tmp.name) / "data" / "heldout.json"
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps(rows * 6), encoding="utf-8")   # 30 documents
+        verdict = self.svc.gate_result(2)
+        self.assertEqual(verdict["docs"], 30)
+        self.assertNotIn("reason", verdict)
+        self.assertTrue(math.isfinite(verdict["upper"]))
+        self.assertEqual(verdict["better"], verdict["upper"] < 0)
+        self.assertGreaterEqual(verdict["docs"], studio_eval.MIN_DOCS)
+
     def test_missing_scores_go_to_the_worker_and_are_kept_on_disk(self):
         self.assertFalse(self.svc.ready(self.svc.best_version))  # two scored versions, nothing scored yet
         self.svc.best_version()
@@ -145,7 +160,7 @@ class BandTest(unittest.TestCase):
         with mock.patch("studio_eval.score_docs", side_effect=AssertionError("scored again")):
             again.best_version()
             self.assertEqual(again.best_version().number, self.svc.best_version().number)
-            self.assertEqual(again.gate_result(2), self.svc.gate_result(2))
+            self.assertEqual(again.gate_result(2)["diff"], self.svc.gate_result(2)["diff"])
 
     def test_a_changed_checkpoint_or_held_back_file_is_scored_again(self):
         self.svc.best_version()

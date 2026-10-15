@@ -19,6 +19,7 @@ LN2 = math.log(2)
 SCORE_WINDOWS = 512  # windows gathered before a scoring pass
 SCORE_ELEMENTS = 4_000_000  # most float64 logits (batch x window x vocabulary) one scoring pass holds
 SCORE_METHOD = "stride-half-1"  # how score_docs reads a document; scores stored under another value are stale
+MIN_DOCS = 20  # fewest held-back documents paired_gain will judge on; a percentile bootstrap over fewer undercovers
 BOOTSTRAP_ELEMENTS = 2_000_000  # most resampled indices one bootstrap pass holds
 
 
@@ -148,7 +149,7 @@ def noise_band(checkpoint, docs, resamples=200, seed=0):
 
 
 def paired_gain(parent, candidate, resamples=1000, seed=0, confidence=.95):
-    """Is the candidate better than the parent on the same held-back documents? {diff, upper, better}.
+    """Is the candidate better than the parent on the same held-back documents? {diff, upper, better, docs} (plus reason).
 
     parent and candidate are score_docs rows (nats, characters) for the same documents in the same order. Documents are
     resampled with the same indices for both, so what the two versions share (how hard each document is) cancels, and
@@ -160,6 +161,9 @@ def paired_gain(parent, candidate, resamples=1000, seed=0, confidence=.95):
     every checkpoint would let luck win eventually (each look is another chance), so Chat does not. A caller that must
     look k times should ask for confidence 1 - (1 - confidence) / k (Bonferroni).
 
+    Fewer than MIN_DOCS documents is never better: with a handful the bootstrap's one-sided bound is too narrow and "better"
+    would fire on luck, so the answer is better False, upper nan and reason "few_docs" (diff is still the measured gap).
+
     This covers the choice of documents only. Seed variance (a different random start giving a different result) is not in
     it; Compare runs measure that spread.
     """
@@ -167,16 +171,18 @@ def paired_gain(parent, candidate, resamples=1000, seed=0, confidence=.95):
     if len(p) != len(c) or not np.array_equal(p[:, 1], c[:, 1]):
         raise ValueError("Both versions must be scored on the same documents.")
     n, chars = len(p), p[:, 1]
-    if n < 2 or not chars.sum():
-        return {"diff": float("nan"), "upper": float("nan"), "better": False}
+    if not chars.sum():
+        return {"diff": float("nan"), "upper": float("nan"), "better": False, "docs": n}
     delta = c[:, 0] - p[:, 0]
+    if n < MIN_DOCS:
+        return {"diff": float(delta.sum() / chars.sum() / LN2), "upper": float("nan"), "better": False, "docs": n, "reason": "few_docs"}
     rng = np.random.default_rng(seed)
     diffs, step = np.empty(resamples), max(1, BOOTSTRAP_ELEMENTS // n)
     for first in range(0, resamples, step):
         picks = rng.integers(0, n, (min(step, resamples - first), n))
         diffs[first:first + len(picks)] = delta[picks].sum(1) / chars[picks].sum(1) / LN2
     upper = float(np.percentile(diffs, 100 * confidence))
-    return {"diff": float(delta.sum() / chars.sum() / LN2), "upper": upper, "better": upper < 0}
+    return {"diff": float(delta.sum() / chars.sum() / LN2), "upper": upper, "better": upper < 0, "docs": n}
 
 
 def smooth(values, alpha=.2):
