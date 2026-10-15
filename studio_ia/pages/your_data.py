@@ -93,8 +93,9 @@ class YourDataPage(Page):
             name, used, count = (tk_label(tab, "", s, c, "panel", font=font(s, bold=b)) for s, c, b in ((15, "text", True), (12, "muted", False), (13, "text2", False)))
             for w in (name, used, count):
                 w.pack(fill="x")
-            for w in (tab, name, used, count):
-                _activate(w, lambda k=k: self.show(k))
+            _activate(tab, lambda k=k: self.show(k))
+            for w in (name, used, count):
+                w.bind("<Button-1>", lambda _e, k=k: self.show(k))
             self.tabs[k] = (tab, name, used, count)
         self.lead_line = tk_label(body, "", 15, "text", wraplength=760)
         self.lead_line.pack(fill="x")

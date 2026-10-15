@@ -151,8 +151,9 @@ class PostTrainingPage(Page):
                 label = f"optional · {count(self.counts.get('pairs'))} pairs rated"
             tk_label(text, name, 15, "text", bg, font=font(15, bold=True)).pack(fill="x")
             tk_label(text, label, 12, "blue" if s == "done" else "violet" if s == "running" else "muted", bg).pack(fill="x")
-            for w in (cell, mark, text, *text.winfo_children()):
-                _activate(w, lambda i=i: self._select(i))
+            _activate(cell, lambda i=i: self._select(i))
+            for w in (mark, text, *text.winfo_children()):  # only the tile takes focus; a ring on every part would widen the row
+                w.bind("<Button-1>", lambda _e, i=i: self._select(i))
 
     def _select(self, i):
         self.selected = i
