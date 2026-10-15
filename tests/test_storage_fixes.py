@@ -33,7 +33,7 @@ class CoreFixes(unittest.TestCase):
         ws = Workspace(self.dir)
         ds = ws.create_dataset("d")
         ws.state["examples"].append({"id": "ex_1", "datasetId": ds, "user": "q", "assistant": "a", "intent": "x"})
-        with patch.object(Workspace, "_db_row", side_effect=lambda e: ("ex_1", ds, "f", "{}", None, "", "", "", 0)):
+        with patch.object(Workspace, "_db_row", side_effect=lambda e: ("ex_1", ds, "f", "{}", None, "", "", "", 0, "text", 0)):
             with self.assertRaises(Exception):
                 ws.use_disk_storage(ds)
         self.assertEqual(len(ws.state["examples"]), 1)

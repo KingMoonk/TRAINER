@@ -695,6 +695,9 @@ class WorkspaceServices(Services):
         self._models, self._cache = {}, {}
         self._lock = threading.RLock()
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
+        workspace.progress = self.note
+        if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
+            threading.Thread(target=workspace.ensure_schema, daemon=True).start()
 
     def close(self):
         if getattr(self, "_viz", None) is not None:
@@ -1108,12 +1111,17 @@ class WorkspaceServices(Services):
             return self._json("corrections.json", [])
         want = "problems" if kind.endswith("problems") else "conversations"
         held = kind == "heldout_problems"
+        datasets = list(self.workspace.state["datasets"])
+        # disk datasets: one indexed query on the kind and holdout columns; in-memory ones (under 10,000 rows each) carry the same two stamps
+        on_disk = self.workspace.pick(want, held, [d["id"] for d in datasets if d.get("storage") == "sqlite"])
         out = []
-        for d in self.workspace.state["datasets"]:
-            for e in self.workspace.iter_examples(d["id"]):
-                if dk.classify(e) == want and dk.held_back(e) == held:
-                    out.append({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
-                               if want == "problems" else e)
+        for d in datasets:
+            if d["id"] in on_disk:
+                rows = on_disk[d["id"]]
+            else:
+                rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
+            out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
+                       if want == "problems" else e for e in rows)
         return out
 
     def teach_correction(self, version, messages, correction, whole_answer=False):
