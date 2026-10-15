@@ -10,9 +10,15 @@ import tkinter as tk
 import uuid
 from pathlib import Path
 
-from studio_spec import config_from_spec, default_spec, validate_spec
-from studio_versions import _facts, spec_diff
+import studio_registry as registry
+from studio_estimate import estimate
+from studio_glossary import MODULE_TERMS, glossary_text
+from studio_slots import BLOCK_SLOTS
+from studio_spec import block_at, config_from_spec, default_spec, set_block, validate_spec
+from studio_validate import errors, validate
+from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
+from studio_ia import pieces as cut
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
@@ -27,6 +33,9 @@ VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large 
 WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
 WIDTHS = ("Narrow", "Normal", "Wide")
 HEADS = (1, 4, 8)
+PART_SLOTS = ("embedding", "position", "head")  # the model-wide parts the tower shows; every block has BLOCK_SLOTS
+PART_TERMS = dict(embedding="embedding", position="position", norm="norm", mixer="token_mixer", channel="mlp", head="output_head")
+WORD_TERMS = ("bytes", "bpe", "gpt2_bpe", "whole_words")  # GLOSSARY entries behind WORDS
 PROMPT = "The largest planet in our solar system is"
 STEPS, ROWS = 1000, 16  # a catch-up job here; the Pretraining page is where length, rows and data are chosen
 LINKS = (("trace", "trace"), ("head_zoom", "inside_head"), ("value_map", "value_map"), ("loss", "loss"),
@@ -44,34 +53,86 @@ EXPECT = dict(
 )
 WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.NOTES[kind]
     same=("weights carry over exactly", "live"), heads=("weights carry over, not exactly", "attention"),
-    removed=("weights carry over, minus what was removed", "attention"), scratch=("starts from scratch", "needs_training"))
+    removed=("weights carry over, minus what was removed", "attention"), other=("weights carry over, changed parts start fresh", "attention"),
+    scratch=("starts from scratch", "needs_training"))
 TRAINING_TEXT = "Chat switches to {new} only when it beats version {n} on held-back text, or when you pick it."
 NO_PARENT = "Version {n} has no trained weights to start from, so the next version trains from scratch."
 NO_CURVE = "No error curve yet: version {n} has not trained on this computer. It appears here once it has."
 
 
-def cfg(s):
-    """s = dict(L, H, W, V, d, T) -> sizes for the cost formulas."""
-    return dict(V=VS[s["V"]], d=s["d"], T=s["T"], L=s["L"], H=s["H"], ff=FF[s["W"]] * s["d"])
+def module_name(slot, short):
+    return registry.get(slot, short).name
 
 
-def P(c):
-    """Parameters."""
-    return c["V"] * c["d"] + c["T"] * c["d"] + c["L"] * (4 * c["d"] ** 2 + 4 * c["d"] + 2 * c["d"] * c["ff"] + c["ff"] + c["d"] + 4 * c["d"]) + 2 * c["d"]
+def module_tip(slot, short):
+    """Hover help for a module: what it is and why you would pick it (studio_glossary), then the registry's exact description."""
+    return f"{glossary_text(MODULE_TERMS[slot][short])}\n\n{registry.get(slot, short).blurb}"
 
 
-def C_(c):
-    """Training time per step: 6·(L·(4d²+2d·ff) + V·d) + 6·L·T·d."""
-    return 6 * (c["L"] * (4 * c["d"] ** 2 + 2 * c["d"] * c["ff"]) + c["V"] * c["d"]) + 6 * c["L"] * c["T"] * c["d"]
+def part_tip(slot):
+    return glossary_text(PART_TERMS[slot])
 
 
-def TM(c):
-    """Memory while training: 16 bytes per parameter (fp32 weights, gradients, Adam m and v)."""
-    return 16 * P(c)
+def fields_of(slot, short):
+    return {f["name"] for f in registry.fields(registry.get(slot, short))}
 
 
-def activations(c):
-    return 2 * c["L"] * c["d"] * 4 * c["T"]
+def knob_applies(s, key):
+    """Whether look-back heads (H) or thinking room (W) mean anything for the all-blocks look-back / thinking-room choice."""
+    slot, field = {"H": ("mixer", "heads"), "W": ("channel", "d_ff")}[key]
+    return field in fields_of(slot, s["M"][slot])
+
+
+def block_parts(s, i):
+    """{slot: module id} of block i: the all-blocks choice, or the block's own."""
+    return {slot: s["O"].get((i, slot), s["M"][slot]) for slot in BLOCK_SLOTS}
+
+
+def own_slots(s, i):
+    """The slots block i has its own module in."""
+    return [slot for slot in BLOCK_SLOTS if (i, slot) in s["O"]]
+
+
+def choose(s, slot, short, block=None):
+    """The choices after picking module `short` for `slot`: for every block (which drops that slot's per-block picks),
+    or for block `block` only (picking the all-blocks module there drops its own pick)."""
+    parts, own = dict(s["M"]), dict(s["O"])
+    if block is None or slot not in BLOCK_SLOTS:
+        parts[slot] = short
+        own = {key: value for key, value in own.items() if key[1] != slot}
+    elif short == parts[slot]:
+        own.pop((block, slot), None)
+    else:
+        own[block, slot] = short
+    return dict(s, M=parts, O=own)
+
+
+def resize(s, n):
+    """The choices with n blocks: per-block picks of blocks that are gone go with them."""
+    return dict(s, L=n, O={key: value for key, value in s["O"].items() if key[0] < n})
+
+
+def entry_for(slot, short, old, s):
+    """Slot entry for module `short`: settings it shares with the module it replaces carry over; heads and a non-default
+    thinking room follow the knobs."""
+    names = fields_of(slot, short)
+    config = {key: value for key, value in (old or {}).get("config", {}).items() if key in names}
+    if "heads" in names and "heads" not in config:
+        config["heads"] = s["H"]
+    if "d_ff" in names and "d_ff" not in config and s["W"] != 1:
+        config["d_ff"] = FF[s["W"]] * s["d"]
+    return {"id": short, "config": config}
+
+
+def sizes(spec, v):
+    """Size, time and memory of a design under word list v, summed from every module's own estimate (studio_estimate).
+    params · table: the word table, position and head · time: training work per row of T pieces · memory: weights, gradients
+    and Adam state at 16 bytes per parameter · activations: bytes kept per row for the backward pass."""
+    e = estimate(spec, VS[v])
+    d, t = spec["dims"]["d_model"], spec["dims"]["n_ctx"]
+    # the estimate leaves the vocabulary matrices out of compute (Kaplan et al.); a step still pays for the output scores
+    return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * VS[v] * d) * t,
+                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t)
 
 
 def say(x, y, more, less):
@@ -87,11 +148,16 @@ def bar(x, y):
 
 
 def read_spec(spec):
-    """ModelSpec -> the four editable choices plus d and T."""
-    f = _facts(spec)
+    """ModelSpec -> the editable choices: L blocks, H heads, W thinking room, V word list, d and T, M the module of every part
+    ({slot: id}; the block slots hold the all-blocks choice) and O the per-block picks ({(block index, slot): id})."""
+    spec = validate_spec(spec)
+    f, block = _facts(spec), spec["block"]
     word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
-    return dict(L=f["blocks"], H=f["heads"] or 4, W=0 if f["room"] < 4 else 1 if f["room"] == 4 else 2, V=word,
-                d=f["width"], T=f["context"])
+    room = (block["channel"]["config"].get("d_ff") or 4 * f["width"]) / f["width"]
+    parts = {slot: spec[slot]["id"] for slot in PART_SLOTS} | {slot: block[slot]["id"] for slot in BLOCK_SLOTS}
+    own = {(o["index"], slot): o[slot]["id"] for o in spec["blocks"] for slot in BLOCK_SLOTS if slot in o}
+    return dict(L=f["blocks"], H=block["mixer"]["config"].get("heads") or 4, W=0 if room < 4 else 1 if room == 4 else 2, V=word,
+                d=f["width"], T=f["context"], M=parts, O=own)
 
 
 def write_spec(base, s, was=None):
@@ -100,21 +166,92 @@ def write_spec(base, s, was=None):
     was = was or read_spec(spec)
     if s["L"] != was["L"]:
         spec["dims"]["n_layer"] = s["L"]
-    if s["H"] != was["H"]:
+    for slot in PART_SLOTS:
+        if s["M"][slot] != was["M"][slot]:
+            spec[slot] = entry_for(slot, s["M"][slot], spec[slot], s)
+    for slot in BLOCK_SLOTS:
+        if s["M"][slot] != was["M"][slot]:
+            spec["block"][slot] = entry_for(slot, s["M"][slot], spec["block"][slot], s)
+    if s["H"] != was["H"] and "heads" in spec["block"]["mixer"]["config"]:
         spec["block"]["mixer"]["config"]["heads"] = s["H"]
-    if s["W"] != was["W"]:
+    if s["W"] != was["W"] and "d_ff" in spec["block"]["channel"]["config"]:
         spec["block"]["channel"]["config"]["d_ff"] = FF[s["W"]] * s["d"]
+    for key in sorted(set(s["O"]) | set(was["O"])):
+        if s["O"].get(key) == was["O"].get(key):
+            continue
+        index, slot = key
+        if key in s["O"]:
+            set_block(spec, index, slot, entry_for(slot, s["O"][key], block_at(spec, index)[slot], s))
+        else:
+            for override in spec["blocks"]:
+                if override["index"] == index:
+                    override.pop(slot, None)
     if s["V"] != was["V"]:
         spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": {}}
     return validate_spec(spec)
 
 
+def why_not(base, s, was, slot, short, block=None):
+    """Why picking module `short` for `slot` (all blocks, or just `block`) cannot work in this design, or "" when it can.
+    The 3D viewer's swaps get the same checks (validate_spec, then studio_validate's errors); only problems the pick adds count."""
+    try:
+        before = set(errors(write_spec(base, s, was)))
+    except ValueError:
+        before = set()
+    try:
+        after = write_spec(base, choose(s, slot, short, block), was)
+    except ValueError as error:
+        return str(error)
+    return next((text for text in errors(after) if text not in before), "")
+
+
+def part_options(base, s, was, slot, block=None):
+    """[(module id, name, blurb, why it cannot be picked or "")] for one part's menu, in the registry's order."""
+    current = s["O"].get((block, slot), s["M"][slot]) if block is not None else s["M"][slot]
+    return [(m.short, m.name, m.blurb, "" if m.short == current else why_not(base, s, was, slot, m.short, block))
+            for m in registry.for_slot(slot)]
+
+
+def part_changes(cur, draft):
+    """Plain-words chips for every module the draft changes: all-blocks choices first, then each block's own."""
+    out = [T["part_change"].format(part=T["part_" + slot].lower(), name=module_name(slot, draft["M"][slot]))
+           for slot in ("embedding", "position", *BLOCK_SLOTS, "head") if draft["M"][slot] != cur["M"][slot]]
+    for i in range(draft["L"]):
+        for slot in BLOCK_SLOTS:
+            a, b = cur["O"].get((i, slot)), draft["O"].get((i, slot))
+            if a != b and (b or i < cur["L"]):
+                out.append(T["block_part_change"].format(n=i + 1, part=T["part_" + slot].lower(),
+                                                         name=module_name(slot, b) if b else T["same_as_others"]))
+    return out
+
+
+def change_chips(old_spec, new_spec, cur, draft):
+    """The not-saved chips: spec_diff's sentences, with its catch-all replaced by the parts that changed."""
+    plain = spec_diff(old_spec, new_spec)
+    out = [c for c in plain if c != OTHER_PARTS] + part_changes(cur, draft)
+    return out or plain
+
+
+def parts_changed(cur, draft):
+    """True when a module changed anywhere both designs have it (blocks only one of them has are added or removed)."""
+    return any(cur["M"][slot] != draft["M"][slot] for slot in PART_SLOTS) or \
+        any(block_parts(cur, i) != block_parts(draft, i) for i in range(min(cur["L"], draft["L"])))
+
+
+def new_issues(old_spec, new_spec):
+    """Advice (warnings and notes, not errors) the new design gets that the old one did not."""
+    old = {issue.text for issue in validate(old_spec)}
+    return [issue.text for issue in validate(new_spec) if issue.level != "ERROR" and issue.text not in old]
+
+
 def warm_kind(cur, draft):
-    """How the old weights carry into the draft: scratch | heads | removed | same (the studio_warmstart rules)."""
+    """How the old weights carry into the draft: scratch | heads | other | removed | same (the studio_warmstart rules)."""
     if draft["V"] != cur["V"]:
         return "scratch"
     if draft["H"] != cur["H"]:
         return "heads"
+    if parts_changed(cur, draft):
+        return "other"
     if draft["L"] < cur["L"] or draft["W"] < cur["W"]:
         return "removed"
     return "same"
@@ -122,7 +259,7 @@ def warm_kind(cur, draft):
 
 def warm_outlook(cur, draft):
     """None when nothing changed, else {kind, carries, preserving, chip, state, text} for the cost panel."""
-    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V")):
+    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V", "M", "O")):
         return None
     kind = warm_kind(cur, draft)
     chip, state = WARM[kind]
@@ -130,13 +267,14 @@ def warm_outlook(cur, draft):
 
 
 def fits(c, ram=None):
-    """True/False: weights, gradients, optimizer state and activations for 16 rows fit in physical memory; None if unknown."""
+    """True/False: weights, gradients, optimizer state and activations for 16 rows fit in physical memory; None if unknown.
+    `c` is a sizes() dict."""
     if ram is None:
         try:
             ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
         except (ValueError, OSError, AttributeError):
             return None
-    return TM(c) + ROWS * activations(c) <= ram
+    return c["memory"] + ROWS * c["activations"] <= ram
 
 
 def last_blocks_change(versions):
@@ -152,13 +290,14 @@ def last_blocks_change(versions):
     return None
 
 
-def design_expectation(s):
-    """(headline, details) for the choices in `s`: what a design this size and word list can be expected to write."""
-    c = cfg(s)
-    return expectation(P(c), TOKENIZERS[s["V"]], embedding_params=c["V"] * c["d"])
+def design_expectation(s, spec):
+    """(headline, details) for the choices in `s` and their spec: what a design this size and word list can be expected to write."""
+    c = sizes(spec, s["V"])
+    return expectation(c["params"], TOKENIZERS[s["V"]], embedding_params=c["table"])
 
 
-def expectations(cur, draft, versions=()):
+def expectations(cur, draft, versions=(), issues=()):
+    """What to expect from each change, then the advice (`issues`, from new_issues) the new design gets."""
     a, b, out = cur, draft, []
     if b["L"] > a["L"]:
         out.append(EXPECT["more"])
@@ -175,17 +314,36 @@ def expectations(cur, draft, versions=()):
         out.append(EXPECT["narrower"])
     if b["V"] != a["V"]:
         out.append(EXPECT[("letters", "small", "large", "words")[b["V"]]])
+    for slot in ("embedding", "position", *BLOCK_SLOTS, "head"):
+        if b["M"][slot] != a["M"][slot]:
+            module = registry.get(slot, b["M"][slot])
+            out.append(T["part_expect"].format(part=T["part_" + slot], name=module.name, blurb=module.blurb))
+    out.extend(issues)
     return out or [T["change_something"]]
 
 
-def pieces_for(v):
-    """(chips, count line) for the board's example sentence under word list v."""
-    if v == 0:
-        return [("␣" if c == " " else c) for c in PROMPT], f"{len(PROMPT)} pieces, one per character"
-    if v == 2:
-        words = PROMPT.split()
-        return [words[0]] + [" " + w for w in words[1:]], f"{len(words)} pieces"
-    return ["pieces depend on your data"], "built from your data when you save"
+MISSING = {1: "Built from your text: add some in Your data to see these pieces.",
+           2: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
+           3: "Built from your text: add some in Your data to see these pieces."}
+
+
+def pieces_for(v, lists):
+    """([(label, state)], count line) for the example sentence under word list v. `lists` = services.word_lists(), or None
+    while it is still being read. The count line puts every list's count side by side, in the order of the buttons."""
+    if lists is None:
+        lists = {"tokenizers": (cut.Tokenizer("byte"), None, None, None), "sentence": cut.EXAMPLE}
+        note = "Reading your text…"
+    else:
+        note = MISSING.get(v)
+    line = " · ".join("–" if n is None else f"{n:,}" for n in cut.counts(lists)) + " pieces"
+    tok = lists["tokenizers"][v]
+    if tok is None:
+        return [(note, "neutral")], line
+    chips = [(label, "pieces" if known else "attention") for label, known in cut.chips(tok, lists["sentence"])]
+    lost = sum(state == "attention" for _, state in chips)
+    if lost:
+        line += f", {lost} word{'s' if lost > 1 else ''} lost to “unknown”"
+    return chips, line
 
 
 def chart_args(old, new, refs):
@@ -262,15 +420,19 @@ class BuilderPage(Page):
         self.anchor = None  # (spec, choices) when a design from another page was reopened here
         self._staged, self.dismissed = None, None
         self.tray = self.chips = self.costs = self.expect = None
+        self.pieces_box = None
         self.note = None
         self.chip_texts, self.cost_say, self.expect_texts, self.actions = [], {}, [], {}
         self.guide_text = self.guide_details = self.hover_text = ""
         self.old_curve = self.new_curve = self.refs = None
+        self.lists = None  # services.word_lists(), read on the slow lane
         self.plot_args, self.plot = {}, None
         self._chart_token = None
         self.answers, self.answer_q, self.answer_stop, self.answer_labels, self.workers = {}, queue.Queue(), threading.Event(), {}, []
         self.pill_bar = self.pill_label = None
         self._curve_at = 0.
+        self.open, self.scope = set(), {}  # blocks shown with their parts; blocks whose picks apply to them only
+        self.draft_spec = None
 
     # state ------------------------------------------------------------------
     @property
@@ -316,6 +478,7 @@ class BuilderPage(Page):
             self._staged = staged
         self.load_chart()
         self.render()
+        self.load_lists()
 
     def _restore_saved(self, current):
         """A saved version nobody has trained yet shows its coral tray, wherever it was saved (e.g. from Quick test)."""
@@ -354,6 +517,22 @@ class BuilderPage(Page):
             apply(work(), False)
         else:
             self.quietly(work, lambda chart: apply(chart, True))
+
+    def load_lists(self):
+        """The four word lists fitted on your text, for the pieces card. Fitting reads a sample of the text (and fetches
+        GPT-2's list once), so it runs on the slow lane; services keep the result until the stored data changes."""
+        def work():
+            try:
+                return self.services.word_lists()
+            except (OSError, ValueError):
+                return None
+
+        def apply(lists):
+            if lists is not None and lists is not self.lists:
+                self.lists = lists
+                if self.pieces_box is not None and self.pieces_box.winfo_exists():
+                    self._paint_pieces()
+        self.quietly(work, apply, lane="slow")
 
     def curve_of(self, version):
         runs = getattr(version, "runs", None) or ([str(Path(version.best_checkpoint).parent)] if version and version.best_checkpoint else [])
@@ -404,14 +583,17 @@ class BuilderPage(Page):
             self.stage()
             self._paint_design()
 
+    def spec_base(self):
+        """(spec, its choices) the draft is written onto: a design reopened from another page, else the current version."""
+        return self.anchor or (self.base_spec(), self.cur)
+
     def spec_for(self, s):
-        if self.anchor:
-            return write_spec(self.anchor[0], s, self.anchor[1])
-        return write_spec(self.base_spec(), s, self.cur)
+        base, was = self.spec_base()
+        return write_spec(base, s, was)
 
     def changes(self):
         try:
-            return spec_diff(self.base_spec(), self.spec_for(self.draft))
+            return change_chips(self.base_spec(), self.spec_for(self.draft), self.cur, self.draft)
         except ValueError:
             return []
 
@@ -431,7 +613,19 @@ class BuilderPage(Page):
         return last_blocks_change(self.services.versions())
 
     def expectations(self):
-        return expectations(self.cur, self.draft, self.services.versions())
+        issues = new_issues(self.base_spec(), self.draft_spec) if self.draft_spec else ()
+        return expectations(self.cur, self.draft, self.services.versions(), issues)
+
+    def pick(self, slot, short, block=None):
+        """Module `short` for `slot`: in every block, or in block `block` only."""
+        self.edit(**choose(self.draft, slot, short, block))
+
+    def knob(self, key, value):
+        """A seg click. Heads and thinking room mean nothing for a look-back or thinking room without them."""
+        if key not in ("H", "W") or knob_applies(self.draft, key):
+            self.edit(**{key: value})
+        else:
+            self._paint_design()  # put the seg back
 
     def stage(self):
         """Publish the unsaved draft so Quick test and Compare runs can use it."""
@@ -456,6 +650,9 @@ class BuilderPage(Page):
             spec = self.spec_for(self.draft)
         except ValueError as error:
             self.note = str(error)
+            return self.render()
+        if problems := errors(spec):
+            self.note = problems[0]
             return self.render()
         self.saved = self.services.save_version(spec, ", ".join(self.changes()) or ("first design" if self.base is None else "no change"))
         self.phase, self._staged, self.anchor = "saved", None, None
@@ -559,9 +756,15 @@ class BuilderPage(Page):
 
     def _paint_design(self):
         """Everything the draft decides, repainted in place: rebuilding the page on each setting flashed it."""
+        try:
+            self.draft_spec = self.spec_for(self.draft)
+        except ValueError:
+            self.draft_spec = None
         self._paint_tower()
         for key in self.segs:
             self._paint_seg(key)
+        for key, note in self.knob_notes.items():
+            note.configure(text="" if knob_applies(self.draft, key) else T["no_heads" if key == "H" else "no_room"])
         self._paint_costs()
         self._paint_expect()
         self._paint_tray()
@@ -582,18 +785,29 @@ class BuilderPage(Page):
         self.pill_bar.set(q.step / q.total if q.job and q.total else None)
 
     def _tower(self, parent):
+        """The model bottom to top, drawn top-down: next word, word scores, even out, the blocks, position, word table, your text."""
         box = tk.Frame(parent, bg=C["panel2"], highlightthickness=1, highlightbackground=C["border"])
         box.pack(fill="x")
         tip(tk_label(box, T["next_word"], 15, "text", "panel2", font=font(15, bold=True)), T["next_word_desc"]).pack(anchor="w", padx=12, pady=8)
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
+        self.pickers = []  # (menu button, was label, slot, block index or None) of the model-wide parts
+        self._part_row(parent, "head")
+        row = self._row(parent)
+        tip(tk_label(row, T["final_norm"], 14, "text", "panel2", font=font(14, bold=True), width=14),
+            f"{T['final_norm_tip']}\n\n{part_tip('norm')}").pack(side="left", padx=12, pady=6)
+        self.final_norm = tk_label(row, "", 13, "text2", "panel2")
+        self.final_norm.pack(side="left")
+        tip(self.final_norm, lambda: module_tip("norm", self.draft["M"]["norm"]))
+        tk_label(row, f"  {T['same_as_blocks']}", 12, "muted", "panel2").pack(side="left")
+        tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
         self.block_box = tk.Frame(parent, bg=C["bg"])
         self.block_box.pack(fill="x")
-        self.block_rows = []  # (row, name, heads, width, tag) per block, block 1 first; drawn top-down
+        self.block_rows = []  # (row, name, heads, width, tag, header, toggle, parts, detail) per block, block 1 first; drawn top-down
         step = tk.Frame(parent, bg=C["bg"])
         step.pack(anchor="w", pady=8)
-        tip(tk_label(step, f"{T['blocks']}  ", 14, "text", "bg"), T["blocks_desc"]).pack(side="left")
-        self.minus = button(step, "−", lambda: self.edit(L=max(1, self.draft["L"] - 1)))
-        self.plus = button(step, "+", lambda: self.edit(L=min(12, self.draft["L"] + 1)))
+        tip(tk_label(step, f"{T['blocks']}  ", 14, "text", "bg"), f"{T['blocks_desc']}\n\n{glossary_text('block')}").pack(side="left")
+        self.minus = button(step, "−", lambda: self.edit(**resize(self.draft, max(1, self.draft["L"] - 1))))
+        self.plus = button(step, "+", lambda: self.edit(**resize(self.draft, min(12, self.draft["L"] + 1))))
         self.minus.pack(side="left")
         self.blocks_label = tk_label(step, "", 18, "text", "bg", width=3, anchor="center")
         self.blocks_label.pack(side="left")
@@ -603,75 +817,190 @@ class BuilderPage(Page):
         for b in (self.minus, self.plus):
             b.state(["!disabled"] if self.phase == "edit" else ["disabled"])
         tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
+        self._part_row(parent, "position")
+        self._part_row(parent, "embedding")
+        tk_label(parent, "↑", 14, "violet").pack(anchor="w", padx=40)
         text = tk.Frame(parent, bg=C["panel2"], highlightthickness=1, highlightbackground=C["border"])
         text.pack(fill="x")
         head = tk.Frame(text, bg=C["panel2"])
         head.pack(fill="x", padx=12, pady=(8, 0))
-        tk_label(head, T["your_text_title"], 14, "text", "panel2", font=font(14, bold=True)).pack(side="left")
+        tip(tk_label(head, T["your_text_title"], 14, "text", "panel2", font=font(14, bold=True)), glossary_text("tokenizer")).pack(side="left")
         self.pieces_count = tk_label(head, "", 12, "muted", "panel2")
         self.pieces_count.pack(side="left")
         self._seg(text, list(WORDS), "V", (0, 1, 2, 3), "panel2")
+        for option, term in zip(WORDS, WORD_TERMS):
+            tip(self.segs["V"][0].buttons[option], glossary_text(term))
         self.pieces_box = tk.Frame(text, bg=C["panel2"])
         self.pieces_box.pack(anchor="w", fill="x", padx=12, pady=(0, 8))
         self.pieces_shown = None
 
+    def _row(self, parent):
+        row = tk.Frame(parent, bg=C["panel2"], highlightthickness=1, highlightbackground=C["border"])
+        row.pack(fill="x", pady=2)
+        return row
+
+    def _part_row(self, parent, slot):
+        """One model-wide part: its name and its module menu."""
+        row = self._row(parent)
+        tip(tk_label(row, T["part_" + slot], 14, "text", "panel2", font=font(14, bold=True), width=14), part_tip(slot)).pack(side="left", padx=12, pady=6)
+        self.pickers.append((*self._picker(row, slot, lambda: None, "panel2"), slot, None))
+
+    def _picker(self, parent, slot, block, bg):
+        """(menu button, was label) choosing `slot`'s module; block() says where a pick goes: None = every block, or a block index.
+        Modules that cannot work in this design are listed greyed out with the reason."""
+        mb = tk.Menubutton(parent, font=font(13), relief="flat", bg=C[bg], fg=C["text"], activebackground=C["panel"], activeforeground=C["text"],
+                           disabledforeground=C["muted"], takefocus=1, cursor="hand2", padx=8, pady=3, indicatoron=True,
+                           highlightthickness=1, highlightbackground=C["border"], highlightcolor=C["violet"])
+        menu = tk.Menu(mb, tearoff=0, font=font(13), bg=C["panel"], fg=C["text"], activebackground=C["violet"], activeforeground=C["bg"],
+                       disabledforeground=C["dim"])
+
+        def fill():
+            menu.delete(0, "end")
+            base, was = self.spec_base()
+            for short, name, _blurb, reason in part_options(base, self.draft, was, slot, block()):
+                menu.add_command(label=f"{name} · {T['wont_fit']}: {reason}" if reason else name, state="disabled" if reason else "normal",
+                                 command=lambda short=short: self.pick(slot, short, block()))
+        menu.configure(postcommand=fill)
+        mb.configure(menu=menu)
+        for seq in ("<space>", "<Return>"):
+            mb.bind(seq, lambda _e: menu.tk_popup(mb.winfo_rootx(), mb.winfo_rooty() + mb.winfo_height()) if self.phase == "edit" else None)
+        tip(mb, lambda: module_tip(slot, mb.module))
+        mb.pack(side="left")
+        was = tk_label(parent, "", 12, "muted", bg)
+        was.pack(side="left", padx=(6, 0))
+        return mb, was
+
+    def _paint_picker(self, mb, was, slot, now, before, bg):
+        mb.module = now
+        changed = before is not None and now != before
+        mb.configure(text=module_name(slot, now), fg=C["amber"] if changed else C["text"], bg=C[bg],
+                     state="normal" if self.phase == "edit" else "disabled")
+        was.configure(text=f"{T['was'].format(name=module_name(slot, before))}  ·  changed" if changed else "", bg=C[bg])
+
     def _paint_tower(self):
         cur, dr, rows = self.cur, self.draft, self.block_rows
+        for mb, was, slot, _ in self.pickers:
+            self._paint_picker(mb, was, slot, dr["M"][slot], cur["M"][slot], "panel2")
+        self.final_norm.configure(text=module_name("norm", dr["M"]["norm"]), fg=C["amber"] if dr["M"]["norm"] != cur["M"]["norm"] else C["text2"])
         while len(rows) < max(cur["L"], dr["L"]):  # a new block goes on top
+            i = len(rows)
             row = tk.Frame(self.block_box, highlightthickness=1)
             row.pack(fill="x", pady=2, **({"before": rows[-1][0]} if rows else {}))
-            name = tk_label(row, f"Block {len(rows) + 1}", 13, width=9)
-            name.pack(side="left", padx=8, pady=8)
-            heads = tk_label(row, "", 13, "pink")
+            header = tk.Frame(row)
+            header.pack(fill="x")
+            toggle = tk_label(header, "▸", 13, "muted", cursor="hand2", takefocus=1)
+            toggle.pack(side="left", padx=(8, 0))
+            _activate(toggle, lambda i=i: self.toggle(i))
+            tip(toggle, T["block_parts_tip"])
+            name = tk_label(header, f"Block {i + 1}", 13, width=8)
+            name.pack(side="left", padx=4, pady=8)
+            heads = tip(tk_label(header, "", 13, "pink"), glossary_text("heads"))
             heads.pack(side="left")
-            width = tk.Frame(row, bg=C["blue"], height=8)
+            width = tip(tk.Frame(header, bg=C["blue"], height=8), glossary_text("expansion"))
             width.pack(side="left", padx=10)
-            tag = tk_label(row, "", 12, "amber")
+            parts = tk_label(header, "", 12, "muted")
+            parts.pack(side="left")
+            tip(parts, lambda i=i: "\n\n".join(module_tip(slot, block_parts(self.draft, i)[slot]) for slot in ("mixer", "channel")))
+            tag = tk_label(header, "", 12, "amber")
             tag.pack(side="right", padx=8)
-            rows.append((row, name, heads, width, tag))
+            detail = tk.Frame(row)
+            rows.append((row, name, heads, width, tag, header, toggle, parts, detail))
         while len(rows) > max(cur["L"], dr["L"]):
             rows.pop()[0].destroy()
-        changed = dr["H"] != cur["H"] or dr["W"] != cur["W"]
-        for i, (row, name, heads, width, tag) in enumerate(rows):
+        knobs = dr["H"] != cur["H"] or dr["W"] != cur["W"]
+        for i, (row, name, heads, width, tag, header, toggle, parts, detail) in enumerate(rows):
             added, removed = i >= cur["L"], i >= dr["L"]
-            shown, bg = cur if removed else dr, C["amber_bg"] if added else C["panel2"]
-            row.configure(bg=bg, highlightbackground=C["amber"] if added else C["border"])
-            name.configure(fg=C["dim"] if removed else C["text"], bg=bg)
-            heads.configure(text="●" * shown["H"], bg=bg)
-            width.configure(width=[36, 72, 144][shown["W"]])
-            tag.configure(text="new" if added else "removed" if removed else "changed" if changed else "", bg=bg)
+            shown = cur if removed else dr
+            mine, own = block_parts(shown, i), own_slots(shown, i)
+            changed = not added and not removed and (knobs or block_parts(cur, i) != mine)
+            bg = "amber_bg" if added else "violet_bg" if own else "panel2"
+            row.configure(bg=C[bg], highlightbackground=C["amber"] if added else C["violet"] if own else C["border"])
+            for w in (header, toggle, name, heads, parts, tag, detail):
+                w.configure(bg=C[bg])
+            toggle.configure(text="▾" if i in self.open and not removed else "▸", highlightbackground=C[bg])
+            name.configure(fg=C["dim"] if removed else C["text"])
+            heads.configure(text="●" * shown["H"] if "heads" in fields_of("mixer", mine["mixer"]) else "")
+            if "d_ff" in fields_of("channel", mine["channel"]):
+                width.configure(width=[36, 72, 144][shown["W"]])
+                width.pack(side="left", padx=10, after=heads)
+            else:
+                width.pack_forget()
+            parts.configure(text=f"{module_name('mixer', mine['mixer'])} · {module_name('channel', mine['channel'])}")
+            text = "new" if added else "removed" if removed else "changed" if changed else T["own_parts"] if own else ""
+            tag.configure(text=text, fg=C["violet"] if text == T["own_parts"] else C["amber"])
+            self._paint_detail(i, detail, bg, removed)
         self.blocks_label.configure(text=str(dr["L"]), fg=C["amber"] if dr["L"] != cur["L"] else C["text"])
         self.blocks_was.configure(text=f"  was {cur['L']}" if dr["L"] != cur["L"] else "")
-        pieces, count = pieces_for(dr["V"])
+        self._paint_pieces()
+
+    def _paint_pieces(self):
+        v = self.draft["V"]
+        chips, count = pieces_for(v, self.lists)
         self.pieces_count.configure(text=f"  {count}")
-        if dr["V"] != self.pieces_shown:
-            self.pieces_shown = dr["V"]
+        if (v, id(self.lists)) != self.pieces_shown:
+            self.pieces_shown = v, id(self.lists)
             for child in self.pieces_box.winfo_children():
                 child.destroy()
-            for k in range(0, len(pieces), 14):  # wrap long piece lists
+            for k in range(0, len(chips), 14):  # wrap long piece lists
                 line = tk.Frame(self.pieces_box, bg=C["panel2"])
                 line.pack(anchor="w")
-                for p in pieces[k:k + 14]:
-                    Chip(line, p, "pieces").pack(side="left", padx=1, pady=1)
+                for label, state in chips[k:k + 14]:
+                    Chip(line, label, state).pack(side="left", padx=1, pady=1)
+
+    def toggle(self, i):
+        self.open ^= {i}
+        self._paint_tower()
+
+    def _paint_detail(self, i, detail, bg, removed):
+        """Block i's sub-layers top-down (what a word passes through bottom-up), each with its module menu."""
+        for child in detail.winfo_children():
+            child.destroy()
+        if i not in self.open or removed:
+            detail.pack_forget()
+            return
+        detail.pack(fill="x", padx=(32, 12), pady=(0, 8))
+        one = self.scope.get(i, False)
+        options = [T["scope_all"], T["scope_one"].format(n=i + 1)]
+        scope = Segmented(detail, options, options[one], lambda opt, i=i: self.set_scope(i, opt != options[0]), bg=bg)
+        scope.pack(anchor="w", pady=(0, 4))
+        cur, dr = self.cur, self.draft
+        mine, before = block_parts(dr, i), block_parts(cur, i) if i < cur["L"] else None
+        for slot in (None, "channel", "norm", None, "mixer", "norm"):  # None: the add-back
+            line = tk.Frame(detail, bg=C[bg])
+            line.pack(fill="x", pady=1)
+            if slot is None:
+                tip(tk_label(line, f"⊕ {T['add_back']}", 12, "muted", bg), glossary_text("residual")).pack(side="left")
+                continue
+            skipped = registry.get(slot, mine[slot]).skip
+            tip(tk_label(line, T["part_" + slot], 13, "dim" if skipped else "text", bg, width=14), part_tip(slot)).pack(side="left")
+            mb, was = self._picker(line, slot, lambda i=i: i if self.scope.get(i) else None, bg)
+            self._paint_picker(mb, was, slot, mine[slot], before and before[slot], bg)
+            if (i, slot) in dr["O"]:
+                tk_label(line, T["only_here"], 12, "violet", bg).pack(side="left", padx=(8, 0))
+
+    def set_scope(self, i, one):
+        self.scope[i] = one
+        self._paint_tower()
 
     def _seg(self, parent, options, key, values, bg="panel"):
         label, value = dict(zip(values, options)), dict(zip(options, values))
-        seg = Segmented(parent, options, None, lambda opt: self.edit(**{key: value[opt]}), bg=bg)
+        seg = Segmented(parent, options, None, lambda opt: self.knob(key, value[opt]), bg=bg)
         seg.pack(anchor="w", padx=12 if bg == "panel2" else 0, pady=4)
         self.segs[key] = seg, label
 
     def _paint_seg(self, key):
         seg, label = self.segs[key]
         seg.set(label.get(self.draft[key]))
-        # ponytail: Tk borders cannot be dashed, so the old choice gets a violet outline and a "was" in its label.
+        # ponytail: Tk borders cannot be dashed, so the saved choice gets a violet outline and a "saved" in its label.
         was = label.get(self.cur[key]) if self.cur[key] != self.draft[key] else None
         for opt, b in seg.buttons.items():
-            b.configure(highlightbackground=C["violet"] if opt == was else C["border"], text=f"{opt} · was" if opt == was else opt)
+            b.configure(highlightbackground=C["violet"] if opt == was else C["border"], text=f"{opt} · saved" if opt == was else opt)
 
     def _controls(self, parent):
+        self.knob_notes = {}
         for name, hint, color, opts, key, values in (
-                ("Look-back heads", T["look_back_heads_tip"], "pink", [str(h) for h in HEADS], "H", HEADS),
-                ("Thinking room", T["thinking_room_tip"], "blue", list(WIDTHS), "W", (0, 1, 2))):
+                ("Look-back heads", f"{T['look_back_heads_tip']}\n\n{glossary_text('heads')}", "pink", [str(h) for h in HEADS], "H", HEADS),
+                ("Thinking room", f"{T['thinking_room_tip']}\n\n{glossary_text('expansion')}", "blue", list(WIDTHS), "W", (0, 1, 2))):
             card = Card(parent)
             card.pack(fill="x", pady=(0, 8))
             head = tk.Frame(card, bg=C["panel"])
@@ -679,18 +1008,23 @@ class BuilderPage(Page):
             tk_label(head, name, 15, color, "panel", font=font(15, bold=True)).pack(side="left")
             info_icon(head, hint).pack(side="left", padx=(4, 0))
             self._seg(card, opts, key, values)
+            self.knob_notes[key] = tk_label(card, "", 12, "muted", "panel", wraplength=300)
+            self.knob_notes[key].pack(anchor="w")
 
     def _costs(self):
         card = Card(self.body)
         card.pack(fill="x", pady=(0, GUTTER))
         Kicker(card, T["what_costs"], bg="panel").pack(anchor="w")
         self.cost_rows = []
-        for name, f, more, less in ((T["size_label"], P, T["cost_bigger"], T["cost_smaller"]),
-                                    (T["time_per_step"], C_, T["cost_slower"], T["cost_faster"]),
-                                    (T["memory_while_training"], TM, T["cost_more"], T["cost_less"])):
+        for name, f, more, less in ((T["size_label"], "params", T["cost_bigger"], T["cost_smaller"]),
+                                    (T["time_per_step"], "time", T["cost_slower"], T["cost_faster"]),
+                                    (T["memory_while_training"], "memory", T["cost_more"], T["cost_less"])):
             row = tk.Frame(card, bg=C["panel"])
             row.pack(fill="x", pady=4)
-            tk_label(row, name, 14, "text", "panel", width=24).pack(side="left")
+            label = tk_label(row, name, 14, "text", "panel", width=24)
+            label.pack(side="left")
+            if term := {"params": "parameters", "time": "step"}.get(f):
+                tip(label, glossary_text(term))
             bars = tk.Frame(row, bg=C["panel"])
             bars.pack(side="left", fill="x", expand=True)
             drawn = []
@@ -716,10 +1050,11 @@ class BuilderPage(Page):
         info_icon(self.fits_row, lambda: self.fits_text).pack(side="left", padx=(4, 0))
 
     def _paint_costs(self):
-        a, b = cfg(self.cur), cfg(self.draft)
+        a = sizes(self.base_spec(), self.cur["V"])
+        b = sizes(self.draft_spec, self.draft["V"]) if self.draft_spec else a
         self.cost_say = {}
         for name, f, more, less, now, new, said in self.cost_rows:
-            x, y = f(a), f(b)
+            x, y = a[f], b[f]
             s = self.cost_say[name] = say(x, y, more, less)
             same = s == T["about_same"]
             old_pct, new_pct = bar(x, y)
@@ -754,7 +1089,7 @@ class BuilderPage(Page):
         info_icon(row, lambda: self.hover_text).pack(side="left", padx=(6, 0))
 
     def _paint_expect(self):
-        self.guide_text, self.guide_details = design_expectation(self.draft)
+        self.guide_text, self.guide_details = design_expectation(self.draft, self.draft_spec or self.base_spec())
         self.expect_texts = self.expectations()
         self.hover_text = "\n\n".join([self.guide_details, *self.expect_texts])  # the card itself is one line
         self.guide_label.configure(text=self.guide_text)

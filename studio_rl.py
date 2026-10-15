@@ -1,9 +1,13 @@
 """Post-training rounds 2 and 3, on-policy and with torch gradients.
 
 Round 2, practice with checks (GRPO-style): per prompt the model writes a group of answers, a rule scores each,
-advantage = score - group mean (optionally / group std), loss = -sum(advantage * sequence log-prob) / rows.
+advantage = score - group mean (optionally / group std), loss = -mean over answers of advantage * (mean token log-prob).
+A group whose answers all score the same has advantage 0 everywhere and teaches nothing; the round counts those
+("groups that taught something"), and a quick pass@k check before it skips the round when the model solves nothing.
 Round 3, learn from a teacher (on-policy distillation): the student writes an answer, a frozen teacher scores each
-of its tokens, per-token reverse KL = log p_student - log p_teacher on the student's own samples.
+of its tokens, per-token reverse KL = log p_student - log p_teacher on the student's own samples. The teacher is either
+another trained version that shares the student's word list and context, or the same model shown a hint
+(context distillation, which only works if the model can follow a hint).
 
 Both are on-policy (fresh samples every step, one gradient step per batch), so no ratio or clipping is needed.
 ponytail: a sampled answer is decoded to text and re-encoded for scoring, so the scored tokens can differ from the
@@ -26,6 +30,8 @@ from studio_rlhf import _encode_pair, _save, token_logps
 
 RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rule is always the minimum, 0
 MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measurement
+PROBE_PROBLEMS = 8      # problems answered before round 2 to see whether it can learn anything
+PROBE_ANSWERS = 4       # answers sampled per probe problem (the k of pass@k)
 
 
 def _messages(item):
@@ -73,15 +79,55 @@ def advantages(rewards, divide_by_std=True):
     return a / std if divide_by_std and std > 1e-9 else a
 
 
+def has_spread(rewards):
+    """True when a group holds both a better and a worse answer. All-equal groups (all pass or all fail) give no gradient."""
+    return max(rewards) - min(rewards) > 1e-9
+
+
+def group_spread(groups):
+    """(taught, total): how many of the reward groups had any spread, and how many there were."""
+    groups = list(groups)
+    return sum(1 for g in groups if has_spread(g)), len(groups)
+
+
+def length_normalised(logp, valid, weights):
+    """-mean over answers of weight * (that answer's mean token log-prob).
+
+    Each answer's summed log-prob is divided by its own token count (the GRPO form, not the constant divisor of Dr. GRPO),
+    so a long answer does not outweigh a short one just by having more tokens: equal per-token log-probs give the same loss
+    at any length. logp is [rows, tokens], zero where valid is False."""
+    counts = valid.sum(dim=1).clamp(min=1).to(logp.dtype)
+    return -(weights * logp.sum(dim=1) / counts).sum() / len(weights)
+
+
 def reinforce_loss(policy, rows, adv, backward=False):
-    """-sum(advantage * sequence log-prob) / rows over encoded (x, y) rows; accumulates gradients when backward."""
+    """-mean(advantage * mean token log-prob) over encoded (x, y) rows (see length_normalised); accumulates gradients when backward."""
     x, y = batch_arrays(rows)
-    logp, _, cache = token_logps(policy, x, y, tape=backward)
+    logp, valid, cache = token_logps(policy, x, y, tape=backward)
     weights = torch.as_tensor(np.asarray(adv), dtype=logp.dtype, device=logp.device)
-    loss = -(weights * logp.sum(dim=1)).sum() / len(rows)
+    loss = length_normalised(logp, valid, weights)
     if backward:
         policy.backward_loss(loss, cache)
     return float(loss.detach())
+
+
+def pass_at_k(checkpoint, problems, count=PROBE_PROBLEMS, k=PROBE_ANSWERS, temperature=.8, seed=7):
+    """Sample k answers for `count` checkable problems: {"problems", "k", "solved" (problems with any passing answer),
+    "passed" (passing answers), "answers"}. With solved == 0 every group in round 2 would be all-fail and teach nothing."""
+    problems = [p for p in problems if p.get("rule") in studio_rules.CHECKABLE]
+    problems = random.Random(seed).sample(problems, min(count, len(problems)))
+    local = LocalModel(checkpoint, device="cpu")
+    local.rng = np.random.default_rng(seed)
+    solved = passed = 0
+    for problem in problems:
+        messages = _messages(problem)
+        prompt = _prompt_text(messages)
+        budget = studio_rules.max_tokens(problem["rule"])
+        ok = sum(bool(studio_rules.check(problem["rule"], prompt, local.generate(messages, max_tokens=budget, temperature=temperature),
+                                         problem.get("params"))) for _ in range(k))
+        passed += ok
+        solved += ok > 0
+    return {"problems": len(problems), "k": k, "solved": solved, "passed": passed, "answers": len(problems) * k}
 
 
 def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, learning_rate=1e-4, prompts_per_step=4,
@@ -102,12 +148,13 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
               "group": group, "base_checkpoint": str(checkpoint)}
     atomic_json(directory / "run.json", record)
     history, best, means = [], -math.inf, []
+    groups_total = taught_total = 0
     emit({"type": "info", "text": f"round 2 · {len(problems)} problems · groups of {group}"})
     step = 0
     while step < steps and not stop.is_set():
         while pause.is_set() and not stop.is_set():
             threading.Event().wait(.05)
-        rows, adv_all, shown = [], [], []
+        rows, adv_all, shown, step_rewards = [], [], [], []
         for problem in rng.sample(problems, min(prompts_per_step, len(problems))):
             messages = _messages(problem)
             prompt = _prompt_text(messages)
@@ -115,7 +162,8 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             answers = [local.generate(messages, max_tokens=budget, temperature=temperature) for _ in range(group)]
             passed = [studio_rules.check(problem["rule"], prompt, a, problem.get("params")) for a in answers]
             rewards = [float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.) for a, ok in zip(answers, passed)]
-            flat = max(rewards) - min(rewards) < 1e-9   # all pass or all fail: nothing to learn
+            flat = not has_spread(rewards)   # all pass or all fail: nothing to learn
+            step_rewards.append(rewards)
             adv = np.zeros(group) if flat else advantages(rewards, divide_by_std)
             if not flat:
                 rows += [_encode_pair(tokenizer, messages, a, cfg["context"]) for a in answers]
@@ -131,7 +179,10 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             optimizer.update(policy, rate)
         step += 1
         mean = float(np.mean([g["mean"] for g in shown]))
-        row = {"step": step, "loss": loss, "mean_reward": mean, "learned_from": len(rows) // group}
+        taught, groups = group_spread(step_rewards)
+        taught_total, groups_total = taught_total + taught, groups_total + groups
+        row = {"step": step, "loss": loss, "mean_reward": mean, "groups": groups, "taught": taught,
+               "groups_total": groups_total, "taught_total": taught_total}
         history.append(row)
         for visual in shown:
             emit({"type": "group", **visual})
@@ -140,7 +191,7 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             best = mean
             _save(directory / "best.npz", policy, optimizer, cfg, tokenizer, base_step + step, -best, history, extra)
     half = max(1, len(history) // 2)
-    record.update(first_mean=float(np.mean([h["mean_reward"] for h in history[:half]])) if history else None,
+    record.update(groups=groups_total, taught=taught_total, first_mean=float(np.mean([h["mean_reward"] for h in history[:half]])) if history else None,
                   last_mean=float(np.mean([h["mean_reward"] for h in history[half:] or history])) if history else None)
     return _finish(directory, local, optimizer, cfg, step, base_step, -best if math.isfinite(best) else None, history, extra, record, stop)
 
@@ -156,12 +207,24 @@ class Teacher:
         self.tokenizer = Tokenizer.restore(data["tokenizer"])
         self.model = ScratchTransformer(dict(data["config"], device=device, dropout=0), self.tokenizer.vocab_size)
         self.model.load_weights(data["model"])
+        self.context = data["config"]["context"]
         self.correction = correction
 
     def messages(self, messages, correction=None):
         """The conversation as the teacher sees it: `correction` (or the teacher's own) goes first as a system message."""
         correction = correction or self.correction
         return [{"role": "system", "content": correction}, *messages] if correction else list(messages)
+
+
+def check_teacher(student_tokenizer, student_context, teacher):
+    """Raise a plain ValueError unless the teacher reads the same word list and the same reading window as the student:
+    its per-token log-probs are only comparable to the student's token for token on the same ids and positions."""
+    if teacher.tokenizer.serialize() != student_tokenizer.serialize():
+        raise ValueError("This teacher uses a different word list from the model it teaches, so its scores would not line up. "
+                         "Pick a version trained with the same word list.")
+    if teacher.context != student_context:
+        raise ValueError(f"This teacher reads {teacher.context} tokens at a time and the model reads {student_context}. "
+                         "Pick a version with the same reading window.")
 
 
 def privileged(checkpoint, correction, device="auto"):
@@ -198,7 +261,8 @@ def reverse_kl(student, teacher, student_rows, teacher_rows, backward=False):
 
 def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learning_rate=1e-4, prompts_per_step=4,
                        max_tokens=None, temperature=.8, probe=8, seed=7, device="auto", emit=None, stop=None, pause=None):
-    """Round 3. teacher: a checkpoint path (previous best, same word list) or privileged(checkpoint, correction).
+    """Round 3. teacher: a checkpoint path (any trained version with the same word list and context; check_teacher
+    raises otherwise) or privileged(checkpoint, correction), the same model shown a hint.
 
     Before training it samples `probe` answers and keeps them; the heat map shows the teacher's surprise at each word,
     and the verdict counts the words where the student's log-prob moved closer to the teacher's after the round
@@ -212,8 +276,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     student, tokenizer = local.model, local.tokenizer
     if not isinstance(teacher, Teacher):
         teacher = Teacher(teacher, device=device)
-    if teacher.tokenizer.serialize() != tokenizer.serialize():
-        raise ValueError("The teacher must share this model's word list.")
+    check_teacher(tokenizer, local.config["context"], teacher)
     directory, cfg, extra = _begin(output_dir, local, checkpoint, "teacher")
     base_step, rng = load_checkpoint(checkpoint)["step"], random.Random(seed)
 
@@ -285,6 +348,14 @@ def measure(checkpoint, docs, problems):
     return {"bpc": studio_eval.bits_per_char(checkpoint, [_doc(d) for d in docs]) if docs else None, "pass_k": k, "pass_n": len(problems)}
 
 
+def skipped_round(probe, checkpoint):
+    """The gate result for a round 2 that did not run because the model solved none of the probe problems."""
+    detail = f"{probe['passed']} of {probe['answers']} sampled answers passed, on {probe['problems']} problems"
+    return {"round": 2, "ok": False, "skipped": True, "verdict": "Not run: this model solves none of these problems yet, so no group would have a better and a worse answer and the round would teach nothing.",
+            "checks": [{"name": "The model solves some problems before the round", "detail": detail, "ok": False}],
+            "before": None, "after": None, "band": None, "checkpoint": str(checkpoint), "groups": 0, "taught": 0, "probe": probe}
+
+
 def run_round(number, job, services, emit, stop, pause):
     """Run round 1-4 from job.params, measure before/after, apply the gate and emit {"type": "gate", ...}."""
     import studio_gate
@@ -296,6 +367,15 @@ def run_round(number, job, services, emit, stop, pause):
         raise NoCheckpoint(getattr(services.current_version(), "number", None))
     out = Path(p.get("output_dir") or Path(services.workspace.run_dir) / f"queue_{job.id}")
     job.params["output_dir"] = str(out)
+    if number == 2:   # a model that solves nothing writes all-fail groups, which give no gradient: say so instead of running
+        problems = _rows(job, services, "problems", "problems")
+        probe = pass_at_k(checkpoint, problems, seed=p.get("seed", 7))
+        if probe["problems"] and not probe["solved"]:
+            result = skipped_round(probe, checkpoint)
+            emit({"type": "gate", **result})
+            if getattr(services, "record_round", None):
+                services.record_round(number, p.get("version"), result)
+            return {"round": number, "ok": False, "checkpoint": checkpoint}
     docs, held = _rows(job, services, "heldout_docs", "heldout_docs"), _rows(job, services, "heldout_problems", "heldout_problems")
     before = measure(checkpoint, docs, held)
     import studio_eval
@@ -306,10 +386,11 @@ def run_round(number, job, services, emit, stop, pause):
         cfg = {**load_checkpoint(checkpoint)["config"], "objective": "assistant", **kw, **p.get("config", {})}
         record = train(cfg, _rows(job, services, "conversations", "conversations"), out, emit=emit, stop=stop, pause=pause, init_from=checkpoint)
     elif number == 2:
-        record = practice_with_checks(checkpoint, _rows(job, services, "problems", "problems"), out, group=p.get("group", 6),
-                                      emit=emit, stop=stop, pause=pause, **kw)
+        record = practice_with_checks(checkpoint, problems, out, group=p.get("group", 6), emit=emit, stop=stop, pause=pause, **kw)
         if (record.get("last_mean") or 0) < (record.get("first_mean") or 0):
             verdict = "Answers that passed the check did not become more likely than ones that failed."
+        if record.get("groups") and not record.get("taught"):
+            verdict = "No group had both a better and a worse answer, so there was nothing to learn from."
     elif number == 3:
         if p.get("teacher_choice") == "correction":   # the same model with each saved correction in front of it
             teacher = Teacher(checkpoint)
@@ -331,6 +412,8 @@ def run_round(number, job, services, emit, stop, pause):
     after = measure(candidate, docs, held)
     ok, checks = studio_gate.passes(before, after, band)
     result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict, "before": before, "after": after, "band": band, "checkpoint": candidate}
+    if number == 2:   # groups that taught something: the share of reward groups with any spread
+        result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe)
     emit({"type": "gate", **result})
     if getattr(services, "record_round", None):   # the real services keep the result and move Chat only when ok
         services.record_round(number, p.get("version"), result)

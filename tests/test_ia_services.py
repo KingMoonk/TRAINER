@@ -37,20 +37,35 @@ class ServicesTest(unittest.TestCase):
 
     def test_references(self):
         r = self.svc.references(self.svc.best_version())
-        lo, hi = r["noise_band"]
-        self.assertTrue(all(math.isfinite(x) for x in (r["uniform_bpc"], r["unigram_bpc"], r["best_so_far_bpc"], lo, hi)))
+        self.assertTrue(all(math.isfinite(x) for x in (r["uniform_bpc"], r["unigram_bpc"], r["best_so_far_bpc"])))
+        self.assertNotIn("noise_band", r)
         self.assertGreater(r["uniform_bpc"], r["unigram_bpc"])
 
-    def test_chat_follows_a_version_only_outside_the_noise_band(self):
+    def test_chat_follows_a_version_only_when_the_paired_test_says_better(self):
+        import studio_eval
         store, cards = self.svc.store, [dict(v.scorecard) for v in self.svc.versions()]
         self.addCleanup(lambda: [store._update(n, scorecard=c) for n, c in enumerate(cards, 1)])
-        lo, _hi = self.svc.references(1)["noise_band"]
-        store._update(1, scorecard={"bpc": lo + 1e-6})
-        store._update(2, scorecard={"bpc": lo + 1e-9})   # lower, but inside version 1's band
-        self.assertEqual(self.svc.best_version().number, 1)
-        store._update(2, scorecard={"bpc": lo - 1e-6})   # below the band
-        self.assertEqual(self.svc.best_version().number, 2)
+        self.addCleanup(self.svc._cache.clear)   # the mocked verdicts must not outlive the test
+        store._update(1, scorecard={"bpc": 3., "bpc_method": studio_eval.SCORE_METHOD})
+        store._update(2, scorecard={"bpc": 2., "bpc_method": studio_eval.SCORE_METHOD})   # lower, whatever the test says
+        for verdict, chat in ((False, 1), (True, 2)):
+            with mock.patch("studio_eval.paired_gain", return_value={"diff": -.1, "upper": -.05 if verdict else .01, "better": verdict}):
+                self.svc._cache.clear()
+                self.assertEqual(self.svc.best_version().number, chat)
+                self.assertEqual(self.svc.gate_result(2)["better"], verdict)
+                self.assertEqual(self.svc.gate_result(2)["vs"], 1)
+        self.assertIsNone(self.svc.gate_result(1))   # the first version has nothing before it
         self.assertGreater(self.svc.checkpoint_step(1), 0)
+
+    def test_the_real_paired_test_reads_both_versions_on_the_same_documents(self):
+        store, cards = self.svc.store, [dict(v.scorecard) for v in self.svc.versions()]
+        self.addCleanup(lambda: [store._update(n, scorecard=c) for n, c in enumerate(cards, 1)])
+        for n in (1, 2):
+            store._update(n, scorecard={"bpc": 3.})   # an old-method number: weighing scores both checkpoints again
+        verdict = self.svc.gate_result(2)   # the fixture holds back 5 documents: too few to judge on
+        self.assertEqual(set(verdict), {"diff", "upper", "better", "docs", "reason", "vs"})
+        self.assertEqual((verdict["better"], verdict["reason"], verdict["docs"], verdict["vs"]), (False, "few_docs", 5, 1))
+        self.assertTrue(math.isfinite(verdict["diff"]))
 
     def test_data(self):
         self.assertEqual(self.svc.data("problems").count, 10)
@@ -123,6 +138,28 @@ class ServicesTest(unittest.TestCase):
         self.assertTrue(self.svc.inspect_logit_lens(None, "hello"))
 
 
+class WordListsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.svc = FixtureServices(self.tmp.name)
+        self.addCleanup(self.svc.close)
+        gpt2 = mock.patch.object(WorkspaceServices, "_gpt2", return_value=None)  # nothing is downloaded in a test
+        gpt2.start()
+        self.addCleanup(gpt2.stop)
+
+    def test_fitted_on_the_stored_text_and_kept_until_it_changes(self):
+        from studio_modules.tokenizer.word import WordTokenizer
+        empty = self.svc.word_lists()
+        self.assertEqual(empty["tokenizers"][1:], (None, None, None))
+        self.assertIs(self.svc.word_lists(), empty)
+        self.assertTrue(self.svc.add_data("text", {"text": "A kingfisher flashed past the old mill at dawn."}))
+        lists = self.svc.word_lists()
+        self.assertIsInstance(lists["tokenizers"][3], WordTokenizer)
+        self.assertIn(" kingfisher", lists["tokenizers"][3].lookup)
+        self.assertEqual(lists["sentence"], "A kingfisher flashed past the old mill at dawn.")
+
+
 class BandTest(unittest.TestCase):
     """Scoring the held-back text stays off the Tk thread: ready() says no for it, it is kept on disk, and one scored version needs none."""
 
@@ -131,7 +168,7 @@ class BandTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.svc = FixtureServices(self.tmp.name)
         self.addCleanup(self.svc.close)
-        self.bands = Path(self.tmp.name) / "data" / "noise_bands.json"
+        self.scores = Path(self.tmp.name) / "data" / "held_back_scores"
         self.svc.store._update(1, scorecard={"bpc": 3.})
         self.svc.store._update(2, scorecard={"bpc": 2.})
 
@@ -139,26 +176,55 @@ class BandTest(unittest.TestCase):
         self.svc.store._update(2, scorecard={"bpc": None})
         with mock.patch.object(self.svc, "_heldout", side_effect=AssertionError("parsed")):
             self.assertEqual(self.svc.best_version().number, 1)
-        self.assertFalse(self.bands.exists())
+        self.assertFalse(self.scores.exists())
 
-    def test_a_missing_band_goes_to_the_worker_and_is_kept_on_disk(self):
+    def test_with_enough_held_back_documents_the_paired_test_judges(self):
+        import json
+
+        import studio_eval
+        path = Path(self.tmp.name) / "data" / "heldout.json"
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps(rows * 6), encoding="utf-8")   # 30 documents
+        verdict = self.svc.gate_result(2)
+        self.assertEqual(verdict["docs"], 30)
+        self.assertNotIn("reason", verdict)
+        self.assertTrue(math.isfinite(verdict["upper"]))
+        self.assertEqual(verdict["better"], verdict["upper"] < 0)
+        self.assertGreaterEqual(verdict["docs"], studio_eval.MIN_DOCS)
+
+    def test_missing_scores_go_to_the_worker_and_are_kept_on_disk(self):
         self.assertFalse(self.svc.ready(self.svc.best_version))  # two scored versions, nothing scored yet
         self.svc.best_version()
-        self.assertTrue(self.bands.exists())
+        self.assertEqual(len(list(self.scores.glob("*.npy"))), 2)  # one file per checkpoint
         self.assertTrue(self.svc.ready(self.svc.best_version))
-        again = WorkspaceServices(self.svc.workspace)  # a new launch
+        again = WorkspaceServices(self.svc.workspace)  # a new launch: the scores come from disk, the pair is only compared
         self.addCleanup(again.close)
-        with mock.patch("studio_eval.noise_band", side_effect=AssertionError("scored again")):
-            self.assertTrue(again.ready(again.best_version))
+        with mock.patch("studio_eval.score_docs", side_effect=AssertionError("scored again")):
+            again.best_version()
             self.assertEqual(again.best_version().number, self.svc.best_version().number)
+            self.assertEqual(again.gate_result(2)["diff"], self.svc.gate_result(2)["diff"])
 
     def test_a_changed_checkpoint_or_held_back_file_is_scored_again(self):
         self.svc.best_version()
-        first = self.svc._band(self.svc.versions()[0].best_checkpoint)
+        ckpt = self.svc.versions()[0].best_checkpoint
+        first = self.svc._held_scores(ckpt).copy()
         heldout = Path(self.tmp.name) / "data" / "heldout.json"
         heldout.write_text(heldout.read_text(encoding="utf-8") + " ", encoding="utf-8")
-        self.assertFalse(self.svc.ready(lambda: self.svc._band(self.svc.versions()[0].best_checkpoint)))
-        self.assertEqual(self.svc._band(self.svc.versions()[0].best_checkpoint), first)  # same text, same band
+        self.assertFalse(self.svc.ready(lambda: self.svc._held_scores(ckpt)))
+        self.assertTrue((self.svc._held_scores(ckpt) == first).all())  # same text, same scores
+        self.assertEqual(len(list(self.scores.glob("*.npy"))), 2)  # the stale file of that checkpoint is gone, not piled up
+
+    def test_scores_made_by_another_scoring_method_are_not_reused_and_the_scorecard_is_refreshed(self):
+        import studio_eval
+        self.svc.best_version()
+        ckpt = self.svc.versions()[0].best_checkpoint
+        before = len(list(self.scores.glob("*.npy")))
+        with mock.patch.object(studio_eval, "SCORE_METHOD", "old-method"):
+            self.assertFalse(self.svc.ready(lambda: self.svc._held_scores(ckpt)))  # the files on disk belong to the current method
+        card = self.svc.store.get(1)["scorecard"]
+        self.assertEqual(card["bpc_method"], studio_eval.SCORE_METHOD)  # the 3.0 above was replaced by a fresh measurement
+        self.assertNotEqual(card["bpc"], 3.)
+        self.assertEqual(len(list(self.scores.glob("*.npy"))), before)
 
     def test_a_cache_hit_does_not_wait_for_a_running_read(self):
         started, release = threading.Event(), threading.Event()
