@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import studio_rules as rules  # names and labels of the rules only
 from studio_ia.copy import YOURDATA as T
 from studio_ia.pages.base import Page, Throttle
-from studio_ia.pages.pretraining import source_action, source_status
+from studio_ia.pages.pretraining import collection_row, source_action, source_status
 from studio_ia.theme import C, GUTTER, entry, font, tk_label
 from studio_ia.widgets import _activate, button, tip
 
@@ -341,19 +341,9 @@ class YourDataPage(Page):
         for child in self.collection_rows.winfo_children():
             child.destroy()
         for row in rows:
-            line = tk.Frame(self.collection_rows, bg=C["panel"])
-            line.pack(fill="x", pady=1)
-            tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
-            tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
-            label, action = source_action(row)
-            if action:
-                label = T["download_add"] if action == "download" and kind != "text" else label
-                button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
-            status = self.status_labels[row["id"]] = tk_label(line, source_status(row, self.notes.get(row["id"], "")), 12,
-                                                              "coral" if row.get("error") else "muted", "panel")
-            status.pack(side="right", padx=10)
+            self.status_labels[row["id"]] = collection_row(self.collection_rows, row, self.notes.get(row["id"], ""), self.fetch)
         if any(source_action(r)[1] == "download" for r in rows):
-            button(self.collection_rows, T["download_add_all"] if kind != "text" else T["download_all"],
+            button(self.collection_rows, T["download_add_all"],
                    lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
 
     def _collect(self):
@@ -374,9 +364,9 @@ class YourDataPage(Page):
             self.paint_collection()
 
     def fetch(self, source_id, action):
-        """Download (and, outside text, add) one source or the whole collection; import a downloaded one."""
+        """Download and add one source or the whole collection; add one downloaded earlier."""
         ids = None if source_id is None else [source_id]
-        started = (self.services.download_sources(ids, kind=self.kind, install=self.kind != "text") if action == "download"
+        started = (self.services.download_sources(ids, kind=self.kind, install=True) if action == "download"
                    else self.services.import_source(source_id))
         if started:
             self._collect()

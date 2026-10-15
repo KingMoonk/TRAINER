@@ -102,20 +102,36 @@ class ViewerControls(unittest.TestCase):
         self.assertEqual(ui.toggle_text("Show numbers", True), "Show numbers: on")
         self.assertEqual(ui.toggle_text("Reduce motion", False), "Reduce motion: off")
 
-    def test_block_labels_never_overlap(self):
+    def test_block_labels_stay_on_their_block_and_never_overlap(self):
         height, gap = .05, .01
-        # a column of blocks seen end on: every label lands on the same spot
+        # a column of blocks seen end on: every label lands on the same spot, so only the first one shows
         items = [(0., .1, .3)] * 6 + [None, (.5, .1, .2), (.05, .3, .3)]
-        ys = ui.place_labels(items, height, gap)
-        self.assertEqual(len(ys), len(items))
-        self.assertIsNone(ys[6])
-        self.assertEqual(ys[0], .1)  # the nearest keeps its place
-        boxes = [(x - w / 2, x + w / 2, y, y + height) for item, y in zip(items, ys) if item is not None for x, _, w in [item]]
+        shown = ui.place_labels(items, height, gap)
+        self.assertEqual(shown, [True] + [False] * 5 + [False, True, True])
+        boxes = [(x - w / 2, x + w / 2, y, y + height) for item, on in zip(items, shown) if on for x, y, w in [item]]
         for i, a in enumerate(boxes):
             for b in boxes[i + 1:]:
                 self.assertTrue(a[1] + gap <= b[0] + 1e-9 or b[1] + gap <= a[0] + 1e-9 or a[3] + gap <= b[2] + 1e-9 or b[3] + gap <= a[2] + 1e-9, (a, b))
-        self.assertEqual(ys[7], .1)  # far enough to the side: not moved
         self.assertEqual(ui.place_labels([], height), [])
+
+    def test_scene_colours_tell_marks_apart(self):
+        colours = [ui.SCENE[name][:3] for name in ('activation', 'mixer', 'channel', 'token', 'lane')]
+        self.assertEqual(len(set(colours)), len(colours))
+
+    def test_play_shows_each_snapshot_for_a_full_pass(self):
+        self.assertEqual(ui.pass_seconds(12), 12)
+        self.assertEqual(ui.pass_seconds(0), 1)
+
+    def test_matrix_legend_explains_the_colours(self):
+        self.assertIn('amber = positive', ui.matrix_legend('Weights'))
+        self.assertIn('rows = queries', ui.matrix_legend('Head'))
+        self.assertNotEqual(ui.SCENE['positive'][:3], ui.SCENE['negative'][:3])
+
+    def test_empty_matrix_note_says_why(self):
+        self.assertIn('Load snapshots', ui.empty_matrix_note('Head', False, 0, 'gru', False))
+        self.assertIn('no attention heads', ui.empty_matrix_note('Head', True, 0, 'gru', False))
+        self.assertIn('Block 1', ui.empty_matrix_note('Head', True, 0, 'gru', False))
+        self.assertIn('no weights values', ui.empty_matrix_note('Weights', True, 2, 'attention', True))
 
     def test_camera_frames_each_level(self):
         target, distance = ui.camera_view("Model", 6)

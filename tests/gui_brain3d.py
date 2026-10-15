@@ -115,6 +115,15 @@ for i, a in enumerate(boxes):
     for b in boxes[i + 1:]:
         assert a[1] <= b[0] or b[1] <= a[0] or a[3] <= b[2] or b[3] <= a[2], (a, b)
 assert not hasattr(app, "edit_weight")
+assert not app.gate_labels[app.scene.selection.layer].isHidden()  # the selected block's label always shows
+# Play on one snapshot (a single real step) runs the pulse forward and back through the blocks, then stops
+app.snapshot_paths, app.snapshot_index, app.playing, app.animation_elapsed = ["c"], 0, False, 0.
+app.toggle_play()
+app.taskMgr.step()
+assert app.playing
+app.animation_elapsed = len(app.scene.gates)
+app.taskMgr.step()
+assert not app.playing
 # the studio going away is noticed
 link.connected = False
 app.taskMgr.step()

@@ -24,6 +24,27 @@ def rgba(name, alpha=1.):
     return tuple(int(value[i:i + 2], 16) / 255 for i in (0, 2, 4)) + (float(alpha),)
 
 
+# one colour per meaning in the 3D scene, so activations, the token mixer and the floor never blend into one cyan
+SCENE = {
+    'activation': rgba('blue', .85),  # residual-stream size per token, and the Model level's bins
+    'mixer': rgba('pink', .85),  # attention beams and arcs, the conv fan, the recurrent ribbon
+    'channel': rgba('violet', .7),  # the block's MLP
+    'token': rgba('amber'),  # the selected token
+    'lane': rgba('border'),  # the floor line under each token
+    'gate': rgba('border'),  # the block's panel; its alpha says whether it is selected
+    'positive': rgba('amber', .95), 'negative': rgba('blue', .95),  # a matrix value's sign at Head and Weights
+    'masked': rgba('panel2'), 'picked': rgba('text'),  # a key the query may not see; the cell I J K L picked
+}
+
+
+def matrix_legend(level):
+    """How to read the Head and Weights bars, shown under the HUD's first line."""
+    legend = 'amber = positive, blue = negative, taller = larger'
+    if level == 'Head':
+        return f'rows = queries, columns = keys | {legend} | flat dark = masked (a later key)'
+    return f'{legend} | white = the picked cell'
+
+
 def button_colors(primary=False):
     """frameColor per DirectButton state (ready, pressed, hover, disabled): flat, the app's button tones."""
     if primary:
@@ -131,24 +152,36 @@ def toggle_text(name, on):
 
 
 def place_labels(items, height, gap=.01):
-    """Vertical positions for block labels so none overlap: items are (x, y, width) in screen units, nearest block
-    first, None for one off screen. A label that would cover a placed one moves up above it. Returns a y (or None) each."""
+    """Which block labels show: items are (x, y, width) in screen units, the label that matters most first (the selected
+    block, then the nearest), None for one off screen. Each label stays on its own block so it turns with the scene; one
+    that would cover a label already shown is hidden rather than moved. Returns True (show) or False each."""
     placed, out = [], []
     for item in items:
         if item is None:
-            out.append(None)
+            out.append(False)
             continue
         x, y, width = item
-        moved = True
-        while moved:
-            moved = False
-            for px, py, pw in placed:
-                if abs(x - px) < (width + pw) / 2 + gap - 1e-9 and abs(y - py) < height + gap - 1e-9:  # just touching is apart
-                    y = py + height + gap
-                    moved = True
-        placed.append((x, y, width))
-        out.append(y)
+        clear = all(abs(x - px) >= (width + pw) / 2 + gap - 1e-9 or abs(y - py) >= height + gap - 1e-9  # just touching is apart
+                    for px, py, pw in placed)
+        if clear:
+            placed.append(item)
+        out.append(clear)
     return out
+
+
+def pass_seconds(blocks):
+    """How long Play shows one snapshot: the replay pulse runs forward through every block, then back, two blocks a
+    second, before Play moves to the next snapshot (or stops after the last, so one real step still plays in full)."""
+    return max(1, blocks)
+
+
+def empty_matrix_note(level, has_snapshot, layer, mixer, has_heads):
+    """What the Head or Weights level says when it has no matrix to draw for the selected block."""
+    if not has_snapshot:
+        return 'Load snapshots, or run one real step, to see these values.'
+    if level == 'Head' and not has_heads:
+        return f'Block {layer + 1} mixes tokens with {mixer}, which has no attention heads. Tab moves to the next block.'
+    return f'This snapshot has no {level.lower()} values for block {layer + 1}.'
 
 
 def camera_view(level, blocks, rows=16):

@@ -52,9 +52,8 @@ class TrainingRunPage(Page):
         self.see = tk_label(b, T["see_change"], 13, "violet", cursor="hand2", takefocus=1)
         for seq in ("<Button-1>", "<Return>", "<space>"):
             self.see.bind(seq, lambda _e: self.navigate("builder"))
-        self.see.pack(anchor="w", pady=(2, GUTTER))
         row = tk.Frame(b, bg=C["bg"])
-        row.pack(anchor="w", pady=(0, GUTTER))
+        row.pack(anchor="w", pady=GUTTER)
         self.pause_btn = button(row, T["pause"], self.toggle_pause, primary=True)
         self.pause_btn.pack(side="left")
         self.stop_btn = button(row, T["stop_cooldown"], lambda: self.services.stop_after_cooldown())
@@ -135,8 +134,14 @@ class TrainingRunPage(Page):
             change = (f"Version {n} = version {pn}" + (f" with {v.change}" if v.change else "") +
                       f". The new parts start at zero, so it began exactly at version {pn}’s error.")
         self.change.configure(text=change)
+        if pn is None:  # no earlier version, so no change to see
+            self.see.pack_forget()
+        else:
+            self.see.pack(anchor="w", pady=(2, 0), after=self.change)
         self.nums[2][1].configure(text=T["version_best"].format(parent=f"version {pn}" if pn else "the earlier version"))
         self.pause_btn.configure(text="Resume" if q.paused else T["pause"])
+        self.pause_btn.state(["!disabled"] if q.job or q.paused else ["disabled"])  # pausing an empty queue only blocked the next job
+        self.stop_btn.state(["!disabled"] if q.job else ["disabled"])
         params = q.job.params if q.job else {}
         run_dir = params.get("output_dir")
         curve = s.run_curve(run_dir) if run_dir else {}
@@ -163,8 +168,11 @@ class TrainingRunPage(Page):
         self.progress.configure(text=" · ".join(parts) + (" · cooling down, then stopping" if q.stopping else "")
                                 + (f" · waiting: {q.blocked}" if q.blocked else "") if q.job else "Nothing is training.")
         history = curve.get("history") or history_of(steps, held)
-        status, state = STATUS[studio_eval.run_status(history)]
-        self.chip.set(status, state)
+        if history:
+            self.chip.set(*STATUS[studio_eval.run_status(history)])
+            self.chip.pack(anchor="w", pady=(10, 2), before=self.plot)
+        else:
+            self.chip.pack_forget()  # no data, no status
         last_s = smooth[-1][1] if smooth else None
         last_h = held[-1][1] if held else None
         for (value, _), x in zip(self.nums, (last_s, last_h, best)):

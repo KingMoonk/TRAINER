@@ -89,13 +89,21 @@ class _SceneRenderer:
         self.keys = set()
         self.geometry = self.render.attachNewNode('scene')
         self.cube = _cube()
+        from panda3d.core import AmbientLight, DirectionalLight
+        ambient, sun = AmbientLight('ambient'), DirectionalLight('sun')
+        ambient.setColor((.55, .55, .6, 1))
+        sun.setColor((.55, .55, .5, 1))
+        sun_path = self.render.attachNewNode(sun)
+        sun_path.setHpr(35, -55, 0)
+        for light in (self.render.attachNewNode(ambient), sun_path):  # lit faces shade apart, so a bar reads as a bar
+            self.cube.setLight(light)
         self.gate_nodes, self.gate_labels = {}, {}
         self.weight_kind, self.head_stage = 'weight', 'pattern'
         self.cell = [0, 0]  # the highlighted weight, relative to the visible 16x16 tile
         self.matrix_rows = 16
         self.link_lost = False
         self.snapshot_paths, self.snapshot_index = [], -1
-        self.stats, self.info, self.note = {}, '', ''
+        self.stats, self.info, self.note, self.caption = {}, '', '', ''
         self.animation_elapsed = 0.
         self.build_controls()
         for key in 'wasdqe':
@@ -445,7 +453,8 @@ class _SceneRenderer:
 
     def show_hud(self):
         line = stats_line(self.stats)
-        self.hud['text'] = self.info + (f' | training: {line}' if line else '') + (f'\n{self.note}' if self.note else '')
+        self.hud['text'] = (self.info + (f' | training: {line}' if line else '') + (f'\n{self.caption}' if self.caption else '')
+                            + (f'\n{self.note}' if self.note else ''))
         self.hud.resetFrameSize()  # DirectGUI sizes a frame once: refit the backdrop to the new text
 
     def read_snapshot(self, path):
@@ -480,7 +489,7 @@ class _SceneRenderer:
         path.setBillboardPointEye()
         return path
 
-    def lines(self, parent, points, color=(.3, .8, .9, .8), thickness=1.):
+    def lines(self, parent, points, color=ui.SCENE['mixer'], thickness=1.):
         if len(points) < 2:
             return
         lines = LineSegs()
@@ -497,7 +506,7 @@ class _SceneRenderer:
         root.setY(-index * 3)
         self.gate_nodes[index] = root
         selected = index == self.scene.selection.layer
-        self.cube_at(root, (0, 0, 1.5), (6, .18, 1.5), (.12, .28, .38, .65 if selected else .3))
+        self.cube_at(root, (0, 0, 1.5), (6, .18, 1.5), ui.SCENE['gate'][:3] + (.65 if selected else .3,))
         if self.scene.snapshot:
             ratios = [value for key, value in self.scene.snapshot.get('update_ratios', {}).items() if key.startswith(f'block{index}.')]
             brightness = min(1., max(ratios, default=0.) * 20)
@@ -508,7 +517,7 @@ class _SceneRenderer:
         if frame['level'] == 'Model':
             bins = len(frame['edges']) - 1
             for bin_index in range(bins):
-                self.cube_at(root, (-5.5 + 11 * bin_index / max(1, bins - 1), 0, 1.5), (.09, .3, .4), (.3, .75, .85, .65))
+                self.cube_at(root, (-5.5 + 11 * bin_index / max(1, bins - 1), 0, 1.5), (.09, .3, .4), ui.SCENE['activation'])
             for hook, mass in frame['attention'].items():
                 if not hook.startswith(f'block{index}.'):
                     continue
@@ -528,9 +537,9 @@ class _SceneRenderer:
         glyph = gate['glyphs']['mixer']['kind']
         for lane in range(count):
             x = (lane - (count - 1) / 2) * .38
-            self.lines(root, [(x, 1.5, .1), (x, -1.5, .1)], color=(.4, .6, .7, .6))
+            self.lines(root, [(x, 1.5, .1), (x, -1.5, .1)], color=ui.SCENE['lane'])
             magnitude = min(2., norms[lane]) if norms else .25
-            color = (1., .7, .25, 1) if lane + frame['start'] == self.scene.selection.token else (.25, .75, .85, .8)
+            color = ui.SCENE['token'] if lane + frame['start'] == self.scene.selection.token else ui.SCENE['activation']
             self.cube_at(root, (x, 0, magnitude / 2), (.08, .14, max(.05, magnitude / 2)), color)
             if glyph == 'beams' and pattern is not None:
                 for key in np.argsort(pattern[lane])[-4:]:
@@ -546,7 +555,7 @@ class _SceneRenderer:
                 for offset in range(min(kernel, lane + 1)):
                     self.lines(root, [(x, 0, .6), (x - offset * .38, 1, .1)])
             if gate['entry']['channel']['id'] != 'none':
-                self.cube_at(root, (x, -.7, 1), (.06, .1, .4), (.6, .45, .9, .7))
+                self.cube_at(root, (x, -.7, 1), (.06, .1, .4), ui.SCENE['channel'])
             if self.scene.show_numbers and index == 0:
                 self.label_at(root, frame['tokens'][lane], (x, 1.5, .2), .14)
 
@@ -572,6 +581,7 @@ class _SceneRenderer:
                 chip.destroy()
             self.gate_labels = {}
             self.pulse = None
+            self.caption = ''
             level = frame['level']
             if level in ('Model', 'Window'):
                 for gate in frame['gates']:
@@ -596,20 +606,23 @@ class _SceneRenderer:
                             value = float(matrix[row, column])
                             x, y = (column - matrix.shape[1] / 2) * .4, -row * .4
                             masked = level == 'Head' and self.head_stage != 'values' and frame['mask'][row][column]
-                            color = (.08, .09, .12, 1) if masked else (1, .6, .2, .9) if value > 0 else (.2, .6, 1, .9)
+                            color = ui.SCENE['masked'] if masked else ui.SCENE['positive'] if value > 0 else ui.SCENE['negative']
                             if level == 'Weights' and [row, column] == self.cell:
-                                color = (1, 1, 1, 1)
+                                color = ui.SCENE['picked']
                             height = .015 if masked else .03 + abs(value) / maximum * 1.5
                             self.cube_at(self.geometry, (x, y, height / 2), (.18, .18, height / 2), color)
+                    self.caption = ui.matrix_legend(level)
                     if self.scene.show_numbers:
-                        if level == 'Head':
-                            axes = 'rows = queries, columns = keys'
-                        else:
+                        numbers = f'{matrix.shape[0]}x{matrix.shape[1]} | range {matrix.min():.3g} to {matrix.max():.3g}'
+                        if level == 'Weights':
                             cell = (min(self.cell[0], matrix.shape[0] - 1), min(self.cell[1], matrix.shape[1] - 1))
-                            axes = f'cell {cell[0]},{cell[1]} = {float(matrix[cell]):.4g} (i/j/k/l move)'
-                        self.label_at(self.geometry, f'{matrix.shape[0]}x{matrix.shape[1]} | range {matrix.min():.3g} to {matrix.max():.3g} | {axes}', (0, 1, 1))
+                            numbers += f' | cell {cell[0]},{cell[1]} = {float(matrix[cell]):.4g} (I J K L move)'
+                        self.caption += f'\n{numbers}'
                 else:
-                    self.label_at(self.geometry, 'Load snapshots, or run one real step, to see these values.', (0, 0, 2))
+                    gate = self.scene.gates[self.scene.selection.layer]
+                    note = ui.empty_matrix_note(level, bool(self.scene.snapshot), self.scene.selection.layer, gate['entry']['mixer']['id'],
+                                                gate['glyphs']['mixer']['kind'] == 'beams')
+                    self.label_at(self.geometry, note, (0, 0, 2))
             self.drawn_level = level
         info = f"{self.scene.spec['name']} | {frame['level']} | {frame['mode']} | block {self.scene.selection.layer + 1}"
         if frame['step'] is not None:
@@ -636,25 +649,27 @@ class _SceneRenderer:
         return on_screen.x, on_screen.z
 
     def place_block_labels(self):
-        """Each block's label floats above its gate, drawn flat on the screen so it stays readable from any angle;
-        where gates line up one behind the other, the farther labels stack upwards instead of overlapping."""
+        """Each block's label floats above its gate, drawn flat on the screen so it stays readable from any angle, and
+        moves with its gate as the camera turns; where gates line up one behind the other, the farther labels hide
+        (the selected block's label always shows) instead of jumping up to dodge."""
         if not self.gate_labels:
             return
         camera = self.camera.getPos(self.render)
-        order = sorted(self.gate_labels, key=lambda i: (camera - Vec3(0, -i * 3, 3.5)).length())
+        selected = self.scene.selection.layer
+        order = sorted(self.gate_labels, key=lambda i: (i != selected, (camera - Vec3(0, -i * 3, 3.5)).length()))
         items = []
         for index in order:
             spot = self.screen_point((0, -index * 3, 3.5))
             chip = self.gate_labels[index]
             items.append(None if spot is None else (spot[0], spot[1], chip.getWidth() * ui.SMALL))
         height = max(chip.getHeight() for chip in self.gate_labels.values()) * ui.SMALL
-        for index, item, y in zip(order, items, ui.place_labels(items, height)):
+        for index, item, shown in zip(order, items, ui.place_labels(items, height)):
             chip = self.gate_labels[index]
-            if y is None:
-                chip.hide()
-            else:
+            if shown:
                 chip.show()
-                chip.setPos(item[0], 0, y)
+                chip.setPos(item[0], 0, item[1])
+            else:
+                chip.hide()
 
     def handle_message(self, message):
         kind = message.get('type')
@@ -665,6 +680,7 @@ class _SceneRenderer:
         elif kind in ('viz_snapshot', 'snapshot'):
             if kind == 'snapshot':  # the answer to Run one real step, loadable or not
                 self.probing = False
+                self.note = 'Ran one real step. Press Play to watch it pass through the blocks.'
             try:
                 self.read_snapshot(message['path'])
                 # training keeps only the newest snapshots on disk; forget the pruned ones so scrubbing never opens a missing file
@@ -720,8 +736,9 @@ class _SceneRenderer:
     def tick(self, task):
         from panda3d.core import ClockObject
         dt = min(.1, ClockObject.getGlobalClock().getDt())
-        if self.playing and getattr(self, 'pulse', None) is not None and self.scene.snapshot:
+        if self.playing:
             self.animation_elapsed += dt
+        if self.playing and getattr(self, 'pulse', None) is not None and self.scene.snapshot:
             count = len(self.scene.gates)
             phase = (self.animation_elapsed * 2) % (2 * count)
             forward = phase < count
@@ -768,8 +785,7 @@ class _SceneRenderer:
         self.camera.setPos(target + Vec3(self.cam_d * math.sin(h) * math.cos(p), self.cam_d * math.cos(h) * math.cos(p), self.cam_d * math.sin(p)))
         self.camera.lookAt(target)
         self.place_block_labels()
-        if self.playing and task.time - getattr(self, 'last_play', 0.) > 1:
-            self.last_play = task.time
+        if self.playing and self.animation_elapsed >= ui.pass_seconds(len(self.scene.gates)):  # the pulse went forward and back
             if self.snapshot_index + 1 < len(self.snapshot_paths):
                 self.scrub(1)
             else:
