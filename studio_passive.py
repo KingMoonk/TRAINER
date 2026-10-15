@@ -211,13 +211,19 @@ COLUMNS = ("status", "command", "plan", "state", "trainer_pid", "watchdog_pid", 
 COMMANDS = ("pause", "resume", "stop")
 
 
+# Switching to WAL takes an exclusive lock that the busy timeout does not wait for, so two threads opening the
+# store at once could fail with "database is locked". Opening is serialised, and WAL is only set when it is not yet on.
+_OPEN_LOCK = threading.Lock()
+
+
 class PassiveStore:
     def __init__(self, root):
         self.root = Path(root)
         self.path = self.root / "data" / "passive.sqlite"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
-            db.execute("PRAGMA journal_mode=WAL")
+        with _OPEN_LOCK, self.connect() as db:
+            if db.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+                db.execute("PRAGMA journal_mode=WAL")
             db.execute(SCHEMA)
 
     def connect(self):
