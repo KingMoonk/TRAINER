@@ -62,6 +62,27 @@ def source_status(row, note=""):
     return T["state_" + row["state"]]
 
 
+def held_out(dataset_id):
+    """True for a catalogue set that is a validation or test split: trained on, it could no longer measure anything."""
+    import studio_catalog as cat
+    return next((e.get("split") for e in cat.CATALOG if f"catalog_{e['id']}" == dataset_id), None) in ("validation", "test")
+
+
+def collection_row(parent, row, note, fetch):
+    """One recommended source on one line, the same on Pretraining and Your data: its name, size, status and the button for
+    its next step. fetch(source id, action) runs the step. Returns the status label, which progress updates in place."""
+    line = tk.Frame(parent, bg=C["panel"])
+    line.pack(fill="x", pady=1)
+    tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
+    tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
+    label, action = source_action(row)
+    if action:
+        button(line, label, lambda: fetch(row["id"], action)).pack(side="right")
+    status = tk_label(line, source_status(row, note), 12, "coral" if row.get("error") else "muted", "panel", wraplength=320, justify="right")
+    status.pack(side="right", padx=10)
+    return status
+
+
 def collection_view(rows):
     """What the collection card shows for `rows`: the same value means the widgets on screen are already right. Progress
     numbers are left out on purpose; they only move the status line, which is updated in place."""
@@ -241,7 +262,7 @@ class PretrainingPage(Page):
     def preload(self):
         """Only the set list: the size preview is read after the page shows (see _ask_preview), so opening never waits."""
         for s in sets_of(self.services.data("text")):
-            self.use.setdefault(s["id"], True)
+            self.use.setdefault(s["id"], not held_out(s["id"]))
 
     def refresh(self):
         v = self.version()
@@ -253,7 +274,7 @@ class PretrainingPage(Page):
             child.destroy()
         sets = sets_of(self.services.data("text"))
         for s in sets:
-            self.use.setdefault(s["id"], True)
+            self.use.setdefault(s["id"], not held_out(s["id"]))
             on = self.use[s["id"]]
             tile = tk.Frame(self.tiles, bg=C["panel2"], highlightthickness=1, highlightbackground=C["violet"] if on else C["border"],
                             padx=12, pady=8, cursor="hand2", takefocus=1)
@@ -262,7 +283,7 @@ class PretrainingPage(Page):
             mark.pack(side="left", padx=(0, 10))
             name = tk_label(tile, s["name"], 15, "text", "panel2")
             name.pack(side="left")
-            note = tk_label(tile, f"{s['count']:,} examples", 13, "muted", "panel2")
+            note = tk_label(tile, f"{s['count']:,} examples" + (f" · {T['held_out']}" if held_out(s["id"]) else ""), 13, "muted", "panel2")
             note.pack(side="left", padx=10)
             for w in (tile, mark, name, note):
                 w.bind("<Button-1>", lambda _e, i=s["id"]: self.toggle(i))
@@ -311,22 +332,13 @@ class PretrainingPage(Page):
         for child in self.collection_rows.winfo_children():
             child.destroy()
         for row in rows:
-            line = tk.Frame(self.collection_rows, bg=C["panel"])
-            line.pack(fill="x", pady=3)
-            tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
-            tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
-            label, action = source_action(row)
-            if action:
-                button(line, label, lambda r=row["id"], a=action: self.fetch(r, a)).pack(side="right")
-            status = self.status_labels[row["id"]] = tk_label(self.collection_rows, source_status(row, self.notes.get(row["id"], "")), 12,
-                                                              "coral" if row.get("error") else "muted", "panel", wraplength=720)
-            status.pack(anchor="w")
+            self.status_labels[row["id"]] = collection_row(self.collection_rows, row, self.notes.get(row["id"], ""), self.fetch)
         if any(source_action(r)[1] == "download" for r in rows):
             button(self.collection_rows, T["download_all"], lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
 
     def fetch(self, source_id, action):
         """Start a background download (all sources when source_id is None) or import; events repaint the card."""
-        started = self.services.download_sources(None if source_id is None else [source_id]) if action == "download" \
+        started = self.services.download_sources(None if source_id is None else [source_id], install=True) if action == "download" \
             else self.services.import_source(source_id)
         if started:
             self.paint_collection()
