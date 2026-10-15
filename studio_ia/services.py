@@ -1005,8 +1005,8 @@ class WorkspaceServices(Services):
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
         workspace.progress = self.note
-        if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-            threads.start(workspace.ensure_schema)
+        # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
+        self._schema = threads.start(workspace.ensure_schema) if workspace.schema_pending() else None
 
     def _reads(self, workspace):
         import studio_versions
@@ -1036,6 +1036,8 @@ class WorkspaceServices(Services):
         if getattr(self, "_viz", None) is not None:
             self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
+        if self._schema is not None:  # its connection holds records.sqlite open, and Windows cannot delete an open file
+            self._schema.join()
 
     # 3D viewer --------------------------------------------------------------
     _viz = None
