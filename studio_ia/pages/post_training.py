@@ -1,7 +1,8 @@
 """Post-training: four rounds in a fixed order, one card with the round's visual, and the gate that decides if Chat moves.
 
 Reads services.post_training(version) -> {"rounds", "counts", "gates", "example"}; live train events (group, heat, moved,
-gate) from the running round replace the illustrative samples. "Add to the queue" enqueues post_round jobs.
+gate, and round 2's step metric with its count of groups that taught something) from the running round replace the
+illustrative samples. "Add to the queue" enqueues post_round jobs.
 """
 from __future__ import annotations
 
@@ -40,7 +41,8 @@ def round_outlook(services, i, status):
 
 
 def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
-    """Why a round cannot be queued yet (plain words), or None. counts = post_training()["counts"]; teacher 0 = previous best."""
+    """Why a round cannot be queued yet (plain words), or None. counts = post_training()["counts"]; teacher 0 = another
+    trained version (has_earlier: one can teach), 1 = this model shown a correction."""
     need = {0: ("conversations", 1, "Add conversations in Your data first."),
             1: ("problems", 1, "Make problems a rule can check first."),
             3: ("pairs", 2, "Rate at least 2 pairs in Chat first.")}
@@ -48,7 +50,7 @@ def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
         return "Train this version in Pretraining first."
     if round_index == 2:
         if teacher == 0:
-            return None if has_earlier else "There is no earlier version to learn from yet."
+            return None if has_earlier else "There is no other trained version to learn from yet."
         return None if counts.get("corrections") else "Teach a correction in Chat first."
     key, least, why = need[round_index]
     return None if (counts.get(key) or 0) >= least else why
@@ -62,10 +64,33 @@ def step_line(q):
     return " · ".join(parts)
 
 
-def live_view(selected, group, heat, moved, gates):
+def live_view(selected, group, heat, moved, gates, spread=None):
     """What the live events change on screen for the open round: the same value means the page already shows it."""
-    visual = (group,) if selected == 1 else (heat, moved) if selected == 2 else ()
+    visual = (group, spread) if selected == 1 else (heat, moved) if selected == 2 else ()
     return (selected, visual, gates.get(selected + 1))
+
+
+def spread_text(taught, groups):
+    """Round 2's groups that taught something, in plain words; "" before any group has been scored."""
+    if not groups:
+        return ""
+    words = "group" if groups == 1 else "groups"
+    return (T["spread_some"] if taught else T["spread_none"]).format(taught=f"{taught:,}", groups=f"{groups:,}", groups_word=words)
+
+
+def teacher_options(versions, version):
+    """Trained versions that could teach `version`: any other one with a checkpoint, the same word list and the same reading
+    window (a first look from their designs; the round checks the checkpoints themselves). In version order."""
+    def shape(v):
+        spec = v.spec or {}
+        return spec.get("tokenizer"), (spec.get("dims") or {}).get("n_ctx")
+    return [v for v in versions if version and v.number != version.number and v.best_checkpoint and shape(v) == shape(version)]
+
+
+def default_teacher(options, version):
+    """The previous best (the latest option before `version`), else the latest option; None when there is none."""
+    earlier = [v for v in options if version and v.number < version.number]
+    return (earlier or options or [None])[-1]
 
 
 def count(value):
@@ -90,10 +115,11 @@ class PostTrainingPage(Page):
     def __init__(self, parent, services, navigate=None, **kw):
         super().__init__(parent, services, navigate, **kw)
         self.selected = None      # round index; None = the first round that is not done
-        self.teacher = 0          # 0 previous best version, 1 this model with a correction in front
+        self.teacher = 0          # 0 another trained version, 1 this model shown a correction as a hint
+        self.teacher_no = None    # number of that version; None = the previous best
         self.leash = 1
         self.pick = ""            # round 4 vote
-        self.group = self.heat = self.moved = None   # live visuals from the running round
+        self.group = self.heat = self.moved = self.spread = None   # live visuals from the running round
         self.live_gate = {}
         self._drawn, self._ticking, self._pending, self._step = None, False, False, None   # live_view on screen; in a burst; events since the last draw; the "step k of n" label
 
@@ -143,14 +169,16 @@ class PostTrainingPage(Page):
         tip(Chip(row, T["at_this_size"], "neutral"), T["click_round"]).pack(anchor="w")
         self._card(version, status)
         self._gate_card(status)
-        self._drawn = live_view(self.selected, self.group, self.heat, self.moved, self.gates)
+        self._drawn = live_view(self.selected, self.group, self.heat, self.moved, self.gates, self.spread)
 
     def on_event(self, kind, payload):
         """Live visuals arrive in bursts (a group per prompt, every step). The first is drawn at once; the rest of a burst
         is drawn at most twice a second, and only if the open round shows something new. Rebuilding the page for each one
         made it flash. A gate comes once per round and is drawn at once."""
-        if kind == "train" and isinstance(payload, dict) and payload.get("type") in ("group", "heat", "moved", "gate"):
-            t = payload["type"]
+        slot = "spread" if isinstance(payload, dict) and payload.get("type") == "metric" and "groups_total" in payload else \
+            payload.get("type") if isinstance(payload, dict) else None
+        if kind == "train" and slot in ("group", "heat", "moved", "gate", "spread"):
+            t = slot
             if t == "gate":
                 self.live_gate[payload["round"]] = payload
                 return self._draw()
@@ -173,7 +201,7 @@ class PostTrainingPage(Page):
             self.after(500, self._tick)
 
     def _draw(self):
-        if live_view(self.selected, self.group, self.heat, self.moved, {**getattr(self, "gates", {}), **self.live_gate}) != self._drawn:
+        if live_view(self.selected, self.group, self.heat, self.moved, {**getattr(self, "gates", {}), **self.live_gate}, self.spread) != self._drawn:
             return self.refresh()
         if self._step is not None:  # nothing new to draw: only the step count moves, in place
             self._step.configure(text=step_line(self.services.queue()))
@@ -224,7 +252,7 @@ class PostTrainingPage(Page):
         actions = tk.Frame(card, bg=C["panel"])
         actions.pack(fill="x", pady=(GUTTER, 0))
         label = {2: T["move_front"], 3: T["add_votes"]}.get(i, ADD)
-        why = blocker(i, self.counts, self.teacher, bool(self._previous_best(version)), bool(version and version.best_checkpoint))
+        why = blocker(i, self.counts, self.teacher, bool(self._teacher_version(version)), bool(version and version.best_checkpoint))
         add = button(actions, label, lambda: self._enqueue(version, i), primary=True)
         add.pack(side="left")
         if why:
@@ -237,7 +265,7 @@ class PostTrainingPage(Page):
             go = tk_label(actions, link[0] + " ›", 14, "violet", "panel", cursor="hand2", takefocus=1)
             go.pack(side="left", padx=GUTTER)
             _activate(go, lambda route=link[1]: self.navigate(route))
-        foot = {0: "Corrections you teach in Chat that need a whole new answer also land here.", 1: "Prompts where all answers pass, or all fail, teach nothing and are skipped. Each rule gets the room its answers need, up to 96 word pieces, so a step takes longer than it would with every answer cut at 32.",
+        foot = {0: "Corrections you teach in Chat that need a whole new answer also land here.", 1: "Prompts where all answers pass, or all fail, teach nothing and are skipped. Before it starts, the model answers a few of the problems; if it solves none, the round is not run, since every group would teach nothing. Each rule gets the room its answers need, up to 96 word pieces, so a step takes longer than it would with every answer cut at 32.",
                 2: "Also runs on its own after a night of training on new text: new text can erode how it answers, and a short lesson from the previous best version restores it without losing the new text.",
                 3: f"{count(self.counts.get('pairs'))} pairs rated. 1 in 5 is held back to check the result."}[i]
         self._help.append(foot)
@@ -282,6 +310,10 @@ class PostTrainingPage(Page):
             push_text = "no push" if abs(push) < 1e-9 else (f"↑ {push:+.2f} · pushed up" if push > 0 else f"↓ {push:+.2f} · pushed down")
             for c, (value, col) in enumerate(((text, "text"), ("pass" if ok else "fail", color), (f"{score:.1f}", color), (push_text, color))):
                 tk_label(grid, value, 14, col, "panel", font=font(14, mono=c == 0)).grid(row=r, column=c, sticky="w", padx=(0, GUTTER), pady=2)
+        gate = self.gates.get(2) or {}
+        taught, groups = (self.spread["taught_total"], self.spread["groups_total"]) if self.spread else (gate.get("taught"), gate.get("groups"))
+        line = spread_text(taught or 0, groups or 0)
+        tk_label(card, line or T["spread_hint"], 13, ("amber" if not taught else "text2") if line else "muted", "panel", wraplength=760).pack(anchor="w", pady=(2, 6))
         if not live or live.get("skipped"):
             grey = tk.Frame(card, bg=C["panel"], highlightthickness=1, highlightbackground=C["border2"], padx=10, pady=6)
             grey.pack(fill="x", pady=6)
@@ -315,9 +347,14 @@ class PostTrainingPage(Page):
             KofN(card, self.moved["k"], self.moved["n"], "words moved toward the teacher").pack(anchor="w", pady=4)
         tk_label(card, T["teacher_label"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 4))
         labels = (T["previous_best"], T["this_model_correction"])
-        earlier = self._previous_version(self.version)
-        previous = T["previous_desc"].format(version=checkpoint_name(self.services, earlier).capitalize()) if earlier else T["no_previous"]
+        options = teacher_options(self.services.versions(), self.version)
+        chosen = self._teacher_version(self.version)
+        previous = T["previous_desc"].format(version=checkpoint_name(self.services, chosen).capitalize()) if chosen else T["no_previous"]
         tip(Segmented(card, labels, labels[self.teacher], lambda v: self._set("teacher", labels.index(v))), (previous, T["correction_desc"])[self.teacher]).pack(anchor="w")
+        if self.teacher == 0 and len(options) > 1:   # a choice only when there is one
+            names = [f"Version {v.number}" for v in options]
+            tk_label(card, T["which_version"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 4))
+            Segmented(card, names, f"Version {chosen.number}", lambda v: self._set("teacher_no", int(v.split()[-1]))).pack(anchor="w")
         self._help.append(T["teacher_note"])
 
     def _r4(self, card):
@@ -417,19 +454,17 @@ class PostTrainingPage(Page):
         tk_label(card, result.format(checkpoint=checkpoint_name(self.services, self.version)), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(GUTTER, 0))
 
     # actions ----------------------------------------------------------------------
-    def _previous_version(self, version):
-        earlier = [v for v in self.services.versions() if version and v.number < version.number and v.best_checkpoint]
-        return earlier[-1] if earlier else None
-
-    def _previous_best(self, version):
-        earlier = self._previous_version(version)
-        return earlier.best_checkpoint if earlier else None
+    def _teacher_version(self, version):
+        """The version picked as teacher, else the previous best; None when no other version can teach."""
+        options = teacher_options(self.services.versions(), version)
+        return next((v for v in options if v.number == self.teacher_no), None) or default_teacher(options, version)
 
     def _enqueue(self, version, i):
         name = ROUNDS[i][0]
         params = {"round": i + 1, "version": version.number if version else None, "checkpoint": version.best_checkpoint if version else None}
         if i == 2:
-            params["teacher"] = self._previous_best(version) if self.teacher == 0 else None
+            teacher = self._teacher_version(version) if self.teacher == 0 else None
+            params["teacher"] = teacher.best_checkpoint if teacher else None
             params["teacher_choice"] = ("previous best", "correction")[self.teacher]
         if i == 3:
             params["beta"] = LEASH[self.leash][1]

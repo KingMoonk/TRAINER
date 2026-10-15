@@ -1,6 +1,6 @@
 """Free disk space: delete what training and iterating left behind, all of it or only what is older than N days.
 
-History = run folders, checkpoints, versions, logs, exports, backups and stores of earlier designs. Your data
+History = run folders, checkpoints, versions, logs, exports, backups, token shards and stores of earlier designs. Your data
 (datasets, downloads, the held-back set) is deleted only when asked. Settings and chat ratings are never touched.
 """
 import shutil
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from studio_versions import VersionStore
 
-AGED = ("runs", "logs", "exports", "artifacts", "data/backups")          # each child is judged by its own age
+AGED = ("runs", "logs", "exports", "artifacts", "data/backups", "data/shards")          # each child is judged by its own age
 WHOLE = ("data/weights", "data/curriculum", "data/versions.json", "data/architectures.sqlite", "data/passive.sqlite",
          "studio-error.log")                           # only "delete all" removes these
 DATA = ("data/records.sqlite", "data/records.sqlite-wal", "data/records.sqlite-shm", "data/downloads", "data/heldout.json", "data/catalog_registry.json", "data/catalog_removed.json")

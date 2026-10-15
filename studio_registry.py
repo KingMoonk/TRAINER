@@ -55,7 +55,7 @@ ORDER = {"tokenizer": ["bpe_gpt2", "bpe_custom", "word", "byte", "character"], "
          "mixer": ["attention", "gqa", "linear", "ssm", "gru", "lstm", "conv", "none"],
          "channel": ["mlp_gelu", "swiglu", "moe", "none"], "head": ["tied", "untied"], "objective": ["ce", "ce_ls", "ce_z"],
          "optimizer": ["adamw", "sgd", "lion", "muon"], "schedule": ["cosine", "wsd", "constant"], "init": ["gpt2", "mup"],
-         "precision": ["fp32", "fp64"]}
+         "precision": ["fp32", "bf16", "fp16", "fp64"]}
 
 
 def for_slot(slot):
