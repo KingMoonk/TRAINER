@@ -44,6 +44,18 @@ python tasks.py test:ci:e2e                       # + a real training run (tests
 
 CI runs `test:ci:e2e` on each push and pull request. `test:ci` and `test:ci:e2e` refuse to run unless `CI` is set (GitHub Actions does), because the window tests open real Tk and 3D windows. Those tests live in `gui_*.py` and skip themselves unless `CI` is set or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
 
+## Web UI (in progress)
+
+`web/` is the browser front end that will replace the Tk app, phase by phase (`docs/rewrite.md`). It needs Node and pnpm:
+
+```bash
+cd web && pnpm install && pnpm dev          # http://localhost:3000
+python tasks.py web:lint                    # eslint + tsc
+python tasks.py web:build                   # the static export, web/out
+```
+
+Every page is a placeholder until its phase lands; the Tk app (`python app.py`) is still the one to use.
+
 ## Finding hot spots
 
 Measure before optimizing. Both tools are opt-in and work the same on macOS and Windows.
