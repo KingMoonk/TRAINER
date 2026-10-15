@@ -3,8 +3,8 @@
 Window-free and dependency-free: the safetensors and GGUF files are written by hand (both are a small header
 plus raw tensor bytes), so nothing is added to requirements.
 
-GPT-2 designs (learned positions, LayerNorm before each part, attention with bias, a GELU MLP, a tied head)
-are written with Hugging Face's `GPT2LMHeadModel` key names and a GPT-2 config.json, so `transformers` loads
+GPT-2 designs (learned positions, LayerNorm before each part, softmax attention, a GELU MLP, a tied head;
+with or without projection biases, absent ones being written as zeros, which is exact) are written with Hugging Face's `GPT2LMHeadModel` key names and a GPT-2 config.json, so `transformers` loads
 them as they are. Both sides keep a linear layer as an (in, out) matrix applied as `x @ W + b`, which is
 GPT-2's Conv1D layout, so no transpose is needed for Hugging Face; the fused qkv is the same [q | k | v]
 split in both. GGUF (llama.cpp) wants the torch `Linear` layout (out, in), so those weights are transposed
@@ -111,11 +111,11 @@ def gpt2_problems(spec):
         norm, mixer, channel = block["norm"], block["mixer"], block["channel"]
         if norm["id"] != "layernorm" or norm["config"].get("placement") != "pre":
             problems.append(f"{where} do not use LayerNorm before each part")
-        if mixer["id"] != "attention" or not mixer["config"].get("bias", True):
-            problems.append(f"{where} do not use softmax attention with bias")
+        if mixer["id"] != "attention":
+            problems.append(f"{where} do not use softmax attention")
         cfg = channel["config"]
-        if channel["id"] != "mlp_gelu" or not cfg.get("bias", True) or cfg.get("layers", 1) != 1 or cfg.get("activation", "gelu") != "gelu":
-            problems.append(f"{where} do not use a one-hidden-layer GELU MLP with bias")
+        if channel["id"] != "mlp_gelu" or cfg.get("layers", 1) != 1 or cfg.get("activation", "gelu") != "gelu":
+            problems.append(f"{where} do not use a one-hidden-layer GELU MLP")
         if problems:
             break
     init = spec["train"]["init"]
@@ -137,13 +137,26 @@ def gpt2_names(n_layer):
     return names
 
 
+BIAS_OF = {"qkv.b": "qkv.w", "proj.b": "proj.w", "f1.b": "f1.w", "f2.b": "f2.w"}   # a GPT-2 bias and the weight whose output width it has
+
+
 def to_gpt2(weights, spec):
-    """The checkpoint's weights under Hugging Face GPT2LMHeadModel names. Every parameter is used exactly once."""
+    """The checkpoint's weights under Hugging Face GPT2LMHeadModel names. Every parameter is used exactly once.
+
+    GPT-2 has a bias on the attention and MLP projections. A design without them is written with zero biases,
+    which computes exactly the same function.
+    """
     names = gpt2_names(spec["dims"]["n_layer"])
-    if set(weights) != set(names):
+    absent = set(names) - set(weights)
+    zeros = {key for key in absent if key.partition(".")[2] in BIAS_OF}
+    if set(weights) - set(names) or absent - zeros:
         raise ExportError("The checkpoint's parameters do not match a GPT-2 design: "
                           + ", ".join(sorted(set(weights) ^ set(names))[:4]) + ".")
-    return {names[key]: np.ascontiguousarray(value) for key, value in weights.items()}
+    out = {names[key]: np.ascontiguousarray(value) for key, value in weights.items()}
+    for key in zeros:
+        block, _, bias = key.partition(".")
+        out[names[key]] = np.zeros(weights[f"{block}.{BIAS_OF[bias]}"].shape[1], dtype=np.float32)
+    return out
 
 
 def gpt2_config(spec, vocab_size):
@@ -234,7 +247,7 @@ def _summary(spec, tokenizer, count):
             f"{registry.get('tokenizer', spec['tokenizer']['id']).name} tokenizer ({tokenizer.vocab_size:,} tokens)")
 
 
-def model_card(spec, tokenizer, count, step, problems, tokenizer_loads):
+def model_card(spec, tokenizer, count, step, problems, tokenizer_loads, zero_biases=False):
     lines = ["---", "library_name: transformers" if not problems else "library_name: groundwork", "tags:", "- groundwork", "---", "",
              f"# {spec['name']}", "", "A small language model trained in Groundwork (TRAINER).", "", _summary(spec, tokenizer, count)
              + (f" · trained for {step:,} steps." if step else "."), ""]
@@ -245,8 +258,10 @@ def model_card(spec, tokenizer, count, step, problems, tokenizer_loads):
                   "spec is embedded in the file's metadata (`groundwork_spec`) and in `config.json`. Rebuild the model "
                   "from that spec in Groundwork to run it.", ""]
     else:
-        lines += ["## Loading", "", "This is GPT-2's architecture (learned positions, LayerNorm, attention with bias, a GELU MLP, "
-                  "a tied output head), written under `GPT2LMHeadModel` key names.", "", "```python",
+        lines += ["## Loading", "", "This is GPT-2's architecture (learned positions, LayerNorm, softmax attention, a GELU MLP, "
+                  "a tied output head), written under `GPT2LMHeadModel` key names."
+                  + (" The design has no bias on its attention or MLP projections, so those biases are written as zeros, "
+                     "which computes exactly the same function." if zero_biases else ""), "", "```python",
                   "from transformers import GPT2LMHeadModel", "", 'model = GPT2LMHeadModel.from_pretrained("path/to/this/folder")', "```", ""]
     lines += ["## Tokenizer", ""]
     if tokenizer_loads:
@@ -267,7 +282,7 @@ def export_hf(checkpoint, out_dir):
     {"path", "files", "architecture": "gpt2" | "raw", "huggingface_loadable", "tokenizer_loadable", "note"}."""
     spec, tokenizer, weights, step = read_checkpoint(checkpoint)
     out = Path(out_dir)
-    problems = gpt2_problems(spec)
+    problems, zero_biases = gpt2_problems(spec), False   # zero_biases: GPT-2 biases this design lacks and the file adds as zeros
     count = sum(value.size for value in weights.values())
     files, tokenizer_loads = hf_tokenizer_files(tokenizer, spec["dims"]["n_ctx"])
     out.mkdir(parents=True, exist_ok=True)
@@ -280,11 +295,12 @@ def export_hf(checkpoint, out_dir):
         if weights["token"].shape[0] != tokenizer.vocab_size:
             raise ExportError("The checkpoint's vocabulary does not match its tokenizer.")
         config, tensors = gpt2_config(spec, tokenizer.vocab_size), to_gpt2(weights, spec)
+        zero_biases = len(tensors) > len(weights)
     write_safetensors(out / "model.safetensors", tensors, metadata)
     (out / "config.json").write_text(json.dumps(config, indent=1, ensure_ascii=False), encoding="utf-8")
     for name, text in files.items():
         (out / name).write_text(text, encoding="utf-8")
-    (out / "README.md").write_text(model_card(spec, tokenizer, count, step, problems, tokenizer_loads), encoding="utf-8")
+    (out / "README.md").write_text(model_card(spec, tokenizer, count, step, problems, tokenizer_loads, not problems and zero_biases), encoding="utf-8")
     note = ("Loads in transformers as GPT2LMHeadModel." if not problems else
             "Hugging Face cannot load this design directly: " + "; ".join(problems) + ". The raw tensors and the model spec are included.")
     if not tokenizer_loads:

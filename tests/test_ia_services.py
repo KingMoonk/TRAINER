@@ -55,16 +55,25 @@ class ServicesTest(unittest.TestCase):
     def test_data(self):
         self.assertEqual(self.svc.data("problems").count, 10)
 
-    def test_export_version_writes_the_best_checkpoint_and_refuses_what_it_cannot_write(self):
-        number = self.svc.best_version().number
+    def test_export_version_writes_the_best_checkpoint_in_both_formats_and_matches_the_engine(self):
+        import studio_export
+        from tests.test_export import engine_logits, gpt2_reference
+        version = self.svc.best_version()
         with tempfile.TemporaryDirectory() as out:
-            report = self.svc.export_version(number, "hf", str(Path(out) / "model"))
+            report = self.svc.export_version(version.number, "hf", str(Path(out) / "model"))
             self.assertTrue((Path(out) / "model" / "model.safetensors").exists())
             self.assertIn("config.json", report["files"])
-            with self.assertRaises(ValueError):   # the fixture's design is not GPT-2's
-                self.svc.export_version(number, "gguf", str(Path(out) / "model.gguf"))
+            self.svc.export_version(version.number, "gguf", str(Path(out) / "model.gguf"))
+            self.assertEqual((Path(out) / "model.gguf").read_bytes()[:4], b"GGUF")
+            # the app's default design has no projection biases; it still exports as GPT-2 and computes the same function
+            tensors, _meta = studio_export.read_safetensors(Path(out) / "model" / "model.safetensors")
+            ids = [1, 3, 10, 40, 77, 120, 200, 9, 262, 4]
+            spec = studio_export.read_checkpoint(version.best_checkpoint)[0]
+            expected = engine_logits(version.best_checkpoint, ids)
+            got = gpt2_reference(tensors, ids, spec["dims"]["n_layer"], spec["block"]["mixer"]["config"]["heads"])
+            self.assertLess(abs(got - expected).max(), 2e-4)
             with self.assertRaises(ValueError):
-                self.svc.export_version(number, "onnx", str(Path(out) / "x"))
+                self.svc.export_version(version.number, "onnx", str(Path(out) / "x"))
 
     def test_chat(self):
         start = time.time()

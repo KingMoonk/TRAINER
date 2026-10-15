@@ -269,7 +269,7 @@ class ExportCard(unittest.TestCase):
                             SimpleNamespace(number=3, name="c", spec={**config, "tokenizer": "character"}, best_checkpoint="c.pt")])
         self.assertEqual([(n, name) for n, name, _ in rows], [(2, "b"), (3, "c")])
         self.assertEqual(rows[0][2], "")
-        self.assertIn("GPT-2", rows[1][2])
+        self.assertIn("character tokenizer", rows[1][2])
 
     def test_file_name_stem(self):
         self.assertEqual(export_default_name("Wider / deeper: v2"), "Wider---deeper--v2")

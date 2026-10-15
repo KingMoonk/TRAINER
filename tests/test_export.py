@@ -34,6 +34,14 @@ def gpt2_spec(layers=2, d_model=32, heads=4, context=32, tokenizer="byte", d_ff=
     return studio_spec.validate_spec(spec)
 
 
+def bias_free_spec(**kw):
+    """A GPT-2-shaped design whose attention and MLP projections have no bias (the app's older default designs)."""
+    spec = gpt2_spec(**kw)
+    spec["block"]["mixer"]["config"]["bias"] = False
+    spec["block"]["channel"]["config"]["bias"] = False
+    return studio_spec.validate_spec(spec)
+
+
 def small_bpe():
     """A GPT-2 style tokenizer with the 256 byte symbols and a few merges, so no download is needed."""
     table = bytes_to_unicode()
@@ -183,6 +191,22 @@ class Gpt2Mapping(unittest.TestCase):
                 np.testing.assert_array_equal(mapped[names[key]], value)
             self.assertFalse(any("lm_head" in key for key in mapped))   # the head is tied to wte
 
+    def test_a_design_without_projection_biases_gets_zero_biases_and_nothing_else(self):
+        spec = bias_free_spec()
+        model = CompiledModel(spec, 263, device="cpu")
+        names = export.gpt2_names(2)
+        absent = set(names) - set(model.p)
+        self.assertEqual(absent, {f"block{i}.{b}" for i in range(2) for b in ("qkv.b", "proj.b", "f1.b", "f2.b")})
+        weights = {key: model.backend.to_cpu(value) for key, value in model.p.items()}
+        mapped = export.to_gpt2(weights, spec)
+        self.assertEqual(set(mapped), set(names.values()))
+        for key in absent:
+            self.assertEqual(mapped[names[key]].dtype, np.float32)
+            self.assertFalse(mapped[names[key]].any())
+        self.assertEqual(mapped["transformer.h.0.attn.c_attn.bias"].shape, (96,))
+        self.assertEqual(mapped["transformer.h.0.mlp.c_fc.bias"].shape, (128,))
+        self.assertEqual(mapped["transformer.h.1.mlp.c_proj.bias"].shape, (32,))
+
     def test_unmatched_parameters_are_refused(self):
         spec = gpt2_spec()
         weights = {key: np.zeros(1, np.float32) for key in export.gpt2_names(2)}
@@ -204,8 +228,6 @@ class Gpt2Mapping(unittest.TestCase):
             "rmsnorm": lambda s: s["block"].update(norm={"id": "rmsnorm"}),
             "post-norm": lambda s: s["block"].update(norm={"id": "layernorm", "config": {"placement": "post"}}),
             "swiglu": lambda s: s["block"].update(channel={"id": "swiglu"}),
-            "no attention bias": lambda s: s["block"].update(mixer={"id": "attention", "config": {"heads": 4, "bias": False}}),
-            "no mlp bias": lambda s: s["block"].update(channel={"id": "mlp_gelu", "config": {"bias": False}}),
             "relu": lambda s: s["block"].update(channel={"id": "mlp_gelu", "config": {"activation": "relu"}}),
             "gru in block 2": lambda s: s.update(blocks=[{"index": 1, "mixer": {"id": "gru"}}]),
             "mup at another width": lambda s: s["train"].update(init={"id": "mup", "config": {"base_width": 256}}),
@@ -249,6 +271,19 @@ class HuggingFaceExport(unittest.TestCase):
         readme = (out / "README.md").read_text()
         self.assertIn("GPT2LMHeadModel", readme)
         self.assertNotIn("cannot load this design", readme)
+
+    def test_a_design_without_projection_biases_exports_as_gpt2_with_matching_logits(self):
+        spec = bias_free_spec(layers=2, d_model=32, heads=4, context=32)
+        write_checkpoint(self.root / "m.npz", spec, Tokenizer("byte"))
+        report = export.export_hf(self.root / "m.npz", self.root / "hf")
+        self.assertEqual((report["architecture"], report["huggingface_loadable"]), ("gpt2", True))
+        tensors, _meta = export.read_safetensors(self.root / "hf" / "model.safetensors")
+        self.assertEqual(set(tensors), set(export.gpt2_names(2).values()))
+        self.assertFalse(tensors["transformer.h.1.attn.c_proj.bias"].any())
+        self.assertTrue(tensors["transformer.h.1.ln_2.bias"].any())   # LayerNorm's own shift is a real parameter
+        ids = [1, 3, 10, 40, 77, 120, 200, 9, 262, 4]
+        np.testing.assert_allclose(gpt2_reference(tensors, ids, 2, 4), engine_logits(self.root / "m.npz", ids), atol=2e-4, rtol=1e-4)
+        self.assertIn("written as zeros", (self.root / "hf" / "README.md").read_text())
 
     def test_byte_tokenizer_files_spell_every_byte_as_the_engine_does(self):
         write_checkpoint(self.root / "m.npz", gpt2_spec(), Tokenizer("byte"))
@@ -403,6 +438,16 @@ class GGUFExport(unittest.TestCase):
         back = {ours[name]: (array.T if name.startswith("blk.") and array.ndim == 2 else array) for name, (_d, _t, _o, array) in tensors.items() if name in ours}
         ids = [1, 3, 10, 40, 77, 120, 200, 9, 262, 4]
         np.testing.assert_allclose(gpt2_reference(back, ids, 2, 4), engine_logits(self.root / "m.npz", ids), atol=2e-4, rtol=1e-4)
+
+    def test_a_design_without_projection_biases_writes_gguf_with_zero_biases(self):
+        spec = bias_free_spec(layers=2, d_model=32, heads=4, context=32)
+        self.assertEqual(export.gguf_problem(spec), "")
+        write_checkpoint(self.root / "m.npz", spec, Tokenizer("byte"))
+        export.export_gguf(self.root / "m.npz", self.root / "m.gguf")
+        _v, _meta, tensors, _s = read_gguf(self.root / "m.gguf")
+        self.assertEqual(tensors["blk.1.attn_qkv.bias"][0], [96])
+        for name in ("blk.0.attn_qkv.bias", "blk.0.attn_output.bias", "blk.1.ffn_up.bias", "blk.1.ffn_down.bias"):
+            self.assertFalse(tensors[name][3].any(), name)
 
     def test_f16_halves_the_matrices_and_keeps_vectors_and_positions_in_f32(self):
         weights = write_checkpoint(self.root / "m.npz", gpt2_spec(), Tokenizer("byte"))
