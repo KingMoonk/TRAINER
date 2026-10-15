@@ -109,6 +109,19 @@ class PretrainingTest(unittest.TestCase):
         self.assertIn("Step 40 of 200", t)
         page.pause_btn.invoke()
         self.assertTrue(self.fake.queue().paused)
+        self.assertTrue(page.chip.winfo_ismapped())
+
+    def test_run_page_controls_follow_the_job(self):
+        self.fake.set_queue(QueueState())
+        self.fake.run_curve = lambda d: {}
+        page = self.app.show("training_run")
+        self.app.update()
+        self.assertTrue(page.pause_btn.instate(["disabled"]) and page.stop_btn.instate(["disabled"]))
+        self.assertFalse(page.chip.winfo_ismapped())
+        self.fake.set_queue(QueueState(paused=True))
+        page.refresh()
+        self.assertFalse(page.pause_btn.instate(["disabled"]))  # Resume stays available
+        self.assertTrue(page.stop_btn.instate(["disabled"]))
 
 
 if __name__ == "__main__":
