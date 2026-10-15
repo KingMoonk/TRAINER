@@ -7,17 +7,21 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import torch
 
+from studio_catalog import CHOICE_ASK
 from studio_slots import BOS, PAD, UNK
 
 LN2 = math.log(2)
 SCORE_WINDOWS = 512  # windows gathered before a scoring pass
 SCORE_ELEMENTS = 4_000_000  # most float64 logits (batch x window x vocabulary) one scoring pass holds
+SHOTS = (0, 1, 4)  # worked examples in front of each few-shot question: none, one, a few
+CHOICE_LINE = re.compile(r"([A-J])\) (.+)")
 
 
 def heldout_split(docs, fraction=.1, seed=0):
@@ -209,3 +213,101 @@ def sanity_checks(source, vocab_size=None, memorised=None):
                    "not run" if memorised is None else f"{memorised['start']:.2f} -> {memorised['end']:.2f}"))
     checks.append(("error_falls", len(losses) > 1 and last < first, f"{first:.2f} -> {last:.2f}"))
     return [{"id": i, "ok": ok, "detail": d} for i, ok, d in checks]
+
+
+def choice_item(example):
+    """A lettered multiple-choice problem (studio_catalog._lettered) as {"task", "question", "choices", "answer"}, else None.
+
+    Takes a workspace example (user, rule and params, or metadata) or a post_rows row (prompt, rule, params). The task is
+    the instruction in front of CHOICE_ASK, shared by every item of a source; answer is the keyed option's index.
+    """
+    meta = example.get("metadata") or {}
+    if (example.get("rule") or meta.get("rule")) != "choice":
+        return None
+    head, _, tail = str(example.get("user") or example.get("prompt") or "").strip().rpartition("\n\n")
+    found = [CHOICE_LINE.fullmatch(line.strip()) for line in tail.split("\n")]
+    if not head or len(found) < 2 or not all(found) or "".join(m[1] for m in found) != "ABCDEFGHIJ"[:len(found)]:
+        return None
+    letters = [m[1] for m in found]
+    key = str((example.get("params") or meta.get("params") or {}).get("answer") or str(example.get("assistant") or "")[:1])
+    if key not in letters:
+        return None
+    task, ask, question = head.partition(CHOICE_ASK.strip())
+    return {"task": task.strip() if ask else "", "question": (question if ask else head).strip(),
+            "choices": [m[2].strip() for m in found], "answer": letters.index(key)}
+
+
+def few_shot_prompt(item, examples=()):
+    """The task line, each worked example as its question and answer, then the question with the answer left open."""
+    parts = [item["task"]] if item.get("task") else []
+    parts += [f"{e['question']}\nAnswer: {e['choices'][e['answer']]}" for e in examples]
+    return "\n\n".join(parts + [f"{item['question']}\nAnswer:"])
+
+
+def few_shot_table(items, encode, context, logprob, shots=SHOTS, seed=0, pool=None):
+    """Multiple-choice accuracy with 0, 1 and k worked examples in the prompt and no training (GPT-3, Brown et al. 2020).
+
+    encode(text) -> token ids; logprob([(prompt_ids, continuation_ids)]) -> summed log-probability of each continuation.
+    Worked examples come from `pool` (default: items) with the same task, never the question itself; one seeded draw per
+    item, so the k-shot prompt extends the 1-shot one. The oldest examples drop out until prompt and answer fit `context`.
+    The pick is the choice with the highest log-probability per piece; chance is what guessing scores (mean 1 / choices).
+    Returns {"items", "chance", "rows": [{"shots", "used" (mean examples that fitted), "correct", "accuracy"}]}.
+    """
+    items = list(items)
+    if not items:
+        return {"items": 0, "chance": None, "rows": []}
+    by_task = {}
+    for p in items if pool is None else pool:
+        by_task.setdefault(p["task"], []).append(p)
+    rng, most = random.Random(seed), max(shots)
+    pairs, plan = [], []  # plan: (shot column, item, examples that fitted, index of its first choice in pairs)
+    for item in items:
+        others = [p for p in by_task.get(item["task"], []) if p["question"] != item["question"]]
+        drawn = rng.sample(others, min(most, len(others)))
+        answers = [encode(" " + c) for c in item["choices"]]
+        for column, n in enumerate(shots):
+            examples = drawn[:n]
+            prompt = encode(few_shot_prompt(item, examples))
+            while examples and len(prompt) + max(map(len, answers)) > context:
+                examples = examples[1:]
+                prompt = encode(few_shot_prompt(item, examples))
+            plan.append((column, item, len(examples), len(pairs)))
+            pairs += [(prompt, a) for a in answers]
+    scores = logprob(pairs)
+    correct, used = [0] * len(shots), [0] * len(shots)
+    for column, item, n, first in plan:
+        per_piece = [scores[first + i] / max(1, len(pairs[first + i][1])) for i in range(len(item["choices"]))]
+        correct[column] += per_piece.index(max(per_piece)) == item["answer"]
+        used[column] += n
+    return {"items": len(items), "chance": sum(1 / len(i["choices"]) for i in items) / len(items),
+            "rows": [{"shots": n, "used": used[c] / len(items), "correct": correct[c], "accuracy": correct[c] / len(items)}
+                     for c, n in enumerate(shots)]}
+
+
+def _continuation_logprobs(local, pairs):
+    """Summed log-probability of each continuation after its prompt (token-id lists), batched like score_docs.
+    A window longer than the context keeps its last pieces."""
+    context, vocab = local.config["context"], local.tokenizer.vocab_size
+    windows = [np.asarray([BOS, *prompt, *answer], dtype=np.int64)[-(context + 1):] for prompt, answer in pairs]
+    order = sorted(range(len(pairs)), key=lambda i: len(windows[i]))  # similar lengths together: little padding
+    size = max(1, SCORE_ELEMENTS // (context * vocab))
+    out = [0.] * len(pairs)
+    for first in range(0, len(order), size):
+        batch = order[first:first + size]
+        x, y = np.full((2, len(batch), max(len(windows[i]) for i in batch) - 1), PAD, dtype=np.int64)
+        for row, i in enumerate(batch):
+            x[row, :len(windows[i]) - 1], y[row, :len(windows[i]) - 1] = windows[i][:-1], windows[i][1:]
+        with torch.no_grad():
+            logp = torch.log_softmax(local.model.forward(x).double(), dim=-1).gather(-1, torch.as_tensor(y)[..., None])[..., 0].cpu().numpy()
+        for row, i in enumerate(batch):
+            end = len(windows[i]) - 1
+            out[i] = float(logp[row, max(0, end - len(pairs[i][1])):end].sum())
+    return out
+
+
+def few_shot(model, items, shots=SHOTS, seed=0, pool=None):
+    """few_shot_table scored by a checkpoint path or LocalModel."""
+    from studio_model import LocalModel
+    local = model if isinstance(model, LocalModel) else LocalModel(model, device="cpu")
+    return few_shot_table(items, lambda text: _ids(local.tokenizer, text).tolist(), local.config["context"],
+                          lambda pairs: _continuation_logprobs(local, pairs), shots, seed, pool)

@@ -44,11 +44,22 @@ def default_spec(name="My network"):
                           "blocks": blocks, "training": dict(TRAINING_DEFAULTS, objective="assistant")})
 
 
+def _gpt3(name, width, layers, heads, lr):
+    """A GPT-3 paper shape (Brown et al. 2020, table 2.1) with its recipe on the spec: AdamW betas .9/.95,
+    eps 1e-8, weight decay .1, cosine decay to 10% after warmup. Gradient clipping is the engine's fixed 1.0."""
+    return {"schema": 1, "name": name,
+            "dims": {"d_model": width, "n_layer": layers, "n_ctx": 2048, "dropout": .1},
+            "block": {"mixer": {"id": "attention", "config": {"heads": heads}},
+                      "channel": {"id": "mlp_gelu", "config": {"d_ff": 4 * width}}},
+            "train": {"optimizer": {"id": "adamw", "config": {"lr": lr, "beta1": .9, "beta2": .95, "eps": 1e-8, "weight_decay": .1}},
+                      "schedule": {"id": "cosine", "config": {"min_lr": .1}}}}
+
+
 def model_spec_presets():
     """Ready-to-edit ModelSpecs built only from modules registered in this checkout.
 
-    The GPT-2-style preset uses the local byte tokenizer until GPT-2 BPE is installed;
-    it describes the network shape, not pretrained GPT-2 weights or vocabulary.
+    The GPT-2- and GPT-3-style presets use the local byte tokenizer until GPT-2 BPE is installed;
+    they describe the network shape (and for GPT-3 its optimizer recipe), not pretrained weights or vocabulary.
     """
     import studio_registry as registry
     from studio_spec import validate_spec as validate_model_spec
@@ -60,6 +71,8 @@ def model_spec_presets():
                                                   "dims": {"d_model": 768, "n_layer": 12, "n_ctx": 1024, "dropout": .1},
                                                   "block": {"mixer": {"id": "attention", "config": {"heads": 12}},
                                                             "channel": {"id": "mlp_gelu", "config": {"d_ff": 3072}}}}),
+        "gpt3_small_style": validate_model_spec(_gpt3("GPT-3 Small style · byte tokenizer", 768, 12, 12, 6e-4)),
+        "gpt3_medium_style": validate_model_spec(_gpt3("GPT-3 Medium style · byte tokenizer", 1024, 24, 16, 3e-4)),
     }
     llama_modules = (("norm", "rmsnorm"), ("position", "rope"), ("mixer", "gqa"), ("channel", "swiglu"))
     try:
@@ -122,7 +135,7 @@ def validate_spec(spec):
     if tokenizer not in TOKENIZERS:
         raise ValueError("Tokenizer must be byte or character.")
     width = _int(embedding.get("width", 64), "Embedding width", 16, 512)
-    context = _int(embedding.get("context", 128), "Context length", 32, 1024)
+    context = _int(embedding.get("context", 128), "Context length", 32, 2048)
     dropout = _float(embedding.get("dropout", .1), "Dropout", 0, .5)
     blocks_in = spec.get("blocks")
     if not isinstance(blocks_in, list) or not 1 <= len(blocks_in) <= 24:

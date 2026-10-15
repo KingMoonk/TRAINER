@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import studio_gate
 from studio_core import Workspace
 from studio_data_kinds import add_problems
-from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
+from studio_ia.copy import CHAT
+from studio_ia.pages.chat import against_chance, answering_version, few_shot_note, few_shot_rows, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
 from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
@@ -107,6 +108,20 @@ class PageLogic(unittest.TestCase):
         self.assertEqual(answering_version([1, 2, 3], 2, 3), 3)
         self.assertEqual(answering_version([1, 2, 3], 2, None, follows=False, current=3), 3)
         self.assertIsNone(answering_version([], None, None))
+
+    def test_few_shot_rows_sit_beside_guessing(self):
+        table = FakeServices().few_shot(1)
+        rows = few_shot_rows(table)
+        self.assertEqual([r[0] for r in rows], [CHAT["few_shot_zero"], CHAT["few_shot_one"], "4" + CHAT["few_shot_fitted"].format(used="3.5")])
+        self.assertEqual(rows[2][1:4], ("14 of 40", "35%", "30%"))
+        self.assertEqual({r[4] for r in rows}, {CHAT["few_shot_near"]})  # 11 to 14 of 40 is within a guesser's spread around 12
+        self.assertEqual(against_chance(30, 40, .3), CHAT["few_shot_above"])
+        self.assertEqual(against_chance(2, 40, .3), CHAT["few_shot_below"])
+        self.assertEqual(few_shot_rows({"items": 0, "chance": None, "rows": []}), [])
+        self.assertEqual(few_shot_rows(None), [])
+        self.assertIn("about 30%", few_shot_note(table))
+        self.assertNotIn(CHAT["few_shot_training"], few_shot_note(table))
+        self.assertIn(CHAT["few_shot_training"], few_shot_note({**table, "held_back": False}))
 
     def test_verdict_rule(self):
         v = lambda n, status: SimpleNamespace(number=n, status=status)  # noqa: E731

@@ -447,6 +447,11 @@ class Services:
         """Training saved between versions a and b (numbers): studio_eval.training_saved result dict."""
         raise NotImplementedError
 
+    def few_shot(self, version):
+        """Lettered problems answered with 0, 1 and a few worked examples in the prompt and no training: studio_eval.few_shot_table's
+        dict plus "tasks" and "held_back" (False when no held-back choice problem exists and training ones are asked). Slow."""
+        raise NotImplementedError
+
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
         "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n)}}}; missing keys are fine."""
@@ -748,6 +753,11 @@ class FakeServices(Services):
         from studio_eval import training_saved
         return training_saved([], [])
 
+    def few_shot(self, version):
+        return {"items": 40, "tasks": 2, "held_back": True, "chance": .3,
+                "rows": [{"shots": 0, "used": 0, "correct": 11, "accuracy": .275}, {"shots": 1, "used": 1, "correct": 13, "accuracy": .325},
+                         {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
+
     def post_training(self, version):
         return {"rounds": {}, "counts": {}, "gates": {}}
 
@@ -815,6 +825,7 @@ RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference n
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
 CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
+FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
 
 LN2 = math.log(2)
 
@@ -1440,6 +1451,21 @@ class WorkspaceServices(Services):
             if not done:
                 return {"percent": None, "comparable": False, "reason": f"Version {number} has no finished run to read."}
         return studio_eval.training_saved(pn, po, sn, so)
+
+    def few_shot(self, version):
+        """A seeded sample of the held-back lettered problems, asked of the version's best checkpoint; worked examples come from
+        every choice problem of the same task. Cached per checkpoint file and state of the stored data."""
+        import random
+        import studio_eval
+        ckpt = self._checkpoint(version)
+
+        def make():
+            held = [i for i in map(studio_eval.choice_item, self.post_rows("heldout_problems")) if i]
+            pool = [i for i in map(studio_eval.choice_item, self.post_rows("problems")) if i]
+            asked = held or pool  # ponytail: no held-back choice problem yet, so training ones are asked (flagged held_back False)
+            asked = random.Random(0).sample(asked, min(FEW_SHOT_ITEMS, len(asked)))
+            return {**studio_eval.few_shot(ckpt, asked, pool=held + pool), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
+        return self._cached(("few_shot", ckpt, Path(ckpt).stat().st_mtime_ns, self.workspace.revision), make)
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
