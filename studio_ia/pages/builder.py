@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox
 import uuid
 from pathlib import Path
 
@@ -851,6 +852,17 @@ class BuilderPage(Page):
             self.stage()
             self._paint_design()
 
+    def import_gpt2(self):
+        """Queue the one-time GPT-2 download and conversion; the new version gets GPT-2's weights when the queue finishes it."""
+        if self.phase != "edit" or not messagebox.askyesno(T["import_gpt2"], T["import_gpt2_ask"]):
+            return
+        try:
+            self.services.import_pretrained("gpt2")
+            self.note = T["import_gpt2_started"]
+        except ValueError as error:
+            self.note = str(error)
+        self.render()
+
     def pick(self, slot, short, block=None):
         """Module `short` for `slot`: in every block, or in block `block` only."""
         self.edit(**choose(self.draft, slot, short, block))
@@ -1256,6 +1268,11 @@ class BuilderPage(Page):
         tip(self.preset_about, lambda: glossary_text(preset_term(self.preset_key)) if self.preset_key else "")
         self.preset_lines = [tk_label(card, "", 12, "muted", "panel", wraplength=300) for _ in range(4)]  # size, fit, speed, recipe
         self.preset_btn = button(card, T["preset_load"], self.use_preset)
+        pretrained = Card(parent)
+        pretrained.pack(fill="x", pady=(0, 8))
+        self.import_btn = button(pretrained, T["import_gpt2"], self.import_gpt2)
+        self.import_btn.pack(anchor="w")
+        tip(self.import_btn, lambda: T["import_gpt2_tip"])
         self._paint_preset()
 
     def _paint_preset(self):

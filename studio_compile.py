@@ -83,6 +83,8 @@ class CompiledModel:
         self.layers = []
         self.layer_names = {}
         self.keep_tape, self.last_tape = False, None
+        self.frozen, self.adapters, self.adapter_names = set(), {}, set()   # LoRA (studio_lora): frozen weights, {weight: (a, b, scale)}
+        self.row_adapters = {}  # LoRA: {token table: the name of its special-token rows' correction}
         self.embedding = self._make("embedding", spec["embedding"], "")
         self.position = self._make("position", spec["position"], "")
         self.stack = []
@@ -126,9 +128,19 @@ class CompiledModel:
                 self.elementwise.add(full)
         return layer
 
+    def _effective(self, get):
+        """{weight: the tensor the forward pass uses} for every weight a LoRA adapter changes; `get(name)` gives a parameter.
+        An attention or MLP weight is W + scale * A @ B; the token table has its special-token rows corrected (studio_lora)."""
+        out = {full: self.p[full] + scale * (get(a) @ get(b)) for full, (a, b, scale) in self.adapters.items()}
+        for full, key in self.row_adapters.items():
+            rows = get(key)
+            out[full] = torch.cat([self.p[full][:rows.shape[0]] + rows, self.p[full][rows.shape[0]:]])
+        return out
+
     @property
     def parameter_count(self):
-        return sum(value.numel() for value in self.p.values())
+        """The model's own parameters; LoRA adapters are an add-on and not counted."""
+        return sum(value.numel() for key, value in self.p.items() if key not in self.adapter_names)
 
     def zero_grad(self):
         for grad in self.g.values():
@@ -171,10 +183,18 @@ class CompiledModel:
         live = {}
         if graph:
             for full, (layer, name) in self._slots.items():
-                live[full] = layer.params[name] = self.p[full].detach().requires_grad_(True)
+                if full not in self.frozen:
+                    live[full] = layer.params[name] = self.p[full].detach().requires_grad_(True)
+            for key in self.adapter_names:
+                live[key] = self.p[key].detach().requires_grad_(True)
         try:
-            with torch.enable_grad() if graph else torch.no_grad(), self._autocast():
-                result = self._run(ids, ctx, trace, attention_summary is not None, live)
+            with torch.enable_grad() if graph else torch.no_grad():
+                for full, value in self._effective(lambda key: live.get(key, self.p[key])).items():
+                    layer, name = self._slots[full]
+                    layer.params[name] = value
+                weights = {full: layer.params[name] for full, (layer, name) in self._slots.items()}   # what a recompute puts back
+                with self._autocast():
+                    result = self._run(ids, ctx, trace, attention_summary is not None, weights)
         finally:
             for full, (layer, name) in self._slots.items():
                 layer.params[name] = self.p[full]
@@ -192,7 +212,7 @@ class CompiledModel:
         """True when every mixer and the position module support a KV cache; otherwise generation re-runs the whole window."""
         return all(block.mixer is None or block.mixer.cacheable for block in self.stack) and (self.position is None or self.position.cacheable)
 
-    def _run(self, ids, ctx, trace, summary, live):
+    def _run(self, ids, ctx, trace, summary, weights):
         values, backward_values = {}, {}
         # Recomputing a block while backward runs is only sound when the pass has no side effects to repeat.
         recompute = self.checkpointing and ctx.training and not (trace or summary or ctx.capture is not None or ctx.patches or ctx.cache is not None)
@@ -244,7 +264,7 @@ class CompiledModel:
                             ctx.set_rng_state(state)
                         for full, layer, name in self._block_slots[block.index]:   # forward() has restored the plain weights by now
                             kept[full] = layer.params[name]
-                            layer.params[name] = live[full]
+                            layer.params[name] = weights[full]
                     with self._autocast():
                         return body(block, h)
                 finally:
@@ -332,9 +352,13 @@ class CompiledModel:
     def telemetry(self, tape, sample=2):
         """Cheap per-component statistics from a forward tape plus current gradients (call before the update)."""
         to_cpu = self.backend.to_cpu
-        names = list(self.g)
-        norms = torch.stack([(self.g[n].float() * self.g[n].float()).sum() for n in names]).tolist()
-        squared = dict(zip(names, norms))
+        names = [n for n in self.g if n not in self.adapter_names]
+        norms = torch.stack([(self.g[n].float() * self.g[n].float()).sum() for n in self.g]).tolist()
+        squared = dict(zip(self.g, norms))
+        for full, (a, b, _) in self.adapters.items():   # under LoRA the base is frozen: its adapters carry the gradient
+            squared[full] += squared[a] + squared[b]
+        for full, key in self.row_adapters.items():
+            squared[full] += squared[key]
 
         def grad_norm(slots, block=None):
             return math.sqrt(sum(squared[n] for n in names if self.owner[n][0] in slots and self.owner[n][1] == block))
@@ -383,8 +407,13 @@ class CompiledModel:
             self.p[key].copy_(value)
 
     def state_arrays(self):
-        """Every parameter as its own NumPy copy (never a view of the live tensor), for checkpoints and inspection."""
-        return {key: self.backend.to_cpu(value).copy() for key, value in self.p.items()}
+        """Every parameter as its own NumPy copy (never a view of the live tensor), for checkpoints and inspection.
+        With LoRA adapters these are the effective (merged) weights, so the result loads into a plain model of the same spec."""
+        out = {key: self.backend.to_cpu(value).copy() for key, value in self.p.items() if key not in self.adapter_names}
+        with torch.no_grad():
+            for full, value in self._effective(self.p.__getitem__).items():
+                out[full] = self.backend.to_cpu(value).copy()
+        return out
 
 
 @torch.no_grad()

@@ -360,15 +360,17 @@ def ablate_set(source, text, off, mode='mean', targets=None):
 
 def greedy_reply(source, prompt, off=(), mode='mean', n=24):
     """Greedy answer to one user message with the (block, head) pairs in `off` switched off for this reply only."""
-    from studio_slots import ASSISTANT, BOS, EOS, PAD, SYSTEM, UNK, USER
+    from studio_model import unsayable
+    from studio_slots import ASSISTANT, BOS, EOS, USER
     model, tokenizer = probe_model(source)
     if tokenizer is None:
         raise ValueError('Replies need a checkpoint with a tokenizer.')
     tokens, out = [BOS, USER] + tokenizer.encode(prompt) + [EOS, ASSISTANT], []
+    blocked = unsayable(tokenizer)
     for _ in range(int(n)):
         ids = np.asarray([tokens[-model.dims.n_ctx:]], dtype=np.int64)
         row = to_numpy(_ablated_logits(model, ids, list(off), mode))[0, -1].astype(np.float64)
-        row[[PAD, BOS, USER, SYSTEM, ASSISTANT, UNK]] = -np.inf
+        row[blocked] = -np.inf
         token = int(row.argmax())
         if token == EOS:
             break

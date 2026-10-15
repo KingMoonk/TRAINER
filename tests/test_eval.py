@@ -14,7 +14,7 @@ from studio_eval import (LN2, MIN_DOCS, band_from_scores, bits_per_char, corpus_
                          run_status, sanity_checks, score_docs, score_windows, smooth, training_saved, uniform_bpc, unigram_bpc)
 from studio_model import LocalModel, Tokenizer
 from studio_registry import for_slot
-from studio_slots import BOS, UNK
+from studio_slots import BOS, OFFSET, UNK
 from studio_spec import validate_spec
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.jsonl"
@@ -112,6 +112,7 @@ def strided_one_window_at_a_time(local, docs):
             begin = max(0, end - context)
             x, y = ids[begin:end], ids[begin + 1:end + 1]
             logits = local.model.backend.to_cpu(local.model.forward(x[None]))[0].astype(np.float64)
+            logits[:, :OFFSET] = -np.inf  # the special rows are not text: the probability is shared among the real pieces
             logits -= logits.max(axis=-1, keepdims=True)
             logp = logits - np.log(np.exp(logits).sum(axis=-1, keepdims=True))
             fresh = np.arange(begin + 1, end + 1) > done  # the targets not scored by an earlier window
@@ -209,7 +210,7 @@ class Strided(unittest.TestCase):
         from studio_model import LocalModel
         tok = Tokenizer("character", ["a", "b"])
 
-        class Flat:  # every piece equally likely: a document's nats are ln V times the pieces scored
+        class Flat:  # every real piece equally likely: a document's nats are ln (V - 7) times the pieces scored
             def forward(self, x):
                 return torch.zeros(x.shape[0], x.shape[1], tok.vocab_size)
 
@@ -218,7 +219,8 @@ class Strided(unittest.TestCase):
         docs = ["", "a", "ab" * 3, "ab" * 4, "ab" * 4 + "a", "ab" * 20, "abz" * 13]  # z is unknown: scored at ln V too
         for (nats, chars), doc in zip(score_docs(local, docs), docs):
             self.assertEqual(chars, len(doc))
-            self.assertAlmostEqual(nats, len(doc) * math.log(tok.vocab_size), places=6)
+            unknown = doc.count("z")  # an unknown character is scored at ln V
+            self.assertAlmostEqual(nats, (len(doc) - unknown) * math.log(tok.vocab_size - OFFSET) + unknown * math.log(tok.vocab_size), places=6)
 
     def test_strided_bits_per_character_do_not_exceed_the_old_back_to_back_value(self):
         from studio_model import train

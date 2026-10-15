@@ -20,6 +20,7 @@ import json
 import math
 
 import studio_registry as registry
+from studio_lora import lora_settings
 from studio_slots import BLOCK_SLOTS, TRAIN_SLOTS, Dims, config_dict
 
 SCHEMA = 1
@@ -131,6 +132,9 @@ def validate_spec(spec):
             if value not in RUN_CHOICES[key]:
                 raise ValueError(f"{key.capitalize()} must be one of {', '.join(RUN_CHOICES[key])}.")
             run[key] = value
+        elif key == "lora":
+            if value is not None:
+                run[key] = lora_settings(value)
         elif key == "validation":
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= .4:
                 raise ValueError("Validation must be between 0 and 0.4.")

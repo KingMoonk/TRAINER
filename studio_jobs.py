@@ -25,6 +25,16 @@ def pretrain(job, services, emit, stop, pause):
                               snapshot_every=p.get("snapshot_every", 50))  # feeds the 3D page's scrubber; newest 20 kept
 
 
+def import_pretrained(job, services, emit, stop, pause):
+    """Download a pretrained open model (kept under data/pretrained) and turn it into a checkpoint in the job's output folder."""
+    import studio_import
+    p = job.params
+    root = Path(getattr(services, "root", None) or services.workspace.run_dir.parent)
+    out = Path(p.get("output_dir") or studio_import.new_output_dir(services.workspace.run_dir, p["model"]))
+    job.params["output_dir"] = str(out)
+    studio_import.run_import(p["model"], root / "data" / "pretrained", out, emit=emit, stop=stop)
+
+
 def checkpoint_now(job, services, emit, stop, pause):
     """Short decaying-schedule run on a copy of the parent run's last checkpoint -> <run>/cooldown_<step>."""
     import studio_model
@@ -75,4 +85,4 @@ def not_built(job, services, emit, stop, pause):
 
 
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
-            "post_round": post_round, "restore_answers": restore_answers}
+            "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained}

@@ -231,6 +231,22 @@ class RLChecks(unittest.TestCase):
         self.assertEqual(gate["checks"][0]["detail"], "0 of 32 sampled answers passed, on 8 problems")
         self.assertEqual((recorded[0][0], recorded[0][1]["checkpoint"]), (2, str(self.ckpt)))   # recorded, and it never moves Chat
 
+    def test_round_1_keeps_a_lora_versions_settings_unless_the_job_says_otherwise(self):
+        lora = {"rank": 4, "alpha": 8, "dropout": 0, "targets": ["attn"]}
+        services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,
+                                   best_version=lambda: None, post_rows=lambda kind: [])
+
+        def trained_with(config):
+            job = SimpleNamespace(id="r1", params={"round": 1, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "r1"), "config": config})
+            with mock.patch.object(studio_rl, "load_checkpoint", return_value={"config": {"width": 32, "lora": lora}}), \
+                 mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "pass_k": 0, "pass_n": 0}), \
+                 mock.patch.object(studio_rl, "train", return_value={"checkpoint": str(self.ckpt)}) as fit:
+                studio_rl.run_round(1, job, services, lambda event: None, threading.Event(), threading.Event())
+            return fit.call_args.args[0]
+
+        self.assertEqual(trained_with({})["lora"], lora)
+        self.assertIsNone(trained_with({"lora": None})["lora"])
+
     def test_post_round_handler_completes_through_a_runner(self):
         problems = _generate_problems(10, __import__("random").Random(42))
         services = SimpleNamespace(workspace=SimpleNamespace(run_dir=self.dir / "runs"), current_version=lambda: None,

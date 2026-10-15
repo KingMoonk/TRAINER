@@ -32,7 +32,7 @@ class Version:
 @dataclass
 class Job:
     id: str
-    kind: str  # pretrain | quicktest | compare | post_round | restore_answers | checkpoint_now
+    kind: str  # pretrain | quicktest | compare | post_round | restore_answers | checkpoint_now | import_pretrained
     label: str = ""
     note: str = ""
     params: dict = field(default_factory=dict)
@@ -320,6 +320,12 @@ class Services:
         """Write a trained version's best checkpoint to `path`: kind "hf" (a folder: safetensors, config, tokenizer, README) or
         "gguf" (a .gguf file). Returns studio_export's report {path, files, note, ...}. Raises NoCheckpoint for a version that
         has not trained, and ValueError (already in plain words) for a design or tokenizer that format cannot hold."""
+        raise NotImplementedError
+
+    def import_pretrained(self, name="gpt2"):
+        """Start from a pretrained open model ("gpt2": OpenAI's 124M, about 548 MB to download once). Saves its design as a new version
+        and queues the download and conversion in the background; the version becomes trained (with a checkpoint) when the job ends.
+        Returns the new Version."""
         raise NotImplementedError
 
     def passive(self):
@@ -624,6 +630,11 @@ class FakeServices(Services):
         self.exports = [*getattr(self, "exports", []), (version, kind, path)]
         return {"path": str(path), "files": [], "note": ""}
 
+    def import_pretrained(self, name="gpt2"):
+        import studio_import
+        self.imports = [*getattr(self, "imports", []), name]
+        return self.save_version(studio_import.gpt2_spec(), f"Started from {studio_import.MODELS[name]['title']}")
+
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
 
@@ -865,10 +876,12 @@ class FakeServices(Services):
 
 import json  # noqa: E402
 import math  # noqa: E402
+import uuid  # noqa: E402
 from studio_ia import threads  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
+VERSION_JOBS = ("pretrain", "import_pretrained")  # queue jobs that carry a version through queued, training and trained
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
@@ -1207,7 +1220,7 @@ class WorkspaceServices(Services):
             job = studio_queue.Job(**asdict(job))
         if self.runner.thread is None:
             self.runner.start()
-        if job.kind == "pretrain" and job.params.get("version"):
+        if job.kind in VERSION_JOBS and job.params.get("version"):
             self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
 
@@ -1243,6 +1256,22 @@ class WorkspaceServices(Services):
         if v is None or not v.best_checkpoint:
             raise NoCheckpoint(v.number if v else None)
         return studio_export.export(v.best_checkpoint, kind, path)
+
+    def import_pretrained(self, name="gpt2"):
+        import studio_import
+        if name not in studio_import.MODELS:
+            raise ValueError(f"Unknown pretrained model {name!r}.")
+        title = studio_import.MODELS[name]["title"]
+        with self.runner.lock:
+            if any(j.kind == "import_pretrained" and j.params.get("model") == name and j.status in ("waiting", "held", "running")
+                   for j in self.runner.jobs):
+                raise ValueError(f"{title} is already being imported. Wait for it in the queue before starting another.")
+        v = self.save_version(studio_import.gpt2_spec(), f"Started from {title}")
+        out = studio_import.new_output_dir(self.workspace.run_dir, name)
+        self.enqueue(Job(uuid.uuid4().hex[:8], "import_pretrained", f"Start from {title}",
+                         "downloads the model once and turns it into a version that continues text and that you can fine-tune",
+                         {"model": name, "version": v.number, "output_dir": str(out)}))
+        return self._version(self.store.get(v.number))
 
     def passive(self):
         import studio_passive_watch as watch
@@ -1514,13 +1543,15 @@ class WorkspaceServices(Services):
         if kind != "job" or not isinstance(payload, dict):
             return
         job = next((j for j in self.runner.jobs if j.id == payload.get("job")), None)
-        number = job.params.get("version") if job and job.kind == "pretrain" else None
+        number = job.params.get("version") if job and job.kind in VERSION_JOBS else None
         if not number:
             return
         if payload["status"] == "running":
             return self._to(number, "training")
         out = Path(job.params.get("output_dir") or "")
         ckpt = next((p for p in (out / "best.npz", out / "last.npz") if p.exists()), None)
+        if not ckpt and job.kind == "import_pretrained" and payload["status"] in ("failed", "stopped"):
+            return self._drop_empty_import(number, payload["status"])
         if ckpt:
             import studio_eval
             self.store.add_run(number, out)
@@ -1531,6 +1562,15 @@ class WorkspaceServices(Services):
                         "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
+        self.emit("versions", None)
+
+    def _drop_empty_import(self, number, how):
+        """An import that ended without weights leaves a version that holds only a design. The newest can simply go; an older one
+        cannot (numbers follow the order), so it says in its description that it has no weights."""
+        if not self.store.remove_last(number):
+            self._to(number, "saved")
+            reason = "was stopped" if how == "stopped" else "did not finish"
+            self.store.set_change(number, f"{self.store.get(number)['change']}, but the download {reason}, so this design has no weights")
         self.emit("versions", None)
 
     def _json(self, name, default):

@@ -382,7 +382,7 @@ def run_round(number, job, services, emit, stop, pause):
     band = studio_eval.noise_band(checkpoint, [_doc(d) for d in docs]) if docs else None
     kw = {k: p[k] for k in ("steps", "learning_rate") if p.get(k) is not None}
     verdict = VERDICTS.get(number, "")
-    if number == 1:
+    if number == 1:   # the version's own settings carry on, LoRA included: a LoRA version stays LoRA unless the job says {"config": {"lora": None}}
         cfg = {**load_checkpoint(checkpoint)["config"], "objective": "assistant", **kw, **p.get("config", {})}
         record = train(cfg, _rows(job, services, "conversations", "conversations"), out, emit=emit, stop=stop, pause=pause, init_from=checkpoint)
     elif number == 2:
