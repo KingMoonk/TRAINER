@@ -9,7 +9,7 @@ from studio_ia.copy import VALUE_MAP
 from studio_ia.pages.base import Page
 from studio_ia.pages.trace import LI, ask
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Segmented
+from studio_ia.widgets import Card, Kicker, Segmented, info_icon
 
 HEADS = ("1", "2", "4", "8")
 PALETTE = (C["amber"], C["blue"], C["violet"], C["pink"], "#b8a4ff", C["sage"], "#f09a5e", "#d0a8e8")
@@ -86,15 +86,16 @@ class ValueMapPage(Page):
         tk_label(self.body, fit(VALUE_MAP["head_dim"]).format(heads=heads) + f" {hd}", 18, "text", font=font(18, bold=True)).pack(anchor="w", pady=GUTTER)
         card = Card(self.body)
         card.pack(fill="x")
-        Kicker(card, VALUE_MAP["one_head"], bg="panel").pack(anchor="w", pady=(0, 6))
+        notes = (f"{fit(VALUE_MAP['together'])} {hd}. " + VALUE_MAP["each_head"].format(hd=hd), VALUE_MAP["weighting"].format(hd=hd),
+                 VALUE_MAP["params"].format(per_head=f"{2 * d * hd:,}", heads=heads, total=f"{2 * d * d:,}", d=d))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w", pady=(0, 6))
+        Kicker(head, VALUE_MAP["one_head"], bg="panel").pack(side="left")
+        info_icon(head, "\n\n".join(notes)).pack(side="left", padx=(4, 0))
         self.funnels = FunnelCanvas(card)
         self.funnels.pack(anchor="w")
         self.funnels.set(d, hd, heads, dict(x=fit(VALUE_MAP["x_label"]), dx=fit(VALUE_MAP["delta_x"]), v=VALUE_MAP["v_label"].format(hd=hd),
                                             w_v=f"{VALUE_MAP['w_v']}  {d} → {hd}", w_o=f"{VALUE_MAP['w_o']}  {hd} → {d}"))
-        tk_label(card, f"{fit(VALUE_MAP['together'])} {hd}. " + VALUE_MAP["each_head"].format(hd=hd), 14, "text2", "panel", wraplength=760).pack(anchor="w", pady=(8, 0))
-        tk_label(card, VALUE_MAP["weighting"].format(hd=hd), 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
-        tk_label(card, VALUE_MAP["params"].format(per_head=f"{2 * d * hd:,}", heads=heads, total=f"{2 * d * d:,}", d=d),
-                 13, "muted", "panel", wraplength=760).pack(anchor="w", pady=(4, 0))
         singular = info.get("singular")
         if singular is not None and heads == info["heads"]:
             rank = rank_of(singular)

@@ -11,7 +11,7 @@ from studio_ia.pages.builder import C_, WIDTHS, P, cfg, read_spec, say, text_set
 from studio_ia.pages.base import Page
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, GuessChips, HowItWorks, Kicker, Progress, Segmented, button
+from studio_ia.widgets import BpcPlot, Card, Chip, GuessChips, HowItWorks, Kicker, Progress, Segmented, button, info_icon, tip
 from studio_spec import default_spec, validate_spec
 from studio_versions import spec_diff
 
@@ -77,8 +77,10 @@ class QuickTestPage(Page):
         b = self.body
         banner = Card(b)
         banner.pack(fill="x", pady=(0, GUTTER))
-        Kicker(banner, T["throwaway"], "amber", "panel").pack(anchor="w")
-        tk_label(banner, T["throwaway_desc"], 14, "text2", "panel", wraplength=720).pack(anchor="w", pady=(4, 0))
+        head = tk.Frame(banner, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, T["throwaway"], "amber", "panel").pack(side="left")
+        info_icon(head, T["throwaway_desc"]).pack(side="left", padx=(4, 0))
         what = Card(b)
         what.pack(fill="x", pady=(0, GUTTER))
         Kicker(what, "What you're testing", bg="panel").pack(anchor="w")
@@ -90,18 +92,17 @@ class QuickTestPage(Page):
         button(what, T["change_designer"], lambda: self.navigate("builder")).pack(anchor="w", pady=(GUTTER, 0))
         choices = Card(b)
         choices.pack(fill="x", pady=(0, GUTTER))
-        self.data = self._choice(choices, T["tiny_dataset"], Segmented(choices, [T[d[1]] for d in DATASETS], T["short_stories"], self.note_data))
-        self.data_note = self._note(choices)
-        self.time = self._choice(choices, T["time_each"], Segmented(choices, [T[m[0]] for m in MINUTES], T["3_min"]))
-        self._note(choices).configure(text=T["both_get_time"])
-        self.size = self._choice(choices, T["size_label"], Segmented(choices, [T["full"], T["shrunk_quarter_label"]], T["full"], self.note_size))
-        self.size_note = self._note(choices)
+        self.data_tip = self.size_tip = ""
+        self.data = self._choice(choices, T["tiny_dataset"], Segmented(choices, [T[d[1]] for d in DATASETS], T["short_stories"], self.note_data),
+                                 lambda: self.data_tip)
+        self.time = self._choice(choices, T["time_each"], Segmented(choices, [T[m[0]] for m in MINUTES], T["3_min"]), T["both_get_time"])
+        self.size = self._choice(choices, T["size_label"], Segmented(choices, [T["full"], T["shrunk_quarter_label"]], T["full"], self.note_size),
+                                 lambda: self.size_tip)
         self.note_data(T["short_stories"])
         self.note_size(T["full"])
         guess = tk.Frame(b, bg=C["bg"])
         guess.pack(fill="x", pady=(0, GUTTER))
-        tk_label(guess, T["your_guess"], 15).pack(anchor="w")
-        tk_label(guess, T["result_shows"], 13, "muted").pack(anchor="w")
+        tip(tk_label(guess, T["your_guess"], 15), T["result_shows"]).pack(anchor="w")
         self.guess = GuessChips(guess, GUESSES, bg="bg")
         self.guess.pack(anchor="w", pady=6)
         self.run_btn = button(guess, "Run quick test", self.start, primary=True)
@@ -127,21 +128,16 @@ class QuickTestPage(Page):
         desc.pack(anchor="w")
         return title, desc
 
-    def _choice(self, card, name, seg):
-        tk_label(card, name, 14, "text2", "panel").pack(anchor="w", pady=(6, 2))
-        seg.pack(anchor="w")
+    def _choice(self, card, name, seg, hint):
+        tip(tk_label(card, name, 14, "text2", "panel"), hint).pack(anchor="w", pady=(6, 2))
+        tip(seg, hint).pack(anchor="w", pady=(0, 6))
         return seg
 
-    def _note(self, card):
-        note = tk_label(card, "", 13, "muted", "panel", wraplength=720)
-        note.pack(anchor="w", pady=(2, 6))
-        return note
-
     def note_data(self, label):
-        self.data_note.configure(text=T[next(d[2] for d in DATASETS if T[d[1]] == label)])
+        self.data_tip = T[next(d[2] for d in DATASETS if T[d[1]] == label)]
 
     def note_size(self, label):
-        self.size_note.configure(text=T["faster_hint"] if label == T["shrunk_quarter_label"] else T["exact_designs"])
+        self.size_tip = T["faster_hint"] if label == T["shrunk_quarter_label"] else T["exact_designs"]
 
     def specs(self):
         v = self.services.current_version()
@@ -266,9 +262,11 @@ class QuickTestPage(Page):
             legend.pack(anchor="w")
             tk_label(legend, f"faint grey: {self.version_name}", 12, "muted", "panel").pack(side="left", padx=(0, 16))
             tk_label(legend, "violet: your idea", 12, "violet", "panel").pack(side="left")
-        Kicker(card, T["early_signal"], bg="panel").pack(anchor="w", pady=(GUTTER, 0))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w", pady=(GUTTER, 0))
+        Kicker(head, T["early_signal"], bg="panel").pack(side="left")
+        info_icon(head, T["one_short_run"].split(" A design")[0]).pack(side="left", padx=(4, 0))
         tk_label(card, signal_text(r, self.version_name, self.guess.value), 17, "text", "panel", wraplength=720).pack(anchor="w", pady=4)
-        tk_label(card, T["one_short_run"].split(" A design")[0], 13, "muted", "panel", wraplength=720).pack(anchor="w")
         if r.get("references") and not r.get("learned_context"):
             tk_label(card, GUARD, 13, "amber", "panel", wraplength=720).pack(anchor="w", pady=(4, 0))
         Kicker(card, T["does_work"], bg="panel").pack(anchor="w", pady=(GUTTER, 0))

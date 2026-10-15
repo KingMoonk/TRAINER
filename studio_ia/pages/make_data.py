@@ -12,7 +12,7 @@ import studio_rules as rules  # rule names only
 from studio_ia.copy import MAKEDATA as T
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Kicker, _activate
+from studio_ia.widgets import Kicker, _activate, tip
 
 MAX_N = 100000
 # Which card makes which data kind, how it is described, and how it is labelled for safety.
@@ -77,7 +77,6 @@ class MakeDataPage(Page):
                            highlightcolor=C["violet"], padx=GUTTER, pady=GUTTER)
             box.pack(side="left", fill="both", expand=True, padx=(0, 8))
             labels = [tk_label(box, card["name"], 15, "text", "panel", font=font(15, bold=True), wraplength=250),
-                      tk_label(box, card["note"], 13, "muted", "panel", wraplength=250),
                       tk_label(box, card["makes_line"], 13, "text2", "panel"),
                       tk_label(box, card["safe"], 13, card["safe_color"], "panel", wraplength=250)]
             for w in labels:
@@ -85,14 +84,14 @@ class MakeDataPage(Page):
             _activate(box, lambda i=i: self.pick(i))
             for w in labels:
                 w.bind("<Button-1>", lambda _e, i=i: self.pick(i))
+            tip(box, card["note"])
             self.cards.append((box, labels))
         Kicker(body, T["kicker"]).pack(fill="x", pady=(GUTTER, 4))
         self.example = tk_label(body, "", 14, "text", "panel", font=font(14, mono=True), padx=GUTTER, pady=10)
         self.example.pack(fill="x")
-        self.where = tk_label(body, "", 13, "muted")
-        self.where.pack(fill="x", pady=GUTTER // 2)
+        self.where_tip = ""
         ctl = tk.Frame(body, bg=C["bg"])
-        ctl.pack(fill="x")
+        ctl.pack(fill="x", pady=(GUTTER, 0))
         tk_label(ctl, T["how_many"], 14, "text").pack(side="left")
         self.n = tk.StringVar(value="100")
         tk.Entry(ctl, textvariable=self.n, width=8, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat",
@@ -102,6 +101,7 @@ class MakeDataPage(Page):
         self.rule.pack(side="left", padx=8)
         self.go = ttk.Button(ctl, style="Primary.TButton", command=lambda: self.run(trial=False))
         self.go.pack(side="left", padx=4)
+        tip(self.go, lambda: self.where_tip)
         self.try5 = ttk.Button(ctl, text=T["try_5"], command=lambda: self.run(trial=True))
         self.try5.pack(side="left", padx=4)
         self.review = ttk.Button(ctl, command=lambda: self.open_data(CARDS[self.k]["makes"]))
@@ -134,7 +134,7 @@ class MakeDataPage(Page):
             for w in labels:
                 w.configure(bg=bg)
         self.example.configure(text=card["example"])
-        self.where.configure(text=card["where"])
+        self.where_tip = card["where"]
         self.go.configure(text=card["go"])
         self.rule.configure(state="readonly" if stores_directly(card) else "disabled")
         self.try5.configure(state="normal" if stores_directly(card) else "disabled")

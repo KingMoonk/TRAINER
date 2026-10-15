@@ -7,7 +7,7 @@ from tkinter import ttk
 from studio_ia.copy import QUEUE as T
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, tk_label
-from studio_ia.widgets import Toggle
+from studio_ia.widgets import Toggle, info_icon, tip
 
 HOURS = (("any", "Any time"), ("nights", "Nights only"), ("set", "Set hours"))
 MEMORY = (("half", "Half"), ("most", "Most"), ("all", "All"))
@@ -100,10 +100,14 @@ class QueuePage(Page):
                  f"learning rate: {lr}", f"{minutes(s.eta_s)} left" if s.eta_s is not None else ""]
         return " · ".join(p for p in parts if p)
 
-    def _card(self, kicker):
+    def _card(self, kicker, hint=None):
         card = ttk.Frame(self.body, padding=GUTTER)
         card.pack(fill="x", pady=(0, GUTTER))
-        tk_label(card, kicker, 12, "muted", bg="bg").pack(anchor="w")
+        head = tk.Frame(card, bg=C["bg"])
+        head.pack(anchor="w")
+        tk_label(head, kicker, 12, "muted", bg="bg").pack(side="left")
+        if hint:
+            info_icon(head, hint, "bg").pack(side="left", padx=(4, 0))
         return card
 
     def _button(self, parent, text, command, **kw):
@@ -126,10 +130,8 @@ class QueuePage(Page):
         row = ttk.Frame(card)
         row.pack(anchor="w", pady=4)
         self._button(row, "Resume" if s.paused else "Pause", self._call("resume" if s.paused else "pause"), style="Primary.TButton").pack(side="left")
-        self._button(row, "Make a checkpoint now", self._call("checkpoint_now")).pack(side="left", padx=GUTTER)
+        tip(self._button(row, T["checkpoint_now"], self._call("checkpoint_now")), T["checkpoint_desc"]).pack(side="left", padx=GUTTER)
         self._button(row, "Stop", self._call("remove", s.job.id)).pack(side="left")
-        tk_label(card, "“Make a checkpoint now” branches off a short cool-down and keeps the main run going. "
-                 "Pausing keeps everything; the run resumes exactly where it stopped.", 13, "dim", wraplength=720).pack(anchor="w")
 
     def _phase(self, s):
         """Schedule phase from the run's own schedule (the engine's progress events carry none)."""
@@ -143,17 +145,15 @@ class QueuePage(Page):
             return ""
 
     def _up_next(self, s):
-        card = self._card("UP NEXT · IN ORDER")
+        card = self._card(T["up_next"], T["reorder_tip"] if s.up_next else None)
         hours = total_hours(s)
         if hours is not None:
             tk_label(card, f"all done in about {hours:.1f} h at the current plan", 13, "muted").pack(anchor="w")
         elif s.up_next:
             tk_label(card, "the finish time shows once each waiting job has a time estimate", 13, "muted").pack(anchor="w")
         if not s.up_next:
-            tk_label(card, "Nothing waiting. When the current job ends, the computer keeps improving the current version in its steady phase, "
-                     "within the plan below.", 14, "text2", wraplength=720).pack(anchor="w")
+            tip(tk_label(card, T["nothing_waiting"], 14, "text2"), T["nothing_waiting_tip"]).pack(anchor="w")
             return
-        tk_label(card, "Drag ⠿ to reorder. A held job keeps its place and is skipped until you release it.", 12, "muted").pack(anchor="w", pady=(0, 4))
         self._rows = []
         last = len(s.up_next) - 1
         for n, job in enumerate(s.up_next):
@@ -212,7 +212,7 @@ class QueuePage(Page):
             self.refresh()
 
     def _plan(self, plan, gate):
-        card = self._card("WHEN IT MAY TRAIN")
+        card = self._card(T["when_train"], T["when_train_tip"])
 
         def segmented(title, key, options):
             row = ttk.Frame(card)
@@ -239,15 +239,13 @@ class QueuePage(Page):
             text.pack(side="left")
             enabled, note = toggle_state(key, note, gate)
             if enabled:
-                Toggle(text, name, plan.get(key), lambda v, k=key: self._set(plan, k, v), bg="bg").pack(anchor="w")
+                tip(Toggle(text, name, plan.get(key), lambda v, k=key: self._set(plan, k, v), bg="bg"), note).pack(anchor="w")
             else:
                 tk_label(text, name, 14, "muted").pack(anchor="w", padx=(46, 0))
-            tk_label(text, note, 12, "muted").pack(anchor="w", padx=(46, 0))
-        tk_label(card, "Answering in Chat never stops training. It shares the computer, so training slows while it answers.", 13, "dim").pack(anchor="w", pady=(8, 0))
+                tk_label(text, note, 12, "muted").pack(anchor="w", padx=(46, 0))
 
     def _storage(self):
-        card = self._card(T["storage"].upper())
-        tk_label(card, T["storage_desc"], 13, "muted", wraplength=720).pack(anchor="w")
+        card = self._card(T["storage"].upper(), T["storage_desc"])
         tk_label(card, T["storage_free"].format(size=size_text(self.services.free_space())), 14, "text2").pack(anchor="w", pady=(6, 0))
         choice = tk.StringVar(value=self.choice)
         data = tk.BooleanVar(value=self.data)
