@@ -9,6 +9,7 @@ from __future__ import annotations
 import tkinter as tk
 import uuid
 
+import studio_registry as registry
 from studio_ia.copy import FEEDBACK as T
 from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
@@ -27,6 +28,7 @@ SAMPLE_GROUP = ("Sort these letters: d b a c", "sort", [("a b c d", 1.), ("a b d
 SAMPLE_HEAT = (["The", "capital", "of", "Australia", "is", "Sydney", ",", "which", "is", "on", "the", "coast"],
                [0, 0, 0, .1, 0, .95, .3, .2, .1, .1, 0, .4])
 ADD = "Add to the queue"
+LORA_RANKS = (4, 8, 16, 32)  # adapter sizes offered; studio_lora's own default (8) is the middle one
 
 
 def round_outlook(services, i, status):
@@ -54,6 +56,39 @@ def blocker(round_index, counts, teacher=0, has_earlier=False, checkpoint=True):
         return None if counts.get("corrections") else "Teach a correction in Chat first."
     key, least, why = need[round_index]
     return None if (counts.get(key) or 0) >= least else why
+
+
+def is_mixed_precision(spec):
+    """True when the design's precision module runs matrix multiplies in 16 bits (bf16, fp16); LoRA refuses these."""
+    entry = ((spec or {}).get("train") or {}).get("precision")
+    entry = {"id": entry} if isinstance(entry, str) else entry
+    if not isinstance(entry, dict) or not entry.get("id"):
+        return False
+    try:
+        return registry.get("precision", entry["id"]).compute is not None
+    except ValueError:
+        return False
+
+
+def lora_blocker(version):
+    """Why LoRA cannot be chosen for a round that starts from `version` (plain words), or None; mirrors what studio_model.train
+    refuses: LoRA without a checkpoint to start from, and LoRA under mixed precision."""
+    if not (version and version.best_checkpoint):
+        return T["lora_no_checkpoint"]
+    return T["lora_mixed"] if is_mixed_precision(version.spec) else None
+
+
+def lora_default(version):
+    """Whether the version already trains LoRA adapters: its own setting carries into a round unless the choice says otherwise."""
+    return bool((((version.spec if version else None) or {}).get("train") or {}).get("run", {}).get("lora"))
+
+
+def lora_config(on, rank, version):
+    """The `config` a round 1 job passes to the train options: {"lora": {"rank": n}} to train adapters, {"lora": None} for every
+    weight. {} when LoRA cannot be chosen (the version's own settings then carry on)."""
+    if lora_blocker(version):
+        return {}
+    return {"lora": {"rank": rank} if on else None}
 
 
 def step_line(q):
@@ -118,7 +153,9 @@ class PostTrainingPage(Page):
         self.teacher = 0          # 0 another trained version, 1 this model shown a correction as a hint
         self.teacher_no = None    # number of that version; None = the previous best
         self.leash = 1
-        self.pick = ""            # round 4 vote
+        self.lora = None          # round 1: None = follow the version's own setting, else True / False
+        self.lora_rank = 8
+        self.pick = ""          # round 4 vote
         self.group = self.heat = self.moved = self.spread = None   # live visuals from the running round
         self.live_gate = {}
         self._drawn, self._ticking, self._pending, self._step = None, False, False, None   # live_view on screen; in a burst; events since the last draw; the "step k of n" label
@@ -288,7 +325,26 @@ class PostTrainingPage(Page):
             cell.pack(side="left", padx=(0, 2 * GUTTER))
             tk_label(cell, count(self.counts.get(key)), 22, "text", "panel", font=font(22, mono=True)).pack(anchor="w")
             tk_label(cell, label, 12, "muted", "panel").pack(anchor="w")
+        self._lora_choice(card)
         self._help.append(T["few_thousand"])
+
+    def _lora_on(self):
+        return lora_default(self.version) if self.lora is None else self.lora
+
+    def _lora_choice(self, card):
+        """Round 1's weights choice: every weight, or small LoRA adapters. Greyed out, with the reason, where the engine would refuse."""
+        tk_label(card, T["lora_label"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 4))
+        why = lora_blocker(self.version)
+        if why:
+            tk_label(card, f"{T['lora_off']} · {why}", 13, "amber", "panel").pack(anchor="w")
+            return
+        labels, on = (T["lora_off"], T["lora_on"]), self._lora_on()
+        Segmented(card, labels, labels[on], lambda v: self._set("lora", labels.index(v) == 1)).pack(anchor="w")
+        tk_label(card, T["lora_desc_on" if on else "lora_desc_off"], 13, "text2", "panel", wraplength=760).pack(anchor="w", pady=(6, 0))
+        if on:
+            tk_label(card, T["lora_rank_label"], 12, "muted", "panel").pack(anchor="w", pady=(GUTTER, 4))
+            ranks = [str(r) for r in LORA_RANKS]
+            Segmented(card, ranks, str(self.lora_rank), lambda v: self._set("lora_rank", int(v))).pack(anchor="w")
 
     def _r2(self, card):
         live = self.group
@@ -462,6 +518,10 @@ class PostTrainingPage(Page):
     def _enqueue(self, version, i):
         name = ROUNDS[i][0]
         params = {"round": i + 1, "version": version.number if version else None, "checkpoint": version.best_checkpoint if version else None}
+        if i == 0 and (config := lora_config(self._lora_on(), self.lora_rank, version)):
+            params["config"] = config
+            if config["lora"]:
+                name += " · " + T["lora_job"].format(rank=self.lora_rank)
         if i == 2:
             teacher = self._teacher_version(version) if self.teacher == 0 else None
             params["teacher"] = teacher.best_checkpoint if teacher else None
