@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import queue
 import sys
@@ -24,14 +25,14 @@ from studio_validate import errors, validate
 from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
 from studio_ia import pieces as cut
-from studio_ia.attribution import attribute, blocks_change_text
+from studio_ia.attribution import attribute, blocks_change_text, run_changes, signed_move
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import BpcPlot, Card, Chip, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon, tip
+from studio_ia.widgets import BpcPlot, Card, Chip, GuessChips, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon, tip
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
@@ -62,6 +63,7 @@ WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.
     removed=("weights carry over, minus what was removed", "attention"), other=("weights carry over, changed parts start fresh", "attention"),
     scratch=("starts from scratch", "needs_training"))
 TRAINING_TEXT = "Chat switches to {new} only when it beats version {n} on held-back text, or when you pick it."
+NO_TEXT = "There is no plain text to train on yet. Add some in Your data, then queue it."
 NO_PARENT = "Version {n} has no trained weights to start from, so the next version trains from scratch."
 NO_CURVE = "No error curve yet: version {n} has not trained on this computer. It appears here once it has."
 
@@ -510,6 +512,295 @@ def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
     return out or [T["change_something"]]
 
 
+# ---------------------------------------------------------------------------------------------- guess, train, check (#83)
+
+GUESSES = dict(error=("lower", "higher"), step=("faster", "slower"), memory=("less", "more"))  # dimension -> its two directions
+SAME = .05  # a step time or memory within 5% is the same (the cost panel's "about the same")
+
+
+def _positive(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x > 0
+
+
+def train_memory(c):
+    """Bytes training needs at ROWS rows per step: weights, gradients and Adam state, plus activations. `c` is a sizes() dict."""
+    return c["memory"] + ROWS * c["activations"]
+
+
+def prediction_questions(old_spec, new_spec):
+    """The dimensions worth a guess for the change from old_spec to new_spec: held-back error always, step time and memory
+    only when the design's estimate says they move (a guess the cost panel already answers "about the same" is no question)."""
+    a, b = sizes(old_spec, read_spec(old_spec)["V"]), sizes(new_spec, read_spec(new_spec)["V"])
+    out = ["error"]
+    if abs(b["time"] / a["time"] - 1) >= SAME:
+        out.append("step")
+    if abs(train_memory(b) / train_memory(a) - 1) >= SAME:
+        out.append("memory")
+    return out
+
+
+def direction(key, before, after):
+    """Which way dimension `key` moved: error by the signed move in bits per character (a move under 0.005 is "same"), step
+    time and memory by ratio (within SAME is "same"). One of GUESSES[key], or "same"; None when either number is missing."""
+    if key == "error":
+        change = signed_move(before, after)
+        if change is None:
+            return None
+        return "same" if round(abs(change), 2) == 0 else "lower" if change < 0 else "higher"
+    if not (_positive(before) and _positive(after)):
+        return None
+    if abs(after / before - 1) < SAME:
+        return "same"
+    return GUESSES[key][after > before]
+
+
+def scored(v):
+    """A version's held-back bits per character, or None."""
+    bpc = (v.scorecard or {}).get("bpc") if v else None
+    return bpc if isinstance(bpc, (int, float)) and not isinstance(bpc, bool) else None
+
+
+def trained(v):
+    return bool(v and (v.best_checkpoint or scored(v) is not None))
+
+
+def results(old, new, speeds=None):
+    """{dimension: {before, after, way, measured}} for the change from version `old` to `new`. Error is each version's held-back
+    score (two scoring methods are not a move); step time is measured when `speeds` ({number: seconds per step}) has both,
+    else the design's estimate; memory is always the design's estimate."""
+    speeds = speeds or {}
+    same_method = (old.scorecard or {}).get("bpc_method") == (new.scorecard or {}).get("bpc_method")
+    a, b = (scored(old), scored(new)) if same_method else (None, scored(new))
+    out = {"error": dict(before=a, after=b, way=direction("error", a, b), measured=True)}
+    try:
+        ca, cb = sizes(old.spec, read_spec(old.spec)["V"]), sizes(new.spec, read_spec(new.spec)["V"])
+    except (KeyError, TypeError, ValueError):
+        ca = cb = None
+    sa, sb = speeds.get(old.number), speeds.get(new.number)
+    if _positive(sa) and _positive(sb):
+        out["step"] = dict(before=sa, after=sb, way=direction("step", sa, sb), measured=True)
+    elif ca:
+        out["step"] = dict(before=ca["time"], after=cb["time"], way=direction("step", ca["time"], cb["time"]), measured=False)
+    if ca:
+        ma, mb = train_memory(ca), train_memory(cb)
+        out["memory"] = dict(before=ma, after=mb, way=direction("memory", ma, mb), measured=False)
+    return out
+
+
+def seconds_text(s):
+    return f"{s * 1000:.0f} ms" if s < 1 else f"{s:.1f} s"
+
+
+def ratio_text(key, r):
+    """'about 1.4× slower', 'about the same'."""
+    return say(r["before"], r["after"], *({"step": (T["cost_slower"], T["cost_faster"]), "memory": (T["cost_more"], T["cost_less"])}[key]))
+
+
+def outcome(key, guess, r, is_trained):
+    """"hit", "miss" or None (not checked yet) for one guess against its result `r` (a results() entry, or None)."""
+    if not is_trained or not r or r["way"] is None:
+        return None
+    return "hit" if r["way"] == guess else "miss"
+
+
+def result_sentence(key, r):
+    if key == "error":
+        if r["before"] is None:
+            return ""
+        return T["result_error_flat" if r["way"] == "same" else "result_error"].format(a=r["before"], b=r["after"])
+    if key == "step" and r["measured"]:
+        return T["result_step"].format(a=seconds_text(r["before"]), b=seconds_text(r["after"]))
+    return T["result_step_estimated" if key == "step" else "result_memory"].format(say=ratio_text(key, r))
+
+
+def guess_check(old, new, speeds=None):
+    """The check of version `new`'s stored guess: {lines, hits, misses, state}, or None when it has none (or no version before it).
+    Each line is "You expected lower error. It went from 2.31 to 2.18 bits per character. A hit."; before training it says when
+    it will be checked. state is a StateTray state: live (all hits), attention (a miss), neutral (nothing checked yet)."""
+    guesses = {k: g for k, g in (getattr(new, "prediction", None) or {}).items() if g in GUESSES.get(k, ())}
+    if not guesses or old is None:
+        return None
+    rs, done = results(old, new, speeds), trained(new)
+    lines, hits, misses = [], 0, 0
+    for key in GUESSES:
+        if key not in guesses:
+            continue
+        guess, r = guesses[key], rs.get(key)
+        line = T["guess_expected"].format(what=T["guess_" + guess])
+        result = outcome(key, guess, r, done)
+        if not done:
+            line += " " + T["guess_waiting"].format(n=new.number)
+        elif result is None:
+            line += " " + T["guess_no_score"].format(n=new.number)
+        else:
+            line += " " + " ".join(filter(None, (result_sentence(key, r), T["guess_" + result])))
+        hits, misses = hits + (result == "hit"), misses + (result == "miss")
+        lines.append(line)
+    return dict(lines=lines, hits=hits, misses=misses, state="attention" if misses else "live" if hits else "neutral")
+
+
+def page_said(old, new):
+    """The first "what to expect" sentence for the change from version `old` to `new` (what the page said before it trained)."""
+    try:
+        return expectations(read_spec(old.spec), read_spec(new.spec))[0]
+    except (KeyError, TypeError, ValueError):
+        return ""
+
+
+def check_text(old, new, speeds=None):
+    """(state, kicker, text) for the guess tray of version `new`, or None when it has no guess to show."""
+    check = guess_check(old, new, speeds)
+    if check is None:
+        return None
+    said = page_said(old, new)
+    text = " ".join(check["lines"] + ([T["guess_page_said"].format(text=said)] if said and said != T["change_something"] else []))
+    return check["state"], T["guess_kicker"].format(n=new.number), text
+
+
+# ---------------------------------------------------------------------------------------------- one change at a time (#83)
+
+def split_steps(cur, draft):
+    """The draft as a chain of one-change choices [s1, …, sk]: each is the one before with one more of the draft's choices
+    applied, and the last has all of them. Word list, blocks, heads and thinking room first (the knobs act on the modules they
+    find), then each part, then each block's own pick. A knob the draft's module has no use for (heads left over from before a
+    swap) is no step of its own: it rides along with the last one."""
+    steps, s = [], dict(cur)
+
+    def take(patch):
+        nonlocal s
+        s = dict(s, **patch)
+        steps.append(s)
+    if draft["V"] != s["V"]:
+        take(dict(V=draft["V"]))
+    if draft["L"] != s["L"]:
+        take(resize(s, draft["L"]))
+    for key in ("H", "W"):
+        if draft[key] != s[key] and knob_applies(draft, key):
+            take({key: draft[key]})
+    for slot in (*PART_SLOTS, *BLOCK_SLOTS):
+        if draft["M"][slot] != s["M"][slot]:
+            take(dict(M=dict(s["M"], **{slot: draft["M"][slot]})))
+    for key in sorted(set(s["O"]) | set(draft["O"])):
+        if draft["O"].get(key) != s["O"].get(key):
+            own = dict(s["O"])
+            if key in draft["O"]:
+                own[key] = draft["O"][key]
+            else:
+                own.pop(key)
+            take(dict(O=own))
+    if steps:
+        steps[-1] = dict(draft)
+    return steps
+
+
+def split_plan(base, was, cur, draft):
+    """[(choices, spec, chips)] saving the draft as one version per change, each written onto the one before; [] when that is
+    not possible: fewer than two changes, or a step on the way would be a design that cannot work. A step that changes nothing
+    in the spec (heads on a look-back without heads) is folded into the next."""
+    out, prev_s, prev_spec = [], was, write_spec(base, was, was)
+    try:
+        for s in split_steps(cur, draft):
+            spec = write_spec(base, s, was)
+            if spec == prev_spec:
+                continue
+            if errors(spec):
+                return []
+            out.append((s, spec, change_chips(prev_spec, spec, prev_s, s)))
+            prev_s, prev_spec = s, spec
+    except ValueError:
+        return []
+    return out if len(out) > 1 and out[-1][1] == write_spec(base, draft, was) else []
+
+
+def split_jobs(start, plan, mode, parent_checkpoint, datasets, run_dir, new_id=lambda: uuid.uuid4().hex[:8]):
+    """The pretrain jobs for split versions start, start + 1, …, chained: the first starts as `mode` from `parent_checkpoint`,
+    each later one starts from the best checkpoint the one before writes (its output folder is set here, so the path is known
+    before it runs; the queue runs them in order). A step that changes the word list trains from scratch."""
+    jobs, before = [], parent_checkpoint
+    for i, (s, spec, _chips) in enumerate(plan):
+        prev = plan[i - 1][0] if i else None
+        step_mode = "from_scratch" if (i == 0 and mode == "from_scratch") or (prev and s["V"] != prev["V"]) else "catch_up"
+        job_id = new_id()
+        job = catchup_job(job_id, start + i, spec, step_mode, before, datasets)
+        out = str(Path(run_dir) / f"queue_{job_id}") if run_dir else None
+        job.params["output_dir"] = out
+        jobs.append(job)
+        before = str(Path(out) / "best.npz") if out else None
+    return jobs
+
+
+# ---------------------------------------------------------------------------------------------- lab notebook (#83)
+
+def notebook(versions, speeds=None, facts=None):
+    """One row per version, oldest first: {number, change, effects, guesses, note, state}. effects says what the version did to
+    held-back error, step time and memory against the version before it; guesses is the stored guess with ✓ or ✗; note says
+    when the comparison is not about one change (several changes at once, or the runs also differed in data, steps, learning
+    rate or extra training: studio_ia.attribution.run_changes on Services.run_facts). Reads no files: `speeds` and `facts`
+    ({number: …}) are what a worker read."""
+    speeds, facts, rows, old = speeds or {}, facts or {}, [], None
+    for v in versions:
+        row = dict(number=v.number, change=v.change or "", effects="", guesses="", note="", state="neutral")
+        done = trained(v)
+        if old is None or not (old.spec and v.spec):
+            row["effects"] = T["notebook_error_only"].format(b=scored(v)) if scored(v) is not None else \
+                T["notebook_not_trained" if not done else "notebook_no_score"]
+        else:
+            rs = results(old, v, speeds)
+            err = rs["error"]
+            parts = [T["notebook_not_trained"] if not done else T["notebook_no_score"] if err["after"] is None
+                     else T["notebook_error"].format(a=err["before"], b=err["after"]) if err["before"] is not None
+                     else T["notebook_error_only"].format(b=err["after"])]
+            for key in ("step", "memory"):
+                if key in rs:
+                    parts.append(T["notebook_" + key].format(say=ratio_text(key, rs[key]))
+                                 + ("" if rs[key]["measured"] else T["notebook_estimated"]))
+            row["effects"] = ", ".join(parts)
+            check = guess_check(old, v, speeds)
+            if check:
+                marks = {"hit": " ✓", "miss": " ✗"}
+                guesses = getattr(v, "prediction", None) or {}
+                said = [T["guess_" + guesses[k]] + marks.get(outcome(k, guesses[k], rs.get(k), done), "")
+                        for k in GUESSES if guesses.get(k) in GUESSES[k]]
+                row["guesses"] = T["notebook_guessed"].format(guesses=", ".join(said))
+                row["state"] = check["state"]
+            elif v.number > 1:
+                row["guesses"] = T["notebook_no_guess"]
+            try:
+                many = len(change_chips(old.spec, v.spec, read_spec(old.spec), read_spec(v.spec)))
+            except (KeyError, TypeError, ValueError):
+                many = 0
+            ran = run_changes(facts[old.number], facts[v.number])[0] if facts.get(old.number) and facts.get(v.number) else []
+            ran = [name for name in ran if name not in ("starting weights", "tokens")]  # a catch-up always starts from the version before
+            row["note"] = "; ".join(filter(None, (T["notebook_many"].format(count=many) if many > 1 else "",
+                                                  T["notebook_also"].format(names=", ".join(ran)) if ran else "")))
+        rows.append(row)
+        old = v
+    return rows
+
+
+def guesses_from(picked):
+    """{dimension: direction} from the save-time chips ({dimension: the label picked, or None}); unpicked ones are left out."""
+    out = {}
+    for key, label in picked.items():
+        labels = [T["predict_" + d] for d in GUESSES[key]]
+        if label in labels:
+            out[key] = GUESSES[key][labels.index(label)]
+    return out
+
+
+def notebook_lines(rows):
+    """The notebook card's lines: one per version, or why there are none (still reading: rows is None)."""
+    if rows is None:
+        return [T["notebook_reading"]]
+    return [notebook_line(row) for row in rows] or [T["notebook_empty"]]
+
+
+def notebook_line(row):
+    """'Version 3 · more blocks (2 → 4) → error 2.31 → 2.18, steps about 1.4× slower · you guessed lower error ✓'."""
+    head = f"{T['notebook_version'].format(n=row['number'])} · {row['change']}" if row["change"] else T["notebook_version"].format(n=row["number"])
+    return " · ".join(filter(None, (f"{head} → {row['effects']}", row["guesses"], row["note"])))
+
+
 MISSING = {1: "Built from your text: add some in Your data to see these pieces.",
            2: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
            3: "Built from your text: add some in Your data to see these pieces."}
@@ -627,6 +918,12 @@ class BuilderPage(Page):
         self.compute_preview, self._asking = None, False  # services.pretrain_preview: the size of your text, None until counted
         self.lr_stop, self.lr_result, self.lr_for = None, None, None  # the learning-rate test: running (its stop event), its answer, the design it ran on
         self.preset_key = None  # the ready-made design being looked at
+        self.asking, self.guesses, self._predict_for = None, [], None  # ("one" | "split", the draft spec) while the save-time guesses show
+        self.picks = {}  # {(version index, dimension): label} picked so far, kept when the page is rebuilt
+        self.chain = set()  # ids of split jobs that each start from the one before: their order is not to be changed here
+        self._split_key = self._split_plan = None  # the split of the draft into one-change versions, kept until the draft changes
+        self.speeds, self.notebook_rows, self._notebook_token = {}, None, None  # measured step times and the lab notebook (slow lane)
+        self.check_shown, self.notebook_texts = None, []
 
     # state ------------------------------------------------------------------
     @property
@@ -674,6 +971,7 @@ class BuilderPage(Page):
         self.load_chart()
         self.render()
         self.load_lists()
+        self.load_notebook()
 
     def _restore_saved(self, current):
         """A saved version nobody has trained yet shows its coral tray, wherever it was saved (e.g. from Quick test)."""
@@ -690,7 +988,7 @@ class BuilderPage(Page):
     def load_chart(self):
         """Curves and reference lines from the real run files; nothing invented when there are none. Scoring the held-back text
         can take a while the first time: that read runs on the shell's worker and the page redraws when it arrives."""
-        base = self.base
+        base = (self.version(self.base.number) or self.base) if self.base else None  # as stored now (a split step may have trained since)
         newer = self.version(self.n + 1) if self.phase != "edit" else None
         self._chart_token = token = object()  # a later load_chart supersedes one still on the worker
 
@@ -727,6 +1025,35 @@ class BuilderPage(Page):
                 self.lists = lists
                 if self.pieces_box is not None and self.pieces_box.winfo_exists():
                     self._paint_pieces()
+        self.quietly(work, apply, lane="slow")
+
+    def load_notebook(self):
+        """The lab notebook and the measured step times behind the guess check. Reading every version's run files (metrics,
+        and run facts that hash the data file once) runs on the slow lane; the card and the guess tray repaint when it arrives."""
+        services = self.services
+        self._notebook_token = token = object()
+
+        def work():  # no widgets here
+            versions = services.versions()
+            speeds, facts = {}, {}
+            for v in versions:
+                try:
+                    speeds[v.number] = services.run_speed(v.number)
+                except Exception:  # an unreadable run is a missing number, never a stuck card
+                    speeds[v.number] = None
+                try:
+                    facts[v.number] = services.run_facts(v.number)
+                except Exception:
+                    facts[v.number] = {}
+            return speeds, notebook(versions, speeds, facts)
+
+        def apply(value):
+            if self._notebook_token is not token:
+                return
+            self.speeds, self.notebook_rows = value
+            self._paint_notebook()
+            if self.tray is not None and self.tray.winfo_exists():
+                self._paint_tray()
         self.quietly(work, apply, lane="slow")
 
     def curve_of(self, version):
@@ -892,7 +1219,54 @@ class BuilderPage(Page):
         self.stage()
         self._paint_design()
 
-    def save(self):
+    def ask_save(self):
+        """"Save as version N": first a quick guess at what the change will do (skippable); version 1 has nothing to compare."""
+        if self.base is None or self.draft_spec is None:
+            return self.save()
+        self.asking, self.picks = ("one", self.draft_spec), {}
+        self._paint_tray()
+
+    def ask_split(self):
+        if self.split_plan():
+            self.asking, self.picks = ("split", self.draft_spec), {}
+            self._paint_tray()
+
+    def cancel_guesses(self):
+        self.asking = None
+        self._paint_tray()
+
+    def save_guessed(self, skip=False):
+        """Save what the guesses were asked about, with the guesses picked (none when skipped)."""
+        kind = self.asking[0] if self.asking else "one"
+        picks = [{} if skip else guesses_from({key: chip.value for key, chip in chips.items()}) for chips in self.guesses]
+        self.asking = None
+        if kind == "split":
+            self._paint_tray()  # the guess buttons go before the slow read of the data list, so a second click cannot save again
+            return self.split(picks)
+        self.save(picks[0] if picks else None)
+
+    def split_plan(self):
+        """split_plan for the draft, or [] (a design reopened from another page, or nothing saved yet, is saved whole)."""
+        if self.anchor is not None or self.base is None or self.phase != "edit":
+            return []
+        key = copy.deepcopy((self.cur, self.draft))
+        if key != self._split_key:
+            self._split_key, self._split_plan = key, split_plan(self.base_spec(), self.cur, self.cur, self.draft)
+        return self._split_plan
+
+    def guess_steps(self):
+        """[(title, old spec, new spec)] for each version the guesses are about."""
+        if not self.asking:
+            return []
+        if self.asking[0] == "one":
+            return [("", self.base_spec(), self.draft_spec)]
+        out, old = [], self.base_spec()
+        for i, (_s, spec, chips) in enumerate(self.split_plan()):
+            out.append((T["predict_step_title"].format(n=self.n + 1 + i, change=", ".join(chips)), old, spec))
+            old = spec
+        return out
+
+    def save(self, prediction=None):
         try:
             spec = self.spec_for(self.draft)
         except ValueError as error:
@@ -901,7 +1275,8 @@ class BuilderPage(Page):
         if problems := errors(spec):
             self.note = problems[0]
             return self.render()
-        self.saved = self.services.save_version(spec, ", ".join(self.changes()) or ("first design" if self.base is None else "no change"))
+        self.saved = self.services.save_version(spec, ", ".join(self.changes()) or ("first design" if self.base is None else "no change"),
+                                                prediction or None)
         self.phase, self._staged, self.anchor = "saved", None, None
         self.services.stage_draft(None)
         self.load_chart()
@@ -910,9 +1285,38 @@ class BuilderPage(Page):
     def queue_it(self, from_scratch):
         self.slow(lambda: text_sets(self.services.data("text")), lambda sets: self._queue(sets, from_scratch))
 
+    def split(self, predictions=()):
+        """Save the draft as one version per change and queue them one after another, each starting from the one before."""
+        plan = self.split_plan()
+        if not plan:
+            self.note = T["one_change_cannot"]
+            return self.render()
+        self.slow(lambda: text_sets(self.services.data("text")), lambda sets: self._split(sets, plan, list(predictions)))
+
+    def _split(self, sets, plan, predictions):
+        if not sets:
+            self.note = NO_TEXT
+            return self.render()
+        parent = self.base.best_checkpoint if self.base else None
+        mode = "from_scratch" if plan[0][0]["V"] != self.cur["V"] or not parent else "catch_up"
+        saved = [self.services.save_version(spec, ", ".join(chips), predictions[i] if i < len(predictions) else None)
+                 for i, (_s, spec, chips) in enumerate(plan)]
+        run_dir = getattr(getattr(self.services, "workspace", None), "run_dir", None)
+        jobs = split_jobs(saved[0].number, plan, mode, parent, sets, run_dir)
+        for job in jobs:
+            self.services.enqueue(job)
+        self.chain |= {job.id for job in jobs}
+        self.base, self.saved = saved[-2], saved[-1]  # the tray follows the last one: "version N, from version N - 1"
+        self.cur, self.draft, self.anchor = read_spec(saved[-2].spec), read_spec(saved[-1].spec), None
+        self.job_id, self.phase, self._staged = jobs[-1].id, "queued", None
+        self.note = T["split_note"].format(first=saved[0].number, last=saved[-1].number)
+        self.services.stage_draft(None)
+        self.load_chart()
+        self.render()
+
     def _queue(self, sets, from_scratch):
         if not sets:
-            self.note = "There is no plain text to train on yet. Add some in Your data, then queue it."
+            self.note = NO_TEXT
             return self.render()
         parent = self.base.best_checkpoint if self.base else None
         mode = "from_scratch" if from_scratch or self.needs_scratch() else "catch_up"
@@ -999,6 +1403,7 @@ class BuilderPage(Page):
         self._expect()
         self._tray()
         self._charts()
+        self._notebook()
         self._look_inside()
         self._paint_design()
 
@@ -1469,7 +1874,12 @@ class BuilderPage(Page):
         self.tray = StateTray(self.tray_box)
         self.tray.pack(fill="x", pady=(0, 8))
         self.chips = tk.Frame(self.tray_box, bg=C["bg"])
-        self.buttons, self.actions = None, {}
+        self.predict_slot = tk.Frame(self.tray_box, bg=C["bg"])  # the save-time guesses
+        self.predict_slot.pack(fill="x")
+        self.button_slot = tk.Frame(self.tray_box, bg=C["bg"])
+        self.button_slot.pack(fill="x")
+        self.check_tray = StateTray(self.tray_box)  # a saved guess against what training did
+        self.buttons, self.actions, self._predict_for = None, {}, None
 
     def _paint_tray(self):
         ph, n, nv = self.phase, self.n, self.nv
@@ -1477,12 +1887,25 @@ class BuilderPage(Page):
         scratch = self.needs_scratch()
         self.chip_texts = []
         actions = []
+        if self.asking and (ph != "edit" or self.asking[1] != self.draft_spec):  # the draft moved on: ask again on the next save
+            self.asking = None
         if ph == "edit":
             self.chip_texts = self.changes()
             if self.chip_texts:
                 state, kicker, text = "unsaved", T["not_saved"], T["not_saved_text"].format(version=nv)
-                actions = [(T["quick_test_first"], lambda: self.navigate("quicktest"), False),
-                           (f"Save as {nv}", self.save, True), (T["discard"], self.discard, False)]
+                plan = self.split_plan() if len(self.chip_texts) > 1 else []
+                if len(self.chip_texts) > 1 and self.base is not None:
+                    text += " " + T["one_change"].format(count=len(self.chip_texts)) + " " + \
+                        (T["one_change_split"].format(count=len(plan)) if plan else T["one_change_cannot"])
+                if self.asking:
+                    save = T["predict_split_save"].format(count=len(plan)) if self.asking[0] == "split" else T["predict_save"]
+                    actions = [(save, self.save_guessed, True), (T["predict_skip"], lambda: self.save_guessed(True), False),
+                               (T["predict_back"], self.cancel_guesses, False)]
+                else:
+                    actions = [(T["quick_test_first"], lambda: self.navigate("quicktest"), False),
+                               (f"Save as {nv}", self.ask_save, True), (T["discard"], self.discard, False)]
+                    if plan:
+                        actions.append((T["split"].format(count=len(plan)), self.ask_split, False))
             elif self.base is None:  # nothing saved yet: the starting design itself can become version 1
                 state, kicker, text = "unsaved", T["first_save"], T["first_save_text"].format(version=nv)
                 actions = [(f"Save as {nv}", self.save, True), (T["quick_test_first"], lambda: self.navigate("quicktest"), False)]
@@ -1500,7 +1923,7 @@ class BuilderPage(Page):
             state, kicker, text = "live", T["queued"], T["queued_text"].format(new_version=Nv)
             when = self.outlook()
             text += f" {when}." if when else ""
-            if self.position():
+            if self.position() and self.job_id not in self.chain:  # a split step must not run before the one it starts from
                 actions = [(T["move_to_front"], self.to_front, True)]
         else:
             state = "training"
@@ -1528,11 +1951,56 @@ class BuilderPage(Page):
         if [label for label, _, _ in actions] != list(self.actions):
             if self.buttons:
                 self.buttons.destroy()
-            self.buttons, self.actions = tk.Frame(self.tray_box, bg=C["bg"]), {}
+            self.buttons, self.actions = tk.Frame(self.button_slot, bg=C["bg"]), {}
             self.buttons.pack(anchor="w")
             for label, cmd, primary in actions:
                 self.actions[label] = btn = button(self.buttons, label, cmd, primary)
                 btn.pack(side="left", padx=(0, 8))
+        if self.asking != self._predict_for:
+            self._predict_for = self.asking
+            self._paint_predict()
+        self._paint_check()
+
+    def _paint_predict(self):
+        """The save-time guesses: a row of chips per dimension worth a guess, for each version being saved."""
+        for child in self.predict_slot.winfo_children():
+            child.destroy()
+        self.guesses = []
+        steps = self.guess_steps()
+        if not steps:
+            return
+        card = Card(self.predict_slot)
+        card.pack(fill="x", pady=(0, 8))
+        Kicker(card, T["predict"], bg="panel").pack(anchor="w")
+        tk_label(card, T["predict_text"], 13, "muted", "panel", wraplength=780).pack(anchor="w", pady=(2, 4))
+        for i, (title, old, new) in enumerate(steps):
+            if title:
+                tk_label(card, title, 13, "text", "panel", wraplength=780).pack(anchor="w", pady=(6, 0))
+            chips = {}
+            for key in prediction_questions(old, new):
+                row = tk.Frame(card, bg=C["panel"])
+                row.pack(anchor="w", pady=2)
+                tk_label(row, T["predict_" + key], 13, "text", "panel", width=22, anchor="w").pack(side="left")
+                chips[key] = GuessChips(row, [T["predict_" + d] for d in GUESSES[key]],
+                                        lambda label, at=(i, key): self.picks.__setitem__(at, label))
+                chips[key].set(self.picks.get((i, key)))
+                chips[key].pack(side="left")
+            self.guesses.append(chips)
+
+    def _paint_check(self):
+        """The guess made when the version was saved, against what training did: the current version while editing, else
+        the one being trained. Step times come from the notebook's read (self.speeds); nothing here reads a file."""
+        target = self.base if self.phase == "edit" else self.version(self.n + 1)
+        shown = None
+        if target is not None and getattr(target, "prediction", None):
+            old = self.version(target.parent or target.number - 1)
+            shown = check_text(old, target, self.speeds)
+        self.check_shown = shown
+        if shown:
+            self.check_tray.set(*shown)
+            self.check_tray.pack(fill="x", pady=(8, 0))
+        else:
+            self.check_tray.pack_forget()
 
     def _charts(self):
         card = Card(self.body)
@@ -1579,6 +2047,28 @@ class BuilderPage(Page):
         both = len(trained) == 2
         self.ask_btn = button(card, "Ask both versions" if both else f"Ask {version_name(next(iter(trained)))}", self.ask_both)
         self.ask_btn.pack(anchor="w", pady=(6, 0))
+
+    def _notebook(self):
+        card = Card(self.body)
+        card.pack(fill="x", pady=(0, GUTTER))
+        head = tk.Frame(card, bg=C["panel"])
+        head.pack(anchor="w")
+        Kicker(head, T["notebook"], bg="panel").pack(side="left")
+        info_icon(head, T["notebook_tip"]).pack(side="left", padx=(4, 0))
+        self.notebook_box = tk.Frame(card, bg=C["panel"])
+        self.notebook_box.pack(anchor="w", fill="x", pady=(4, 0))
+        self._paint_notebook()
+
+    def _paint_notebook(self):
+        box = getattr(self, "notebook_box", None)
+        if box is None or not box.winfo_exists():
+            return
+        for child in box.winfo_children():
+            child.destroy()
+        self.notebook_texts = notebook_lines(self.notebook_rows)
+        quiet = not self.notebook_rows
+        for line in self.notebook_texts:
+            tk_label(box, line, 13, "muted" if quiet else "text", "panel", wraplength=780, justify="left").pack(anchor="w", pady=1)
 
     def _look_inside(self):
         Kicker(self.body, T["look_inside"]).pack(anchor="w")

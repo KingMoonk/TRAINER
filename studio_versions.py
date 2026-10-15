@@ -2,7 +2,7 @@
 
 Kept independent of studio_archdb (that store is keyed by architecture revisions); a version only
 references run directories and checkpoint paths. Version = {number, name, change, parent, spec, created_at,
-runs, best_checkpoint, status, scorecard, verdict}.
+runs, best_checkpoint, status, scorecard, verdict, prediction}. prediction is the guess made on saving ({dimension: direction}, Build your model).
 """
 from __future__ import annotations
 
@@ -105,8 +105,9 @@ class VersionStore:
         held = [v for v in self.versions() if v["best_checkpoint"] and isinstance(v["scorecard"].get("bpc"), (int, float))]
         return min(held, key=lambda v: v["scorecard"]["bpc"], default=None)
 
-    def save_version(self, spec, change=None):
-        """Save `spec` as the next version (status "saved"); `change` defaults to the plain-words diff from its parent."""
+    def save_version(self, spec, change=None, prediction=None):
+        """Save `spec` as the next version (status "saved"); `change` defaults to the plain-words diff from its parent.
+        `prediction` is what the person guessed the change would do ({"error": "lower", ...}); none is stored as {}."""
         spec = validate_spec(spec)
         with self._lock:
             versions = self.versions()
@@ -116,7 +117,7 @@ class VersionStore:
             version = dict(number=len(versions) + 1, name=f"Version {len(versions) + 1}", change=change,
                            parent=parent["number"] if parent else None, spec=spec,
                            created_at=time.strftime("%Y-%m-%dT%H:%M:%S"), runs=[], best_checkpoint=None,
-                           status="saved", scorecard={}, verdict=None)
+                           status="saved", scorecard={}, verdict=None, prediction=dict(prediction or {}))
             self._write(versions + [version])
             return copy.deepcopy(version)
 

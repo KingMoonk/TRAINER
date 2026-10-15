@@ -27,6 +27,7 @@ class Version:
     best_checkpoint: str | None = None
     scorecard: dict = field(default_factory=dict)
     verdict: str = ""
+    prediction: dict = field(default_factory=dict)  # the guess made on saving: {"error": "lower", "step": "slower", "memory": "more"}
 
 
 @dataclass
@@ -216,7 +217,12 @@ class Services:
         """The saved Compare runs: [{base, variants, mode, results, finished}] (specs as saved, results.json of each and its time)."""
         return []
 
-    def save_version(self, spec, change_text):
+    def run_speed(self, number):
+        """Measured seconds per training step of version `number`'s last run, or None when it has not logged one here."""
+        return None
+
+    def save_version(self, spec, change_text, prediction=None):
+        """prediction: what the person guessed the change would do ({dimension: direction}), stored with the version."""
         raise NotImplementedError
 
     # queue (S2) -----------------------------------------------------------
@@ -587,8 +593,9 @@ class FakeServices(Services):
         done = [v for v in self._versions if v.best_checkpoint]
         return done[-1] if done else None
 
-    def save_version(self, spec, change_text):
-        v = Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", change_text, spec=spec, status="saved")
+    def save_version(self, spec, change_text, prediction=None):
+        v = Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", change_text, spec=spec, status="saved",
+                    prediction=dict(prediction or {}))
         self._versions.append(v)
         self.emit("versions", v)
         return v
@@ -1142,6 +1149,35 @@ class WorkspaceServices(Services):
         self._cache[key] = (stamp, facts)
         return dict(facts)
 
+    def run_speed(self, number):
+        """Seconds per step of version `number`'s last run: word pieces per step (the growth in trained tokens over the growth
+        in steps between the first and last rows that log both) over the median measured pieces per second. Read once per change of metrics.jsonl; call it off the
+        Tk thread."""
+        from studio_model import read_metrics
+        try:
+            path = Path(self._abs(self.store.get(number)["runs"][-1])) / "metrics.jsonl"
+        except (KeyError, IndexError, TypeError):
+            return None
+        stamp = self._file_stamp(path)
+        if stamp is None:
+            return None
+        key = ("speed", str(path))
+        kept = self._cache.get(key)
+        if kept and kept[0] == stamp:
+            return kept[1]
+        ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0  # noqa: E731
+        try:
+            rows = read_metrics(path)
+        except (OSError, ValueError):
+            return None
+        speeds = sorted(r["tokens_per_second"] for r in rows if ok(r.get("tokens_per_second")))
+        counted = [r for r in rows if ok(r.get("trained_tokens")) and ok(r.get("step"))]  # trained_tokens counts from this run's first step
+        a, b = (counted[0], counted[-1]) if counted else (None, None)
+        per_step = (b["trained_tokens"] - a["trained_tokens"]) / (b["step"] - a["step"]) if counted and b["step"] > a["step"] else None
+        seconds = per_step / speeds[len(speeds) // 2] if speeds and per_step and per_step > 0 else None
+        self._cache[key] = (stamp, seconds)
+        return seconds
+
     def compare_runs(self):
         out = []
         for folder in sorted(Path(self.workspace.run_dir).glob("compare_*")):
@@ -1242,8 +1278,8 @@ class WorkspaceServices(Services):
         held = [r for r in read_metrics(Path(v.best_checkpoint).parent / "metrics.jsonl") if r.get("val_loss") is not None]
         return min(held, key=lambda r: r["val_loss"])["step"] if held else None  # best.npz is saved at the lowest held-back loss
 
-    def save_version(self, spec, change_text):
-        row = self.store.save_version(spec, change_text or None)
+    def save_version(self, spec, change_text, prediction=None):
+        row = self.store.save_version(spec, change_text or None, prediction)
         v = self._version(row)
         self.emit("versions", v)
         return v
