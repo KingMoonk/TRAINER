@@ -330,6 +330,11 @@ class Services:
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
 
+    def word_lists(self):
+        """studio_ia.pieces.word_lists for the Builder: the four word lists, the small and whole-word ones fitted on a sample
+        of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
+        raise NotImplementedError
+
     # data (S5) / evaluation (S4) / chat ------------------------------------
     def data(self, kind, query=""):
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
@@ -618,6 +623,10 @@ class FakeServices(Services):
 
     def stop_after_cooldown(self):
         pass
+
+    def word_lists(self):
+        from studio_ia import pieces
+        return pieces.word_lists([r["b"] for r in self._rows()["text"]])  # no GPT-2 list: nothing is downloaded here
 
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
@@ -1272,6 +1281,23 @@ class WorkspaceServices(Services):
                     store.pop(next(iter(store)))
                 atomic_json(self.root / "data" / "previews.json", store)
         return {**store[key], "tokens_per_second": self._speed(read_metrics)}
+
+    def word_lists(self):
+        def make():
+            import studio_data_kinds as dk
+            from studio_ia import pieces
+            ids = [d["id"] for d in self.workspace.state["datasets"]]
+            texts, _ = dk.text_sample(self.workspace, ids, pieces.SAMPLE_CHARS, exclude=set(self._heldout()))
+            return pieces.word_lists(texts, self._cached("gpt2", self._gpt2))
+        return self._fresh("word_lists", make)
+
+    def _gpt2(self):
+        """GPT-2's list, downloaded once into data/gpt2 as training with it would; None when it cannot be fetched."""
+        from studio_modules.tokenizer import bpe_gpt2
+        try:
+            return bpe_gpt2.load_assets(bpe_gpt2.GPT2Config())
+        except ValueError:
+            return None
 
     def cached_preview(self, dataset_ids, rows=16):
         """pretrain_preview's answer when it is already known (this session or data/previews.json), else None. Never

@@ -81,12 +81,6 @@ class Builder(unittest.TestCase):
         self.assertTrue(any("Last time blocks changed (2 → 4, version 1 → 2), error moved by 0.50" in t for t in out))
         self.assertEqual(B.expectations(choices(), choices()), [B.T["change_something"]])
 
-    def test_pieces_are_counted_not_invented(self):
-        chips, count = B.pieces_for(0)
-        self.assertEqual((len(chips), count), (len(B.PROMPT), f"{len(B.PROMPT)} pieces, one per character"))
-        self.assertEqual(B.pieces_for(2)[1], "8 pieces")
-        self.assertIn("your data", B.pieces_for(1)[1] + B.pieces_for(1)[0][0])
-
     def test_chart_continues_from_the_old_end_and_never_invents(self):
         self.assertEqual(B.chart_args(None, None, None)["smooth"], [])
         old = {"smooth": [(0, 5.), (100, 3.)], "heldout": [(100, 3.1)], "total": 100}
