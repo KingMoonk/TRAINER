@@ -301,6 +301,20 @@ STORAGE = {
     "storage_confirm": "Delete {n} items and free {size}? This cannot be undone."
 }
 
+EXPORT = {
+    "kicker": "EXPORT",
+    "desc": "Write a trained version to a file other tools can open. Hugging Face: a folder with the weights (safetensors), config, word list and a README. "
+            "GGUF: one file for llama.cpp and Ollama. A design that is not GPT-2's architecture exports to Hugging Face as raw tensors that Hugging Face "
+            "cannot load directly, and not to GGUF at all.",
+    "none": "Nothing to export yet. A version appears here once it has trained.",
+    "hf": "Hugging Face…",
+    "gguf": "GGUF…",
+    "pick_hf": "Choose where to put the folder for {name}",
+    "pick_gguf": "Save {name} as GGUF",
+    "working": "Exporting",
+    "done": "Exported {name} to {path}. {note}",
+}
+
 PASSIVE = {
     "h1": "Passive training",
     "lead": "Training that keeps going on its own, outside the queue, restarted by a watchdog. See it, stop it, or stop it starting when you sign in.",

@@ -307,6 +307,12 @@ class Services:
         """Bytes free on the disk that holds the workspace (where checkpoints are written)."""
         raise NotImplementedError
 
+    def export_version(self, version, kind, path):
+        """Write a trained version's best checkpoint to `path`: kind "hf" (a folder: safetensors, config, tokenizer, README) or
+        "gguf" (a .gguf file). Returns studio_export's report {path, files, note, ...}. Raises NoCheckpoint for a version that
+        has not trained, and ValueError (already in plain words) for a design or tokenizer that format cannot hold."""
+        raise NotImplementedError
+
     def passive(self):
         """{"sessions": [...], "signin": bool}: passive training sessions, newest first, each {id, status, created, stop,
         trainer, watchdog, restarts, heard, error}; signin is True while its watchdog is set to start when you sign in."""
@@ -592,6 +598,10 @@ class FakeServices(Services):
 
     def free_space(self):
         return 120 * 10 ** 9
+
+    def export_version(self, version, kind, path):
+        self.exports = [*getattr(self, "exports", []), (version, kind, path)]
+        return {"path": str(path), "files": [], "note": ""}
 
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
@@ -1087,6 +1097,13 @@ class WorkspaceServices(Services):
     def free_space(self):
         import shutil
         return shutil.disk_usage(self.root).free
+
+    def export_version(self, version, kind, path):
+        import studio_export
+        v = self._as_version(version)
+        if v is None or not v.best_checkpoint:
+            raise NoCheckpoint(v.number if v else None)
+        return studio_export.export(v.best_checkpoint, kind, path)
 
     def passive(self):
         import studio_passive_watch as watch

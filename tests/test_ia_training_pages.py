@@ -11,11 +11,12 @@ from studio_ia.pages.chat import against_chance, answering_version, few_shot_not
 from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
 from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
-from studio_ia.pages.storage import size_text, storage_state
+from studio_ia.pages.storage import export_default_name, export_rows, export_run, size_text, storage_state
 from studio_ia.pages.training_run import history_of, phase_at
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
 from studio_model import validate_config
 from studio_spec import default_spec
+from tests.test_export import gpt2_spec
 
 BYTE, BPE = {"id": "byte", "config": {}}, {"id": "bpe_gpt2", "config": {}}
 
@@ -272,6 +273,33 @@ class StorageCard(unittest.TestCase):
 
     def test_sizes(self):
         self.assertEqual((size_text(2_500_000), size_text(3_200_000_000)), ("2.5 MB", "3.2 GB"))
+
+
+class ExportCard(unittest.TestCase):
+    def test_only_trained_versions_are_listed_and_gguf_says_why_not(self):
+        config = {"name": "x", "tokenizer": "byte", "width": 32, "layers": 1, "heads": 4, "context": 32, "expansion": 4}
+        gpt2 = {**config, "architecture": gpt2_spec()}
+        rows = export_rows([SimpleNamespace(number=1, name="a", spec=gpt2, best_checkpoint=None),
+                            SimpleNamespace(number=2, name="b", spec=gpt2, best_checkpoint="b.pt"),
+                            SimpleNamespace(number=3, name="c", spec={**config, "tokenizer": "character"}, best_checkpoint="c.pt")])
+        self.assertEqual([(n, name) for n, name, _ in rows], [(2, "b"), (3, "c")])
+        self.assertEqual(rows[0][2], "")
+        self.assertIn("character tokenizer", rows[1][2])
+
+    def test_file_name_stem(self):
+        self.assertEqual(export_default_name("Wider / deeper: v2"), "Wider---deeper--v2")
+        self.assertEqual(export_default_name(" /: "), "model")
+
+    def test_run_reports_the_path_or_the_plain_reason(self):
+        f = FakeServices()
+        line = export_run(f, 2, "b", "gguf", "out/b.gguf")
+        self.assertEqual(f.exports, [(2, "gguf", "out/b.gguf")])
+        self.assertIn("out/b.gguf", line)
+
+        class Refuses(FakeServices):
+            def export_version(self, version, kind, path):
+                raise ValueError("GGUF export covers GPT-2's architecture only.")
+        self.assertEqual(export_run(Refuses(), 2, "b", "gguf", "x"), "GGUF export covers GPT-2's architecture only.")
 
 
 class GateRules(unittest.TestCase):
