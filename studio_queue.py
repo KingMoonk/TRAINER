@@ -1,6 +1,7 @@
 """One machine, one queue: a single runner executes one job at a time and persists data/queue.json."""
 import dataclasses
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ from studio_core import atomic_json
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
+MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
 SAMPLE_MB = 64  # ponytail: flat per-sample memory guess for the batch cap; jobs may override with params["sample_mb"]
 
 
@@ -108,6 +110,17 @@ def idle_seconds():
 def physical_memory():
     from studio_passive import total_memory  # has the Windows path; os.sysconf is POSIX-only
     return total_memory()
+
+
+def size_text(n):
+    return f"{n / 2 ** 30:.1f} GB" if n >= 2 ** 30 else f"{n / 2 ** 20:.0f} MB"
+
+
+def disk_need(root):
+    """Free space a run needs: 3 times the largest checkpoint already saved under `root`, never less than MIN_FREE (the last
+    checkpoint is the best guide to the next one)."""
+    largest = max((p.stat().st_size for p in Path(root).glob("runs/*/*.npz")), default=0)
+    return max(MIN_FREE, 3 * largest)
 
 
 def batch_cap(plan, sample_mb=SAMPLE_MB, ram=None):
@@ -337,8 +350,21 @@ class Runner:
                 continue
             self._run(job)
 
+    def _disk_problem(self):
+        """A sentence when the disk holding the queue and the checkpoints cannot fit a run, else ''. A failed job names the
+        cause; a gate would hold the queue forever with no job to blame."""
+        try:
+            free, need = shutil.disk_usage(self.path.parent).free, disk_need(self.path.parent.parent)
+        except OSError:
+            return ""  # cannot tell; the job runs and its own failure is explained
+        if free >= need:
+            return ""
+        return (f"Not enough disk space for this run: {size_text(free)} free, about {size_text(need)} needed. "
+                "Free space in This computer › Storage.")
+
     def _run(self, job):
         handler = self.handlers.get(job.kind)
+        short = self._disk_problem()
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
             job.params = {**job.params, "max_batch_size": batch_cap(self.plan, job.params.get("sample_mb", SAMPLE_MB))}
@@ -359,6 +385,9 @@ class Runner:
         outcome = {}
 
         def work():
+            if short:
+                outcome["error"] = short
+                return
             try:
                 handler(job, self.services, emit, self.stop_event, self.pause_event)
             except Exception as exc:  # noqa: BLE001

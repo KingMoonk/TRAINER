@@ -579,7 +579,8 @@ class Workspace:
         self.save()
         return added, duplicate, invalid
 
-    def import_files(self, paths, dataset_id=None):
+    def import_files(self, paths, dataset_id=None, describe=str):
+        """One report line per file; `describe` turns an exception into the words shown after the file name."""
         report = []
         for path in paths:
             try:
@@ -618,7 +619,7 @@ class Workspace:
                     raise
                 report.append(f"{Path(path).name}: {added} added, {duplicate} duplicates, {invalid} invalid")
             except (OSError, ValueError, csv.Error) as exc:
-                report.append(f"{Path(path).name}: {exc}")
+                report.append(f"{Path(path).name}: {describe(exc)}")
         return report
 
     def remove_dataset(self, dataset_id):

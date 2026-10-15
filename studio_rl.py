@@ -292,7 +292,8 @@ def run_round(number, job, services, emit, stop, pause):
     p = job.params
     checkpoint = p.get("checkpoint") or getattr(services.current_version(), "best_checkpoint", None)
     if not checkpoint:
-        raise ValueError("This round needs a trained checkpoint to start from.")
+        from studio_versions import NoCheckpoint
+        raise NoCheckpoint(getattr(services.current_version(), "number", None))
     out = Path(p.get("output_dir") or Path(services.workspace.run_dir) / f"queue_{job.id}")
     job.params["output_dir"] = str(out)
     docs, held = _rows(job, services, "heldout_docs", "heldout_docs"), _rows(job, services, "heldout_problems", "heldout_problems")
