@@ -30,7 +30,8 @@ class NoCheckpoint(ValueError):
                          if version else "No version has trained yet. Queue one from Build your model.")
 
 
-_WORDS = {"byte": "letters", "character": "letters", "bpe_gpt2": "large word list", "bpe_custom": "small word list"}
+_WORDS = {"byte": "letters", "character": "letters", "bpe_gpt2": "large word list", "bpe_custom": "small word list",
+          "word": "whole words"}
 
 
 def _facts(spec):

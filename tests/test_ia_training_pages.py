@@ -8,7 +8,7 @@ from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
-from studio_ia.pages.pretraining import source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
+from studio_ia.pages.pretraining import collection_view, enough_text, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import size_text, storage_state, total_hours
 from studio_ia.pages.training_run import history_of, phase_at
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
@@ -154,6 +154,17 @@ class RecommendedCollection(unittest.TestCase):
         self.assertEqual(source_action({"state": "imported"}), (None, None))
         self.assertEqual(source_status({"state": "downloading"}, "Downloading x · 1.0 MB"), "Downloading x · 1.0 MB")
         self.assertIn("Could not finish: no network.", source_status({"state": "not downloaded", "error": "no network"}))
+
+    def test_collection_view_ignores_progress_but_sees_state_changes(self):
+        row = {"id": "a", "name": "A", "size": "1 MB", "records": "5", "state": "downloading", "completed": 1, "total": 9, "error": ""}
+        before = collection_view([row])
+        row["completed"] = 5  # progress alone does not rebuild the card
+        self.assertEqual(collection_view([row]), before)
+        row["state"] = "downloaded"
+        self.assertNotEqual(collection_view([row]), before)
+        row["error"] = "no network"
+        self.assertNotEqual(collection_view([row]), collection_view([{**row, "error": ""}]))
+        self.assertNotEqual(collection_view([row]), collection_view([]))
 
     def test_download_then_import_into_the_text_sets(self):
         from unittest.mock import patch
@@ -392,3 +403,30 @@ class PostTrainingLive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EnoughTextTest(unittest.TestCase):
+    def verdict(self, ratio):
+        return enough_text(ratio)[1]
+
+    def test_headline_follows_the_rule_of_thumb(self):
+        self.assertEqual(self.verdict(2), "little")
+        self.assertEqual(self.verdict(15.9), "little")
+        self.assertEqual(self.verdict(16), "about_right")
+        self.assertEqual(self.verdict(20), "about_right")
+        self.assertEqual(self.verdict(30), "about_right")
+        self.assertEqual(self.verdict(30.5), "plenty")
+        self.assertEqual(self.verdict(549.54), "plenty")
+
+    def test_far_above_the_rule_says_plenty_not_about_as_much(self):
+        headline, _ = enough_text(549.54)
+        self.assertIn("plenty", headline)
+        self.assertIn("27", headline)
+        self.assertNotIn("about as much", headline)
+        self.assertIn("about 10.0", enough_text(2)[0])
+
+    def test_ratio_reads_plainly(self):
+        self.assertEqual(ratio_text(2.0), "2.00")
+        self.assertEqual(ratio_text(27.46), "27.5")
+        self.assertEqual(ratio_text(549.54), "about 550")
+        self.assertEqual(ratio_text(12345.6), "about 12,000")
