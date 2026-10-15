@@ -758,7 +758,7 @@ class BuilderPage(Page):
             self._paint_design()
 
     def import_gpt2(self):
-        """Queue the one-time GPT-2 download and conversion; the result arrives as a new, already trained version."""
+        """Queue the one-time GPT-2 download and conversion; the new version gets GPT-2's weights when the queue finishes it."""
         if self.phase != "edit" or not messagebox.askyesno(T["import_gpt2"], T["import_gpt2_ask"]):
             return
         try:

@@ -1159,10 +1159,14 @@ class WorkspaceServices(Services):
         if name not in studio_import.MODELS:
             raise ValueError(f"Unknown pretrained model {name!r}.")
         title = studio_import.MODELS[name]["title"]
+        with self.runner.lock:
+            if any(j.kind == "import_pretrained" and j.params.get("model") == name and j.status in ("waiting", "held", "running")
+                   for j in self.runner.jobs):
+                raise ValueError(f"{title} is already being imported. Wait for it in the queue before starting another.")
         v = self.save_version(studio_import.gpt2_spec(), f"Started from {title}")
         out = studio_import.new_output_dir(self.workspace.run_dir, name)
         self.enqueue(Job(uuid.uuid4().hex[:8], "import_pretrained", f"Start from {title}",
-                         "downloads the model once and turns it into a version you can chat with and fine-tune",
+                         "downloads the model once and turns it into a version that continues text and that you can fine-tune",
                          {"model": name, "version": v.number, "output_dir": str(out)}))
         return self._version(self.store.get(v.number))
 
@@ -1430,6 +1434,8 @@ class WorkspaceServices(Services):
             return self._to(number, "training")
         out = Path(job.params.get("output_dir") or "")
         ckpt = next((p for p in (out / "best.npz", out / "last.npz") if p.exists()), None)
+        if not ckpt and job.kind == "import_pretrained" and payload["status"] in ("failed", "stopped"):
+            return self._drop_empty_import(number, payload["status"])
         if ckpt:
             import studio_eval
             self.store.add_run(number, out)
@@ -1440,6 +1446,15 @@ class WorkspaceServices(Services):
                         "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
+        self.emit("versions", None)
+
+    def _drop_empty_import(self, number, how):
+        """An import that ended without weights leaves a version that holds only a design. The newest can simply go; an older one
+        cannot (numbers follow the order), so it says in its description that it has no weights."""
+        if not self.store.remove_last(number):
+            self._to(number, "saved")
+            reason = "was stopped" if how == "stopped" else "did not finish"
+            self.store.set_change(number, f"{self.store.get(number)['change']}, but the download {reason}, so this design has no weights")
         self.emit("versions", None)
 
     def _json(self, name, default):

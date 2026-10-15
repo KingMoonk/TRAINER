@@ -130,6 +130,19 @@ class VersionStore:
                     return v
         raise KeyError(f"No version {number}.")
 
+    def remove_last(self, number):
+        """Remove version `number` when it is the newest and has no run or checkpoint (numbers follow the order, so an older one
+        cannot go). Returns whether it was removed."""
+        with self._lock:
+            versions = self.versions()
+            if not versions or versions[-1]["number"] != number or versions[-1]["runs"] or versions[-1]["best_checkpoint"]:
+                return False
+            self._write(versions[:-1])
+            return True
+
+    def set_change(self, number, change):
+        return self._update(number, change=change)
+
     def set_status(self, number, status):
         now = self.get(number)["status"]
         if status not in NEXT.get(now, ()):
