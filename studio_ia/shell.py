@@ -5,6 +5,7 @@ import gc
 import queue
 import threading
 import tkinter as tk
+import traceback
 from collections import namedtuple
 from tkinter import ttk
 
@@ -21,6 +22,7 @@ AREAS = [("designer", "Network designer"), ("pretraining", "Pretraining"), ("pos
 AREA_HOME = {"designer": "builder", "pretraining": "pretraining", "post": "post_training", "chat": "chat", "machine": "queue", "data": "your_data"}
 UTILITY_AREAS = ("machine", "data")  # not stages of the pipeline: set off from the four above by a rule
 LI = ("Network designer", "Look inside")
+NEXT_EVENTS = ("queue", "job", "blocked", "versions", "checkpoint", "data", "download_done", "import_done", "downloads_finished")  # what can change the Next row
 
 # route -> Route(area, h1, lead, breadcrumb): area is the sidebar row that lights up on that page.
 ROUTES = {
@@ -102,6 +104,7 @@ class Studio(tk.Tk):
         self.unsubscribe = self.services.subscribe(self.on_event)
         self.services.start_queue()  # jobs saved as waiting by the last session start again
         self.refresh_strip()
+        self.refresh_next()
         self.show("builder")
 
     # sidebar ----------------------------------------------------------------
@@ -110,6 +113,7 @@ class Studio(tk.Tk):
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         tk_label(side, "Groundwork Studio", 17, "text", "panel", font=font(17, bold=True)).pack(fill="x", padx=GUTTER, pady=GUTTER)
+        self._build_next(side)
         for key, name in AREAS:
             if key == UTILITY_AREAS[0]:
                 tk.Frame(side, bg=C["border2"], height=1).pack(fill="x", padx=GUTTER, pady=(6, 6))
@@ -148,6 +152,59 @@ class Studio(tk.Tk):
         self.strip_link.pack(fill="x", pady=(6, 0))
         for seq in ("<Button-1>", "<Return>", "<space>"):
             self.strip_link.bind(seq, lambda _e: self.show("queue"))
+
+    def _build_next(self, side):
+        """The "Next" row: services.next_step() as a kicker, a title and a line; a click opens the page that does it."""
+        box = tk.Frame(side, bg=C["panel2"], takefocus=1, cursor="hand2", highlightthickness=1, highlightbackground=C["border2"],
+                       highlightcolor=C["violet"])
+        box.pack(fill="x", padx=GUTTER, pady=(0, GUTTER))
+        wrap = SIDEBAR_W - 4 * GUTTER
+        self.next_kicker = tk_label(box, "NEXT", 12, "violet", "panel2", font=font(12, bold=True))
+        self.next_title = tk_label(box, "", 15, "text", "panel2", font=font(15, bold=True), wraplength=wrap)
+        self.next_line = tk_label(box, "", 12, "muted", "panel2", wraplength=wrap)
+        for w in (self.next_kicker, self.next_title, self.next_line):
+            w.pack(fill="x", padx=10, pady=(6, 0) if w is self.next_kicker else (0, 0))
+        self.next_line.pack_configure(pady=(0, 8))
+        self.next_route, self._next_pending, self._next_again = None, False, False
+        for w in (box, self.next_kicker, self.next_title, self.next_line):
+            for seq in ("<Button-1>", "<Return>", "<space>"):
+                w.bind(seq, self._next_click)
+        self.next_box = box
+
+    @property
+    def next_text(self):
+        return "\n".join(w.cget("text") for w in (self.next_title, self.next_line))
+
+    def refresh_next(self):
+        """Ask services.next_step() on the worker (it may read the whole text summary) and repaint the row when it answers."""
+        if self._next_pending:
+            self._next_again = True  # an answer is on its way, but the state changed since it was asked
+            return
+        self._next_pending = True
+
+        def ask():
+            try:
+                return self.services.next_step()
+            except NotImplementedError:  # a Services with no workspace behind it: the row keeps what it had
+                return None
+            except Exception:  # a failed read must not leave the row waiting for an answer that never comes
+                traceback.print_exc()
+                return None
+        self.quietly(ask, self._paint_next)
+
+    def _paint_next(self, step):
+        self._next_pending = False
+        if step is not None:
+            self.next_route = step.route
+            self.next_title.configure(text=step.title)
+            self.next_line.configure(text=step.line)
+        if self._next_again:
+            self._next_again = False
+            self.refresh_next()
+
+    def _next_click(self, _event=None):
+        if self.next_route:
+            self.show(self.next_route)
 
     @property
     def strip_text(self):
@@ -331,6 +388,8 @@ class Studio(tk.Tk):
             self.after(60, self._poll)
 
     def on_event(self, kind, payload):
+        if kind in NEXT_EVENTS:
+            self.refresh_next()
         if kind in ("queue", "job", "blocked"):
             self.refresh_strip()
         elif kind == "train" and not self._strip_pending:  # steps arrive several times a second: redraw the strip once a second
@@ -355,7 +414,6 @@ def main():
         Studio(services_module.WorkspaceServices(Workspace())).mainloop()  # the repo-root workspace
         return 0
     except Exception:
-        import traceback
         from tkinter import messagebox
         report = traceback.format_exc()
         (ROOT / "studio-error.log").write_text(report, encoding="utf-8")

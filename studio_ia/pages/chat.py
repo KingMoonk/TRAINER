@@ -6,6 +6,7 @@ import threading
 import tkinter as tk
 
 from studio_ia.copy import CHAT as T
+from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import Card, Kicker, Toggle, button
@@ -138,6 +139,7 @@ class ChatPage(Page):
         self.mode.pack(side="left")
         self.cmp_btn = button(row, "", self.toggle_compare)
         self.cmp_btn.pack(side="right")
+        self.empty = tk_label(head, "", 13, "muted", "panel", wraplength=720)  # what to do when no version has trained
         self.panes_row = tk.Frame(body, bg=C["bg"])
         self.panes_row.pack(fill="x", pady=(0, GUTTER))
         self.pane_frames, self.pane_tags, self.pane_texts, self.pane_better = [], [], [], []
@@ -193,6 +195,12 @@ class ChatPage(Page):
         vs = self._versions()
         cur, best = vs.get(self.use), self._best()
         self.using.configure(text=T["head_using"].format(version=name(cur)) if cur else "No trained version yet")
+        line = "" if cur else empty_line(self.services)
+        self.empty.configure(text=line)
+        if line:
+            self.empty.pack(anchor="w", pady=(6, 0))
+        else:
+            self.empty.pack_forget()
         self.mode.configure(text="" if not cur else T["head_mode_follows"] if not self.picked
                             else T["head_mode_picked"].format(best_version=f"Version {best}"))
         self.cmp_btn.configure(text=T["back_to_one"] if self.compare else T["compare_btn"])

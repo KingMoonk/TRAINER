@@ -470,7 +470,7 @@ HEAD_LAB = {
     "head_off": "switched off",
     "switch_off": "Switch it off",
     "switch_on": "Switch it back on",
-    "test_pattern": "Test its attention pattern",
+    "test_pattern": "Show the three tests",
     "three_tests": "THREE PATTERN TESTS · ON PREPARED TEXT",
     "prepared_text": "Prepared text: four random pieces, then the same four again. Each row is a piece reading earlier pieces. Brighter cells will show where this head's attention goes once the engine fills them in.",
     "before_switch": "Before switching it off, guess how much the error rises:",

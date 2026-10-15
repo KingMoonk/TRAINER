@@ -9,6 +9,7 @@ import tkinter as tk
 import uuid
 
 from studio_ia.copy import FEEDBACK as T
+from studio_ia.next_step import empty_line
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -120,7 +121,9 @@ class PostTrainingPage(Page):
             self.selected = next((i for i, s in enumerate(status) if s != "done"), 0)
         tk_label(self.body, T["starts_from"], 12, "muted").pack(anchor="w")
         starts = T["version_best"].replace("Version 4", f"Version {version.number}") if version else "No trained version yet"
-        tk_label(self.body, starts, 16, "text").pack(anchor="w", pady=(2, GUTTER))
+        tk_label(self.body, starts, 16, "text").pack(anchor="w", pady=(2, 0 if version else GUTTER))
+        if not version and (line := empty_line(self.services)):
+            tk_label(self.body, line, 13, "muted", wraplength=760).pack(anchor="w", pady=(2, GUTTER))
         self._stages(status, notes)
         row = tk.Frame(self.body, bg=C["bg"])
         row.pack(fill="x", pady=GUTTER)

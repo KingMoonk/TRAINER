@@ -195,6 +195,18 @@ class Services:
             return (f"{after}; the queue opens {when}{plan}" if after else f"Starts {when}{plan}") if when else f"Waiting: {reason}"
         return after or "Starts now"
 
+    def next_step(self):
+        """The single "what next" answer (studio_ia.next_step.NextStep) from this workspace's data, versions and queue.
+        Reads the text summary, so a cold workspace makes it a long read: the shell asks from its worker."""
+        from studio_ia.next_step import next_step
+        q = self.queue()
+        first = next((j for j in q.up_next if getattr(j, "status", "waiting") != "held"), None)
+        return next_step(self.data("text").count > 0, self.versions(), q, self.queue_outlook(first))
+
+    def next_step_if_ready(self):
+        """next_step() when it will not keep the Tk thread waiting (ready()), else None: a page's empty state keeps its own words."""
+        return self.next_step() if self.ready(self.next_step) else None
+
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
 
@@ -535,7 +547,9 @@ class FakeServices(Services):
     def add_data(self, kind, fields):
         a, b = {"text": ("Your files", fields.get("text", "")), "conversations": (fields.get("user", ""), fields.get("assistant", "")),
                 "problems": (fields.get("prompt", ""), fields.get("rule", ""))}[kind]
-        return self._add_row(kind, a, b, "In use" if kind == "text" else "Ready" if kind == "problems" else "Good")
+        added = self._add_row(kind, a, b, "In use" if kind == "text" else "Ready" if kind == "problems" else "Good")
+        self.emit("data", {"kind": kind})
+        return added
 
     def import_data(self, kind, paths):
         return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
@@ -1226,13 +1240,16 @@ class WorkspaceServices(Services):
     def add_data(self, kind, fields):
         import studio_data_kinds as dk
         ws, target = self.workspace, dk.ensure_dataset(self.workspace, self._OWN_SETS[kind])
-        if kind == "problems":
-            return bool(dk.add_problems(ws, target, [{"prompt": fields["prompt"], "rule": fields["rule"], "params": {}}])[0])
-        return bool(ws.add(target, [{**fields, "quality": "Good"}], "manual")[0])
+        added = (bool(dk.add_problems(ws, target, [{"prompt": fields["prompt"], "rule": fields["rule"], "params": {}}])[0]) if kind == "problems"
+                 else bool(ws.add(target, [{**fields, "quality": "Good"}], "manual")[0]))
+        self.emit("data", {"kind": kind})  # the sidebar's Next row may have been waiting for exactly this
+        return added
 
     def import_data(self, kind, paths):
         import studio_data_kinds as dk
-        return self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
+        report = self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]))
+        self.emit("data", {"kind": kind})
+        return report
 
     # recommended collections (studio_catalog does the fetching, checking and indexing) ---------------------------
     _busy: dict = {}  # source id -> {completed, total}; swapped for a fresh dict per run, never mutated while shared
