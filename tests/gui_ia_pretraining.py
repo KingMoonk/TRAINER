@@ -30,6 +30,11 @@ class PretrainingTest(unittest.TestCase):
             self.skipTest(f"no display: {error}")
         self.addCleanup(self.app.destroy)
 
+    def settle(self):
+        """Run the event loop until the shell's lanes have delivered everything (the collection is read on one)."""
+        while self.app._waiting or self.app._quiet:
+            self.app.update()
+
     def test_pretraining_page(self):
         page = self.app.show("pretraining")
         self.app.update()
@@ -52,7 +57,7 @@ class PretrainingTest(unittest.TestCase):
                                  {"id": "wikitext2", "name": "WikiText-2", "size": "6 MB", "records": "15,488 paragraphs",
                                   "state": "downloaded", "completed": 0, "total": 0, "error": ""}]
         page = self.app.show("pretraining")
-        self.app.update()
+        self.settle()
         t = "\n".join(texts(page))
         self.assertIn("Download and add all", t)
         self.assertIn("Add to my sources", t)
@@ -61,15 +66,16 @@ class PretrainingTest(unittest.TestCase):
         self.assertEqual(self.fake.calls, [("download_sources", None, "text", True), ("import_source", "wikitext2")])
         self.fake._collection[0]["error"] = "no network"
         page.on_event("download_failed", {"id": "tinystories", "error": "no network"})
+        self.settle()
         self.assertIn("Could not finish: no network.", "\n".join(texts(page)))
 
     def test_download_progress_updates_the_status_line_in_place(self):
         self.fake._collection = [{"id": "tinystories", "name": "TinyStories", "size": "64 MB", "records": "77,941 stories",
                                   "state": "downloading", "completed": 0, "total": 0, "error": ""}]
         page = self.app.show("pretraining")
-        self.app.update()
+        self.settle()
         page.throttle.interval = .3
-        label = page.status_labels["tinystories"]
+        label = page.collection_list["tinystories"].status
         page.on_event("download", {"id": "tinystories", "text": "Downloading · 1 MB"})
         page.on_event("download", {"id": "tinystories", "text": "Downloading · 2 MB"})
         self.assertEqual(label.cget("text"), "Downloading · 1 MB")  # the first change is drawn at once
@@ -77,9 +83,10 @@ class PretrainingTest(unittest.TestCase):
         while time.monotonic() < end:
             self.app.update()
         self.assertEqual(label.cget("text"), "Downloading · 2 MB")  # the burst's last one a tick later
-        self.assertIs(page.status_labels["tinystories"], label)  # the rows were not rebuilt
+        self.assertIs(page.collection_list["tinystories"].status, label)  # the rows were not rebuilt
         page.paint_collection()
-        self.assertIs(page.status_labels["tinystories"], label)  # nor are they when nothing about them changed
+        self.settle()
+        self.assertIs(page.collection_list["tinystories"].status, label)  # nor are they when nothing about them changed
 
     def test_opens_at_once_and_waits_only_to_add_to_the_queue(self):
         self.fake.ready = lambda work: False  # a large store: the set list is read in the background

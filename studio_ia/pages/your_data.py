@@ -14,9 +14,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import studio_rules as rules  # names and labels of the rules only
 from studio_ia.copy import YOURDATA as T
 from studio_ia.pages.base import Page, Throttle
-from studio_ia.pages.pretraining import collection_row, source_action, source_status
+from studio_ia.pages.pretraining import collection_items, collection_row, fill_collection_row, source_action, source_status
 from studio_ia.theme import C, GUTTER, entry, font, tk_label
-from studio_ia.widgets import _activate, button, tip
+from studio_ia.widgets import KeyedRows, _activate, button, sync_tree, tip
 
 KINDS = ("text", "conversations", "problems")
 PAGE = 200  # rows the table gains per read
@@ -49,6 +49,12 @@ def back_link(kind):
 
 def visible_rows(rows, only_dups):
     return [r for r in rows if r["status"] == "Near-duplicate"] if only_dups else list(rows)
+
+
+def table_items(rows, only_dups, mono, cell):
+    """(iid, Treeview item options) for each row the table shows; cell(text, column) cuts a cell to fit column 0 or 1."""
+    return [(r["id"], {"values": (cell(r["a"], 0), cell(r["b"], 1), r["status"]),
+                       "tags": (r["status"], "mono") if mono else (r["status"],)}) for r in visible_rows(rows, only_dups)]
 
 
 def dup_label(found, only_dups):
@@ -209,9 +215,12 @@ class YourDataPage(Page):
         self.make_button.pack(side="left", padx=8)
         card = self.collection_card = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], padx=GUTTER, pady=10)
         tip(tk_label(card, T["collection"], 15, "text", "panel", font=font(15, bold=True)), lambda: T[f"{self.kind}_collection_desc"]).pack(anchor="w")
-        self.collection_rows = tk.Frame(card, bg=C["panel"])
-        self.collection_rows.pack(fill="x", pady=(6, 0))
-        self.notes, self.collections, self.status_labels, self.painted = {}, {}, {}, None  # notes: source id -> latest progress line
+        rows = tk.Frame(card, bg=C["panel"])
+        rows.pack(fill="x", pady=(6, 0))
+        self.collection_list = KeyedRows(rows, lambda parent, _data: collection_row(parent, self.fetch),
+                                         lambda line, data: fill_collection_row(line, *data), fill="x", pady=1)
+        self.download_all = button(card, "", lambda: self.fetch(None, "download"), primary=True)
+        self.notes, self.collections = {}, {}  # notes: source id -> latest progress line
         self.throttle, self.dirty, self.flush_timer, self.resize_timer = Throttle(PROGRESS_EVERY), set(), None, None
         _activate(self.back, self.go_back)
 
@@ -309,14 +318,15 @@ class YourDataPage(Page):
 
     def _paint_rows(self, keep=0):
         """Show self.rows; the first `keep` of them are already in the table (a page was appended, or nothing changed)."""
-        if not keep:
-            self.table.delete(*self.table.get_children())
         mono = self.kind == "problems"
         measure = self.cell_fonts[mono].measure
-        wa, wb = self.fitted = tuple(self.table.column(c, "width") - CELL_PAD for c in ("a", "b"))
-        for r in visible_rows(self.rows[keep:], self.only_dups):
-            self.table.insert("", "end", iid=r["id"], values=(fit_cell(r["a"], wa, measure), fit_cell(r["b"], wb, measure), r["status"]),
-                              tags=(r["status"], "mono") if mono else (r["status"],))
+        widths = self.fitted = tuple(self.table.column(c, "width") - CELL_PAD for c in ("a", "b"))
+        items = table_items(self.rows[keep:], self.only_dups, mono, lambda text, column: fit_cell(text, widths[column], measure))
+        if keep:  # a page was appended: the rows above it are already right
+            for iid, options in items:
+                self.table.insert("", "end", iid=iid, **options)
+        else:  # rows that stay are updated in place, so the table keeps its scroll position and selection
+            sync_tree(self.table, items)
         if self.selected and self.table.exists(self.selected):
             self.table.selection_set(self.selected)
         else:
@@ -337,17 +347,13 @@ class YourDataPage(Page):
         else:
             self.collection_card.pack_forget()
         rows = self.collections.get(kind, [])
-        if self.painted == (kind, rows):  # only the status lines move while a download runs; they are updated in place
-            return
-        self.painted = (kind, rows)
-        self.status_labels = {}
-        for child in self.collection_rows.winfo_children():
-            child.destroy()
-        for row in rows:
-            self.status_labels[row["id"]] = collection_row(self.collection_rows, row, self.notes.get(row["id"], ""), self.fetch)
+        self.collection_list.set(collection_items(rows, self.notes))  # rows that stay are updated in place
         if any(source_action(r)[1] == "download" for r in rows):
-            button(self.collection_rows, T["download_add_all"],
-                   lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
+            self.download_all.configure(text=T["download_add_all"])
+            self.download_all.pack(anchor="w", pady=(8, 0))
+        else:
+            self.download_all.configure(text="")
+            self.download_all.pack_forget()
 
     def _collect(self):
         """Read the open kind's collection (manifests on disk) on the worker and repaint it when it differs. Only a download
@@ -363,7 +369,7 @@ class YourDataPage(Page):
 
     def _collected(self, kind, rows):
         self.collections[kind] = rows
-        if kind == self.kind:
+        if kind == self.kind and self.winfo_exists():
             self.paint_collection()
 
     def fetch(self, source_id, action):
@@ -402,9 +408,10 @@ class YourDataPage(Page):
     def _flush_notes(self):
         rows = {r["id"]: r for r in self.collections.get(self.kind, [])}
         for source_id in self.dirty:
-            label, row = self.status_labels.get(source_id), rows.get(source_id)
-            if label is not None and row is not None:  # a progress line means the source is being fetched, whatever the rows read last said
-                label.configure(text=source_status({**row, "state": "downloading", "error": ""}, self.notes[source_id]), fg=C["muted"])
+            line, row = self.collection_list.get(source_id), rows.get(source_id)
+            if line is not None and row is not None:  # a progress line means the source is being fetched, whatever the rows read last said
+                line.status.configure(text=source_status({**row, "state": "downloading", "error": ""}, self.notes[source_id]), fg=C["muted"])
+                self.collection_list.touched(source_id)
         self.dirty.clear()
 
     def _row(self):

@@ -442,3 +442,84 @@ class BpcPlot(tk.Canvas):
 def button(parent, text, command, primary=False):
     """ttk button; primary ones are >= 44px tall (see theme.apply)."""
     return ttk.Button(parent, text=text, command=command, style="Primary.TButton" if primary else "TButton", takefocus=True)
+
+
+def keyed_plan(have, want):
+    """How to turn rows keyed `have` (in screen order) into rows keyed `want` (in order) without rebuilding any that stay:
+    (drop, add, moved) = the keys whose rows are destroyed, the keys that get a new row, and whether the rows that stay are
+    in a new order. A refresh that only changes text gives ([], [], False)."""
+    wanted, held = set(want), set(have)
+    drop = [k for k in have if k not in wanted]
+    add = [k for k in want if k not in held]
+    return drop, add, [k for k in have if k in wanted] != [k for k in want if k in held]
+
+
+class KeyedRows:
+    """Rows of `parent`, one per key, kept in step with set([(key, data), ...]): a row whose key stays is updated in place,
+    a new key gets a row in its place, and only the rows of keys that are gone are destroyed. Nothing that stays is
+    rebuilt, so a refresh does not flicker and the scroll position and keyboard focus stay where they were.
+
+    make(parent, data) builds a row's widgets and returns its outer widget, unpacked; update(widget, data) fills it in, for a
+    new row too, and runs only when the row's data changed. The rows are packed with `pack` options, and are the only
+    widgets `parent` packs. Data is compared by value, so hand in fresh data, not a dict changed in place since the last set."""
+
+    def __init__(self, parent, make, update, **pack):
+        self.parent, self.make, self.update, self.pack = parent, make, update, pack
+        self.rows, self.data, self.order = {}, {}, []  # key -> widget, key -> data it shows, keys in screen order
+
+    def set(self, items):
+        items = list(items)
+        want = [k for k, _ in items]
+        drop, add, moved = keyed_plan(self.order, want)
+        for k in drop:
+            self.rows.pop(k).destroy()
+            self.data.pop(k, None)
+        added = set(add)
+        for k, data in items:
+            if k in added:
+                self.rows[k] = self.make(self.parent, data)
+            if k in added or self.data.get(k) != data:
+                self.update(self.rows[k], data)
+                self.data[k] = data
+        if add or moved:  # -after moves a packed row without unmapping it; a packed row given no place keeps its own
+            previous = None
+            for k in want:
+                row = self.rows[k]
+                if previous is not None:
+                    row.pack(after=previous, **self.pack)
+                else:
+                    first = next(iter(self.parent.pack_slaves()), None)
+                    row.pack(**self.pack, **({"before": first} if first is not None and str(first) != str(row) else {}))
+                previous = row
+        self.order = want
+
+    def touched(self, key):
+        """The row of `key` was changed outside update (a progress line): the next set fills it again whatever its data."""
+        self.data.pop(key, None)
+
+    def __getitem__(self, key):
+        return self.rows[key]
+
+    def get(self, key):
+        return self.rows.get(key)
+
+    def __len__(self):
+        return len(self.order)
+
+
+def sync_tree(tree, items):
+    """Keyed rows for a ttk.Treeview: items = [(iid, item options such as values and tags), ...] in order. A row that stays
+    is configured in place and only gone rows are deleted, so the view keeps its scroll position and selection."""
+    items = list(items)
+    want = [k for k, _ in items]
+    drop, add, moved = keyed_plan(list(tree.get_children()), want)
+    if drop:
+        tree.delete(*drop)
+    added = set(add)
+    for index, (k, options) in enumerate(items):
+        if k in added:
+            tree.insert("", index, iid=k, **options)
+        else:
+            tree.item(k, **options)
+            if moved:
+                tree.move(k, "", index)

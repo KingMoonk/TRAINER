@@ -136,13 +136,13 @@ class DataPagesTest(unittest.TestCase):
         asked, real = [], self.fake.collection
         self.fake.collection = lambda kind="text": asked.append(kind) or real(kind)
         page.throttle.interval = .3
-        label = page.status_labels["gsm8k_check"]
+        label = page.collection_list["gsm8k_check"].status
         page.on_event("download", {"id": "gsm8k_check", "text": "Downloading · 1 MB"})
         page.on_event("download", {"id": "gsm8k_check", "text": "Downloading · 2 MB"})
         self.assertEqual(label.cget("text"), "Downloading · 1 MB")  # the second one waits for the next tick
         self.settle(.5)
         self.assertEqual(label.cget("text"), "Downloading · 2 MB")
-        self.assertIs(page.status_labels["gsm8k_check"], label)  # repainted in place, the rows were not rebuilt
+        self.assertIs(page.collection_list["gsm8k_check"].status, label)  # repainted in place, the rows were not rebuilt
         self.assertEqual(asked, [])  # and the manifests were not read again
         page.on_event("download_done", {"id": "gsm8k_check"})
         self.settle()

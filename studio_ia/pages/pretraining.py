@@ -10,7 +10,7 @@ from studio_ia.expectation import expectation, table_params
 from studio_ia.pages.base import Page, Throttle
 from studio_ia.services import Job, if_added, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Segmented, button, info_icon, tip
+from studio_ia.widgets import Card, KeyedRows, Kicker, Segmented, button, info_icon, tip
 
 ROWS = ("8", "16", "32")
 HOLD = ("2%", "5%", "10%")
@@ -75,25 +75,47 @@ def held_out(dataset_id):
     return next((e.get("split") for e in cat.CATALOG if f"catalog_{e['id']}" == dataset_id), None) in ("validation", "test")
 
 
-def collection_row(parent, row, note, fetch):
+def collection_row(parent, fetch):
     """One recommended source on one line, the same on Pretraining and Your data: its name, size, status and the button for
-    its next step. fetch(source id, action) runs the step. Returns the status label, which progress updates in place."""
+    its next step. fetch(source id, action) runs the step. Builds the line, unpacked; fill_collection_row shows a row in it
+    each time the row changes, so the line is never rebuilt. `.status` is the status label, which progress updates in place."""
     line = tk.Frame(parent, bg=C["panel"])
-    line.pack(fill="x", pady=1)
-    tk_label(line, row["name"], 14, "text", "panel").pack(side="left")
-    tk_label(line, f"{row['size']} · {row['records']}", 12, "dim", "panel").pack(side="left", padx=10)
+    line.source = None
+    line.name_label = tk_label(line, "", 14, "text", "panel")
+    line.name_label.pack(side="left")
+    line.size_label = tk_label(line, "", 12, "dim", "panel")
+    line.size_label.pack(side="left", padx=10)
+    slot = tk.Frame(line, bg=C["panel"])  # keeps the button right of the status line while it comes and goes
+    slot.pack(side="right")
+    line.action = button(slot, "", lambda: fetch(line.source["id"], source_action(line.source)[1]))
+    line.status = tk_label(line, "", 12, "muted", "panel", wraplength=320, justify="right")
+    line.status.pack(side="right", padx=10)
+    return line
+
+
+def fill_collection_row(line, row, note=""):
+    """Show `row` (with its latest progress `note`) in a line collection_row built."""
+    line.source = row
+    line.name_label.configure(text=row["name"])
+    line.size_label.configure(text=f"{row['size']} · {row['records']}")
     label, action = source_action(row)
+    line.action.configure(text=label or "")
     if action:
-        button(line, label, lambda: fetch(row["id"], action)).pack(side="right")
-    status = tk_label(line, source_status(row, note), 12, "coral" if row.get("error") else "muted", "panel", wraplength=320, justify="right")
-    status.pack(side="right", padx=10)
-    return status
+        line.action.pack()
+    else:
+        line.action.pack_forget()
+    line.status.configure(text=source_status(row, note), fg=C["coral" if row.get("error") else "muted"])
 
 
-def collection_view(rows):
-    """What the collection card shows for `rows`: the same value means the widgets on screen are already right. Progress
-    numbers are left out on purpose; they only move the status line, which is updated in place."""
-    return tuple((r["id"], r["name"], r["size"], r["records"], r["state"], r.get("error") or "") for r in rows)
+def collection_items(rows, notes):
+    """(key, data) for KeyedRows: each collection row with its latest progress line."""
+    return [(r["id"], (dict(r), notes.get(r["id"], ""))) for r in rows]  # a copy: the services may change a row in place
+
+
+def tile_items(sets, use):
+    """(key, data) for KeyedRows: one tile per text set, ticked when it is used."""
+    return [(s["id"], {"id": s["id"], "name": s["name"], "count": s["count"], "held": held_out(s["id"]), "on": bool(use.get(s["id"]))})
+            for s in sets]
 
 
 def enough_text(ratio):
@@ -140,7 +162,6 @@ class PretrainingPage(Page):
         super().__init__(*a, **kw)
         self.use, self.mode = {}, "catch_up"
         self.preview, self.notes = {}, {}  # notes: latest progress line per source being fetched
-        self.painted, self.status_labels = None, {}  # collection_view on screen; each source's status label
         self.throttle, self.dirty, self.flush_timer = Throttle(PROGRESS_EVERY), set(), None
         self.job_id = None  # the last job "Add to the queue" added, for the line under the button
         self.build()
@@ -152,8 +173,10 @@ class PretrainingPage(Page):
         self.model_line.pack(anchor="w", pady=(2, GUTTER))
         # data
         self.data_card = self._card(T["data"], T["what_reads"])
-        self.tiles = tk.Frame(self.data_card, bg=C["panel"])
-        self.tiles.pack(fill="x")
+        tiles = tk.Frame(self.data_card, bg=C["panel"])
+        tiles.pack(fill="x")
+        self.tile_list = KeyedRows(tiles, self._make_tile, self._fill_tile, fill="x", pady=3)
+        self.tiles_note = tk_label(self.data_card, "", 14, "muted", "panel")
         self.data_line = tk_label(self.data_card, "", 13, "muted", "panel", wraplength=720)
         self.data_line.pack(anchor="w", pady=(8, 0))
         links = tk.Frame(self.data_card, bg=C["panel"])
@@ -167,8 +190,11 @@ class PretrainingPage(Page):
         tk_label(row, T["post_training_r1_end"], 13, "muted", "panel").pack(side="left")
         # recommended collection
         self.collection_card = self._card(T["collection"], T["collection_desc"])
-        self.collection_rows = tk.Frame(self.collection_card, bg=C["panel"])
-        self.collection_rows.pack(fill="x")
+        rows = tk.Frame(self.collection_card, bg=C["panel"])
+        rows.pack(fill="x")
+        self.collection_list = KeyedRows(rows, lambda parent, _data: collection_row(parent, self.fetch),
+                                         lambda line, data: fill_collection_row(line, *data), fill="x", pady=1)
+        self.download_all = button(self.collection_card, "", lambda: self.fetch(None, "download"), primary=True)
         # enough text
         card = self._card(T["enough_text"])
         self.enough = tk_label(card, "", 17, "text", "panel", font=font(17, bold=True))
@@ -281,11 +307,10 @@ class PretrainingPage(Page):
         self.v, self.parent_v = v, parent
         n = v.number if v else None
         self.model_line.configure(text=f"Version {n} · from the Network designer" if v else "No design saved yet")
-        for child in self.tiles.winfo_children():
-            child.destroy()
         if not self.warmed():  # the set list is being read: the page shows now, adding to the queue waits for it
-            tk_label(self.tiles, T["reading_text"], 14, "muted", "panel").pack(anchor="w")
-            self.data_line.configure(text="")
+            if not len(self.tile_list):  # tiles already shown stay until the new list is in
+                self._tiles_note(T["reading_text"], "muted")
+                self.data_line.configure(text="")
             self.preview, self.estimating = {}, True
             self.update_numbers()
             self.paint_modes(v, parent)
@@ -295,21 +320,8 @@ class PretrainingPage(Page):
         sets = sets_of(self.services.data("text"))
         for s in sets:
             self.use.setdefault(s["id"], not held_out(s["id"]))
-            on = self.use[s["id"]]
-            tile = tk.Frame(self.tiles, bg=C["panel2"], highlightthickness=1, highlightbackground=C["violet"] if on else C["border"],
-                            padx=12, pady=8, cursor="hand2", takefocus=1)
-            tile.pack(fill="x", pady=3)
-            mark = tk_label(tile, "✓" if on else " ", 14, "bg" if on else "text", "violet" if on else "panel2", width=2)
-            mark.pack(side="left", padx=(0, 10))
-            name = tk_label(tile, s["name"], 15, "text", "panel2")
-            name.pack(side="left")
-            note = tk_label(tile, f"{s['count']:,} examples" + (f" · {T['held_out']}" if held_out(s["id"]) else ""), 13, "muted", "panel2")
-            note.pack(side="left", padx=10)
-            for w in (tile, mark, name, note):
-                w.bind("<Button-1>", lambda _e, i=s["id"]: self.toggle(i))
-            tile.bind("<Return>", lambda _e, i=s["id"]: self.toggle(i))
-        if not sets:
-            tk_label(self.tiles, "No text yet.", 14, "text2", "panel").pack(anchor="w")
+        self.tile_list.set(tile_items(sets, self.use))
+        self._tiles_note("" if sets else "No text yet.", "text2")
         k = len(self.chosen())
         self.data_card_status = f"{k} {'source' if k == 1 else 'sources'} selected" if k else "nothing selected"
         self.data_line.configure(text=self.data_card_status)
@@ -317,6 +329,35 @@ class PretrainingPage(Page):
         self.update_numbers()
         self.paint_modes(v, parent)
         self.paint_collection()
+
+    def _make_tile(self, parent, data):
+        tile = tk.Frame(parent, bg=C["panel2"], highlightthickness=1, padx=12, pady=8, cursor="hand2", takefocus=1)
+        tile.mark = tk_label(tile, "", 14, "text", "panel2", width=2)
+        tile.mark.pack(side="left", padx=(0, 10))
+        tile.name_label = tk_label(tile, "", 15, "text", "panel2")
+        tile.name_label.pack(side="left")
+        tile.note = tk_label(tile, "", 13, "muted", "panel2")
+        tile.note.pack(side="left", padx=10)
+        for w in (tile, tile.mark, tile.name_label, tile.note):
+            w.bind("<Button-1>", lambda _e, i=data["id"]: self.toggle(i))
+        tile.bind("<Return>", lambda _e, i=data["id"]: self.toggle(i))
+        return tile
+
+    @staticmethod
+    def _fill_tile(tile, data):
+        on = data["on"]
+        tile.configure(highlightbackground=C["violet"] if on else C["border"])
+        tile.mark.configure(text="✓" if on else " ", fg=C["bg"] if on else C["text"], bg=C["violet"] if on else C["panel2"])
+        tile.name_label.configure(text=data["name"])
+        tile.note.configure(text=f"{data['count']:,} examples" + (f" · {T['held_out']}" if data["held"] else ""))
+
+    def _tiles_note(self, text, color):
+        """The line in place of the tiles while the set list is read or when there is none; hidden otherwise."""
+        self.tiles_note.configure(text=text, fg=C[color])
+        if text:
+            self.tiles_note.pack(anchor="w", before=self.data_line)
+        else:
+            self.tiles_note.pack_forget()
 
     def _ask_preview(self):
         """Use the preview if it is already known; otherwise show "estimating" and work it out in the background (it
@@ -341,20 +382,24 @@ class PretrainingPage(Page):
         self.paint_modes(self.v, self.parent_v)
 
     def paint_collection(self):
-        try:
-            rows = self.services.collection()
-        except NotImplementedError:
-            rows = []
-        view = collection_view(rows)
-        if view == self.painted:  # progress only moves the status lines, which are updated in place
+        """Read the collection (a manifest on disk per source) on the worker, then update its rows in place."""
+        def work():
+            try:
+                return self.services.collection()
+            except NotImplementedError:
+                return []
+        self.quietly(work, self._collected)
+
+    def _collected(self, rows):
+        if not self.winfo_exists():
             return
-        self.painted, self.status_labels = view, {}
-        for child in self.collection_rows.winfo_children():
-            child.destroy()
-        for row in rows:
-            self.status_labels[row["id"]] = collection_row(self.collection_rows, row, self.notes.get(row["id"], ""), self.fetch)
+        self.collection_list.set(collection_items(rows, self.notes))
         if any(source_action(r)[1] == "download" for r in rows):
-            button(self.collection_rows, T["download_all"], lambda: self.fetch(None, "download"), primary=True).pack(anchor="w", pady=(8, 0))
+            self.download_all.configure(text=T["download_all"])
+            self.download_all.pack(anchor="w", pady=(8, 0))
+        else:
+            self.download_all.configure(text="")
+            self.download_all.pack_forget()
 
     def fetch(self, source_id, action):
         """Start a background download (all sources when source_id is None) or import; events repaint the card."""
@@ -369,7 +414,7 @@ class PretrainingPage(Page):
             self.dirty.add(payload["id"])
             self._flush_soon()
         elif kind in ("download_done", "import_done", "download_failed"):
-            self.paint_collection()  # cheap: manifests and the set list only
+            self.paint_collection()
         elif kind == "downloads_finished":
             self.quiet_reload()  # re-counting every row is slow; the page stays usable while it runs
         elif kind in ("queue", "job", "blocked"):
@@ -394,9 +439,10 @@ class PretrainingPage(Page):
 
     def _flush_notes(self):
         for source_id in self.dirty:
-            label = self.status_labels.get(source_id)
-            if label is not None and label.winfo_exists():  # a progress line means it is being fetched, whatever the rows say
-                label.configure(text=self.notes[source_id], fg=C["muted"])
+            line = self.collection_list.get(source_id)
+            if line is not None:  # a progress line means it is being fetched, whatever the rows say
+                line.status.configure(text=self.notes[source_id], fg=C["muted"])
+                self.collection_list.touched(source_id)
         self.dirty.clear()
 
     def toggle(self, dataset_id):
