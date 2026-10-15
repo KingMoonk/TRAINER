@@ -347,8 +347,11 @@ class BpcPlot(tk.Canvas):
     above an axis break, shaded unrun remainder and a learning-rate lane with phase bands underneath.
 
     set(steps=[(x, y)], smooth=[(x, y)], heldout=[(x, y)], refs=[(name, value)], total=None, progress=None,
-        lr=[(x, lr)], phases=[(start, end, name)], band=None, series=[{points, color, width, dash}])
-    `series` adds lines of their own colour and optional dash pattern, e.g. one per seed or a dashed held-back curve.
+        lr=[(x, lr)], phases=[(start, end, name)], band=None, series=[{points, color, width, dash, dots}],
+        fmt=None, x_fmt=None)
+    `series` adds lines of their own colour and optional dash pattern, e.g. one per seed or a dashed held-back curve;
+    dots=True also marks each of its points, so a single point shows. fmt(y) -> str labels the y axis (default two decimals),
+    x_fmt(x) -> str labels the ends of the x axis. A plot made with lane=0 has no learning-rate lane.
     Reference lines above the data range go in the strip above the break; `band` = (lo, hi) shades the noise band.
     With no data it says so."""
 
@@ -408,12 +411,19 @@ class BpcPlot(tk.Canvas):
             if lo <= val <= hi:
                 self.create_line(x0, Y(val), x1, Y(val), fill=C["muted"], dash=(4, 3))
                 self.create_text(x1, Y(val) - 8, text=name, anchor="e", fill=C["muted"], font=font(11))
+        fmt = d.get("fmt") or "{:.2f}".format
         for v in (lo + 0.05 * (hi - lo), hi - 0.05 * (hi - lo)):
-            self.create_text(x0 - 6, Y(v), text=f"{v:.2f}", anchor="e", fill=C["muted"], font=font(11, mono=True))
+            self.create_text(x0 - 6, Y(v), text=fmt(v), anchor="e", fill=C["muted"], font=font(11, mono=True))
+        if d.get("x_fmt"):
+            self.create_text(x0, yb + 11, text=d["x_fmt"](0), anchor="w", fill=C["muted"], font=font(11))
+            self.create_text(x1, yb + 11, text=d["x_fmt"](total), anchor="e", fill=C["muted"], font=font(11))
         for points, color, width, dash in plot_series(d):
             self.create_line(*[c for p in points for c in (X(p[0]), Y(p[1]))], fill=color, width=width, dash=dash)
         for x, y in d.get("heldout") or []:
             self.create_oval(X(x) - 4, Y(y) - 4, X(x) + 4, Y(y) + 4, fill=C["blue"], outline=C["panel"])
+        for s in d.get("series") or []:
+            for x, y, *_ in s["points"] if s.get("dots") else ():
+                self.create_oval(X(x) - 5, Y(y) - 5, X(x) + 5, Y(y) + 5, fill=C.get(s.get("color", "violet"), s.get("color")), outline=C["panel"])
         # learning-rate lane
         lt, lb = h + 6, h + self.lane - 4
         for start, end, name in d.get("phases") or []:
@@ -425,7 +435,8 @@ class BpcPlot(tk.Canvas):
         line = [c for x, v in lr for c in (X(x), lb - (lb - lt - 16) * v / top - 14)]
         if len(line) >= 4:
             self.create_line(*line, fill=C["text2"], width=2)
-        self.create_text(x0 - 6, (lt + lb) / 2, text="LR", anchor="e", fill=C["muted"], font=font(11, bold=True))
+        if self.lane:
+            self.create_text(x0 - 6, (lt + lb) / 2, text="LR", anchor="e", fill=C["muted"], font=font(11, bold=True))
 
 
 def button(parent, text, command, primary=False):

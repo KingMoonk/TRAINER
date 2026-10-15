@@ -488,6 +488,16 @@ class Services:
         dict plus "tasks" and "held_back" (False when no held-back choice problem exists and training ones are asked). Slow."""
         raise NotImplementedError
 
+    def benchmark(self) -> dict:
+        """The benchmark track as stored, never computing: {"suite" id, "sizes" {docs, choice, problems}, "dropped" {kind: n filtered
+        out}, "rows": [{"number", "name", "lineage", "tokens", "result" (studio_bench.run_suite's dict, None until it has run)}]},
+        one row per trained version. Reads the held-back data: call it off the Tk thread."""
+        raise NotImplementedError
+
+    def run_benchmark(self, number):
+        """Run (or read back) the benchmark suite on one trained version: studio_bench.run_suite's dict. Slow."""
+        raise NotImplementedError
+
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
         "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}},
@@ -817,6 +827,18 @@ class FakeServices(Services):
         return {"items": 40, "tasks": 2, "held_back": True, "chance": .3,
                 "rows": [{"shots": 0, "used": 0, "correct": 11, "accuracy": .275}, {"shots": 1, "used": 1, "correct": 13, "accuracy": .325},
                          {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
+
+    def benchmark(self):
+        def result(n, bpc, accuracy, rate):
+            return {"suite": "fake", "version": n, "bpc": bpc, "problems": {"passed": round(30 * rate), "total": 30, "rate": rate},
+                    "few_shot": {"items": 40, "chance": .3, "accuracy": accuracy, "rows": []}}
+        return {"suite": "fake", "sizes": {"docs": 24, "choice": 40, "problems": 30}, "dropped": {},
+                "rows": [{"number": 1, "name": "Version 1", "lineage": "a", "tokens": 200_000, "result": result(1, 2.6, .30, .1)},
+                         {"number": 2, "name": "Version 2", "lineage": "a", "tokens": 800_000, "result": result(2, 2.2, .35, .2)},
+                         {"number": 3, "name": "Version 3", "lineage": "b", "tokens": 500_000, "result": None}]}
+
+    def run_benchmark(self, number):
+        return next(r["result"] for r in self.benchmark()["rows"] if r["number"] == number) or {}
 
     def post_training(self, version):
         return {"rounds": {}, "counts": {}, "gates": {}}
@@ -1728,6 +1750,52 @@ class WorkspaceServices(Services):
             asked = random.Random(0).sample(asked, min(FEW_SHOT_ITEMS, len(asked)))
             return {**studio_eval.few_shot(ckpt, asked, pool=held + pool), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
         return self._cached(("few_shot", ckpt, Path(ckpt).stat().st_mtime_ns, self.workspace.revision), make)
+
+    def _bench_suite(self):
+        """The fixed benchmark items (studio_bench.build_suite), rebuilt only when the held-back data or the stored data changes."""
+        import studio_bench
+
+        def make():
+            import studio_decontam
+            index = self._train_index()
+            text = {"docs": lambda d: d, "choice": lambda i: "\n".join([i["question"], *i["choices"]]), "problems": lambda p: p["prompt"]}
+
+            def decontaminated(kind, items):  # an item sharing a 13-gram with training text (studio_decontam) is left out
+                return items if kind == "pool" else studio_decontam.exclude_overlap(items, index, text[kind])[0]  # worked examples are training problems
+            return studio_bench.suite_from_rows(self._heldout(), self.post_rows("heldout_problems"), self.post_rows("problems"),
+                                                filter_items=decontaminated)
+        return self._cached(("bench_suite", self._heldout_stamp(), self.workspace.revision), make)
+
+    def _bench_tokens(self, v, checkpoint):
+        """Tokens seen by a version's checkpoint over every run it descends from (studio_bench.tokens_seen), or None."""
+        import studio_bench
+
+        def owner(path):  # the runs of the version that made a checkpoint that does not sit in a run folder with a log
+            return next(([self._abs(r) for r in w.runs] for w in self.versions() if w.best_checkpoint and Path(w.best_checkpoint) == Path(path)), None)
+        return studio_bench.tokens_seen([self._abs(r) for r in v.runs], checkpoint, owner)
+
+    def benchmark(self):
+        import hashlib
+        import studio_bench
+        from studio_spec import structure_key
+        suite = self._bench_suite()
+        rows = []
+        for v in self.versions():
+            if not v.best_checkpoint or not Path(v.best_checkpoint).exists() or v.status == "training":
+                continue
+            try:
+                lineage = hashlib.sha1(structure_key(v.spec).encode()).hexdigest()[:8]  # one design, trained differently, is one line
+            except (ValueError, KeyError, TypeError):
+                lineage = f"v{v.number}"
+            rows.append({"number": v.number, "name": v.name, "lineage": lineage, "tokens": self._bench_tokens(v, v.best_checkpoint),
+                         "result": studio_bench.cached(self.root, v, suite)})
+        return {"suite": suite["id"], "sizes": {k: len(suite[k]) for k in ("docs", "choice", "problems")}, "dropped": suite["dropped"],
+                "rows": rows}
+
+    def run_benchmark(self, number):
+        import studio_bench
+        v, checkpoint = self._as_version(number), self._checkpoint(number)
+        return studio_bench.benchmark(self.root, (v.number, checkpoint), self._bench_suite(), self._bench_tokens(v, checkpoint))
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):

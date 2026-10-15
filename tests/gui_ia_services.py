@@ -1,4 +1,4 @@
-"""The shell on FixtureServices visits all 18 routes without error (skips without a display)."""
+"""The shell on FixtureServices visits all 19 routes without error (skips without a display)."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tempfile
 import tkinter as tk
@@ -18,7 +18,7 @@ class ShellOnFixtureTest(unittest.TestCase):
         except tk.TclError as error:
             self.skipTest(f"no display: {error}")
         self.addCleanup(app.destroy)
-        self.assertEqual(len(ROUTES), 18)
+        self.assertEqual(len(ROUTES), 19)
         for route in ROUTES:
             app.show(route)
             app.update()

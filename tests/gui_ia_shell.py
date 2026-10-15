@@ -1,4 +1,4 @@
-"""Shell check: all 18 routes render their h1, and a queue event updates the machine strip."""
+"""Shell check: all 19 routes render their h1, and a queue event updates the machine strip."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import time
 import unittest
@@ -25,7 +25,7 @@ class ShellTest(unittest.TestCase):
         self.addCleanup(self.app.destroy)
 
     def test_all_routes_show_their_h1(self):
-        self.assertEqual(len(ROUTES), 18)
+        self.assertEqual(len(ROUTES), 19)
         for route, spec in ROUTES.items():
             page = self.app.show(route)
             self.app.update()
