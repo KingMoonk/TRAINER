@@ -7,11 +7,12 @@ import studio_gate
 from studio_core import Workspace
 from studio_data_kinds import add_problems
 from studio_ia.pages.chat import answering_version, stream_reply, verdict_view
-from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, step_line
+from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, live_view, spread_text, step_line, teacher_options
 from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import size_text, storage_state
-from studio_ia.pages.training_run import history_of, phase_at
+from studio_ia.copy import TRAINING as T
+from studio_ia.pages.training_run import history_of, phase_at, switch_note
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
 from studio_model import validate_config
 from studio_spec import default_spec
@@ -96,7 +97,7 @@ class PageLogic(unittest.TestCase):
         self.assertIn("conversations", blocker(0, {}))
         self.assertIn("2 pairs", blocker(3, {"pairs": 1}))
         self.assertIsNone(blocker(3, {"pairs": 2}))
-        self.assertIn("earlier version", blocker(2, {}, 0, False))
+        self.assertIn("other trained version", blocker(2, {}, 0, False))
         self.assertIn("correction", blocker(2, {}, 1, True))
         self.assertEqual(step_line(QueueState(step=5, total=20, eta_s=600)), "step 5 of 20 · about 10 min left")
         self.assertEqual(step_line(QueueState()), "starting")
@@ -267,11 +268,38 @@ class GateRules(unittest.TestCase):
         self.assertFalse(studio_gate.passes(before, {"bpc": 2.05, "pass_k": 3, "pass_n": 5})[0])
         self.assertFalse(studio_gate.passes(before, {"bpc": 1.9, "pass_k": 2, "pass_n": 5}, band)[0])  # pass rate fell
 
-    def test_chat_moves_only_below_the_band(self):
+    def test_chat_moves_only_when_the_paired_test_says_better(self):
+        better, unsure = {"better": True, "diff": -.1, "upper": -.02}, {"better": False, "diff": -.1, "upper": .02}
         self.assertTrue(studio_gate.moves_chat(1.0, None, None))
-        self.assertFalse(studio_gate.moves_chat(1.97, 2.0, (1.95, 2.1)))
-        self.assertTrue(studio_gate.moves_chat(1.9, 2.0, (1.95, 2.1)))
-        self.assertFalse(studio_gate.moves_chat(None, 2.0, None))
+        self.assertFalse(studio_gate.moves_chat(1.97, 2.0, unsure))   # lower, but not sure it is more than luck
+        self.assertTrue(studio_gate.moves_chat(1.9, 2.0, better))
+        self.assertFalse(studio_gate.moves_chat(None, 2.0, better))
+        self.assertTrue(studio_gate.moves_chat(1.97, 2.0))             # no held-back text to pair on: lower is enough
+        self.assertFalse(studio_gate.moves_chat(2.03, 2.0))
+
+
+class SwitchNote(unittest.TestCase):
+    def test_while_the_run_goes_it_is_a_first_look_only(self):
+        self.assertEqual(switch_note(True, 1.9, 2.0, None)[0], "held_back_below")
+        self.assertEqual(switch_note(True, 2.1, 2.0, None)[0], "held_back_inside")
+        self.assertEqual(switch_note(True, None, 2.0, None)[0], "no_band_yet")
+        self.assertEqual(switch_note(True, 1.9, 2.0, {"better": True, "diff": -.1})[0], "held_back_below")  # a verdict waits for the end
+
+    def test_after_the_run_the_paired_verdict_says_better_not_sure_or_not_better(self):
+        self.assertEqual(switch_note(False, None, None, {"better": True, "diff": -.0412, "upper": -.01}), ("gate_better", {"gap": "0.041"}))
+        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": -.02, "upper": .01})[0], "gate_not_sure")
+        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": .03, "upper": .1})[0], "gate_not_better")
+        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": float("nan"), "upper": float("nan")})[0], "no_band_yet")
+        self.assertEqual(switch_note(False, None, None, None)[0], "no_band_yet")
+        few = {"better": False, "diff": -.5, "upper": float("nan"), "docs": 5, "reason": "few_docs"}
+        self.assertEqual(switch_note(False, None, None, few), ("gate_few_docs", {"docs": 5, "need": 20}))  # however big the gap looks
+        self.assertEqual(T["gate_few_docs"].format(parent="version 1", **switch_note(False, None, None, few)[1]),
+                         "Not sure: only 5 held-back documents; at least 20 are needed to tell a real gain from luck. Chat keeps using version 1.")
+
+    def test_every_note_fills_in_from_the_words_the_page_has(self):
+        words = {"Version": "Version 2", "version": "version 2", "parent": "version 1", "gap": "0.041", "docs": 5, "need": 20}
+        for key in ("held_back_below", "held_back_inside", "no_band_yet", "gate_better", "gate_not_sure", "gate_not_better", "gate_few_docs"):
+            self.assertNotIn("{", T[key].format(**words))
 
 
 class WorkspaceRows(unittest.TestCase):
@@ -368,12 +396,33 @@ def _problems():
     return generate("copy", random.Random(1), 6)
 
 
+class PostTrainingHonesty(unittest.TestCase):
+    def test_spread_text(self):
+        self.assertEqual(spread_text(12, 40), "12 of 40 groups had both a better and a worse answer; only those teach the model.")
+        self.assertEqual(spread_text(1, 1), "1 of 1 group had both a better and a worse answer; only those teach the model.")
+        self.assertIn("None of the 40 groups", spread_text(0, 40))
+        self.assertEqual(spread_text(0, 0), "")
+
+    def test_teachers_share_the_word_list_and_window(self):
+        def v(n, tokenizer=BYTE, n_ctx=32, checkpoint=True):
+            return SimpleNamespace(number=n, spec={"tokenizer": tokenizer, "dims": {"n_ctx": n_ctx}}, best_checkpoint=f"v{n}.npz" if checkpoint else None)
+        current = v(2)
+        versions = [v(1), current, v(3), v(4, BPE), v(5, n_ctx=64), v(6, checkpoint=False)]
+        options = teacher_options(versions, current)
+        self.assertEqual([o.number for o in options], [1, 3])          # not itself, other word list, other window, untrained
+        self.assertEqual(default_teacher(options, current).number, 1)   # the previous best
+        self.assertEqual(default_teacher(options[1:], current).number, 3)
+        self.assertIsNone(default_teacher([], current))
+        self.assertEqual(teacher_options(versions, None), [])
+
+
 class PostTrainingLive(unittest.TestCase):
     """Live events must not rebuild the page for every one of them, nor when the open round shows nothing new."""
 
     def page(self):
         page = PostTrainingPage.__new__(PostTrainingPage)  # no window: only the event logic is used
         page.selected, page.group, page.heat, page.moved, page.live_gate = 1, None, None, None, {}
+        page.spread = None
         page.gates, page._ticking, page._pending, page._step, page.services = {}, False, False, None, FakeServices()
         page.timers, page.redraws, page.reloads = [], [], []
         page.after = lambda ms, fn: page.timers.append((ms, fn))
@@ -407,6 +456,14 @@ class PostTrainingLive(unittest.TestCase):
         self.assertEqual(page.redraws, [1])
         page.on_event("train", {"type": "gate", "round": 2, "ok": True, "checks": []})
         self.assertEqual(page.redraws, [1, 1])
+
+    def test_round_2_step_metrics_redraw_only_when_the_count_changes(self):
+        page = self.page()
+        step = {"type": "metric", "step": 1, "groups": 4, "taught": 1, "groups_total": 4, "taught_total": 1}
+        page.on_event("train", step)
+        self.assertEqual((page.spread["taught_total"], len(page.redraws)), (1, 1))
+        page.on_event("train", {"type": "metric", "step": 1, "loss": 2.})   # another round's metric: not round 2's count
+        self.assertEqual(page.spread["taught_total"], 1)
 
     def test_queue_job_and_version_events_still_reload(self):
         page = self.page()

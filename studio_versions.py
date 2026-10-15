@@ -46,13 +46,16 @@ def _room_label(ratio):
     return "wide" if ratio > 4 else "narrow" if ratio < 4 else "normal"
 
 
+OTHER_PARTS = "other parts changed"
+
+
 def spec_diff(old, new):
     """Plain-words changes from `old` to `new` as a list of strings (empty when nothing changed)."""
     a, b = _facts(old), _facts(new)
     out = []
     if a["blocks"] != b["blocks"]:
         out.append(f"{'more' if b['blocks'] > a['blocks'] else 'fewer'} blocks ({a['blocks']} → {b['blocks']})")
-    if a["heads"] != b["heads"]:
+    if a["heads"] != b["heads"] and None not in (a["heads"], b["heads"]):  # a mixer without heads is a module change
         out.append(f"look-back heads {a['heads']} → {b['heads']}")
     if a["room"] != b["room"]:
         out.append(f"{_room_label(b['room'])} thinking room")
@@ -63,7 +66,7 @@ def spec_diff(old, new):
     if a["words"] != b["words"]:
         out.append(b["words"])
     if not out and structure_key(old) != structure_key(new):
-        out.append("other parts changed")
+        out.append(OTHER_PARTS)
     return out
 
 

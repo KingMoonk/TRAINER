@@ -28,14 +28,16 @@ class Snapshots(unittest.TestCase):
         model.backward(dy, tape)
         optimizer.update(model, .001)
         self.assertAlmostEqual(snapshot['loss'], loss)
+        # The snapshot takes the exact attention path (it records the scores); the real step takes the fused kernel,
+        # which rounds differently in the last float32 bits (a parameter whose gradient is zero up to rounding then moves by Adam's noise).
         for key, value in model.p.items():
             value = to_np(value)
-            np.testing.assert_array_equal(snapshot['arrays'][f'weight::{key}'], value)
-            np.testing.assert_array_equal(snapshot['arrays'][f'update::{key}'], value - before[key])
+            np.testing.assert_allclose(snapshot['arrays'][f'weight::{key}'], value, rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(snapshot['arrays'][f'update::{key}'], value - before[key], rtol=1e-3, atol=1e-6)
         for key, value in tape.forward_values.items():
-            np.testing.assert_array_equal(snapshot['arrays'][f'forward::{key}'], to_np(value))
+            np.testing.assert_allclose(snapshot['arrays'][f'forward::{key}'], to_np(value), rtol=1e-5, atol=1e-7)
         for key, value in tape.backward_values.items():
-            np.testing.assert_array_equal(snapshot['arrays'][f'backward::{key}'], to_np(value))
+            np.testing.assert_allclose(snapshot['arrays'][f'backward::{key}'], to_np(value), rtol=1e-4, atol=1e-7)
 
     def test_round_trip_without_pickle(self):
         snapshot = capture(self.model(), [[1, 2]], 4)

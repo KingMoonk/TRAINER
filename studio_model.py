@@ -13,7 +13,8 @@ Data-pipeline config keys (stable API, also used by the curriculum trainer):
       sequential - legacy: independent context-sized chunks cut from token 0 (answers may lose their prompt).
                    Checkpoints written before this key existed resume with "sequential".
   objective  "assistant" | "all"      - which tokens are targets; every target token is trained exactly once.
-Use samples_from(examples, tokenizer, cfg) -> WindowStore and batch_arrays(pairs) to feed train().
+Use samples_from(examples, tokenizer, cfg) -> WindowStore and batch_arrays(pairs) to feed train(). From STREAM_CHARS characters of
+training text on, train() reads the same windows from token shards on disk instead (shard_windows, studio_shards).
 """
 from __future__ import annotations
 
@@ -36,9 +37,10 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
 import numpy as np
 import torch
 
+import studio_shards
 from studio_arch import parameter_breakdown, validate_spec
 from studio_backend import DEVICES
-from studio_core import atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
+from studio_core import ROOT, atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
 from studio_modules.objective.ce import cross_entropy  # noqa: F401  (part of this module's API)
@@ -65,6 +67,7 @@ DEFAULT_CONFIG = {
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
 EVAL_WINDOWS = 400  # evaluation reads at most this many windows, spread evenly over the set
+STREAM_CHARS = 16_000_000  # training text from this many characters on is tokenized into on-disk shards (about 48 MB of windows)
 
 
 def validate_config(config):
@@ -325,19 +328,11 @@ def _anchored_windows(builder, tokens, mask, positions, roles, units, context):
             c = d
 
 
-def samples_from(examples, tokenizer, cfg):
-    """Cut examples into training windows: a WindowStore of (inputs, targets) pairs (target -100 = ignored).
-
-    cfg["windowing"] (a missing key means legacy "sequential"), cfg["context"] and cfg["objective"] decide the cut.
-    Anchored: each assistant answer is the target of a window that ends with it (long answers continue in
-    stride-sized pieces); under objective "all" the text before the first answer is targeted by the first window,
-    so every target token is trained exactly once per example. Text rows and answer-less rows are chunked
-    sequentially.
-    """
+def cut_windows(examples, tokenizer, cfg, builder):
+    """Cut examples into training windows and hand each to builder.add(segment, flags): the cut samples_from() and the shards share."""
     context = cfg["context"]
     anchored = cfg.get("windowing", "sequential") == "anchored"
     assistant_only = cfg["objective"] == "assistant"
-    builder = _WindowBuilder(tokenizer.vocab_size)
     for example in examples:
         tokens, mask, positions, roles, spans = _encode_arrays(example, tokenizer, assistant_only)
         if not anchored or not spans:
@@ -349,7 +344,52 @@ def samples_from(examples, tokenizer, cfg):
             ends = [high for _, high in spans]
             units = list(zip([1] + ends[:-1], ends)) + ([(ends[-1], len(tokens))] if ends[-1] < len(tokens) else [])
         _anchored_windows(builder, tokens, mask, positions, roles, units, context)
+
+
+def samples_from(examples, tokenizer, cfg):
+    """Cut examples into training windows: a WindowStore of (inputs, targets) pairs (target -100 = ignored).
+
+    cfg["windowing"] (a missing key means legacy "sequential"), cfg["context"] and cfg["objective"] decide the cut.
+    Anchored: each assistant answer is the target of a window that ends with it (long answers continue in
+    stride-sized pieces); under objective "all" the text before the first answer is targeted by the first window,
+    so every target token is trained exactly once per example. Text rows and answer-less rows are chunked
+    sequentially.
+    """
+    builder = _WindowBuilder(tokenizer.vocab_size)
+    cut_windows(examples, tokenizer, cfg, builder)
     return builder.finish()
+
+
+class MappedWindows(WindowStore):
+    """The windows of a token-shard folder (studio_shards): a WindowStore whose buffers are memory maps, so only the windows a
+    batch touches are read from disk. Counts come from the folder's index, not from a scan."""
+
+    def __init__(self, tokens, flags, offsets, entry):
+        super().__init__(tokens, flags, offsets)
+        self.entry = entry
+
+    def describe(self):
+        count = self.entry["windows"]
+        return {"windows": count, "tokens": self.entry["tokens"] - count, "targets": self.entry["targets"],
+                "from_start": self.entry["from_start"] / count if count else 0., "megabytes": self.nbytes / 1024 ** 2}
+
+
+def characters_in(examples):
+    """Characters of text the examples hold: what the size of their token windows follows (a byte token is about one)."""
+    return sum(len(e["text"]) if e.get("text") else sum(len(m["content"]) for m in messages_of(e)) for e in examples)
+
+
+def shard_windows(training, validation, tokenizer, cfg, split_hash, root):
+    """(train windows, validation windows, reused) read from token shards under root, tokenizing into them first when this data,
+    tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut."""
+    key = studio_shards.key_for(split_hash, hashlib.sha256(json.dumps(tokenizer.serialize(), sort_keys=True).encode()).hexdigest(),
+                                cfg["windowing"], cfg["context"], cfg["objective"])
+    found = studio_shards.load(root, key, tokenizer.vocab_size)
+    reused = found is not None
+    if not reused:
+        found = studio_shards.build(root, key, tokenizer.vocab_size, lambda writers: [
+            cut_windows(examples, tokenizer, cfg, writers[name]) for name, examples in (("train", training), ("val", validation))])
+    return MappedWindows(*found["train"]), MappedWindows(*found["val"]), reused
 
 
 def batch_arrays(samples):
@@ -516,7 +556,8 @@ def _initialize_from(model, tokenizer, path):
 
 
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
-          snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, schedule_window=None):
+          snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
+          schedule_window=None):
     """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
     step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
     Left None (the default) the schedule spans this run alone."""
@@ -579,8 +620,14 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     else:
         module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
         tokenizer = module.fit(module_cfg, training)
-    train_samples = samples_from(training, tokenizer, cfg)
-    val_samples = samples_from(validation, tokenizer, cfg)
+    streamed = reused = False
+    if characters_in(training) + characters_in(validation) >= stream_chars:
+        # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
+        # on the same data and tokenizer starts at once. Under the threshold the windows are built in memory as always.
+        train_samples, val_samples, reused = shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or ROOT / "data" / "shards")
+        streamed = True
+    else:
+        train_samples, val_samples = samples_from(training, tokenizer, cfg), samples_from(validation, tokenizer, cfg)
     if not train_samples:
         raise ValueError("No trainable target tokens were found.")
     model = ScratchTransformer(cfg, tokenizer.vocab_size)
@@ -625,10 +672,13 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     atomic_json(directory / "run.json", record)
     if model.backend.reason:
         emit({"type": "info", "text": model.backend.reason + " · using CPU"})
+    if model.precision_note:
+        emit({"type": "info", "text": model.precision_note})
     if split["note"]:
         emit({"type": "info", "text": split["note"]})
     emit({"type": "info", "text": f"{model.backend.name} · {model.parameter_count:,} parameters · {tokenizer.vocab_size} tokens · {len(train_samples)} training windows ({cfg['windowing']}, "
-                                  f"{train_samples.describe()['from_start']:.0%} start at the prompt, {train_samples.nbytes / 1024 ** 2:.1f} MB)"})
+                                  f"{train_samples.describe()['from_start']:.0%} start at the prompt, {train_samples.nbytes / 1024 ** 2:.1f} MB"
+                                  f"{(' on disk, reused' if reused else ' on disk') if streamed else ''})"})
     if transplanted:
         emit({"type": "info", "text": f"Initialized from {Path(init_from).name}: copied {len(transplanted['copied'])} tensors, "
                                       f"{len(transplanted['fresh'])} freshly initialized."})

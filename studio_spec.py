@@ -135,6 +135,11 @@ def validate_spec(spec):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= .4:
                 raise ValueError("Validation must be between 0 and 0.4.")
             run[key] = float(value)
+        elif key == "checkpointing":
+            if not isinstance(value, bool):
+                raise ValueError("Checkpointing must be true or false.")
+            if value:
+                run[key] = True   # opt-in: recompute each block's activations in backward to save memory
     if run:
         out["train"]["run"] = run
     return out
