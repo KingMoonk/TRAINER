@@ -95,7 +95,7 @@ class PostTrainingPage(Page):
         self.pick = ""            # round 4 vote
         self.group = self.heat = self.moved = None   # live visuals from the running round
         self.live_gate = {}
-        self._drawn, self._ticking, self._step = None, False, None   # live_view on screen; tick pending; the "step k of n" label
+        self._drawn, self._ticking, self._pending, self._step = None, False, False, None   # live_view on screen; in a burst; events since the last draw; the "step k of n" label
 
     # data -------------------------------------------------------------------
     def _version(self):
@@ -141,15 +141,19 @@ class PostTrainingPage(Page):
         self._drawn = live_view(self.selected, self.group, self.heat, self.moved, self.gates)
 
     def on_event(self, kind, payload):
-        """Live visuals arrive in bursts (a group per prompt, every step): they are collected and drawn at most twice a
-        second, and only if the open round shows something new. Rebuilding the page for each one made it flash."""
+        """Live visuals arrive in bursts (a group per prompt, every step). The first is drawn at once; the rest of a burst
+        is drawn at most twice a second, and only if the open round shows something new. Rebuilding the page for each one
+        made it flash. A gate comes once per round and is drawn at once."""
         if kind == "train" and isinstance(payload, dict) and payload.get("type") in ("group", "heat", "moved", "gate"):
             t = payload["type"]
             if t == "gate":
                 self.live_gate[payload["round"]] = payload
+                return self._draw()
+            setattr(self, t, payload)
+            if self._ticking:
+                self._pending = True
             else:
-                setattr(self, {"group": "group", "heat": "heat", "moved": "moved"}[t], payload)
-            if not self._ticking:
+                self._draw()
                 self._ticking = True
                 self.after(500, self._tick)
         elif kind in ("queue", "versions", "job"):
@@ -157,6 +161,13 @@ class PostTrainingPage(Page):
 
     def _tick(self):
         self._ticking = False
+        if self._pending:
+            self._pending = False
+            self._draw()
+            self._ticking = True
+            self.after(500, self._tick)
+
+    def _draw(self):
         if live_view(self.selected, self.group, self.heat, self.moved, {**getattr(self, "gates", {}), **self.live_gate}) != self._drawn:
             return self.refresh()
         if self._step is not None:  # nothing new to draw: only the step count moves, in place

@@ -349,7 +349,7 @@ class PostTrainingLive(unittest.TestCase):
     def page(self):
         page = PostTrainingPage.__new__(PostTrainingPage)  # no window: only the event logic is used
         page.selected, page.group, page.heat, page.moved, page.live_gate = 1, None, None, None, {}
-        page.gates, page._ticking, page._step, page.services = {}, False, None, FakeServices()
+        page.gates, page._ticking, page._pending, page._step, page.services = {}, False, False, None, FakeServices()
         page.timers, page.redraws, page.reloads = [], [], []
         page.after = lambda ms, fn: page.timers.append((ms, fn))
         page.refresh = lambda: (page.redraws.append(1), setattr(page, "_drawn", live_view(page.selected, page.group, page.heat, page.moved, {**page.gates, **page.live_gate})))
@@ -357,13 +357,15 @@ class PostTrainingLive(unittest.TestCase):
         page._drawn = live_view(1, None, None, None, {})
         return page
 
-    def test_a_burst_of_groups_draws_once(self):
+    def test_a_burst_draws_its_first_at_once_and_the_rest_once(self):
         page = self.page()
         for n in range(6):
             page.on_event("train", {"type": "group", "prompt": "p", "rule": "sort", "mean": .5, "answers": [], "n": n})
-        self.assertEqual((len(page.timers), page.redraws), (1, []))
+        self.assertEqual((len(page.timers), page.redraws), (1, [1]))
         page.timers[0][1]()
-        self.assertEqual((page.redraws, page.reloads), ([1], []))
+        self.assertEqual((page.redraws, page.reloads), ([1, 1], []))
+        page.timers[1][1]()  # the burst is over: the lane goes quiet
+        self.assertEqual((len(page.timers), page.redraws), (2, [1, 1]))
 
     def test_nothing_new_for_the_open_round_does_not_redraw(self):
         page = self.page()
@@ -371,16 +373,14 @@ class PostTrainingLive(unittest.TestCase):
         page.timers[0][1]()
         self.assertEqual(page.redraws, [])
 
-    def test_the_same_group_again_does_not_redraw_but_a_gate_does(self):
+    def test_the_same_group_again_does_not_redraw_but_a_gate_does_at_once(self):
         page = self.page()
         group = {"type": "group", "prompt": "p", "rule": "sort", "mean": .5, "answers": []}
         page.on_event("train", group)
-        page.timers[0][1]()
         page.on_event("train", dict(group))
-        page.timers[1][1]()
+        page.timers[0][1]()
         self.assertEqual(page.redraws, [1])
         page.on_event("train", {"type": "gate", "round": 2, "ok": True, "checks": []})
-        page.timers[2][1]()
         self.assertEqual(page.redraws, [1, 1])
 
     def test_queue_job_and_version_events_still_reload(self):
