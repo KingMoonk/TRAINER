@@ -75,6 +75,7 @@ class CompiledModel:
         self.layers = []
         self.layer_names = {}
         self.keep_tape, self.last_tape = False, None
+        self.frozen, self.adapters, self.adapter_names = set(), {}, set()   # LoRA (studio_lora): frozen weights, {weight: (a, b, scale)}
         self.embedding = self._make("embedding", spec["embedding"], "")
         self.position = self._make("position", spec["position"], "")
         self.stack = []
@@ -118,7 +119,8 @@ class CompiledModel:
 
     @property
     def parameter_count(self):
-        return sum(value.numel() for value in self.p.values())
+        """The model's own parameters; LoRA adapters are an add-on and not counted."""
+        return sum(value.numel() for key, value in self.p.items() if key not in self.adapter_names)
 
     def zero_grad(self):
         for grad in self.g.values():
@@ -149,9 +151,15 @@ class CompiledModel:
         live = {}
         if graph:
             for full, (layer, name) in self._slots.items():
-                live[full] = layer.params[name] = self.p[full].detach().requires_grad_(True)
+                if full not in self.frozen:
+                    live[full] = layer.params[name] = self.p[full].detach().requires_grad_(True)
+            for key in self.adapter_names:
+                live[key] = self.p[key].detach().requires_grad_(True)
         try:
             with torch.enable_grad() if graph else torch.no_grad():
+                for full, (a, b, scale) in self.adapters.items():   # LoRA: the effective weight is W + scale * A @ B
+                    layer, name = self._slots[full]
+                    layer.params[name] = self.p[full] + scale * (live.get(a, self.p[a]) @ live.get(b, self.p[b]))
                 result = self._run(ids, ctx, trace, attention_summary is not None)
         finally:
             for full, (layer, name) in self._slots.items():
@@ -319,8 +327,13 @@ class CompiledModel:
             self.p[key].copy_(value)
 
     def state_arrays(self):
-        """Every parameter as its own NumPy copy (never a view of the live tensor), for checkpoints and inspection."""
-        return {key: self.backend.to_cpu(value).copy() for key, value in self.p.items()}
+        """Every parameter as its own NumPy copy (never a view of the live tensor), for checkpoints and inspection.
+        With LoRA adapters these are the effective (merged) weights, so the result loads into a plain model of the same spec."""
+        out = {key: self.backend.to_cpu(value).copy() for key, value in self.p.items() if key not in self.adapter_names}
+        with torch.no_grad():
+            for full, (a, b, scale) in self.adapters.items():
+                out[full] = self.backend.to_cpu(self.p[full] + scale * (self.p[a] @ self.p[b])).copy()
+        return out
 
 
 @torch.no_grad()

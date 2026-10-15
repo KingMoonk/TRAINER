@@ -47,6 +47,7 @@ from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
 from studio_modules.tokenizer.byte import Tokenizer
 from studio_planning import merge_duplicate_lineage
 from studio_registry import for_slot, get as get_module
+from studio_lora import FILE_PREFIX, PREFIX, attach_lora, lora_settings, merge_arrays, scale_of
 from studio_slots import ASSISTANT, BOS, EOS, OFFSET, PAD, SYSTEM, UNK, USER
 from studio_spec import config_from_spec, is_model_spec, model_spec, module_of, structure_key, validate_spec as validate_model_spec
 
@@ -57,6 +58,7 @@ DEFAULT_CONFIG = {
     "weight_decay": 0.01, "warmup": 20, "eval_every": 25, "validation": 0.1,
     "seed": 42, "objective": "assistant", "windowing": "anchored", "device": "auto", "architecture": None,
     "sample_every": 4, "sample_prompt": "The ",  # run page: a greedy sample of the prompt every N evaluation intervals (0 = off)
+    "lora": None,  # {"rank", "alpha", "targets"}: train low-rank adapters on a frozen model instead of every weight (studio_lora)
 }
 # Why these defaults: a character vocabulary over mixed datasets reaches thousands of symbols (hundreds of
 # thousands of embedding parameters, up to 8% unknown characters across datasets); bytes cost ~13% more
@@ -105,6 +107,7 @@ def validate_config(config):
         raise ValueError("Embedding width must be divisible by the attention head count.")
     if cfg["tokenizer"] not in ({m.short for m in for_slot("tokenizer")} if model_spec_given else {"byte", "character"}) or cfg["objective"] not in {"all", "assistant"}:
         raise ValueError("Invalid tokenizer or objective.")
+    cfg["lora"] = lora_settings(cfg["lora"])
     if cfg["windowing"] not in WINDOWINGS:
         raise ValueError("Windowing must be anchored or sequential.")
     if cfg["device"] not in DEVICES:
@@ -154,7 +157,7 @@ class AdamW(_AdamW):
 
 
 def build_optimizer(model):
-    """The optimizer and schedule the model's spec names, ready to step it."""
+    """The optimizer and schedule the model's spec names, ready to step it. `model` may be a studio_lora.Trainable view."""
     train = model.spec["train"]
     optimizer, optimizer_cfg = module_of("optimizer", train["optimizer"])
     schedule, schedule_cfg = module_of("schedule", train["schedule"])
@@ -363,13 +366,21 @@ def batch_arrays(samples):
     return x, y
 
 
-def load_checkpoint(path, weights_only=False):
-    """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads."""
+def load_checkpoint(path, weights_only=False, merged=True):
+    """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads.
+
+    A LoRA checkpoint (adapters stored under lora::) comes back as one plain merged model unless merged=False, which keeps the
+    frozen base and returns the adapters too (as "lora.<weight>.a" / ".b"), the shape a resumed LoRA run needs."""
     with np.load(Path(path), allow_pickle=False) as archive:
         metadata = json.loads(str(archive["metadata"].item()))
         if metadata.get("architecture") != "groundwork_numpy_decoder" or metadata.get("format_version") != 1:
             raise ValueError("Choose a Groundwork NumPy checkpoint (.npz).")
         metadata["model"] = {key.removeprefix("weight::"): archive[key].copy() for key in archive.files if key.startswith("weight::")}
+        adapters = {key[len(FILE_PREFIX):]: archive[key].copy() for key in archive.files if key.startswith(FILE_PREFIX)}
+        if adapters and merged:
+            metadata["model"] = merge_arrays(metadata["model"], adapters, scale_of(lora_settings(metadata["config"].get("lora"))))
+        elif adapters:
+            metadata["model"].update({PREFIX + key: value for key, value in adapters.items()})
         # optimizer state arrays are stored as adam_<state>::<parameter>, whatever the optimizer (the prefix is historical)
         metadata["optimizer_state"] = {}
         for key in () if weights_only else archive.files:
@@ -545,6 +556,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
     sampler = random.Random(cfg["seed"])
     checkpoint = load_checkpoint(resume) if resume else None
+    if checkpoint and checkpoint["config"].get("lora"):  # a LoRA run resumes from the frozen base plus its adapters, not the merged weights
+        checkpoint["model"] = load_checkpoint(resume, weights_only=True, merged=False)["model"]
     # Older checkpoints must resume with their original row-based partition.
     grouped = not checkpoint or checkpoint.get("split_strategy") == "lineage-v1"
     training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
@@ -562,7 +575,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             previous["windowing"] = cfg["windowing"] = "sequential"
         keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + (
             "seed", "validation", "objective", "windowing", "batch_size", "accumulation",
-            "learning_rate", "weight_decay", "warmup",
+            "learning_rate", "weight_decay", "warmup", "lora",
         )
         current_spec, previous_spec = effective_spec(cfg), effective_spec(previous)
         recipe = ("objective", "optimizer", "schedule")
@@ -579,11 +592,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     if not train_samples:
         raise ValueError("No trainable target tokens were found.")
     model = ScratchTransformer(cfg, tokenizer.vocab_size)
-    optimizer, schedule = build_optimizer(model)
+    transplanted = _initialize_from(model, tokenizer, init_from) if init_from else None
+    trainable = attach_lora(model, cfg["lora"]) if cfg["lora"] else model  # LoRA: the base is frozen; the optimizer sees only the adapters
+    optimizer, schedule = build_optimizer(trainable)
     step, best, history = 0, float("inf"), []
-    transplanted = None
-    if init_from:
-        transplanted = _initialize_from(model, tokenizer, init_from)
     if checkpoint:
         model.load_weights(checkpoint["model"])
         for state in optimizer.states:
@@ -636,7 +648,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     "sampler_state": sampler.getstate(), "model_rng": model.rng.bit_generator.state,
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
-        arrays.update({"weight::" + key: model.backend.to_cpu(value) for key, value in model.p.items()})
+        arrays.update({(FILE_PREFIX + key[len(PREFIX):] if key in model.adapter_names else "weight::" + key): model.backend.to_cpu(value)
+                       for key, value in model.p.items()})
         for state in optimizer.states:
             arrays.update({f"adam_{state}::{key}": model.backend.to_cpu(value) for key, value in getattr(optimizer, state).items()})
         path = directory / filename
@@ -736,7 +749,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             payload = model.telemetry(model.last_tape) if sample_telemetry and model.last_tape is not None else None
             model.keep_tape, model.last_tape = False, None
             before = {key: model.backend.to_cpu(value).copy() for key, value in model.p.items()} if snapshot_due else None
-            norm = optimizer.update(model, rate)
+            norm = optimizer.update(trainable, rate)
             step = next_step
             trained_tokens += token_count
             model.backend.synchronize()
