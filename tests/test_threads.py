@@ -130,6 +130,28 @@ class ThreadsTest(unittest.TestCase):
             threading.Event().wait(0.005)
         self.assertIsNone(gone())
 
+    def test_events_from_a_worker_never_touch_tk(self):
+        """A worker's emit only queues: the Tk thread delivers it in pump(), so a destroyed app is never called from a worker."""
+        from studio_ia.services import FakeServices
+
+        class Widget:
+            def after(self, ms, fn):
+                calls.append(threading.get_ident())
+                fn()
+
+        calls, got = [], []
+        services = FakeServices()
+        services.bind_ui(Widget())
+        services.subscribe(lambda kind, payload: got.append((kind, payload)))
+        worker = threading.Thread(target=lambda: (services.emit("a", 1), services.emit("b", 2)))
+        worker.start()
+        worker.join()
+        self.assertEqual((calls, got), ([], []))
+        services.pump()
+        self.assertEqual(got, [("a", 1), ("b", 2)])
+        services.emit("c")  # on the Tk thread: scheduled with after, as before
+        self.assertEqual((calls, got[-1]), ([threading.get_ident()], ("c", None)))
+
     def test_no_bare_thread_starts(self):
         """A thread started outside threads.start() can free Tk objects off the Tk thread: crashes CI at random."""
         allowed = {"studio_ia/threads.py"}

@@ -103,6 +103,7 @@ class Studio(tk.Tk):
         self.unsubscribe = self.services.subscribe(self.on_event)
         threads.attach()
         self._settle()
+        self._pump()
         self.services.start_queue()  # jobs saved as waiting by the last session start again
         with timed("shell.refresh_strip"):
             self.refresh_strip()
@@ -374,6 +375,10 @@ class Studio(tk.Tk):
         if self._waiting + self._quiet:
             self.after(60, self._poll)
 
+    def _pump(self):
+        self.services.pump()  # events the queue runner and other workers emitted, delivered here on the Tk thread
+        self._pump_id = self.after(50, self._pump)
+
     def _settle(self):
         threads.settle()  # page and download threads that finished give the collector back, here on the Tk thread
         self._settle_id = self.after(250, self._settle)
@@ -394,6 +399,7 @@ class Studio(tk.Tk):
             lane.stop()
         threads.detach()
         self.after_cancel(self._settle_id)
+        self.after_cancel(self._pump_id)
         self.unsubscribe()
         close = getattr(self.services, "close", None)
         if close:
