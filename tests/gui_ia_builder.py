@@ -4,6 +4,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 
+from studio_data_kinds import DataSummary
 from studio_spec import default_spec
 from studio_versions import spec_diff
 from studio_warmstart import NOTES
@@ -22,7 +23,7 @@ class BuilderTest(unittest.TestCase):
         self.fake = FakeServices()
         self.fake.save_version(default_spec(), "first design")
         self.fake.versions()[0].best_checkpoint = "/tmp/ckpt/best.npz"  # trained, so a catch-up can start from it
-        self.has_text = lambda kind: {"kind": kind, "count": 1, "sets": [{"id": "d1", "name": "books", "count": 1}]}
+        self.has_text = lambda kind, query="": DataSummary(kind, 1, sets=[{"id": "d1", "name": "books", "count": 1}])
         self.fake.data = self.has_text
         try:
             self.app = Studio(self.fake)
@@ -80,7 +81,7 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(self.page.phase, "queued")
 
     def test_no_text_means_no_job(self):
-        self.fake.data = lambda kind: {"kind": kind, "count": 0, "sets": []}
+        self.fake.data = lambda kind, query="": DataSummary(kind)
         self.page.edit(L=4)
         self.page.save()
         self.page.queue_it(False)

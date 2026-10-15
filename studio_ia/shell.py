@@ -325,6 +325,8 @@ class Studio(tk.Tk):
         while True:
             work, then, quiet = self.jobs.get()
             if work is None:
+                if then:  # the shell was destroyed mid-job: its hold is released once that job has finished
+                    threads.done()
                 return
             try:
                 self.results.put((then, work(), None, quiet))
@@ -403,7 +405,7 @@ class Studio(tk.Tk):
             self.pages[self.route].on_event(kind, payload)
 
     def destroy(self):
-        self.jobs.put((None, None, False))
+        self.jobs.put((None, bool(self._waiting + self._quiet), False))
         threads.detach()
         self.after_cancel(self._settle_id)
         self.unsubscribe()
