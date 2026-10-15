@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import os
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -317,9 +318,12 @@ def preset_specs(gpt2_words=False):
 
 
 def gpu_kind():
-    """"cuda" or "mps" when training here will use a GPU, else "". Imports torch and runs a small check, so call it off the Tk thread."""
-    from studio_backend import gpu_status
-    status = gpu_status()
+    """"cuda" or "mps" when this process already found a GPU, else "". It only reads an earlier check: importing torch or
+    running a Metal/CUDA calculation from the Builder (on a worker thread, while Tk runs) crashes the app on macOS."""
+    backend = sys.modules.get("studio_backend")
+    if backend is None or not backend.gpu_status.cache_info().currsize:
+        return ""
+    status = backend.gpu_status()
     return status["kind"] if status["available"] else ""
 
 
@@ -556,7 +560,7 @@ class BuilderPage(Page):
         self.open, self.scope = set(), {}  # blocks shown with their parts; blocks whose picks apply to them only
         self.draft_spec = None
         self.presets = preset_specs(gpt2_words_ready())
-        self.preset_key, self.gpu = None, None  # the ready-made design being looked at; this computer's GPU ("" none, None not checked)
+        self.preset_key = None  # the ready-made design being looked at
 
     # state ------------------------------------------------------------------
     @property
@@ -1156,15 +1160,7 @@ class BuilderPage(Page):
         tip(self.preset_about, lambda: glossary_text(preset_term(self.preset_key)) if self.preset_key else "")
         self.preset_lines = [tk_label(card, "", 12, "muted", "panel", wraplength=300) for _ in range(4)]  # size, fit, speed, recipe
         self.preset_btn = button(card, T["preset_load"], self.use_preset)
-        if self.gpu is None:
-            self.gpu = ""  # until the check answers, assume the processor alone (the slower case)
-            self.quietly(gpu_kind, self._got_gpu, lane="slow")
         self._paint_preset()
-
-    def _got_gpu(self, kind):
-        self.gpu = kind
-        if self.preset_key:
-            self._paint_preset()
 
     def _paint_preset(self):
         spec = dict(self.presets).get(self.preset_key)
@@ -1174,7 +1170,7 @@ class BuilderPage(Page):
             w.pack_forget()
         if not spec:
             return
-        cost = self.preset_cost = preset_cost(spec, gpu=self.gpu)
+        cost = self.preset_cost = preset_cost(spec, gpu=gpu_kind())
         self.preset_about.configure(text=T["preset_" + self.preset_key])
         texts = [*cost["lines"], T["preset_recipe"].format(recipe=recipe_text(spec))]
         for label, text, bad in zip(self.preset_lines, texts, (False, cost["fits"] is False, cost["slow"], False)):
