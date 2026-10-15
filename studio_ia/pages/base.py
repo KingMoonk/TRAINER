@@ -70,6 +70,34 @@ class Page(ttk.Frame):
     def preload(self):
         """The slow service reads refresh() is about to make, and nothing else: it can run off the Tk thread, so no widgets."""
 
+    opens_at_once = False  # True: the shell shows the page without its loading panel and refresh() asks warmed() first
+    _warming = _warm = False
+
+    def warmed(self):
+        """For an opens_at_once page: True when preload()'s reads are ready to make on the Tk thread. Otherwise they start
+        on the slow lane, refresh() runs again once they are in, and the page draws what it can without them meanwhile."""
+        if self._warm or self.services.ready(self.preload):
+            return True
+        if not self._warming:
+            self._warming = True
+            self.quietly(self._read_ahead, self._warmed, lane="slow")
+        return not self._warming
+
+    def _read_ahead(self):
+        try:
+            self.preload()
+        except Exception:  # refresh() meets the same error on the Tk thread
+            pass
+
+    def _warmed(self, _none):
+        self._warming = False
+        if self.winfo_exists() and self.winfo_manager():  # a page that is not shown reads again when it is
+            self._warm = True  # this refresh reads in place whatever ready() says now: a read that failed or went stale never loops
+            try:
+                self.refresh()
+            finally:
+                self._warm = False
+
     def reload(self):
         """refresh() after the stored data may have changed. The shell swaps in a version that loads behind its panel."""
         self.refresh()
