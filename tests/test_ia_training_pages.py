@@ -11,7 +11,8 @@ from studio_ia.pages.post_training import PostTrainingPage, blocker, live_view, 
 from studio_ia.pages.pretraining import collection_view, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import size_text, storage_state
-from studio_ia.pages.training_run import history_of, phase_at
+from studio_ia.copy import TRAINING as T
+from studio_ia.pages.training_run import history_of, phase_at, switch_note
 from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
 from studio_model import validate_config
 from studio_spec import default_spec
@@ -267,11 +268,34 @@ class GateRules(unittest.TestCase):
         self.assertFalse(studio_gate.passes(before, {"bpc": 2.05, "pass_k": 3, "pass_n": 5})[0])
         self.assertFalse(studio_gate.passes(before, {"bpc": 1.9, "pass_k": 2, "pass_n": 5}, band)[0])  # pass rate fell
 
-    def test_chat_moves_only_below_the_band(self):
+    def test_chat_moves_only_when_the_paired_test_says_better(self):
+        better, unsure = {"better": True, "diff": -.1, "upper": -.02}, {"better": False, "diff": -.1, "upper": .02}
         self.assertTrue(studio_gate.moves_chat(1.0, None, None))
-        self.assertFalse(studio_gate.moves_chat(1.97, 2.0, (1.95, 2.1)))
-        self.assertTrue(studio_gate.moves_chat(1.9, 2.0, (1.95, 2.1)))
-        self.assertFalse(studio_gate.moves_chat(None, 2.0, None))
+        self.assertFalse(studio_gate.moves_chat(1.97, 2.0, unsure))   # lower, but not sure it is more than luck
+        self.assertTrue(studio_gate.moves_chat(1.9, 2.0, better))
+        self.assertFalse(studio_gate.moves_chat(None, 2.0, better))
+        self.assertTrue(studio_gate.moves_chat(1.97, 2.0))             # no held-back text to pair on: lower is enough
+        self.assertFalse(studio_gate.moves_chat(2.03, 2.0))
+
+
+class SwitchNote(unittest.TestCase):
+    def test_while_the_run_goes_it_is_a_first_look_only(self):
+        self.assertEqual(switch_note(True, 1.9, 2.0, None)[0], "held_back_below")
+        self.assertEqual(switch_note(True, 2.1, 2.0, None)[0], "held_back_inside")
+        self.assertEqual(switch_note(True, None, 2.0, None)[0], "no_band_yet")
+        self.assertEqual(switch_note(True, 1.9, 2.0, {"better": True, "diff": -.1})[0], "held_back_below")  # a verdict waits for the end
+
+    def test_after_the_run_the_paired_verdict_says_better_not_sure_or_not_better(self):
+        self.assertEqual(switch_note(False, None, None, {"better": True, "diff": -.0412, "upper": -.01}), ("gate_better", {"gap": "0.041"}))
+        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": -.02, "upper": .01})[0], "gate_not_sure")
+        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": .03, "upper": .1})[0], "gate_not_better")
+        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": float("nan"), "upper": float("nan")})[0], "no_band_yet")
+        self.assertEqual(switch_note(False, None, None, None)[0], "no_band_yet")
+
+    def test_every_note_fills_in_from_the_words_the_page_has(self):
+        words = {"Version": "Version 2", "version": "version 2", "parent": "version 1", "gap": "0.041"}
+        for key in ("held_back_below", "held_back_inside", "no_band_yet", "gate_better", "gate_not_sure", "gate_not_better"):
+            self.assertNotIn("{", T[key].format(**words))
 
 
 class WorkspaceRows(unittest.TestCase):

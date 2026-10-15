@@ -7,10 +7,11 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from studio_compile import CompiledModel
-from studio_eval import (LN2, band_from_scores, bits_per_char, heldout_split, memorise_one_batch, noise_band, run_status,
-                         sanity_checks, score_docs, smooth, training_saved, uniform_bpc, unigram_bpc)
+from studio_eval import (LN2, band_from_scores, bits_per_char, corpus_bpc, heldout_split, memorise_one_batch, noise_band, paired_gain,
+                         run_status, sanity_checks, score_docs, score_windows, smooth, training_saved, uniform_bpc, unigram_bpc)
 from studio_model import LocalModel, Tokenizer
 from studio_registry import for_slot
 from studio_slots import BOS, UNK
@@ -80,7 +81,7 @@ class Formulas(unittest.TestCase):
 
 
 def one_window_at_a_time(local, docs):
-    """score_docs as it was written: one forward pass per context window of every document."""
+    """score_docs as it was first written: back-to-back context windows, each starting with no context."""
     tok, context, uniform = local.tokenizer, local.config["context"], math.log(local.tokenizer.vocab_size)
     out = []
     for text in docs:
@@ -94,6 +95,29 @@ def one_window_at_a_time(local, docs):
             picked = logp[np.arange(len(y)), y]
             unknown = y == UNK
             nats += float(-picked[~unknown].sum()) + uniform * int(unknown.sum())
+        out.append((nats, len(text)))
+    return out
+
+
+def strided_one_window_at_a_time(local, docs):
+    """The sliding-window score written out plainly: one forward pass per window, no batching, each new half after the first read with the half before it."""
+    tok, context, uniform = local.tokenizer, local.config["context"], math.log(local.tokenizer.vocab_size)
+    out = []
+    for text in docs:
+        ids = np.array([BOS] + tok.encode(text), dtype=np.int64)
+        nats, done = 0., 0  # done: ids[1:done + 1] are scored
+        while done < len(ids) - 1:
+            new = context if done == 0 else context // 2
+            end = min(len(ids) - 1, done + new)  # the last target scored by this window
+            begin = max(0, end - context)
+            x, y = ids[begin:end], ids[begin + 1:end + 1]
+            logits = local.model.backend.to_cpu(local.model.forward(x[None]))[0].astype(np.float64)
+            logits -= logits.max(axis=-1, keepdims=True)
+            logp = logits - np.log(np.exp(logits).sum(axis=-1, keepdims=True))
+            fresh = np.arange(begin + 1, end + 1) > done  # the targets not scored by an earlier window
+            picked, unknown = logp[np.arange(len(y)), y], y == UNK
+            nats += float(-picked[fresh & ~unknown].sum()) + uniform * int((fresh & unknown).sum())
+            done = end
         out.append((nats, len(text)))
     return out
 
@@ -149,7 +173,7 @@ class Vectorised(unittest.TestCase):
                 padded = np.concatenate([ids, np.zeros((1, 12), dtype=np.int64)], axis=1)
                 np.testing.assert_allclose(model.forward(padded)[:, :20].numpy(), model.forward(ids).numpy(), atol=1e-5)
 
-    def test_batched_scores_match_one_window_at_a_time(self):
+    def test_batched_scores_match_one_window_at_a_time_with_a_stride(self):
         from studio_model import train
         rows = [json.loads(line) for line in FIXTURE.read_text().splitlines()][:30]
         docs = [r["user"] + "\n" + r["assistant"] for r in rows]
@@ -159,12 +183,114 @@ class Vectorised(unittest.TestCase):
                 cfg = dict(width=16, layers=1, heads=2, context=48, steps=4, batch_size=4, eval_every=4, validation=.2, device="cpu", tokenizer=tokenizer)
                 train(cfg, [{"text": d} for d in docs[5:]], Path(tmp) / "r")
                 local = LocalModel(Path(tmp) / "r" / "last.npz", device="cpu")
-                expected, got = one_window_at_a_time(local, held), score_docs(local, held)
+                expected, got = strided_one_window_at_a_time(local, held), score_docs(local, held)
                 self.assertEqual([c for _, c in got], [c for _, c in expected])
                 for (a, _), (b, _) in zip(got, expected):
                     self.assertAlmostEqual(a, b, delta=1e-5 * max(1., abs(b)))  # float32 logits: batch shape moves the last bits
                 if tokenizer == "character":
                     self.assertIn(UNK, local.tokenizer.encode(held[4]))  # the unknown-character path ran
+
+
+class Strided(unittest.TestCase):
+    def test_windows_cover_every_piece_exactly_once(self):
+        for context in (1, 2, 3, 8, 9, 48):
+            for length in (1, 2, 3, context, context + 1, context + 2, 2 * context, 3 * context + 1, 100):
+                with self.subTest(context=context, length=length):
+                    windows = score_windows(length, context)
+                    scored = [t for start, stop, skip in windows for t in range(start + 1 + skip, stop + 1)]
+                    self.assertEqual(scored, list(range(1, length)))  # every id after BOS, once, in order
+                    for index, (start, stop, skip) in enumerate(windows):
+                        self.assertLessEqual(stop - start, context)
+                        if index:  # a later window scores at most half a window of new pieces, with the pieces before them as context
+                            self.assertLessEqual(stop - start - skip, max(1, context // 2))
+                            self.assertGreaterEqual(skip, min(stop - start, context) - max(1, context // 2))
+
+    def test_every_piece_is_scored_once_by_the_model_pass(self):
+        from studio_model import LocalModel
+        tok = Tokenizer("character", ["a", "b"])
+
+        class Flat:  # every piece equally likely: a document's nats are ln V times the pieces scored
+            def forward(self, x):
+                return torch.zeros(x.shape[0], x.shape[1], tok.vocab_size)
+
+        local = LocalModel.__new__(LocalModel)
+        local.model, local.tokenizer, local.config = Flat(), tok, {"context": 8}
+        docs = ["", "a", "ab" * 3, "ab" * 4, "ab" * 4 + "a", "ab" * 20, "abz" * 13]  # z is unknown: scored at ln V too
+        for (nats, chars), doc in zip(score_docs(local, docs), docs):
+            self.assertEqual(chars, len(doc))
+            self.assertAlmostEqual(nats, len(doc) * math.log(tok.vocab_size), places=6)
+
+    def test_strided_bits_per_character_do_not_exceed_the_old_back_to_back_value(self):
+        from studio_model import train
+        # "aabb" repeating, each document starting at a different phase: the next letter needs the two before it, which a
+        # window starting cold does not have for its first prediction and a window re-reading the previous half does.
+        pattern = "aabb" * 80
+        fit = [pattern[r % 4:r % 4 + 100 + r] for r in range(40)]
+        held = [pattern[r % 4:r % 4 + 130 + 7 * r] for r in range(6)]  # several 32-piece windows each
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(width=16, layers=1, heads=2, context=32, steps=600, batch_size=8, eval_every=600, validation=.2, device="cpu",
+                       tokenizer="character", learning_rate=.01, warmup=5)
+            train(cfg, [{"text": d} for d in fit], Path(tmp) / "r")
+            local = LocalModel(Path(tmp) / "r" / "last.npz", device="cpu")
+            old, new = corpus_bpc(one_window_at_a_time(local, held)), corpus_bpc(score_docs(local, held))
+        self.assertGreater(min(len(local.tokenizer.encode(d)) for d in held), 2 * 32)
+        self.assertLessEqual(new, old)
+        self.assertLess(new, old)  # and the learned context does help here: the gap is not rounding
+
+
+class PairedGain(unittest.TestCase):
+    @staticmethod
+    def scores(bits, chars=20):
+        return [(b * chars * LN2, chars) for b in bits]
+
+    def test_a_clearly_better_model_is_better(self):
+        rng = np.random.default_rng(1)
+        hard = rng.uniform(1.5, 4., 60)  # documents differ a lot in difficulty; the two models share that
+        parent, candidate = self.scores(hard), self.scores(hard - .1 + rng.normal(0, .02, 60))
+        got = paired_gain(parent, candidate)
+        self.assertTrue(got["better"])
+        self.assertLess(got["upper"], 0)
+        self.assertAlmostEqual(got["diff"], -.1, delta=.02)
+        self.assertFalse(paired_gain(candidate, parent)["better"])  # the other way round is worse, not better
+
+    def test_identical_models_are_not_sure(self):
+        scores = self.scores(np.random.default_rng(2).uniform(1., 4., 40))
+        got = paired_gain(scores, list(scores))
+        self.assertFalse(got["better"])
+        self.assertEqual((got["diff"], got["upper"]), (0., 0.))
+
+    def test_a_gap_within_luck_is_not_sure(self):
+        rng = np.random.default_rng(3)
+        base = rng.uniform(1.5, 4., 60)
+        noisy = base + rng.normal(0, .5, 60) - .02  # a hair lower on average, document by document all over the place
+        got = paired_gain(self.scores(base), self.scores(noisy))
+        self.assertLess(got["diff"], 0)
+        self.assertFalse(got["better"])
+
+    def test_pairing_sees_what_the_unpaired_band_cannot(self):
+        rng = np.random.default_rng(4)
+        hard = rng.uniform(.5, 6., 80)  # a wide spread of difficulty swamps a small steady gain unless the documents are paired
+        parent, candidate = self.scores(hard), self.scores(hard - .05)
+        lo, _ = band_from_scores(parent)
+        self.assertGreater(corpus_bpc(candidate), lo)  # inside the parent's own band: the old gate could not see it
+        self.assertTrue(paired_gain(parent, candidate)["better"])
+
+    def test_the_confidence_level_and_documents_must_match(self):
+        rng = np.random.default_rng(5)
+        base = rng.uniform(1.5, 4., 50)
+        parent, candidate = self.scores(base), self.scores(base + rng.normal(-.03, .1, 50))
+        loose, strict = paired_gain(parent, candidate, confidence=.8), paired_gain(parent, candidate, confidence=.999)
+        self.assertLess(loose["upper"], strict["upper"])
+        with self.assertRaises(ValueError):
+            paired_gain(parent, candidate[:-1])
+        with self.assertRaises(ValueError):
+            paired_gain(parent, self.scores(base, chars=21))
+        self.assertFalse(paired_gain(parent[:1], candidate[:1])["better"])  # one document says nothing about luck
+
+    def test_the_same_scores_give_the_same_answer(self):
+        base = np.random.default_rng(6).uniform(1.5, 4., 50)
+        a, b = self.scores(base), self.scores(base - .05)
+        self.assertEqual(paired_gain(a, b), paired_gain(a, b))
 
 
 class TinyRun(unittest.TestCase):

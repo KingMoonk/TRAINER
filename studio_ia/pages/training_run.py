@@ -1,6 +1,7 @@
 """Pretraining run: readable at a glance. Everything in bits per character."""
 from __future__ import annotations
 
+import math
 import tkinter as tk
 
 import studio_eval
@@ -33,6 +34,17 @@ def sample_rows(curve, step, pn):
     else:
         rows.append((T["now_step"].format(step=f"{step:,}") if step is not None else "now", T["no_sample_yet"]))
     return rows
+
+
+def switch_note(running, last_held, best, gate):
+    """(copy key, {gap}) for the line about Chat switching. While the run goes it is only a first look at the held-back curve against
+    the earlier best; once it ends and Chat has weighed it (services.gate_result), the paired test's verdict."""
+    if not running and gate and math.isfinite(gate["diff"]):
+        gap = f"{abs(gate['diff']):.3f}"
+        return ("gate_better" if gate["better"] else "gate_not_sure" if gate["diff"] < 0 else "gate_not_better"), {"gap": gap}
+    if last_held is None or best is None:
+        return "no_band_yet", {}
+    return ("held_back_below" if last_held < best else "held_back_inside"), {}
 
 
 def num(x):
@@ -92,7 +104,7 @@ class TrainingRunPage(Page):
         how = HowItWorks(b, T["how_status_work"], bg="bg")
         how.pack(fill="x", pady=(0, GUTTER))
         text = (f"{T['status_one_of']} {T['status_learning']} {T['learning_desc']} {T['status_flat']} {T['flat_desc']} "
-                f"{T['status_memorising']} {T['memorising_desc']}\n\n{T['schedule_note']}\n\n{T['lr_auto_note']}")
+                f"{T['status_memorising']} {T['memorising_desc']}\n\n{T['schedule_note']}\n\n{T['lr_auto_note']}\n\n{T['gate_how']}")
         tk_label(how.body, text, 13, "text2", "bg", wraplength=760).pack(anchor="w")
         self.samples = Card(b)
         self.samples.pack(fill="x")
@@ -152,7 +164,11 @@ class TrainingRunPage(Page):
             refs = s.references(parent or v) if v else {}
         except NotImplementedError:
             refs = {}
-        best, band = refs.get("best_so_far_bpc"), refs.get("noise_band")
+        best = refs.get("best_so_far_bpc")
+        try:
+            gate = s.gate_result(v) if v and not q.job else None
+        except NotImplementedError:
+            gate = None
         rows = params.get("config", {}).get("batch_size", 16)
         seen = q.step * rows * params.get("config", {}).get("context", CONTEXT)
         per_pass = curve.get("pieces_per_pass") or params.get("pieces_per_pass")
@@ -180,15 +196,14 @@ class TrainingRunPage(Page):
         reflines = [(name, val) for name, val in (("uniform guess", refs.get("uniform_bpc")),
                     ("counting word frequencies", refs.get("unigram_bpc")), (f"version {pn}’s best" if pn else "earlier best", best)) if val is not None]
         self.plot.set(steps=steps, smooth=smooth, heldout=held, refs=reflines, total=curve.get("total") or q.total or None,
-                      progress=q.step, lr=curve.get("lr") or [], phases=curve.get("phases") or [], band=band)
+                      progress=q.step, lr=curve.get("lr") or [], phases=curve.get("phases") or [])
         chat = s.best_version() if v else None
         cn = chat.number if chat else pn
-        below = last_h is not None and band is not None and last_h < band[0]
         self.switch_head.configure(text=T["chat_still_uses"].format(chat=f"version {cn}" if cn else "no trained version yet"))
         words = {"Version": f"Version {n}" if n else "This version", "version": f"version {n}" if n else "this version",
-                 "parent": f"version {pn}" if pn else "the earlier best"}
-        key = "held_back_below" if below else "held_back_inside" if band is not None and last_h is not None else "no_band_yet"
-        self.switch_text.configure(text=T[key].format(**words))
+                 "parent": f"version {gate['vs']}" if gate and not q.job else f"version {pn}" if pn else "the earlier best"}
+        key, extra = switch_note(bool(q.job), last_h, best, gate)
+        self.switch_text.configure(text=T[key].format(**words, **extra) + (" " + T["gate_seeds"] if key in ("gate_not_sure", "gate_not_better") else ""))
         self.samples_view(curve, q, n, pn)
 
     def samples_view(self, curve, q, n, pn):

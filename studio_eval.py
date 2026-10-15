@@ -1,4 +1,4 @@
-"""Evaluation and references: bits per character, uniform and unigram reference lines, noise band, run status.
+"""Evaluation and references: bits per character, uniform and unigram reference lines, paired gain test, run status.
 
 Documents are plain strings. Model calls go through LocalModel / ScratchTransformer.forward + backend.to_cpu only.
 """
@@ -18,6 +18,8 @@ from studio_slots import BOS, PAD, UNK
 LN2 = math.log(2)
 SCORE_WINDOWS = 512  # windows gathered before a scoring pass
 SCORE_ELEMENTS = 4_000_000  # most float64 logits (batch x window x vocabulary) one scoring pass holds
+SCORE_METHOD = "stride-half-1"  # how score_docs reads a document; scores stored under another value are stale
+BOOTSTRAP_ELEMENTS = 2_000_000  # most resampled indices one bootstrap pass holds
 
 
 def heldout_split(docs, fraction=.1, seed=0):
@@ -33,54 +35,74 @@ def _ids(tokenizer, text):
     return tokenizer.encode_array(text) if hasattr(tokenizer, "encode_array") else np.asarray(tokenizer.encode(text), dtype=np.int64)
 
 
+def score_windows(length, context):
+    """(start, stop, skip) per forward pass over a document of `length` ids (BOS first): inputs ids[start:stop], targets
+    ids[start + 1:stop + 1], and the first `skip` positions are context only. Each window after the first moves on by
+    context // 2 and re-reads the previous half, so every id after BOS is scored exactly once and (past the first
+    window) with at least half a window of context."""
+    stride, last = max(1, context // 2), length - 1  # targets are ids[1:length]
+    out, first = [], 1
+    while first <= last:
+        stop = min(last, first + (context if first == 1 else stride) - 1)
+        start = max(0, stop - context)
+        out.append((start, stop, first - start - 1))
+        first = stop + 1
+    return out
+
+
 def score_docs(model, docs):
     """Per document (nats, characters). Characters the tokenizer cannot encode (UNK pieces) are scored at ln V.
 
-    model is a checkpoint path or a LocalModel. Windows from many documents run through the model together,
-    right-padded to the longest in the batch; every mixer is causal, so the padding never reaches a real position.
+    model is a checkpoint path or a LocalModel. A document is read in overlapping windows (score_windows): each window
+    after the first scores only its new half, with the half before it as context, so no piece is scored cold except the
+    first window's. Windows from many documents run through the model together, right-padded to the longest in the
+    batch; every mixer is causal, so the padding never reaches a real position.
     """
     from studio_model import LocalModel
     local = model if isinstance(model, LocalModel) else LocalModel(model, device="cpu")
     tok, context, uniform = local.tokenizer, local.config["context"], math.log(local.tokenizer.vocab_size)
     nats = [0.] * len(docs)
-    pending = []  # (document, inputs, targets); scored and cleared once enough have gathered, so memory stays bounded
+    pending = []  # (document, inputs, targets, skip); scored and cleared once enough have gathered, so memory stays bounded
 
     def flush():
         pending.sort(key=lambda window: len(window[1]))  # similar lengths together: little padding
         size = max(1, SCORE_ELEMENTS // (context * tok.vocab_size))
         for first in range(0, len(pending), size):
             batch = pending[first:first + size]
-            lengths = np.array([len(inputs) for _, inputs, _ in batch])
+            lengths = np.array([len(inputs) for _, inputs, _, _ in batch])
+            skips = np.array([skip for _, _, _, skip in batch])
             x, y = np.full((2, len(batch), lengths.max()), PAD, dtype=np.int64)
-            for row, (_, inputs, targets) in enumerate(batch):
+            for row, (_, inputs, targets, _) in enumerate(batch):
                 x[row, :len(inputs)], y[row, :len(targets)] = inputs, targets
             logp = torch.log_softmax(local.model.forward(x).double(), dim=-1).gather(-1, torch.as_tensor(y)[..., None])[..., 0].cpu().numpy()
-            real = np.arange(x.shape[1])[None, :] < lengths[:, None]
+            position = np.arange(x.shape[1])[None, :]
+            real = (position < lengths[:, None]) & (position >= skips[:, None])
             unknown = real & (y == UNK)
             scored = np.where(real & ~unknown, -logp, 0.).sum(axis=1) + uniform * unknown.sum(axis=1)
-            for (doc, _, _), value in zip(batch, scored):
+            for (doc, _, _, _), value in zip(batch, scored):
                 nats[doc] += float(value)
         pending.clear()
 
     for doc, text in enumerate(docs):
         ids = np.concatenate([[BOS], _ids(tok, text)])
-        for start in range(0, len(ids) - 1, context):
-            y = ids[start + 1:start + context + 1]
-            pending.append((doc, ids[start:start + len(y)], y))
+        for start, stop, skip in score_windows(len(ids), context):
+            pending.append((doc, ids[start:stop], ids[start + 1:stop + 1], skip))
         if len(pending) >= SCORE_WINDOWS:
             flush()
     flush()
     return [(n, len(text)) for n, text in zip(nats, docs)]
 
 
-def _bpc(scores):
-    chars = sum(c for _, c in scores)
-    return sum(n for n, _ in scores) / chars / LN2 if chars else float("nan")
+def corpus_bpc(scores):
+    """Total nats over total characters of per-document (nats, characters) rows, divided by ln 2."""
+    arr = np.asarray(scores, dtype=np.float64).reshape(-1, 2)
+    chars = arr[:, 1].sum()
+    return float(arr[:, 0].sum() / chars / LN2) if chars else float("nan")
 
 
 def bits_per_char(checkpoint, docs):
     """Total nats over total characters, divided by ln 2."""
-    return _bpc(score_docs(checkpoint, docs))
+    return corpus_bpc(score_docs(checkpoint, docs))
 
 
 def uniform_bpc(tokenizer, docs):
@@ -109,7 +131,11 @@ def unigram_bpc(tokenizer, docs, eval_docs=None):
 
 
 def band_from_scores(scores, resamples=200, seed=0):
-    """(lo, hi) 10th-90th percentile of the corpus bpc over bootstrap resamples of documents."""
+    """(lo, hi) 10th-90th percentile of the corpus bpc over bootstrap resamples of documents.
+
+    One model on its own: it says how far that one number moves with the choice of documents. It is not a test of one
+    version against another; for that use paired_gain.
+    """
     rng = np.random.default_rng(seed)
     arr = np.array(scores, dtype=np.float64)
     picks = rng.integers(0, len(arr), (resamples, len(arr)))
@@ -119,6 +145,38 @@ def band_from_scores(scores, resamples=200, seed=0):
 
 def noise_band(checkpoint, docs, resamples=200, seed=0):
     return band_from_scores(score_docs(checkpoint, docs), resamples, seed)
+
+
+def paired_gain(parent, candidate, resamples=1000, seed=0, confidence=.95):
+    """Is the candidate better than the parent on the same held-back documents? {diff, upper, better}.
+
+    parent and candidate are score_docs rows (nats, characters) for the same documents in the same order. Documents are
+    resampled with the same indices for both, so what the two versions share (how hard each document is) cancels, and
+    diff is candidate minus parent in corpus bits per character. upper is the upper end of a one-sided `confidence`
+    interval of that difference; the candidate is better only when upper is below 0, so a gap that luck in the choice of
+    documents could produce reads as not sure. Identical models give diff 0, upper 0 and are never better.
+
+    Repeated looks: the test is meant for one look per pair, at the end of a run on its best checkpoint. Re-asking at
+    every checkpoint would let luck win eventually (each look is another chance), so Chat does not. A caller that must
+    look k times should ask for confidence 1 - (1 - confidence) / k (Bonferroni).
+
+    This covers the choice of documents only. Seed variance (a different random start giving a different result) is not in
+    it; Compare runs measure that spread.
+    """
+    p, c = np.asarray(parent, dtype=np.float64).reshape(-1, 2), np.asarray(candidate, dtype=np.float64).reshape(-1, 2)
+    if len(p) != len(c) or not np.array_equal(p[:, 1], c[:, 1]):
+        raise ValueError("Both versions must be scored on the same documents.")
+    n, chars = len(p), p[:, 1]
+    if n < 2 or not chars.sum():
+        return {"diff": float("nan"), "upper": float("nan"), "better": False}
+    delta = c[:, 0] - p[:, 0]
+    rng = np.random.default_rng(seed)
+    diffs, step = np.empty(resamples), max(1, BOOTSTRAP_ELEMENTS // n)
+    for first in range(0, resamples, step):
+        picks = rng.integers(0, n, (min(step, resamples - first), n))
+        diffs[first:first + len(picks)] = delta[picks].sum(1) / chars[picks].sum(1) / LN2
+    upper = float(np.percentile(diffs, 100 * confidence))
+    return {"diff": float(delta.sum() / chars.sum() / LN2), "upper": upper, "better": upper < 0}
 
 
 def smooth(values, alpha=.2):
