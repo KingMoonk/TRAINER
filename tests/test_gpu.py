@@ -76,6 +76,20 @@ class GpuIntegrationChecks(unittest.TestCase):
         for key in cpu.p:
             np.testing.assert_allclose(to_np(cpu.p[key]), gpu.backend.to_cpu(gpu.p[key]), rtol=1e-3, atol=1e-5, err_msg=key)
 
+        # Greedy generation from one checkpoint loaded on both devices.
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "trained" / "last.npz"
+            train(tiny_config("cpu"), [normalize({"user": "a", "assistant": "b"})], checkpoint.parent)
+            cpu_local, gpu_local = LocalModel(checkpoint, device="cpu"), LocalModel(checkpoint, device=self.kind)
+            tokens = np.array([[1, 3, 8, 2, 4, 9]])
+            cpu_logits = cpu_local.model.backend.to_cpu(cpu_local.model.forward(tokens))
+            gpu_logits = gpu_local.model.backend.to_cpu(gpu_local.model.forward(tokens))
+            np.testing.assert_allclose(cpu_logits, gpu_logits, rtol=0, atol=1e-3)
+            np.testing.assert_array_equal(cpu_logits.argmax(axis=-1), gpu_logits.argmax(axis=-1))
+            prompt = [{"role": "user", "content": "a"}]
+            self.assertEqual(gpu_local.generate(prompt, max_tokens=8, temperature=0),
+                             cpu_local.generate(prompt, max_tokens=8, temperature=0))
+
     def test_gpu_learning_inference_and_portable_legacy_resume(self):
         examples = [normalize({"user": "a", "assistant": "b"})]
         with tempfile.TemporaryDirectory() as directory:
@@ -93,7 +107,7 @@ class GpuIntegrationChecks(unittest.TestCase):
             for device in ("cpu", self.kind):
                 local = LocalModel(checkpoint_path, device=device)
                 self.assertEqual(local.model.backend.device, device)
-                self.assertEqual(local.generate(prompt, max_tokens=5, temperature=0), "b")
+            cpu_reply = LocalModel(checkpoint_path, device="cpu").generate(prompt, max_tokens=5, temperature=0)
 
             # Desktop loading and generation use distinct short-lived workers.
             # Keeping both executors alive guarantees separate OS threads here.
@@ -105,7 +119,7 @@ class GpuIntegrationChecks(unittest.TestCase):
                     lambda: (threading.get_ident(), threaded_model.generate(prompt, max_tokens=5, temperature=0))
                 ).result(timeout=30)
                 self.assertNotEqual(load_thread, generation_thread)
-                self.assertEqual(reply, "b")
+                self.assertEqual(reply, cpu_reply)
 
             # A GPU checkpoint can resume on the CPU.
             cpu_directory = root / "cpu-resumed"
@@ -126,7 +140,8 @@ class GpuIntegrationChecks(unittest.TestCase):
             legacy_path = root / "legacy-cpu.npz"
             np.savez_compressed(legacy_path, **arrays)
             legacy_local = LocalModel(legacy_path, device=self.kind)
-            self.assertEqual(legacy_local.generate(prompt, max_tokens=5, temperature=0), "b")
+            self.assertEqual(legacy_local.generate(prompt, max_tokens=5, temperature=0),
+                             LocalModel(legacy_path, device="cpu").generate(prompt, max_tokens=5, temperature=0))
 
             # Resume the same CPU state on both devices to verify restored Adam
             # moments affect the next steps consistently, beyond merely loading it.
