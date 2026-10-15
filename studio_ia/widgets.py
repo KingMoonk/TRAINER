@@ -8,7 +8,13 @@ from studio_ia.theme import C, GUTTER, STATES, font, tk_label
 
 
 def _activate(widget, command):
-    """Click, Return and space all fire `command` (keyboard parity for non-button widgets)."""
+    """Click, Return and space all fire `command` (keyboard parity for non-button widgets).
+
+    Also draws the focus ring: a 1px violet outline that is invisible (same colour as the widget) until it has focus.
+    """
+    if not int(widget.cget("highlightthickness")):
+        widget.configure(highlightthickness=1, highlightbackground=widget.cget("bg"))
+    widget.configure(highlightcolor=C["violet"])
     for seq in ("<Button-1>", "<Return>", "<space>"):
         widget.bind(seq, lambda _e: command())
 

@@ -8,7 +8,7 @@ import tkinter as tk
 from studio_ia.copy import CHAT as T
 from studio_ia.pages.base import Page
 from studio_ia.theme import C, GUTTER, font, tk_label
-from studio_ia.widgets import Card, Kicker, Toggle, button
+from studio_ia.widgets import Card, Kicker, Toggle, _activate, button
 
 A_COLOR, B_COLOR = "violet", "blue"
 TONE = {"better": "violet", "baseline": "muted", "within the spread": "muted", "worse": "coral", "catching up": "coral"}
@@ -163,8 +163,7 @@ class ChatPage(Page):
         teach.pack(fill="x", pady=(0, GUTTER))
         link = tk_label(teach, T["teach_correction"], 14, "violet", cursor="hand2", takefocus=1)
         link.pack(anchor="w")
-        for seq in ("<Button-1>", "<Return>", "<space>"):
-            link.bind(seq, lambda _e: self.teach_row.pack(anchor="w", fill="x", pady=4))
+        _activate(link, lambda: self.teach_row.pack(anchor="w", fill="x", pady=4))
         tk_label(teach, T["teach_correction_desc"], 12, "dim", wraplength=780).pack(anchor="w")
         self.teach_row = tk.Frame(teach, bg=C["bg"])
         self.correction = tk.Entry(self.teach_row, bg=C["panel2"], fg=C["text"], insertbackground=C["text"], relief="flat", font=font(14))
@@ -245,14 +244,13 @@ class ChatPage(Page):
         tk_label(card, sub, 13, "muted", "panel", wraplength=780).pack(anchor="w")
         how = tk_label(card, "Hide how this is measured" if self.how else T["how_measured"], 13, "violet", "panel", cursor="hand2", takefocus=1)
         how.pack(anchor="w", pady=(8, 0))
-        for seq in ("<Button-1>", "<Return>", "<space>"):
-            how.bind(seq, lambda _e: self._toggle_how())
+        _activate(how, self._toggle_how)
         if self.how:
             for key in ("training_saved", "verdict_text", "verdict_checked", "verdict_large_change", "verdict_error_unit", "verdict_error_unit_desc"):
                 tk_label(card, T[key], 12, "muted", "panel", wraplength=780).pack(anchor="w", pady=1)
             size = tk_label(card, T["size_check"], 13, "violet", "panel", cursor="hand2", takefocus=1)
             size.pack(anchor="w", pady=4)
-            size.bind("<Button-1>", lambda _e: self.navigate("compare"))
+            _activate(size, lambda: self.navigate("compare"))
 
     def _shelf(self, vs, best):
         for w in self.shelf.winfo_children():
@@ -275,9 +273,9 @@ class ChatPage(Page):
             tk_label(row, chip, 12, TONE.get(chip, "muted"), bg, width=16).pack(side="left")
             tk_label(row, v.change, 13, "text2", bg).pack(side="left")
             tk_label(row, slot, 12, A_COLOR if is_a else B_COLOR if is_b else "muted", bg).pack(side="right", padx=8)
-            for w in (row, *row.winfo_children()):
+            _activate(row, lambda n=num: self.pick(n))
+            for w in row.winfo_children():
                 w.bind("<Button-1>", lambda _e, n=num: self.pick(n))
-            row.bind("<Return>", lambda _e, n=num: self.pick(n))
             self.rows[num] = row
         steps = []
         for num, v in sorted(vs.items()):
