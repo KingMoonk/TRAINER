@@ -1,5 +1,7 @@
 """LoRA (studio_lora): adapters start as the identity, only they train, the base stays frozen, and merging changes nothing."""
+import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import torch
 import studio_lora as lora
 import studio_spec
 from studio_model import ScratchTransformer, build_optimizer, load_checkpoint, train, validate_config
+from studio_slots import OFFSET
 
 WORDS = ("yes", "no", "cat", "dog", "sun", "red", "sky", "big")
 EXAMPLES = [{"user": f"Copy: {w}", "assistant": w} for w in WORDS] * 3
@@ -52,7 +55,7 @@ class Adapters(unittest.TestCase):
         self.assertTrue(torch.equal(model.forward(IDS), before))
         self.assertTrue(all(float(model.p[key].abs().sum()) == 0 for key in model.p if key.endswith(".b") and key.startswith("lora.")))
         self.assertEqual(sorted(view.p), sorted(model.adapter_names))
-        self.assertEqual(len(view.p), 2 * 2 * 2)  # two layers x (qkv, proj) x (a, b)
+        self.assertEqual(len(view.p), 2 * 2 * 2 + 1)  # two layers x (qkv, proj) x (a, b), and the special-token rows
 
     def test_only_adapters_get_gradients_and_the_optimizer_sees_only_them(self):
         model = tiny_model()
@@ -118,9 +121,9 @@ class Adapters(unittest.TestCase):
     def test_targets_can_be_the_mlp_too(self):
         model = tiny_model()
         view = lora.attach_lora(model, {"targets": ["qkv", "proj", "f1", "f2"]})
-        self.assertEqual(len(view.p), 2 * 4 * 2)
+        self.assertEqual(len(view.p), 2 * 4 * 2 + 1)
 
-    def test_merge_gives_the_same_output_and_a_plain_model(self):
+    def test_the_effective_weights_load_into_a_plain_model_with_the_same_output(self):
         model = tiny_model()
         lora.attach_lora(model, {"rank": 4, "alpha": 8})
         rng = np.random.default_rng(0)
@@ -131,11 +134,9 @@ class Adapters(unittest.TestCase):
         plain = tiny_model()
         plain.load_weights(arrays)
         self.assertTrue(torch.allclose(plain.forward(IDS), unmerged, atol=1e-5))
-        lora.merge_lora(model)
-        self.assertEqual(set(model.p), set(plain.p))
-        self.assertFalse(model.adapters)
-        self.assertTrue(torch.allclose(model.forward(IDS), unmerged, atol=1e-5))
-        self.assertFalse(torch.equal(model.p["block0.qkv.w"], tiny_model().p["block0.qkv.w"]))
+        self.assertEqual(set(arrays), set(plain.p))
+        self.assertFalse(torch.equal(plain.p["block0.qkv.w"], tiny_model().p["block0.qkv.w"]))
+        self.assertFalse(torch.equal(plain.p["token"][:OFFSET], tiny_model().p["token"][:OFFSET]))
 
     def test_merge_arrays_matches_the_formula(self):
         w = {"x.w": np.ones((3, 2), dtype=np.float32)}
@@ -143,6 +144,52 @@ class Adapters(unittest.TestCase):
         merged = lora.merge_arrays(w, {"x.w.a": a, "x.w.b": b}, 2.0)
         np.testing.assert_allclose(merged["x.w"], 1 + 2.0 * (a @ b))
         self.assertEqual(w["x.w"].tolist(), np.ones((3, 2)).tolist())  # the input is not modified
+
+    def test_merge_arrays_adds_the_special_token_rows_and_leaves_the_rest(self):
+        table = np.arange(30, dtype=np.float32).reshape(10, 3)
+        rows = np.ones((4, 3), dtype=np.float32)
+        merged = lora.merge_arrays({"token": table}, {"token.rows": rows}, 2.0)  # the scale is for the low-rank pairs only
+        np.testing.assert_array_equal(merged["token"][:4], table[:4] + 1)
+        np.testing.assert_array_equal(merged["token"][4:], table[4:])
+        with self.assertRaises(ValueError):
+            lora.merge_arrays({"other": table}, {"token.rows": rows}, 2.0)
+
+    def test_the_special_token_rows_train_and_get_their_gradient(self):
+        model = tiny_model()
+        view = lora.attach_lora(model, {"rank": 4})
+        key = model.row_adapters["token"]
+        self.assertEqual(tuple(model.p[key].shape), (OFFSET, 32))
+        self.assertEqual(key, "lora.token.rows")
+        y = np.array([[-100, 9, 10, 11, 12, 13, 14, 15]])
+        model.zero_grad()
+        model.loss_and_backward(IDS, y)
+        self.assertGreater(float(model.g[key].abs().sum()), 0)
+        self.assertEqual(float(model.g["token"].abs().sum()), 0)
+        optimizer, _ = build_optimizer(view)
+        self.assertIn(key, optimizer.m)
+
+    def test_mixed_precision_is_refused_because_it_rounds_the_adapter_away(self):
+        model = tiny_model()
+        model.compute = torch.bfloat16  # as when the precision setting asks for it on a machine that supports it
+        with self.assertRaises(ValueError) as caught:
+            lora.attach_lora(model, {})
+        self.assertIn("float32", str(caught.exception))
+        self.assertFalse(model.adapters)
+
+    def test_telemetry_counts_the_adapters_and_the_special_rows(self):
+        model = tiny_model()
+        lora.attach_lora(model, {"rank": 4})
+        y = np.array([[-100, 9, 10, 11, 12, 13, 14, 15]])
+        for key in model.adapter_names:  # B starts at zero, which would leave A without a gradient
+            model.p[key].add_(.1)
+        model.zero_grad()
+        model.keep_tape = True
+        model.loss_and_backward(IDS, y)
+        stats = model.telemetry(model.last_tape)
+        self.assertGreater(stats["embedding"]["grad_norm"], 0)
+        self.assertEqual(stats["output"]["grad_norm"], 0)  # the final norm is frozen and the tied head has no weights of its own
+        for block in stats["blocks"]:
+            self.assertGreater(block["attention"]["grad_norm"], 0)
 
 
 class Training(unittest.TestCase):
@@ -170,13 +217,17 @@ class Training(unittest.TestCase):
         raw = load_checkpoint(self.dir / "tuned" / "last.npz", merged=False)
         original = load_checkpoint(self.base)["model"]
         adapters = [key for key in raw["model"] if key.startswith("lora.")]
-        self.assertEqual(len(adapters), 2 * 2 * 2)
+        self.assertEqual(len(adapters), 2 * 2 * 2 + 1)
         for key, value in original.items():
             np.testing.assert_array_equal(raw["model"][key], value, err_msg=key)
         merged = load_checkpoint(self.dir / "tuned" / "last.npz")["model"]
         self.assertEqual(set(merged), set(original))  # one plain model: chat and export need nothing special
         self.assertFalse(np.array_equal(merged["block0.qkv.w"], original["block0.qkv.w"]))
-        self.assertTrue(np.array_equal(merged["token"], original["token"]) if "token" in merged else True)
+        # the special-token rows (PAD, BOS, EOS, the role tokens) train; every other row of the token table stays as it was
+        self.assertFalse(np.array_equal(merged["token"][:OFFSET], original["token"][:OFFSET]))
+        np.testing.assert_array_equal(merged["token"][OFFSET:], original["token"][OFFSET:])
+        np.testing.assert_array_equal(raw["model"]["token"], original["token"])
+        self.assertEqual(raw["model"]["lora.token.rows"].shape, (OFFSET, 32))
         self.assertEqual(raw["config"]["lora"]["rank"], 4)
         self.assertTrue(all(key.startswith("lora.") for state in raw["optimizer_state"].values() for key in state))
 
@@ -192,14 +243,45 @@ class Training(unittest.TestCase):
         plain.load_weights(merged["model"])
         self.assertTrue(torch.allclose(with_adapters.forward(IDS), plain.forward(IDS), atol=1e-5))
 
-    def test_resume_continues_a_lora_run(self):
+    def test_resume_continues_a_lora_run_exactly_where_it_stopped(self):
         different = [{"user": f"Copy: {w}", "assistant": w[::-1]} for w in WORDS] * 3
-        cfg = dict(TINY, steps=10, learning_rate=.01, lora={"rank": 4})
-        train(cfg, different, self.dir / "first", init_from=self.base)
-        record = train(dict(cfg, steps=20), different, self.dir / "second", resume=self.dir / "first" / "last.npz")
+        cfg = dict(TINY, steps=20, learning_rate=.01, lora={"rank": 4})
+        stop = threading.Event()
+        halted = train(cfg, different, self.dir / "first", init_from=self.base, stop=stop,
+                       emit=lambda event: stop.set() if event["type"] == "metric" and event["step"] == 10 else None)
+        self.assertEqual((halted["status"], halted["step"]), ("stopped", 10))
+        record = train(cfg, different, self.dir / "second", resume=self.dir / "first" / "last.npz")
         self.assertEqual(record["step"], 20)
+        train(cfg, different, self.dir / "straight", init_from=self.base)  # the same 20 steps without a break
+        resumed = load_checkpoint(self.dir / "second" / "last.npz", merged=False)["model"]
+        straight = load_checkpoint(self.dir / "straight" / "last.npz", merged=False)["model"]
+        adapters = [key for key in straight if key.startswith("lora.")]
+        self.assertEqual(len(adapters), 2 * 2 * 2 + 1)
+        self.assertTrue(any(float(np.abs(straight[key]).sum()) > 0 for key in adapters))
+        self.assertEqual(set(resumed), set(straight))
+        for key in straight:  # the base and every adapter, the special-token rows included, come back as they were
+            np.testing.assert_allclose(resumed[key], straight[key], atol=1e-6, err_msg=key)
         with self.assertRaises(ValueError):
-            train(dict(cfg, steps=30, lora=None), different, self.dir / "third", resume=self.dir / "first" / "last.npz")
+            train(dict(cfg, lora=None), different, self.dir / "third", resume=self.dir / "first" / "last.npz")
+
+    def test_lora_without_a_model_to_start_from_is_refused_in_plain_words(self):
+        with self.assertRaises(ValueError) as caught:
+            train(dict(TINY, steps=2, lora={}), EXAMPLES, self.dir / "nothing_to_tune")
+        self.assertIn("LoRA", str(caught.exception))
+        self.assertFalse((self.dir / "nothing_to_tune" / "last.npz").exists())
+
+    def test_a_checkpoint_with_adapters_but_no_lora_settings_is_refused_clearly(self):
+        different = [{"user": f"Copy: {w}", "assistant": w[::-1]} for w in WORDS] * 3
+        train(dict(TINY, steps=2, learning_rate=.01, lora={}), different, self.dir / "nosettings", init_from=self.base)
+        with np.load(self.dir / "nosettings" / "last.npz", allow_pickle=False) as archive:
+            arrays = {key: archive[key] for key in archive.files}
+        metadata = json.loads(str(arrays["metadata"].item()))
+        metadata["config"]["lora"] = None
+        arrays["metadata"] = np.array(json.dumps(metadata))
+        np.savez(self.dir / "stripped.npz", **arrays)
+        with self.assertRaises(ValueError) as caught:
+            load_checkpoint(self.dir / "stripped.npz")
+        self.assertIn("LoRA", str(caught.exception))
 
     def test_plain_training_is_unchanged(self):
         data = load_checkpoint(self.base)

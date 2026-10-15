@@ -418,7 +418,10 @@ def load_checkpoint(path, weights_only=False, merged=True):
         metadata["model"] = {key.removeprefix("weight::"): archive[key].copy() for key in archive.files if key.startswith("weight::")}
         adapters = {key[len(FILE_PREFIX):]: archive[key].copy() for key in archive.files if key.startswith(FILE_PREFIX)}
         if adapters and merged:
-            metadata["model"] = merge_arrays(metadata["model"], adapters, scale_of(lora_settings(metadata["config"].get("lora"))))
+            settings = lora_settings(metadata["config"].get("lora"))
+            if settings is None:
+                raise ValueError("This checkpoint has LoRA adapters but its settings do not say how to apply them.")
+            metadata["model"] = merge_arrays(metadata["model"], adapters, scale_of(settings))
         elif adapters:
             metadata["model"].update({PREFIX + key: value for key, value in adapters.items()})
         # optimizer state arrays are stored as adam_<state>::<parameter>, whatever the optimizer (the prefix is historical)
@@ -577,6 +580,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise ValueError("Wall-clock budget must be positive.")
     if resume and init_from:
         raise ValueError("Resume and initialize-from cannot be combined.")
+    if cfg["lora"] and not (resume or init_from):
+        raise ValueError("LoRA fine-tunes a model that already exists, so start it from a version you have already trained or imported.")
     directory = Path(output_dir)
     if any((directory / name).exists() for name in ("config.json", "dataset.jsonl", "last.npz", "best.npz")):
         raise ValueError("Choose a new output folder to preserve the existing run.")

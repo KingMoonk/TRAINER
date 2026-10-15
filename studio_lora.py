@@ -7,6 +7,10 @@ How it sits in the engine: adapters are ordinary entries of `model.p` / `model.g
 the compiled forward (studio_compile) swaps in the effective weight, and `Trainable` is the view of the model an optimizer
 steps. A checkpoint stores the frozen base under `weight::` and the adapters under `lora::`; `load_checkpoint` folds them
 together (merge_arrays), so chat, export, evaluation and a later stage's `init_from` all see one plain merged model.
+
+The 7 special-token rows of the token table (ids below OFFSET: PAD, BOS, EOS and the role tokens) train too, as a correction
+`lora.<table>.rows` added to those rows only. A model that never saw USER, ASSISTANT or SYSTEM (an imported GPT-2) could not learn
+the chat roles otherwise: the table and its tied head are frozen. Every other row stays as it was.
 """
 from __future__ import annotations
 
@@ -15,8 +19,11 @@ import math
 import numpy as np
 import torch
 
+from studio_slots import OFFSET
+
 DEFAULTS = {"rank": 8, "alpha": 16, "targets": ["qkv", "proj"]}
 PREFIX = "lora."       # parameter names in model.p
+ROWS = ".rows"         # ends the name of the special-token rows' correction
 FILE_PREFIX = "lora::"  # array names in a checkpoint
 
 
@@ -75,8 +82,11 @@ def attach_lora(model, settings):
     Call it once, after the base weights are in place (a transplant or checkpoint load) and before the optimizer is built.
     """
     settings = lora_settings(settings)
-    if model.adapters:
+    if model.adapters or model.row_adapters:
         raise ValueError("This model already has LoRA adapters.")
+    if model.compute is not None:
+        raise ValueError("LoRA needs the float32 precision. Under mixed precision the effective weight is rounded to 16 bits "
+                         "before every multiply, which would round the small adapter update away. Choose float32 and try again.")
     wanted = set(settings["targets"])
     scale, rank = scale_of(settings), settings["rank"]
     found = set()
@@ -104,32 +114,37 @@ def attach_lora(model, settings):
                 for table in (model.p, model.g, model.roles, model.owner, model.group):
                     del table[key]
         raise ValueError(f"LoRA found no weight called {', '.join(missing)} in this model's attention or MLP layers.")
-    model.adapter_names = {key for a, b, _ in model.adapters.values() for key in (a, b)}
+    for full in base_names:
+        layer, name = model._slots[full]
+        if model.owner[full][0] == "embedding" and name == "token" and model.p[full].ndim == 2 and model.p[full].shape[0] > OFFSET:
+            key = PREFIX + full + ROWS
+            like = model.p[full]
+            model.p[key], model.g[key] = (torch.zeros((OFFSET, like.shape[1]), dtype=like.dtype, device=like.device),
+                                          torch.zeros((OFFSET, like.shape[1]), dtype=like.dtype, device=like.device))
+            model.roles[key], model.owner[key], model.group[key] = "adapter", model.owner[full], model.group[full]
+            model.row_adapters[full] = key
+    model.adapter_names = {key for a, b, _ in model.adapters.values() for key in (a, b)} | set(model.row_adapters.values())
     model.frozen = set(base_names)
     return Trainable(model, sorted(model.adapter_names))
 
 
 def merge_arrays(weights, adapters, scale):
-    """Fold adapters into base weights. weights: {name: array}; adapters: {"<weight>.a" / "<weight>.b": array}. Returns a new dict of just the base weights."""
+    """Fold adapters into base weights. weights: {name: array}; adapters: {"<weight>.a" / "<weight>.b" / "<weight>.rows": array}.
+    Returns a new dict of just the base weights."""
     out = dict(weights)
     for key in adapters:
-        if not key.endswith(".a"):
-            continue
-        base = key[:-2]
-        if base not in out or base + ".b" not in adapters:
-            raise ValueError(f"The LoRA adapter for {base} has no matching weight or B matrix.")
-        delta = adapters[key].astype(np.float64) @ adapters[base + ".b"].astype(np.float64)
-        out[base] = (out[base].astype(np.float64) + scale * delta).astype(out[base].dtype)
+        if key.endswith(ROWS):
+            base = key[:-len(ROWS)]
+            rows = adapters[key]
+            if base not in out or out[base].shape[0] < rows.shape[0] or out[base].shape[1:] != rows.shape[1:]:
+                raise ValueError(f"The LoRA rows for {base} have no matching weight.")
+            merged = out[base].copy()
+            merged[:len(rows)] = (merged[:len(rows)].astype(np.float64) + rows.astype(np.float64)).astype(merged.dtype)
+            out[base] = merged
+        elif key.endswith(".a"):
+            base = key[:-2]
+            if base not in out or base + ".b" not in adapters:
+                raise ValueError(f"The LoRA adapter for {base} has no matching weight or B matrix.")
+            delta = adapters[key].astype(np.float64) @ adapters[base + ".b"].astype(np.float64)
+            out[base] = (out[base].astype(np.float64) + scale * delta).astype(out[base].dtype)
     return out
-
-
-@torch.no_grad()
-def merge_lora(model):
-    """Fold the model's adapters into its base weights in place, drop the adapters and unfreeze. The output is unchanged."""
-    for full, (a, b, scale) in list(model.adapters.items()):
-        model.p[full].add_(scale * (model.p[a] @ model.p[b]))
-        for key in (a, b):
-            for table in (model.p, model.g, model.roles, model.owner, model.group):
-                del table[key]
-    model.adapters, model.adapter_names, model.frozen = {}, set(), set()
-    return model
