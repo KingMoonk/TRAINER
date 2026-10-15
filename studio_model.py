@@ -898,9 +898,9 @@ def complete(model, tokenizer, prompt, max_tokens=48):
     blocked = unsayable(tokenizer)
     with torch.no_grad():
         for _ in range(max_tokens):
-            logits = model.backend.to_cpu(last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)).astype(np.float64)
-            logits[blocked] = -np.inf
-            token = int(logits.argmax())
+            logits = last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)
+            logits[blocked] = -torch.inf
+            token = int(logits.argmax())  # only the chosen id leaves the device
             if token == EOS:
                 break
             result.append(token)
@@ -948,21 +948,21 @@ class LocalModel:
 
         blocked = unsayable(self.tokenizer)
         cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
+        available = self.tokenizer.vocab_size - OFFSET + 1
+        k = available if int(top_k) <= 0 else min(int(top_k), available)
+        # Sampling runs on the model's device and only the chosen id is copied back. Its stream is seeded from the model's NumPy
+        # stream once per reply, so a seed still gives the same replies on a given device.
+        generator = torch.Generator(self.model.device).manual_seed(int(self.rng.integers(2 ** 62))) if temperature > 0 else None
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
-            # Transfer only the final vocabulary vector for seeded CPU sampling.
-            logits = self.model.backend.to_cpu(last_logits(self.model, window(), len(tokens) > context, cache)).astype(np.float64)
-            logits[blocked] = -np.inf
+            logits = last_logits(self.model, window(), len(tokens) > context, cache)
+            logits[blocked] = -torch.inf
             if temperature <= 0:
                 token = int(logits.argmax())
             else:
-                logits /= max(.05, float(temperature))
-                available = self.tokenizer.vocab_size - OFFSET + 1
-                k = available if int(top_k) <= 0 else min(int(top_k), available)
-                keep = np.argpartition(logits, -k)[-k:]
-                probabilities = softmax(logits[keep])
-                token = int(self.rng.choice(keep, p=probabilities))
+                top, keep = torch.topk(logits / max(.05, float(temperature)), k)
+                token = int(keep[torch.multinomial(torch.softmax(top, dim=-1), 1, generator=generator)])
             if token == EOS:
                 break
             result.append(token)

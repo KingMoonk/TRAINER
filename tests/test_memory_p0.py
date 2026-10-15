@@ -10,6 +10,7 @@ import torch
 
 import studio_model
 from studio_compile import CompiledModel
+from studio_estimate import estimate
 from studio_ia.services import CHAT_MODELS, WorkspaceServices
 from studio_model import LocalModel, ScratchTransformer, load_checkpoint, train, validate_config
 from studio_modules.tokenizer.byte import Tokenizer
@@ -21,6 +22,12 @@ CONFIG = {"width": 16, "layers": 2, "heads": 2, "context": 32, "expansion": 2, "
           "device": "cpu", "sample_every": 0}
 POSITIONS = ("learned", "rope", "alibi", "sinusoidal", "none")
 MIXERS = ("attention", "gqa", "linear", "conv", "gru", "lstm", "ssm", "none")
+CACHED = ("attention", "gqa", "linear")  # mixers with a cache path; the rest re-run the whole window
+
+
+def positions(mixer):
+    """RoPE and ALiBi act on attention scores, which linear attention does not have."""
+    return POSITIONS if mixer != "linear" else ("learned", "sinusoidal", "none")
 
 
 def local(mixer="attention", position="learned"):
@@ -37,16 +44,16 @@ def local(mixer="attention", position="learned"):
     return result
 
 
-def generate(model, cached, **kwargs):
+def generate(model, cached, max_tokens=48):
     with mock.patch.object(CompiledModel, "can_cache", new_callable=mock.PropertyMock, return_value=cached and model.model.can_cache):
-        return model.generate([{"role": "user", "content": "Count from 4 to 9, slowly."}], temperature=0, max_tokens=48, **kwargs)
+        return model.generate([{"role": "user", "content": "Count from 4 to 9, slowly."}], temperature=0, max_tokens=max_tokens)
 
 
 class KVCache(unittest.TestCase):
-    def test_cached_logits_equal_uncached_for_attention_and_gqa(self):
+    def test_cached_logits_equal_uncached(self):
         ids = np.random.default_rng(0).integers(6, 200, size=30)
-        for mixer in ("attention", "gqa"):
-            for position in POSITIONS:
+        for mixer in CACHED:
+            for position in positions(mixer):
                 with self.subTest(mixer=mixer, position=position):
                     model = local(mixer, position).model
                     self.assertTrue(model.can_cache)
@@ -58,8 +65,8 @@ class KVCache(unittest.TestCase):
                     self.assertEqual(cache["n"], 30)
 
     def test_greedy_output_is_identical_and_survives_a_sliding_window(self):
-        for mixer in ("attention", "gqa"):
-            for position in POSITIONS:
+        for mixer in CACHED:
+            for position in positions(mixer):
                 with self.subTest(mixer=mixer, position=position):
                     model = local(mixer, position)
                     self.assertEqual(generate(model, True), generate(model, False))  # prompt + 48 new tokens passes the 32-token context
@@ -68,8 +75,38 @@ class KVCache(unittest.TestCase):
         for mixer in MIXERS:
             with self.subTest(mixer=mixer):
                 model = local(mixer)
-                self.assertEqual(model.model.can_cache, mixer in ("attention", "gqa", "none"))
+                self.assertEqual(model.model.can_cache, mixer in CACHED + ("none",))
                 self.assertEqual(generate(model, True), generate(model, False))
+
+    def test_greedy_tokens_match_one_by_one(self):
+        """Token for token, not just the decoded text: CPU, float32, fixed seed, EOS blocked so every run makes 20 tokens."""
+        real = studio_model.last_logits
+        for mixer in CACHED:
+            with self.subTest(mixer=mixer):
+                model, seen = local(mixer, "learned" if mixer == "linear" else "rope"), {}
+                for cached in (True, False):
+                    windows = seen[cached] = []
+                    with mock.patch.object(studio_model, "last_logits", lambda *a, out=windows: out.append(list(a[1])) or real(*a)), \
+                            mock.patch.object(studio_model, "unsayable", lambda tokenizer: [0, 1, 2, 3, 4, 5, 6]):
+                        text = generate(model, cached, max_tokens=20)
+                    seen[cached, "text"] = text
+                self.assertEqual(len(seen[True]), 20)
+                self.assertEqual(seen[True], seen[False])  # the same tokens fed back at every step
+                self.assertEqual(seen[True, "text"], seen[False, "text"])
+
+    def test_cache_memory_matches_the_estimate(self):
+        """Attention and GQA keep Estimate.kv_bytes per layer per token; linear attention keeps a fixed state of that size."""
+        for mixer in CACHED:
+            with self.subTest(mixer=mixer):
+                model = local(mixer).model
+                per_token = estimate(model.spec, model.dims.vocab)["kv_bytes_per_token"]
+                cache = {"n": 0}
+                model.forward(np.arange(7, 27)[None], cache=cache)
+                for token in range(27, 31):
+                    model.forward(np.array([[token]]), cache=cache)
+                stored = {t.untyped_storage().data_ptr(): t.untyped_storage().nbytes() for key, state in cache.items() if key != "n" for t in state}
+                expected = per_token * (cache["n"] if mixer != "linear" else 1)
+                self.assertAlmostEqual(sum(stored.values()) / expected, 1., delta=.01)
 
     def test_complete_matches_uncached(self):
         model = local("gqa", "rope")
