@@ -1627,9 +1627,14 @@ class WorkspaceServices(Services):
         import studio_bench
 
         def make():
-            # filter_items is where test data is kept out of the suite: pass a decontamination filter here (see studio_bench.keep_all)
+            import studio_decontam
+            index = self._train_index()
+            text = {"docs": lambda d: d, "choice": lambda i: "\n".join([i["question"], *i["choices"]]), "problems": lambda p: p["prompt"]}
+
+            def decontaminated(kind, items):  # an item sharing a 13-gram with training text (studio_decontam) is left out
+                return items if kind == "pool" else studio_decontam.exclude_overlap(items, index, text[kind])[0]  # worked examples are training problems
             return studio_bench.suite_from_rows(self._heldout(), self.post_rows("heldout_problems"), self.post_rows("problems"),
-                                                filter_items=studio_bench.keep_all)
+                                                filter_items=decontaminated)
         return self._cached(("bench_suite", self._heldout_stamp(), self.workspace.revision), make)
 
     def _bench_tokens(self, v, checkpoint):

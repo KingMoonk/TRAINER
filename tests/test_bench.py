@@ -468,6 +468,23 @@ class Services(unittest.TestCase):
                 svc.close()
         self.assertEqual([r["lineage"] for r in rows], ["v1", "v2"])
 
+    def test_a_held_back_document_also_in_training_is_left_out_of_the_suite(self):
+        import studio_decontam
+
+        def suite(leak):
+            with tempfile.TemporaryDirectory() as tmp:
+                svc = FixtureServices(tmp)
+                try:
+                    leaked = [d for d in svc._heldout() if len(d.split()) >= 13][:leak]
+                    with mock.patch.object(svc, "_train_index", return_value=studio_decontam.Index().add_all(leaked)):
+                        return svc.benchmark()
+                finally:
+                    svc.close()
+        clean, dirty = suite(0), suite(1)
+        self.assertEqual(clean["dropped"]["docs"], 0)
+        self.assertEqual(dirty["dropped"]["docs"], 1)
+        self.assertNotEqual(dirty["suite"], clean["suite"])
+
     def test_fake_services_return_the_same_shape(self):
         fake = FakeServices().benchmark()
         self.assertEqual(set(fake), {"suite", "sizes", "dropped", "rows"})
