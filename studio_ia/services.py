@@ -449,7 +449,7 @@ class Services:
 
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
-        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n)}}}; missing keys are fine."""
+        "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}}}; missing keys are fine."""
         raise NotImplementedError
 
     def post_rows(self, kind):
@@ -1340,7 +1340,7 @@ class WorkspaceServices(Services):
         if v is None:
             return
         done = self._json("post_training.json", {})
-        done.setdefault(str(v.number), {})[str(number)] = {k: result.get(k) for k in ("ok", "checks", "verdict", "before", "after", "band", "checkpoint")}
+        done.setdefault(str(v.number), {})[str(number)] = {k: result.get(k) for k in ("ok", "checks", "verdict", "before", "after", "band", "checkpoint", "groups", "taught", "skipped")}
         self._save_json("post_training.json", done)
         if result.get("ok"):
             card = dict(v.scorecard or {})
