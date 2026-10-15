@@ -70,6 +70,13 @@ class Direction(unittest.TestCase):
         out = text(Version(1, spec=spec(2)), version(2, 4, 2.0), FACTS, FACTS)
         self.assertTrue(out.endswith("one of them has no held-back score yet."))
 
+    def test_scores_from_two_scoring_methods_are_not_called_a_move(self):
+        old = Version(1, spec=spec(2), scorecard={"bpc": 3.0, "bpc_method": "stride-half-1"})
+        new = Version(2, spec=spec(4), scorecard={"bpc": 2.5, "bpc_method": "stride-half-2"})
+        self.assertIsNone(A.attribute(old, new, FACTS, FACTS)["change"])
+        new.scorecard["bpc_method"] = "stride-half-1"
+        self.assertEqual(A.attribute(old, new, FACTS, FACTS)["change"], -0.5)
+
 
 class Confounders(unittest.TestCase):
     def test_only_the_block_count_differing_is_clean(self):
@@ -315,6 +322,20 @@ class TkThread(unittest.TestCase):
         then(work())
         facts, compares = B.BuilderPage.attribution_inputs(page, vs)
         self.assertEqual(facts(1), {})
+        self.assertIn("could not check", B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6),
+                                                         vs, facts=facts, compares=compares)[-1])
+
+    def test_a_worker_that_fails_in_an_unexpected_way_still_frees_the_pair(self):
+        page, services, queued = self.page()
+        services.compare_runs.side_effect = RuntimeError("boom")
+        vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
+        B.BuilderPage.attribution_inputs(page, vs)
+        work, then, _ = queued[0]
+        then(work())
+        self.assertEqual(page.attr_busy, set())
+        facts, compares = B.BuilderPage.attribution_inputs(page, vs)
+        self.assertEqual(facts(1), {})
+        self.assertEqual(len(queued), 1)  # shown as could not check, not asked again until the page refreshes
         self.assertIn("could not check", B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6),
                                                          vs, facts=facts, compares=compares)[-1])
 

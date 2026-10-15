@@ -599,6 +599,35 @@ class Services(unittest.TestCase):
         svc.remove(svc.runner.jobs[-1].id)                  # stops the running job
         self.wait_for(lambda: len(svc.versions()) == before)
 
+    def test_removing_an_import_that_is_still_waiting_removes_the_empty_version(self):
+        release, started = threading.Event(), threading.Event()
+
+        def waits(dest, progress=None, stop=None, **kwargs):
+            started.set()
+            release.wait(30)
+            raise ValueError("Could not download GPT-2.")
+        svc = self.import_with(waits)
+        self.addCleanup(release.set)
+        svc.runner.pause()  # the import waits in Up next and never starts
+        before = len(svc.versions())
+        version = svc.import_pretrained("gpt2")
+        job = svc.runner.jobs[-1]
+        self.assertEqual((job.status, svc.store.get(version.number)["status"]), ("waiting", "queued"))
+        svc.remove(job.id)
+        self.assertEqual(len(svc.versions()), before)
+        self.assertFalse(started.is_set())
+
+    def test_removing_a_waiting_import_marks_an_older_empty_version(self):
+        svc = self.import_with(lambda *args, **kwargs: None)
+        svc.runner.pause()
+        version = svc.import_pretrained("gpt2")
+        later = svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
+        svc.remove(svc.runner.jobs[-1].id)
+        kept = svc.store.get(version.number)
+        self.assertEqual(kept["status"], "saved")
+        self.assertIn("no weights", kept["change"])
+        self.assertEqual(svc.store.get(later.number)["change"], "A later design")
+
     def test_an_older_empty_version_is_marked_because_numbers_cannot_be_reused(self):
         release = threading.Event()
 

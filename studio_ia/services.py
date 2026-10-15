@@ -1184,6 +1184,10 @@ class WorkspaceServices(Services):
         """(row Chat follows, {version number: how it was weighed against the best before it}), versions in order."""
         import studio_gate
         rows, best, weighed = self._rows(), None, {}
+        scored = [r for r in rows if r.get("best_checkpoint") and isinstance(r.get("scorecard", {}).get("bpc"), (int, float))]
+        if len(scored) > 1:  # versions are compared below and elsewhere: none may keep a number from an older scoring method
+            for row in scored:
+                self._rescored(row)
         for row in rows:
             bpc = row.get("scorecard", {}).get("bpc")
             if not row.get("best_checkpoint") or not isinstance(bpc, (int, float)):
@@ -1335,7 +1339,12 @@ class WorkspaceServices(Services):
         return out
 
     def remove(self, job_id):
+        with self.runner.lock:
+            job = next((j for j in self.runner.jobs if j.id == job_id), None)
+            waiting = job is not None and job is not self.runner.running  # a running job is stopped and ends through _record_job
         self.runner.remove(job_id)
+        if waiting and job.kind == "import_pretrained" and job.params.get("version"):  # it never started: no event will say it ended
+            self._drop_empty_import(job.params["version"], "stopped")
 
     def pause(self):
         self.runner.pause()

@@ -226,6 +226,21 @@ class BandTest(unittest.TestCase):
         self.assertNotEqual(card["bpc"], 3.)
         self.assertEqual(len(list(self.scores.glob("*.npy"))), before)
 
+    def test_every_scored_version_is_measured_by_the_current_method_even_when_the_pair_cannot_be_weighed(self):
+        import studio_eval
+        store, cards = self.svc.store, [dict(v.scorecard) for v in self.svc.versions()]
+        self.addCleanup(lambda: [store._update(n, scorecard=c) for n, c in enumerate(cards, 1)])
+        self.addCleanup(self.svc._cache.clear)
+        for n in (1, 2):
+            store._update(n, scorecard={"bpc": 9., "bpc_method": "old-method"})
+        self.svc._cache.clear()
+        with mock.patch.object(self.svc, "_gate", return_value=None):  # the paired test gave no answer for this pair
+            self.svc.best_version()
+        for n in (1, 2):
+            card = store.get(n)["scorecard"]
+            self.assertEqual(card["bpc_method"], studio_eval.SCORE_METHOD)
+            self.assertNotEqual(card["bpc"], 9.)
+
     def test_a_cache_hit_does_not_wait_for_a_running_read(self):
         started, release = threading.Event(), threading.Event()
         self.svc._cached("fast", lambda: 1)

@@ -825,7 +825,7 @@ class BuilderPage(Page):
             def work():  # no widgets here
                 try:
                     return key, services.run_facts(key[0]), services.run_facts(key[1]), services.compare_runs()
-                except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                except Exception:  # whatever went wrong, the line says it could not check and the pair is not stuck busy
                     return key, {}, {}, []
 
             def apply(value):
