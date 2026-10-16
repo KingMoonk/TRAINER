@@ -2,6 +2,7 @@
 import hashlib
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from unittest import mock
 
@@ -26,6 +27,21 @@ class DataServices(FakeServices):
 
 
 class PostTrainingApiTest(unittest.TestCase):
+    def test_import_catalogue_comes_from_the_server_registry(self):
+        models = {"tiny": {"title": "Tiny model", "size": 1234}, "other": {"title": "Another model", "size": 9876}}
+        with patch("studio_import.MODELS", models):
+            response = self.client.get("/post-training/import-models")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{"id": "tiny", "name": "Tiny model", "size": 1234},
+                                           {"id": "other", "name": "Another model", "size": 9876}])
+
+    def test_status_job_exposes_its_result_schema(self):
+        schema = self.client.get("/openapi.json").json()
+        response = schema["paths"]["/post-training/status"]["post"]["responses"]["202"]["content"]["application/json"]["schema"]
+        self.assertEqual(response["$ref"], "#/components/schemas/PostTrainingJobOut")
+        result = schema["components"]["schemas"]["PostTrainingJobOut"]["properties"]["result"]
+        self.assertIn({"$ref": "#/components/schemas/PostTrainingOut"}, result["anyOf"])
+
     def setUp(self):
         self.services = DataServices()
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))

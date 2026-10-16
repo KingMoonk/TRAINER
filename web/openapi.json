@@ -1867,6 +1867,29 @@
         "title": "ImportJob",
         "type": "object"
       },
+      "ImportModelOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "size"
+        ],
+        "title": "ImportModelOut",
+        "type": "object"
+      },
       "Inspect": {
         "properties": {
           "version": {
@@ -2844,6 +2867,34 @@
         "title": "Outlook",
         "type": "object"
       },
+      "OverlapOut": {
+        "additionalProperties": true,
+        "properties": {
+          "checked": {
+            "default": 0,
+            "title": "Checked",
+            "type": "integer"
+          },
+          "left_out": {
+            "default": 0,
+            "title": "Left Out",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "title": "OverlapOut",
+        "type": "object"
+      },
       "Own": {
         "properties": {
           "block": {
@@ -3284,6 +3335,126 @@
           "parameters"
         ],
         "title": "PlanRow",
+        "type": "object"
+      },
+      "PostTrainingJobOut": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostTrainingOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "PostTrainingJobOut",
+        "type": "object"
+      },
+      "PostTrainingOut": {
+        "description": "Services.post_training: missing keys are fine, a client reads them as unknown.",
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "example": {
+            "title": "Example"
+          },
+          "gates": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Gates",
+            "type": "object"
+          },
+          "overlap": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OverlapOut"
+            },
+            "title": "Overlap",
+            "type": "object"
+          },
+          "rounds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RoundState"
+            },
+            "title": "Rounds",
+            "type": "object"
+          }
+        },
+        "title": "PostTrainingOut",
         "type": "object"
       },
       "Prediction": {
@@ -4982,6 +5153,22 @@
           "round"
         ],
         "title": "RoundRequest",
+        "type": "object"
+      },
+      "RoundState": {
+        "properties": {
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "default": "idle",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "RoundState",
         "type": "object"
       },
       "RowsPage": {
@@ -9474,6 +9661,32 @@
         ]
       }
     },
+    "/post-training/import-models": {
+      "get": {
+        "description": "Models this server can import; size is the expected download in bytes.",
+        "operationId": "import_models_post_training_import_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImportModelOut"
+                  },
+                  "title": "Response Import Models Post Training Import Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Import Models",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
     "/post-training/imports": {
       "post": {
         "description": "Start from a pretrained open model: saves its design as a new version and queues the conversion; the version trains\n(gets a checkpoint) when the job ends. `weights` is the model's published model.safetensors, for a server that cannot\ndownload it. `lora` fine-tunes small adapters instead of every weight.",
@@ -9668,7 +9881,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                  "$ref": "#/components/schemas/PostTrainingJobOut"
                 }
               }
             },
