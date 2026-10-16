@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark h-full antialiased">
-      <body className="flex min-h-full">
+      <body className="flex min-h-full flex-col md:flex-row">
         <Providers>
           <ShellEvents>
             <Sidebar />
