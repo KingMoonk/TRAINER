@@ -94,6 +94,10 @@ class Hold(BaseModel):
     held: bool = True
 
 
+class Pin(BaseModel):
+    pinned: str | None = Field(None, max_length=200)  # a machine's address or hostname; null or "" lets the job go anywhere again
+
+
 class Started(BaseModel):
     started: bool
 
@@ -119,12 +123,17 @@ def get_queue(services: Services) -> QueueStateModel:
     return _state(services)
 
 
+def local_jobs(services):
+    """This machine's jobs: the running one first, then the jobs running on a peer, then Up next in order."""
+    state = services.queue()
+    away = [j for j in getattr(getattr(services, "runner", None), "jobs", ()) if j.node and j.status == "running" and not j.owner]
+    return ([state.job] if state.job is not None else []) + away + list(state.up_next)
+
+
 @router.get("/jobs")
 def list_jobs(services: Services) -> list[JobModel]:
     """The running job first, then the jobs running on a peer, then Up next in order."""
-    state = services.queue()
-    away = [j for j in getattr(getattr(services, "runner", None), "jobs", ()) if j.node and j.status == "running" and not j.owner]
-    return [JobModel.model_validate(j) for j in ([state.job] if state.job is not None else []) + away + list(state.up_next)]
+    return [JobModel.model_validate(j) for j in local_jobs(services)]
 
 
 @router.post("/jobs", status_code=201)
@@ -163,6 +172,23 @@ def hold(job_id: str, services: Services, body: Hold = Hold()) -> QueueStateMode
     """Services.hold: a held job keeps its place and is skipped; held=false releases it."""
     _waiting(services, job_id)
     services.hold(job_id, body.held)
+    return _state(services)
+
+
+@router.post("/jobs/{job_id}/pin")
+def pin(job_id: str, body: Pin, services: Services) -> QueueStateModel:
+    """Keep a waiting job on one machine (`pinned`: its address or hostname), or let it go anywhere again (null). A pin is never
+    overridden: the job runs there or waits, and its waiting reason says why. Services has no pin, so a node with a job queue
+    pins through the Runner, and the stand-in services edit the job in place."""
+    _waiting(services, job_id)
+    pinned = (body.pinned or "").strip() or None
+    runner = getattr(services, "runner", None)
+    if runner is not None:
+        runner.pin(job_id, pinned)
+    else:
+        job = next(j for j in services.queue().up_next if j.id == job_id)
+        job.params = {**{k: v for k, v in job.params.items() if k != "pinned"}, **({"pinned": pinned} if pinned else {})}
+        services.emit("queue", services.queue())
     return _state(services)
 
 

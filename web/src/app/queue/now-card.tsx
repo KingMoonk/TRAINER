@@ -3,11 +3,13 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { ClusterQueue } from "@/lib/cluster";
 import { T } from "./copy";
-import { progressLine, stateLine, type Queue } from "./logic";
+import { placeText, progressLine, rowFor, stateLine, type Queue } from "./logic";
 import type { QueueActions } from "./use-queue";
 
-export function NowCard({ queue, actions }: { queue: Queue | undefined; actions: QueueActions }) {
+/** `cluster` is set only when other machines are listed: a cluster of one shows no machine anywhere. */
+export function NowCard({ queue, actions, cluster }: { queue: Queue | undefined; actions: QueueActions; cluster?: ClusterQueue }) {
   return (
     <Card>
       <CardHeader>
@@ -21,7 +23,7 @@ export function NowCard({ queue, actions }: { queue: Queue | undefined; actions:
             <Skeleton className="h-2 w-full" />
           </div>
         ) : queue.job ? (
-          <Running queue={queue} actions={actions} />
+          <Running queue={queue} actions={actions} cluster={cluster} />
         ) : (
           <>
             <p className="text-base text-muted-foreground">{queue.paused ? T.pausedByYou : T.nothingTraining}</p>
@@ -50,14 +52,20 @@ export function NowCard({ queue, actions }: { queue: Queue | undefined; actions:
   );
 }
 
-function Running({ queue, actions }: { queue: Queue; actions: QueueActions }) {
+function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActions; cluster?: ClusterQueue }) {
   const job = queue.job!;
+  const row = rowFor(cluster, job.id);
   const fraction = queue.total ? Math.min(1, queue.step / queue.total) : 0;
   return (
     <>
       <p className="text-base" data-testid="state-line">
         {stateLine(queue)}
       </p>
+      {row && (
+        <p className="text-sm text-muted-foreground" data-testid="now-place">
+          {placeText(row)}
+        </p>
+      )}
       <p className="text-sm text-muted-foreground" data-testid="progress-line">
         {progressLine(queue)}
       </p>

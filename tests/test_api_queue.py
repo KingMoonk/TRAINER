@@ -44,6 +44,11 @@ class QueueRouterTests(ApiCase):
         state = self.call("POST", "/queue/jobs/{job_id}/hold", path={"job_id": a["id"]}, json={"held": False})
         self.assertEqual({j["id"]: j["status"] for j in state["up_next"]}[a["id"]], "waiting")
 
+        state = self.call("POST", "/queue/jobs/{job_id}/pin", path={"job_id": a["id"]}, json={"pinned": "gpu-box"})
+        self.assertEqual({j["id"]: j["params"].get("pinned") for j in state["up_next"]}[a["id"]], "gpu-box")
+        state = self.call("POST", "/queue/jobs/{job_id}/pin", path={"job_id": a["id"]}, json={"pinned": None})
+        self.assertEqual({j["id"]: j["params"] for j in state["up_next"]}[a["id"]], {"version": 1})
+
         self.assertTrue(self.call("GET", "/queue/outlook")["outlook"])
         self.assertTrue(self.call("GET", "/queue/jobs/{job_id}/outlook", path={"job_id": a["id"]})["outlook"])
 

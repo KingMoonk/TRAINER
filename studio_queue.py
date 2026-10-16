@@ -271,6 +271,17 @@ class Runner:
         self.wake.set()
         self._emit("queue", {"job": job_id})
 
+    def pin(self, job_id, pinned=None):
+        """Keep a waiting job on one machine (its address or hostname): it runs there or waits, and is never moved. None lets it
+        go to any machine again. The placement pass that follows reads the new pin."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id), None)
+            if job is not None:
+                job.params = {**{k: v for k, v in job.params.items() if k != "pinned"}, **({"pinned": pinned} if pinned else {})}
+                self._save()
+        self.wake.set()
+        self._emit("queue", {"job": job_id})
+
     def remove(self, job_id):
         remote = None
         with self.lock:

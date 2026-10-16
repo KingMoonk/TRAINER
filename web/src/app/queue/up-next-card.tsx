@@ -4,12 +4,15 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { ClusterQueue } from "@/lib/cluster";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
-import { allDoneLine, dropIndex, minutes, type Job, type Queue } from "./logic";
+import { allDoneLine, dropIndex, minutes, rowFor, type Job, type Queue } from "./logic";
+import { PinSelect, PlaceLine } from "./nodes";
 import { useJobOutlook, type QueueActions } from "./use-queue";
 
-export function UpNextCard({ queue, actions }: { queue: Queue | undefined; actions: QueueActions }) {
+/** `cluster` is set only when other machines are listed: a cluster of one shows no machine on any row. */
+export function UpNextCard({ queue, actions, cluster }: { queue: Queue | undefined; actions: QueueActions; cluster?: ClusterQueue }) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<number | null>(null);
   const jobs = queue?.up_next ?? [];
@@ -54,6 +57,7 @@ export function UpNextCard({ queue, actions }: { queue: Queue | undefined; actio
                       last={jobs.length - 1}
                       active={dragging === job.id || (over === n && dragging !== null)}
                       actions={actions}
+                      cluster={cluster}
                       onDragStart={() => setDragging(job.id)}
                       onDragOver={() => setOver(n)}
                       onDrop={(id) => drop(n, id)}
@@ -76,6 +80,7 @@ function Row({
   last,
   active,
   actions,
+  cluster,
   onDragStart,
   onDragOver,
   onDrop,
@@ -86,6 +91,7 @@ function Row({
   last: number;
   active: boolean;
   actions: QueueActions;
+  cluster?: ClusterQueue;
   onDragStart: () => void;
   onDragOver: () => void;
   onDrop: (id: string) => void;
@@ -95,6 +101,7 @@ function Row({
   const name = job.label || job.kind;
   const outlook = useJobOutlook(job.id).data?.outlook;
   const move = (index: number) => actions.move.mutate({ id: job.id, index });
+  const row = rowFor(cluster, job.id);
   return (
     <li
       data-testid={`job-${job.id}`}
@@ -138,8 +145,10 @@ function Row({
         </div>
         {job.note && <div className="text-xs text-muted-foreground">{job.note}</div>}
         {outlook && <div className="text-xs text-muted-foreground">{fill(T.starts, { outlook })}</div>}
+        {row && <PlaceLine row={row} />}
       </div>
       {job.eta_s != null && <span className="text-xs text-muted-foreground">{minutes(job.eta_s)}</span>}
+      {cluster && <PinSelect id={job.id} name={name} row={row} nodes={cluster.nodes} actions={actions} />}
       <div className="flex flex-wrap gap-1">
         <Button variant="outline" size="sm" aria-label={`${T.moveUp}: ${name}`} disabled={n === 0} onClick={() => move(n - 1)}>
           {"▲"}
