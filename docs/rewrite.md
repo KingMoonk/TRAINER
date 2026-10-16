@@ -43,16 +43,17 @@ against `FakeServices`) alongside the macOS/Windows `smoke` job. The macOS/Windo
 
 Each phase lists what it delivers and what "done" means. Boxes are ticked on the branch as PRs land.
 
-### Phase 0 — scaffold
+### Phase 0 — scaffold (#91)
 
-- [ ] Branch `wedd-compute-cluster` from `master`; this document.
-- [ ] `web/`: Next.js (app router), TypeScript strict, Tailwind, shadcn/ui with a dark theme as the default, TanStack Query,
-      an `api` client module (fetch + SSE) generated from the API's OpenAPI schema.
-- [ ] `tasks.py web:*`, CI `web` job, pnpm lockfile committed. README section: how to run API + web locally.
+- [x] Branch `wedd-compute-cluster` from `master`; this document.
+- [x] `web/`: Next.js (app router), TypeScript strict, Tailwind, shadcn/ui with a dark theme as the default, TanStack Query,
+      an `api` client module (fetch + SSE). It is hand-written until Phase 1 generates it from the API's OpenAPI schema.
+- [x] `tasks.py web:*`, CI `web` job, pnpm lockfile committed. README section: how to run the web UI locally (the API
+      joins it in Phase 1).
 
 Done: `python tasks.py web:build` passes in CI; `pnpm dev` shows an empty shell with nav and dark theme.
 
-### Phase 1 — API server
+### Phase 1 — API server (#93)
 
 - [ ] `studio_api/`: FastAPI + uvicorn. One router per `Services` scope: `versions`, `queue`, `storage`, `passive`, `data`,
       `pretraining`, `post_training`, `chat`, `inspect`, `benchmark`, `viewer`, `node`. One route per public `Services`
@@ -77,7 +78,7 @@ Done: `python tasks.py web:build` passes in CI; `pnpm dev` shows an empty shell 
 Done: the Tk app still passes CI; `python -m studio_api --fake` serves a schema with every `Services` method; the
 generated TypeScript client compiles against it.
 
-### Phase 2 — web shell and the always-visible pages
+### Phase 2 — web shell and the always-visible pages (#94)
 
 - [ ] Layout: sidebar nav mirroring today's routes, status strip (current version, queue, resources) driven by SSE,
       loading skeletons instead of spinners, toasts for `problem_report`.
@@ -90,7 +91,7 @@ generated TypeScript client compiles against it.
 
 Done: a user can import data, queue a pretraining run, watch it progress and see the version appear, all from the browser.
 
-### Phase 3 — the rest of the pages
+### Phase 3 — the rest of the pages (#95)
 
 - [ ] Builder (largest page, 2k lines of Tk): tower, start-from, controls, costs/expectations, tray states (edit, saved,
       queued, training), charts, look-inside links, and the #83/#85 learning loop (guess-before-saving, one change per
@@ -101,7 +102,7 @@ Done: a user can import data, queue a pretraining run, watch it progress and see
 
 Done: every route in the Tk shell has a web page with the same capabilities; the route check test lists both.
 
-### Phase 4 — 3D viewer in the browser
+### Phase 4 — 3D viewer in the browser (#96)
 
 - [ ] `viewer` router returns scene geometry and stats from `studio_scene.SceneModel` as JSON (plus a binary endpoint
       for large tensors if JSON is too slow).
@@ -111,7 +112,7 @@ Done: every route in the Tk shell has a web page with the same capabilities; the
 
 Done: the viewer works in Safari and Chrome against a live run; CI no longer needs Mesa.
 
-### Phase 5 — remove Tk, merge to master
+### Phase 5 — remove Tk, merge to master (#97)
 
 - [ ] Delete `studio_ia/shell.py`, `widgets.py`, `theme.py`, `pages/`, `studio_widgets.py`, `studio_ux.py`,
       `studio_ui_guard.py`'s Tk parts, `tests/gui_*.py`, `packaging/`, `start_studio.bat`, the `--run-module` trick in
@@ -122,7 +123,7 @@ Done: the viewer works in Safari and Chrome against a live run; CI no longer nee
 
 Done: no `tkinter` import anywhere; CI is faster than today.
 
-### Phase 6 — cluster
+### Phase 6 — cluster (#98)
 
 - [ ] Node registry: every API is a coordinator and a worker; nodes are listed by hand (tailnet names) in the workspace
       config, and each polls the others' `/node` for capabilities and load. A node alone is a cluster of one.
@@ -142,7 +143,7 @@ Done: no `tkinter` import anywhere; CI is faster than today.
 Done: a pretraining job queued from a Mac runs on the Windows/NVIDIA node, its version is published, and a benchmark of it
 runs on a Mac.
 
-### Phase 7 — hosting and auth (later, optional)
+### Phase 7 — hosting and auth, later and optional (#99)
 
 - [ ] Web on Vercel with real sign-in (Auth.js or Clerk); the API stays on the tailnet behind `tailscale serve` (or Funnel
       with a token check), CORS for the Vercel origin.
