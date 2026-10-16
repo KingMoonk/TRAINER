@@ -42,6 +42,7 @@ def local(mixer="attention", position="learned"):
     result.config, result.tokenizer = config, Tokenizer("byte")
     result.model = ScratchTransformer(config, result.tokenizer.vocab_size)
     result.rng, result.step = np.random.default_rng(1), 0
+    result.reduced_kv_cache = False   # these tests compare cached and uncached output exactly; tests/test_kv_cache.py covers the reduced cache
     return result
 
 

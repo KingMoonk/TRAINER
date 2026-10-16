@@ -44,6 +44,7 @@ from studio_backend import DEVICES
 from studio_core import ROOT, atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
+from studio_modules.mixer.attention import new_cache
 from studio_modules.objective.ce import cross_entropy  # noqa: F401  (part of this module's API)
 from studio_modules.ops import softmax as _softmax
 from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
@@ -917,10 +918,11 @@ def unsayable(tokenizer):
 
 
 @slow("run a model forward")
-def complete(model, tokenizer, prompt, max_tokens=48):
-    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
+def complete(model, tokenizer, prompt, max_tokens=48, reduced_cache=False):
+    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces.
+    reduced_cache: keep the KV cache in half precision (see new_cache); the default float32 cache reproduces the uncached maths."""
     tokens, result = [BOS] + tokenizer.encode(prompt), []
-    cache = {"n": 0} if model.can_cache else None
+    cache = new_cache(model.device, reduced_cache) if model.can_cache else None
     blocked = unsayable(tokenizer)
     with torch.no_grad():
         for _ in range(max_tokens):
@@ -935,6 +937,11 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 
 class LocalModel:
+    # Generation's KV cache: True keeps keys and values in bfloat16 (float16 where unsupported), False in float32 (tests, inspection).
+    # None: half precision on CUDA only, where chat shares the GPU's memory with jobs; on the CPU and MPS reading the cache back
+    # up costs about a tenth of the tokens/s for memory those devices have to spare.
+    reduced_kv_cache = None
+
     @slow("build a model from a checkpoint")
     def __init__(self, path, seed=42, device="auto", data=None):
         data = data or load_checkpoint(path, weights_only=True)   # `data`: the same checkpoint, already loaded by the caller
@@ -956,8 +963,11 @@ class LocalModel:
         self.config["device"] = device
         return self
 
+    def reduced_cache(self):
+        return self.model.device == "cuda" if self.reduced_kv_cache is None else bool(self.reduced_kv_cache)
+
     def complete(self, prompt, max_tokens=48):
-        return complete(self.model, self.tokenizer, prompt, max_tokens)
+        return complete(self.model, self.tokenizer, prompt, max_tokens, self.reduced_cache())
 
     def _chat(self, messages):
         """The prompt's token ids, and (position of each message's role token, role id) so a cut window starts with the right role."""
@@ -989,7 +999,7 @@ class LocalModel:
         result = []
         context = self.config["context"]
         blocked = unsayable(self.tokenizer)
-        cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
+        cache = new_cache(self.model.device, self.reduced_cache()) if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         available = self.tokenizer.vocab_size - OFFSET + 1
         k = available if int(top_k) <= 0 else min(int(top_k), available)
         # Sampling runs on the model's device and only the chosen id is copied back. Its stream is seeded from the model's NumPy
@@ -1043,7 +1053,7 @@ class LocalModel:
         rows = [list(tokens) for _ in range(n)]   # each reply's prompt + answer so far
         results = [[] for _ in range(n)]
         active = list(range(n))                   # reply ids still decoding, in batch order
-        cache = {"n": 0}
+        cache = new_cache(self.model.device, self.reduced_cache())
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
