@@ -8,13 +8,15 @@ every part and O the per-block picks. O's (block, slot) keys become a list of {b
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import studio_registry as registry
 from studio_api.app import get_services
 from studio_api.models_work import plain
+from studio_api.routers.versions import JobOut, _job
 from studio_ia import design
+from studio_ia.services import Job
 from studio_slots import BLOCK_SLOTS, SLOTS
 from studio_spec import validate_spec
 
@@ -356,3 +358,177 @@ def changes(body: ChangesBody) -> Changes:
     chips = design.change_chips(base, draft_spec, cur, draft)
     warm = design.warm_outlook(cur, draft)
     return Changes(chips=chips, parts_changed=design.parts_changed(cur, draft), warm=Warm(**warm) if warm else None)
+
+
+# The learning loop keeps no browser/session state. Slow run-file reads use jobs.
+class QuestionBody(BaseModel):
+    old_spec: dict
+    new_spec: dict
+
+
+class GuessOption(BaseModel):
+    value: str
+    label: str
+
+
+class Question(BaseModel):
+    key: Literal["error", "step", "memory"]
+    options: list[GuessOption]
+
+
+def questions_for(old_spec, new_spec):
+    return [Question(key=key, options=[GuessOption(value=value, label=design.T["predict_" + value])
+                                      for value in design.GUESSES[key]])
+            for key in design.prediction_questions(old_spec, new_spec)]
+
+
+@router.post("/questions")
+def questions(body: QuestionBody) -> list[Question]:
+    return questions_for(maths(validate_spec, body.old_spec), maths(validate_spec, body.new_spec))
+
+
+class CheckBody(BaseModel):
+    old_version: int = Field(ge=1)
+    new_version: int = Field(ge=1)
+
+
+class Measurement(BaseModel):
+    before: float | None
+    after: float | None
+    way: str | None
+    measured: bool
+
+
+class GuessCheck(BaseModel):
+    lines: list[str]
+    hits: int
+    misses: int
+    state: Literal["attention", "live", "neutral"]
+
+
+class LearningCheck(BaseModel):
+    results: dict[str, Measurement]
+    check: GuessCheck | None
+    tray: tuple[str, str, str] | None
+    page_said: str
+
+
+class CheckJob(JobOut):
+    result: LearningCheck | None = None
+
+
+def known_version(services, number):
+    version = next((v for v in services.versions() if v.number == number), None)
+    if version is None:
+        raise HTTPException(404, f"No version {number}")
+    return version
+
+
+@router.post("/guess-check", response_model=CheckJob, status_code=202)
+def guess_check(body: CheckBody, request: Request, services: Services):
+    """Check saved guesses using the same measured/estimated results and sentences as Builder."""
+    old, new = (known_version(services, number) for number in (body.old_version, body.new_version))
+
+    def work(stop):
+        speeds = {}
+        for version in (old, new):
+            if stop.is_set():
+                return None
+            speeds[version.number] = services.run_speed(version.number)
+        return plain(dict(results=design.results(old, new, speeds), check=design.guess_check(old, new, speeds),
+                          tray=design.check_text(old, new, speeds), page_said=design.page_said(old, new)))
+
+    return _job(request, "design.guess_check", work)
+
+
+class Prediction(BaseModel):
+    error: Literal["lower", "higher"] | None = None
+    step: Literal["faster", "slower"] | None = None
+    memory: Literal["less", "more"] | None = None
+
+
+class SplitBody(BaseModel):
+    base: dict
+    was: Choices
+    cur: Choices
+    draft: Choices
+    parent_version: int | None = Field(None, ge=1)
+    datasets: list[str] = Field(default_factory=list)
+    predictions: list[Prediction] = Field(default_factory=list)
+
+
+class SplitStep(BaseModel):
+    choices: Choices
+    spec: dict
+    chips: list[str]
+    questions: list[Question]
+    prediction: dict[str, str]
+
+
+class SplitPreview(BaseModel):
+    steps: list[SplitStep]
+    jobs: list[Job]
+
+
+@router.post("/split-plan")
+def split_preview(body: SplitBody, services: Services) -> SplitPreview:
+    """Preview versions and chained jobs; saving versions and enqueueing use the existing APIs.
+
+    No versions or jobs are persisted here. Empty steps means this draft cannot be split safely.
+    """
+    base = maths(validate_spec, body.base)
+    was, cur, draft = (choices_in(value) for value in (body.was, body.cur, body.draft))
+    plan = maths(design.split_plan, base, was, cur, draft)
+    if len(body.predictions) > len(plan):
+        raise HTTPException(422, "More predictions than split steps")
+    parent = known_version(services, body.parent_version) if body.parent_version is not None else services.current_version()
+    checkpoint = parent.best_checkpoint if parent else None
+    mode = "catch_up" if checkpoint and plan and plan[0][0]["V"] == cur["V"] else "from_scratch"
+    start = max((v.number for v in services.versions()), default=0) + 1
+    run_dir = getattr(getattr(services, "workspace", None), "run_dir", None)
+    jobs = maths(design.split_jobs, start, plan, mode, checkpoint, body.datasets, run_dir)
+    steps, previous = [], maths(design.write_spec, base, was, was)
+    for i, (choices, spec, chips) in enumerate(plan):
+        prediction = body.predictions[i].model_dump(exclude_none=True) if i < len(body.predictions) else {}
+        steps.append(SplitStep(choices=choices_out(choices), spec=spec, chips=chips,
+                               questions=questions_for(previous, spec), prediction=prediction))
+        previous = spec
+    return SplitPreview(steps=steps, jobs=jobs)
+
+
+class NotebookRow(BaseModel):
+    number: int
+    change: str
+    effects: str
+    guesses: str
+    note: str
+    state: Literal["attention", "live", "neutral"]
+
+
+class LearningNotebook(BaseModel):
+    rows: list[NotebookRow]
+    lines: list[str]
+
+
+class NotebookJob(JobOut):
+    result: LearningNotebook | None = None
+
+
+@router.post("/notebook", response_model=NotebookJob, status_code=202)
+def notebook(request: Request, services: Services):
+    """Read speeds and run facts off the request thread, then return rows and desktop wording."""
+    versions = sorted(services.versions(), key=lambda version: version.number)
+
+    def work(stop):
+        speeds, facts = {}, {}
+        for version in versions:
+            if stop.is_set():
+                return None
+            speeds[version.number] = services.run_speed(version.number)
+            if stop.is_set():
+                return None
+            facts[version.number] = services.run_facts(version.number)
+        rows = design.notebook(versions, speeds, facts)
+        return plain(dict(rows=rows, lines=design.notebook_lines(rows)))
+
+    return _job(request, "design.notebook", work)

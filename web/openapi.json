@@ -400,6 +400,107 @@
         "title": "ChangesBody",
         "type": "object"
       },
+      "CheckBody": {
+        "properties": {
+          "new_version": {
+            "minimum": 1.0,
+            "title": "New Version",
+            "type": "integer"
+          },
+          "old_version": {
+            "minimum": 1.0,
+            "title": "Old Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "old_version",
+          "new_version"
+        ],
+        "title": "CheckBody",
+        "type": "object"
+      },
+      "CheckJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LearningCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "CheckJob",
+        "type": "object"
+      },
       "Chip": {
         "properties": {
           "known": {
@@ -1529,6 +1630,60 @@
         "title": "GenerateRequest",
         "type": "object"
       },
+      "GuessCheck": {
+        "properties": {
+          "hits": {
+            "title": "Hits",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "misses": {
+            "title": "Misses",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "attention",
+              "live",
+              "neutral"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lines",
+          "hits",
+          "misses",
+          "state"
+        ],
+        "title": "GuessCheck",
+        "type": "object"
+      },
+      "GuessOption": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "GuessOption",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1729,6 +1884,60 @@
         "title": "Inspect",
         "type": "object"
       },
+      "Job": {
+        "properties": {
+          "created_at": {
+            "default": 0.0,
+            "title": "Created At",
+            "type": "number"
+          },
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta S"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "status": {
+            "default": "waiting",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "Job",
+        "type": "object"
+      },
       "JobModel": {
         "description": "studio_ia.services.Job (studio_queue.Job when the runner is real).",
         "properties": {
@@ -1806,6 +2015,87 @@
           "W"
         ],
         "title": "Knobs",
+        "type": "object"
+      },
+      "LearningCheck": {
+        "properties": {
+          "check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuessCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_said": {
+            "title": "Page Said",
+            "type": "string"
+          },
+          "results": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Measurement"
+            },
+            "title": "Results",
+            "type": "object"
+          },
+          "tray": {
+            "anyOf": [
+              {
+                "maxItems": 3,
+                "minItems": 3,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tray"
+          }
+        },
+        "required": [
+          "results",
+          "check",
+          "tray",
+          "page_said"
+        ],
+        "title": "LearningCheck",
+        "type": "object"
+      },
+      "LearningNotebook": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/NotebookRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "lines"
+        ],
+        "title": "LearningNotebook",
         "type": "object"
       },
       "LeashOut": {
@@ -1981,6 +2271,55 @@
           }
         },
         "title": "LrBody",
+        "type": "object"
+      },
+      "Measurement": {
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "boolean"
+          },
+          "way": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Way"
+          }
+        },
+        "required": [
+          "before",
+          "after",
+          "way",
+          "measured"
+        ],
+        "title": "Measurement",
         "type": "object"
       },
       "Message": {
@@ -2224,6 +2563,130 @@
           "dtypes"
         ],
         "title": "Node",
+        "type": "object"
+      },
+      "NotebookJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LearningNotebook"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "NotebookJob",
+        "type": "object"
+      },
+      "NotebookRow": {
+        "properties": {
+          "change": {
+            "title": "Change",
+            "type": "string"
+          },
+          "effects": {
+            "title": "Effects",
+            "type": "string"
+          },
+          "guesses": {
+            "title": "Guesses",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "attention",
+              "live",
+              "neutral"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "change",
+          "effects",
+          "guesses",
+          "note",
+          "state"
+        ],
+        "title": "NotebookRow",
         "type": "object"
       },
       "Option": {
@@ -2823,6 +3286,57 @@
         "title": "PlanRow",
         "type": "object"
       },
+      "Prediction": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "lower",
+                  "higher"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "enum": [
+                  "less",
+                  "more"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "enum": [
+                  "faster",
+                  "slower"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "title": "Prediction",
+        "type": "object"
+      },
       "Preset": {
         "properties": {
           "key": {
@@ -3346,6 +3860,52 @@
           "rules"
         ],
         "title": "ProblemRules",
+        "type": "object"
+      },
+      "Question": {
+        "properties": {
+          "key": {
+            "enum": [
+              "error",
+              "step",
+              "memory"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/GuessOption"
+            },
+            "title": "Options",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "options"
+        ],
+        "title": "Question",
+        "type": "object"
+      },
+      "QuestionBody": {
+        "properties": {
+          "new_spec": {
+            "additionalProperties": true,
+            "title": "New Spec",
+            "type": "object"
+          },
+          "old_spec": {
+            "additionalProperties": true,
+            "title": "Old Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "old_spec",
+          "new_spec"
+        ],
+        "title": "QuestionBody",
         "type": "object"
       },
       "QueueStateModel": {
@@ -4783,6 +5343,124 @@
           "spec"
         ],
         "title": "SpecBody",
+        "type": "object"
+      },
+      "SplitBody": {
+        "properties": {
+          "base": {
+            "additionalProperties": true,
+            "title": "Base",
+            "type": "object"
+          },
+          "cur": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "datasets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Datasets",
+            "type": "array"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "parent_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version"
+          },
+          "predictions": {
+            "items": {
+              "$ref": "#/components/schemas/Prediction"
+            },
+            "title": "Predictions",
+            "type": "array"
+          },
+          "was": {
+            "$ref": "#/components/schemas/Choices"
+          }
+        },
+        "required": [
+          "base",
+          "was",
+          "cur",
+          "draft"
+        ],
+        "title": "SplitBody",
+        "type": "object"
+      },
+      "SplitPreview": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/SplitStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps",
+          "jobs"
+        ],
+        "title": "SplitPreview",
+        "type": "object"
+      },
+      "SplitStep": {
+        "properties": {
+          "chips": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chips",
+            "type": "array"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "prediction": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Prediction",
+            "type": "object"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "choices",
+          "spec",
+          "chips",
+          "questions",
+          "prediction"
+        ],
+        "title": "SplitStep",
         "type": "object"
       },
       "StartRequest": {
@@ -7568,6 +8246,48 @@
         ]
       }
     },
+    "/design/guess-check": {
+      "post": {
+        "description": "Check saved guesses using the same measured/estimated results and sentences as Builder.",
+        "operationId": "guess_check_design_guess_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Guess Check",
+        "tags": [
+          "design"
+        ]
+      }
+    },
     "/design/lr-text": {
       "post": {
         "description": "lr_text: the sentence under \"Find a learning rate\".",
@@ -7605,6 +8325,28 @@
           }
         },
         "summary": "Lr Text",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/notebook": {
+      "post": {
+        "description": "Read speeds and run facts off the request thread, then return rows and desktop wording.",
+        "operationId": "notebook_design_notebook_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Notebook",
         "tags": [
           "design"
         ]
@@ -7719,6 +8461,51 @@
           }
         },
         "summary": "Presets",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/questions": {
+      "post": {
+        "operationId": "questions_design_questions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Question"
+                  },
+                  "title": "Response Questions Design Questions Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Questions",
         "tags": [
           "design"
         ]
@@ -7867,6 +8654,48 @@
           }
         },
         "summary": "Sizes",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/split-plan": {
+      "post": {
+        "description": "Preview versions and chained jobs; saving versions and enqueueing use the existing APIs.\n\nNo versions or jobs are persisted here. Empty steps means this draft cannot be split safely.",
+        "operationId": "split_preview_design_split_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Split Preview",
         "tags": [
           "design"
         ]
