@@ -1,0 +1,77 @@
+import type { components } from "@/lib/api-schema";
+import { ApiError } from "@/lib/api";
+import { T, fill } from "./copy";
+
+export type Queue = components["schemas"]["QueueStateModel"];
+export type Job = components["schemas"]["JobModel"];
+export type Plan = components["schemas"]["PlanModel"];
+export type ToggleKey = "idle_only" | "pause_on_battery" | "keep_awake" | "chat_follows_best";
+
+export function minutes(seconds: number | null | undefined): string {
+  return seconds == null ? "" : `about ${Math.max(1, Math.round(seconds / 60))} min`;
+}
+
+/** Hours until everything running or waiting is done; null unless every job has an estimate. */
+export function totalHours(state: Queue): number | null {
+  const jobs = [...(state.job ? [state.job] : []), ...state.up_next];
+  const etas = jobs.map((j) => (j.id === state.job?.id ? state.eta_s : j.eta_s));
+  return jobs.length === 0 || etas.some((e) => e == null) ? null : (etas as number[]).reduce((a, b) => a + b, 0) / 3600;
+}
+
+export function allDoneLine(state: Queue): string {
+  const hours = totalHours(state);
+  if (hours != null) return fill(T.allDoneIn, { hours: hours.toFixed(1) });
+  return state.up_next.length ? T.finishNeedsEstimates : "";
+}
+
+export function stateLine(s: Queue): string {
+  const state = s.paused ? "paused" : s.blocked ? `waiting: ${s.blocked}` : "running";
+  return `${s.job?.label || s.job?.kind || ""} · ${state}`;
+}
+
+export function progressLine(s: Queue): string {
+  const lr = s.lr == null ? "auto" : `auto (${Number(s.lr.toPrecision(2))})`;
+  const parts = [
+    s.total ? `step ${s.step.toLocaleString("en-US")} of ${s.total.toLocaleString("en-US")}` : "starting",
+    s.phase ? `schedule: ${s.phase}` : "",
+    `learning rate: ${lr}`,
+    s.eta_s != null ? `${minutes(s.eta_s)} left` : "",
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** (enabled, note) for a plan toggle. Idle detection the computer cannot do greys "Only when I'm not using the computer". */
+export function toggleState(key: string, note: string, supported: boolean): { enabled: boolean; note: string } {
+  return key === "idle_only" && !supported ? { enabled: false, note: T.idleUnsupported } : { enabled: true, note };
+}
+
+/** The place a dragged row lands: dropped on row `target`, it takes that row's position. */
+export function dropIndex(target: number, length: number): number {
+  return Math.max(0, Math.min(target, length - 1));
+}
+
+export function errorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    try {
+      const body = JSON.parse(error.body) as { detail?: unknown };
+      if (typeof body.detail === "string") return body.detail;
+    } catch {
+      // not JSON: fall through to the status line
+    }
+    return `${error.message}${error.body ? `: ${error.body}` : ""}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A whole hour 0-23 from what was typed, or null. */
+export function parseHour(text: string): number | null {
+  if (!/^\d{1,2}$/.test(text.trim())) return null;
+  const n = Number(text);
+  return n >= 0 && n <= 23 ? n : null;
+}
+
+export function resumesText(resumesAt: string | null | undefined): string {
+  if (!resumesAt) return "";
+  const when = new Date(resumesAt);
+  return Number.isNaN(when.getTime()) ? "" : fill(T.blockedAt, { when: when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) });
+}
