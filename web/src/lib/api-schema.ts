@@ -4,6 +4,46 @@
  */
 
 export interface paths {
+    "/benchmark/compare-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Plan
+         * @description The runs a Compare setup would make, and how each variant is matched to the base. Queues nothing. 422 says why a setup cannot run.
+         */
+        post: operations["compare_plan_benchmark_compare_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/benchmark/compare-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Queue
+         * @description Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.
+         */
+        post: operations["compare_queue_benchmark_compare_queue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/benchmark/compare-runs": {
         parameters: {
             query?: never;
@@ -432,6 +472,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/data/problems/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Problem Rules
+         * @description Generatable rules in desktop picker order; imported answer keys cannot generate examples.
+         */
+        get: operations["problem_rules_data_problems_rules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/refresh_downloads": {
         parameters: {
             query?: never;
@@ -660,6 +720,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/guess-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Guess Check
+         * @description Check saved guesses using the same measured/estimated results and sentences as Builder.
+         */
+        post: operations["guess_check_design_guess_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/design/lr-text": {
         parameters: {
             query?: never;
@@ -674,6 +754,26 @@ export interface paths {
          * @description lr_text: the sentence under "Find a learning rate".
          */
         post: operations["lr_text_design_lr_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/notebook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Notebook
+         * @description Read speeds and run facts off the request thread, then return rows and desktop wording.
+         */
+        post: operations["notebook_design_notebook_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -734,6 +834,23 @@ export interface paths {
         get: operations["presets_design_presets_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Questions */
+        post: operations["questions_design_questions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -820,6 +937,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/split-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Split Preview
+         * @description Preview versions and chained jobs; saving versions and enqueueing use the existing APIs.
+         *
+         *     No versions or jobs are persisted here. Empty steps means this draft cannot be split safely.
+         */
+        post: operations["split_preview_design_split_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/design/tower": {
         parameters: {
             query?: never;
@@ -877,6 +1016,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/inspect/ablate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ablate
+         * @description {baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.
+         */
+        post: operations["ablate_inspect_ablate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/inspect/forward": {
         parameters: {
             query?: never;
@@ -888,9 +1047,30 @@ export interface paths {
         put?: never;
         /**
          * Forward
-         * @description {ids, tokens, logits, hooks}: one forward pass over `text`.
+         * @description {ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.
          */
         post: operations["forward_inspect_forward_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inspect/head-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Head Stats
+         * @description {entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted
+         *     pattern, so it answers at once instead of as a job.
+         */
+        post: operations["head_stats_inspect_head_stats_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -911,6 +1091,26 @@ export interface paths {
          * @description {before, after}: held-back bits per character with the (block, head) pairs in `off` switched off.
          */
         post: operations["heads_off_inspect_heads_off_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inspect/logit-lens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logit Lens
+         * @description [{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.
+         */
+        post: operations["logit_lens_inspect_logit_lens_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1137,6 +1337,26 @@ export interface paths {
         put?: never;
         /** Stop Passive */
         post: operations["stop_passive_passive__session_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/import-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Import Models
+         * @description Models this server can import; size is the expected download in bytes.
+         */
+        get: operations["import_models_post_training_import_models_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1783,6 +2003,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/quicktest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Quicktest State
+         * @description The current version, the staged change (if any) and the newest finished result that finished after `since` (epoch seconds).
+         */
+        get: operations["quicktest_state_quicktest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quicktest/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Stage Draft
+         * @description Stage an unsaved design change for Quick test and Compare (the designer's draft).
+         */
+        put: operations["stage_draft_quicktest_draft_put"];
+        post?: never;
+        /** Discard Draft */
+        delete: operations["discard_draft_quicktest_draft_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quicktest/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run
+         * @description Queue a quick test of the staged change against the current version. 400 without a staged change or, for "slice", without text.
+         */
+        post: operations["run_quicktest_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quicktest/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Idea
+         * @description Save the staged change as the next version and clear the stage; the designer then shows it as saved and needing training.
+         */
+        post: operations["save_idea_quicktest_save_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storage": {
         parameters: {
             query?: never;
@@ -1852,6 +2153,26 @@ export interface paths {
         };
         /** Free Space */
         get: operations["free_space_storage_free_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/training-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Training Run
+         * @description The run the page shows: a running job's live run, else the newest version's latest run.
+         */
+        get: operations["training_run_training_run_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2297,6 +2618,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AblateRequest */
+        AblateRequest: {
+            /** Heads */
+            heads?: [
+                number,
+                number
+            ][] | null;
+            /**
+             * Mode
+             * @default zero
+             * @enum {string}
+             */
+            mode: "mean" | "zero";
+            /** Text */
+            text: string;
+            /** Version */
+            version?: number | null;
+        };
         /** Accepted */
         Accepted: {
             /** Epoch */
@@ -2466,6 +2805,41 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** CheckBody */
+        CheckBody: {
+            /** New Version */
+            new_version: number;
+            /** Old Version */
+            old_version: number;
+        };
+        /** CheckJob */
+        CheckJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["LearningCheck"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
         /** Chip */
         Chip: {
             /** Known */
@@ -2563,6 +2937,56 @@ export interface components {
              * @default
              */
             waiting_reason: string;
+        };
+        /** ComparePlan */
+        ComparePlan: {
+            /** Base */
+            base?: number | null;
+            /** N Runs */
+            n_runs: number;
+            /** N Sweeps */
+            n_sweeps: number;
+            /** Variants */
+            variants: components["schemas"]["PlanRow"][];
+            /** Wall Seconds */
+            wall_seconds: number;
+        };
+        /**
+         * CompareSetup
+         * @description What Compare runs asks: the base version, the variants (other saved versions), and how to hold them equal.
+         */
+        CompareSetup: {
+            /** Base */
+            base?: number | null;
+            /**
+             * Guess
+             * @default
+             */
+            guess: string;
+            /**
+             * Mode
+             * @default params
+             * @enum {string}
+             */
+            mode: "params" | "compute" | "tokens" | "wall-clock";
+            /**
+             * Question
+             * @default
+             */
+            question: string;
+            /**
+             * Retune Lr
+             * @default true
+             */
+            retune_lr: boolean;
+            /**
+             * Seeds
+             * @default 3
+             * @enum {integer}
+             */
+            seeds: 1 | 3 | 5;
+            /** Variants */
+            variants?: number[];
         };
         /** ComputeBody */
         ComputeBody: {
@@ -2839,10 +3263,12 @@ export interface components {
              * @default true
              */
             hooks: boolean;
+            /** Ids */
+            ids?: number[] | null;
             /** Names */
             names?: string[] | null;
             /** Text */
-            text: string;
+            text?: string | null;
             /** Version */
             version?: number | null;
         };
@@ -2960,6 +3386,27 @@ export interface components {
              */
             store: boolean;
         };
+        /** GuessCheck */
+        GuessCheck: {
+            /** Hits */
+            hits: number;
+            /** Lines */
+            lines: string[];
+            /** Misses */
+            misses: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "attention" | "live" | "neutral";
+        };
+        /** GuessOption */
+        GuessOption: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2969,6 +3416,11 @@ export interface components {
         HasText: {
             /** Has Text */
             has_text: boolean;
+        };
+        /** HeadStatsRequest */
+        HeadStatsRequest: {
+            /** Pattern */
+            pattern: unknown[];
         };
         /** HeadsOffRequest */
         HeadsOffRequest: {
@@ -3023,10 +3475,52 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** ImportModelOut */
+        ImportModelOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Size */
+            size: number;
+        };
         /** Inspect */
         Inspect: {
             /** Version */
             version?: number | null;
+        };
+        /** Job */
+        Job: {
+            /**
+             * Created At
+             * @default 0
+             */
+            created_at: number;
+            /** Eta S */
+            eta_s?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @default waiting
+             */
+            status: string;
         };
         /**
          * JobModel
@@ -3125,6 +3619,29 @@ export interface components {
             /** W */
             W: boolean;
         };
+        /** LearningCheck */
+        LearningCheck: {
+            check: components["schemas"]["GuessCheck"] | null;
+            /** Page Said */
+            page_said: string;
+            /** Results */
+            results: {
+                [key: string]: components["schemas"]["Measurement"];
+            };
+            /** Tray */
+            tray: [
+                string,
+                string,
+                string
+            ] | null;
+        };
+        /** LearningNotebook */
+        LearningNotebook: {
+            /** Lines */
+            lines: string[];
+            /** Rows */
+            rows: components["schemas"]["NotebookRow"][];
+        };
         /** LeaseModel */
         LeaseModel: {
             /** Duration S */
@@ -3161,6 +3678,18 @@ export interface components {
             /** Path */
             path?: string | null;
         };
+        /** LogitLensRequest */
+        LogitLensRequest: {
+            /** Text */
+            text: string;
+            /**
+             * Top K
+             * @default 5
+             */
+            top_k: number;
+            /** Version */
+            version?: number | null;
+        };
         /** LossRequest */
         LossRequest: {
             /**
@@ -3186,6 +3715,17 @@ export interface components {
             result?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** Measurement */
+        Measurement: {
+            /** After */
+            after: number | null;
+            /** Before */
+            before: number | null;
+            /** Measured */
+            measured: boolean;
+            /** Way */
+            way: string | null;
         };
         /** Message */
         Message: {
@@ -3307,6 +3847,52 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** NotebookJob */
+        NotebookJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["LearningNotebook"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /** NotebookRow */
+        NotebookRow: {
+            /** Change */
+            change: string;
+            /** Effects */
+            effects: string;
+            /** Guesses */
+            guesses: string;
+            /** Note */
+            note: string;
+            /** Number */
+            number: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "attention" | "live" | "neutral";
+        };
         /** Option */
         Option: {
             /** Blurb */
@@ -3353,6 +3939,23 @@ export interface components {
         Outlook: {
             /** Outlook */
             outlook: string;
+        };
+        /** OverlapOut */
+        OverlapOut: {
+            /**
+             * Checked
+             * @default 0
+             */
+            checked: number;
+            /**
+             * Left Out
+             * @default 0
+             */
+            left_out: number;
+            /** Note */
+            note?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** Own */
         Own: {
@@ -3545,6 +4148,93 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** PlanRow */
+        PlanRow: {
+            /** Adjustments */
+            adjustments?: unknown[];
+            /** Changes */
+            changes?: string[];
+            /** Matched */
+            matched: boolean;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Relative Error */
+            relative_error?: number | null;
+            /** Steps */
+            steps?: number | null;
+            /** Variant */
+            variant: number;
+        };
+        /** PostTrainingJobOut */
+        PostTrainingJobOut: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["PostTrainingOut"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /**
+         * PostTrainingOut
+         * @description Services.post_training: missing keys are fine, a client reads them as unknown.
+         */
+        PostTrainingOut: {
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+            /** Example */
+            example?: unknown;
+            /** Gates */
+            gates?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Overlap */
+            overlap?: {
+                [key: string]: components["schemas"]["OverlapOut"];
+            };
+            /** Rounds */
+            rounds?: {
+                [key: string]: components["schemas"]["RoundState"];
+            };
+        };
+        /** Prediction */
+        Prediction: {
+            /** Error */
+            error?: ("lower" | "higher") | null;
+            /** Memory */
+            memory?: ("less" | "more") | null;
+            /** Step */
+            step?: ("faster" | "slower") | null;
+        };
         /** Preset */
         Preset: {
             /** Key */
@@ -3712,6 +4402,30 @@ export interface components {
              * @default The cat sat on the mat because it was tired.
              */
             text: string;
+            /** Version */
+            version?: number | null;
+        };
+        /** ProblemRule */
+        ProblemRule: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** ProblemRules */
+        ProblemRules: {
+            /**
+             * Max Drafts
+             * @default 200
+             */
+            max_drafts: number;
+            /**
+             * Max Problems
+             * @default 5000
+             */
+            max_problems: number;
+            /** Rules */
+            rules: components["schemas"]["ProblemRule"][];
         };
         /**
          * PublishedVersion
@@ -3767,6 +4481,27 @@ export interface components {
             size?: number | null;
             /** Step */
             step?: number | null;
+        };
+        /** Question */
+        Question: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "error" | "step" | "memory";
+            /** Options */
+            options: components["schemas"]["GuessOption"][];
+        };
+        /** QuestionBody */
+        QuestionBody: {
+            /** New Spec */
+            new_spec: {
+                [key: string]: unknown;
+            };
+            /** Old Spec */
+            old_spec: {
+                [key: string]: unknown;
+            };
         };
         /**
          * QueueStateModel
@@ -3830,6 +4565,166 @@ export interface components {
              * @default []
              */
             up_next: components["schemas"]["JobModel"][];
+        };
+        /** Queued */
+        Queued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Outlook */
+            outlook: string;
+        };
+        /** QuickTestCheck */
+        QuickTestCheck: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Id */
+            id: string;
+            /** Ok */
+            ok?: boolean | null;
+        };
+        /** QuickTestDesign */
+        QuickTestDesign: {
+            /** Description */
+            description: string;
+            /** Title */
+            title: string;
+        };
+        /** QuickTestDraft */
+        QuickTestDraft: {
+            /** Changes */
+            changes: string[];
+            /** Cost */
+            cost: string;
+            /** Description */
+            description: string;
+        };
+        /** QuickTestReferences */
+        QuickTestReferences: {
+            /** Uniform */
+            uniform: number;
+            /** Unigram */
+            unigram: number;
+        };
+        /**
+         * QuickTestResult
+         * @description studio_quicktest.run's result, as stored.
+         */
+        QuickTestResult: {
+            /** Broken */
+            broken?: string | null;
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["QuickTestCheck"][];
+            current?: components["schemas"]["QuickTestRun"] | null;
+            /**
+             * Dataset
+             * @default
+             */
+            dataset: string;
+            /** Delta */
+            delta?: number | null;
+            draft?: components["schemas"]["QuickTestRun"] | null;
+            /** Finished At */
+            finished_at?: number | null;
+            /**
+             * Learned Context
+             * @default false
+             */
+            learned_context: boolean;
+            /** Minutes */
+            minutes: number;
+            references?: components["schemas"]["QuickTestReferences"] | null;
+            /**
+             * Shrink
+             * @default false
+             */
+            shrink: boolean;
+            /**
+             * Stopped
+             * @default false
+             */
+            stopped: boolean;
+            /** Threshold */
+            threshold?: number | null;
+            /** Verdict */
+            verdict?: ("lower" | "about the same" | "higher") | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** QuickTestRun */
+        QuickTestRun: {
+            /** Bpc */
+            bpc?: number | null;
+            /**
+             * Curve
+             * @default []
+             */
+            curve: number[][];
+            /**
+             * Sample
+             * @default
+             */
+            sample: string;
+            /** Steps */
+            steps: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** QuickTestRunRequest */
+        QuickTestRunRequest: {
+            /**
+             * Dataset
+             * @default stories
+             * @enum {string}
+             */
+            dataset: "stories" | "slice" | "problems";
+            /**
+             * Guess
+             * @enum {string}
+             */
+            guess: "Lower" | "Same" | "Higher";
+            /**
+             * Minutes
+             * @default 3
+             * @enum {integer}
+             */
+            minutes: 1 | 3 | 10;
+            /**
+             * Shrink
+             * @default false
+             */
+            shrink: boolean;
+        };
+        /** QuickTestStageDraft */
+        QuickTestStageDraft: {
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        /** QuickTestStarted */
+        QuickTestStarted: {
+            /** Job Id */
+            job_id: string;
+            /** Outlook */
+            outlook: string;
+            /** Started At */
+            started_at: number;
+        };
+        /** QuickTestState */
+        QuickTestState: {
+            current: components["schemas"]["QuickTestDesign"];
+            draft: components["schemas"]["QuickTestDraft"] | null;
+            last: components["schemas"]["QuickTestResult"] | null;
+            /** Next Number */
+            next_number: number;
         };
         /** RangeJob */
         RangeJob: {
@@ -4072,6 +4967,19 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** RoundState */
+        RoundState: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Status
+             * @default idle
+             */
+            status: string;
+        };
         /** RowsPage */
         RowsPage: {
             /** Next Cursor */
@@ -4086,6 +4994,49 @@ export interface components {
              * @enum {string}
              */
             kind: "conversations" | "problems" | "pairs" | "corrections" | "heldout_docs" | "heldout_problems";
+        };
+        /** RunPageModel */
+        RunPageModel: {
+            /**
+             * Change
+             * @default
+             */
+            change: string;
+            /** Chat Version */
+            chat_version?: number | null;
+            curve: components["schemas"]["CurveModel"];
+            /** Gate Vs */
+            gate_vs?: number | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Parent */
+            parent?: number | null;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            references: components["schemas"]["ReferencesModel"];
+            /**
+             * Running
+             * @default false
+             */
+            running: boolean;
+            /** Status */
+            status?: ("learning" | "flat" | "memorising") | null;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+            switch: components["schemas"]["SwitchNote"];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /** Version */
+            version?: number | null;
         };
         /** RunRequest */
         RunRequest: {
@@ -4178,6 +5129,45 @@ export interface components {
         };
         /** SpecBody */
         SpecBody: {
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        /** SplitBody */
+        SplitBody: {
+            /** Base */
+            base: {
+                [key: string]: unknown;
+            };
+            cur: components["schemas"]["Choices"];
+            /** Datasets */
+            datasets?: string[];
+            draft: components["schemas"]["Choices"];
+            /** Parent Version */
+            parent_version?: number | null;
+            /** Predictions */
+            predictions?: components["schemas"]["Prediction"][];
+            was: components["schemas"]["Choices"];
+        };
+        /** SplitPreview */
+        SplitPreview: {
+            /** Jobs */
+            jobs: components["schemas"]["Job"][];
+            /** Steps */
+            steps: components["schemas"]["SplitStep"][];
+        };
+        /** SplitStep */
+        SplitStep: {
+            /** Chips */
+            chips: string[];
+            choices: components["schemas"]["Choices"];
+            /** Prediction */
+            prediction: {
+                [key: string]: string;
+            };
+            /** Questions */
+            questions: components["schemas"]["Question"][];
             /** Spec */
             spec: {
                 [key: string]: unknown;
@@ -4302,6 +5292,24 @@ export interface components {
              * @default
              */
             query: string;
+        };
+        /**
+         * SwitchNote
+         * @description Which line the page says about Chat switching (studio_ia.training_logic.switch_note): the key is the copy's, gap is
+         *     in bits per character, docs and need are set for gate_few_docs.
+         */
+        SwitchNote: {
+            /** Docs */
+            docs?: number | null;
+            /** Gap */
+            gap?: string | null;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "gate_few_docs" | "gate_better" | "gate_not_sure" | "gate_not_better" | "no_band_yet" | "held_back_below" | "held_back_inside";
+            /** Need */
+            need?: number | null;
         };
         /** TeacherOut */
         TeacherOut: {
@@ -4674,6 +5682,11 @@ export interface components {
         };
         /** ReplyRequest */
         studio_api__routers__chat__ReplyRequest: {
+            /** Ablate */
+            ablate?: [
+                number,
+                number
+            ][] | null;
             /** Messages */
             messages: components["schemas"]["Message"][];
             /** Version */
@@ -4780,6 +5793,72 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    compare_plan_benchmark_compare_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareSetup"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparePlan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_queue_benchmark_compare_queue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareSetup"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Queued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     compare_runs_benchmark_compare_runs_post: {
         parameters: {
             query?: never;
@@ -5438,6 +6517,26 @@ export interface operations {
             };
         };
     };
+    problem_rules_data_problems_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemRules"];
+                };
+            };
+        };
+    };
     refresh_downloads_data_refresh_downloads_post: {
         parameters: {
             query?: never;
@@ -5600,6 +6699,7 @@ export interface operations {
                 query?: string;
                 cursor?: string | null;
                 limit?: number;
+                review_only?: boolean;
             };
             header?: never;
             path: {
@@ -5831,6 +6931,39 @@ export interface operations {
             };
         };
     };
+    guess_check_design_guess_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lr_text_design_lr_text_post: {
         parameters: {
             query?: never;
@@ -5860,6 +6993,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    notebook_design_notebook_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotebookJob"];
                 };
             };
         };
@@ -5946,6 +7099,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Preset"][];
+                };
+            };
+        };
+    };
+    questions_design_questions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Question"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6069,6 +7255,39 @@ export interface operations {
             };
         };
     };
+    split_preview_design_split_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SplitBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SplitPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     tower_design_tower_post: {
         parameters: {
             query?: never;
@@ -6157,6 +7376,39 @@ export interface operations {
             };
         };
     };
+    ablate_inspect_ablate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AblateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forward_inspect_forward_post: {
         parameters: {
             query?: never;
@@ -6190,6 +7442,39 @@ export interface operations {
             };
         };
     };
+    head_stats_inspect_head_stats_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeadStatsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     heads_off_inspect_heads_off_post: {
         parameters: {
             query?: never;
@@ -6200,6 +7485,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["HeadsOffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logit_lens_inspect_logit_lens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogitLensRequest"];
             };
         };
         responses: {
@@ -6592,6 +7910,26 @@ export interface operations {
             };
         };
     };
+    import_models_post_training_import_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportModelOut"][];
+                };
+            };
+        };
+    };
     import_pretrained_post_training_imports_post: {
         parameters: {
             query?: never;
@@ -6741,7 +8079,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                    "application/json": components["schemas"]["PostTrainingJobOut"];
                 };
             };
             /** @description Validation Error */
@@ -7541,6 +8879,139 @@ export interface operations {
             };
         };
     };
+    quicktest_state_quicktest_get: {
+        parameters: {
+            query?: {
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuickTestState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stage_draft_quicktest_draft_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuickTestStageDraft"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_draft_quicktest_draft_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    run_quicktest_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuickTestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuickTestStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_idea_quicktest_save_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Version"];
+                };
+            };
+        };
+    };
     storage_storage_get: {
         parameters: {
             query?: {
@@ -7642,6 +9113,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FreeSpace"];
+                };
+            };
+        };
+    };
+    training_run_training_run_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunPageModel"];
                 };
             };
         };
@@ -8204,7 +9695,9 @@ export interface operations {
     };
     snapshots_viewer_snapshots_get: {
         parameters: {
-            query?: never;
+            query?: {
+                version?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -8218,6 +9711,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -95,6 +95,9 @@ generated TypeScript client compiles against it.
 
 Done: a user can import data, queue a pretraining run, watch it progress and see the version appear, all from the browser.
 
+Verified by `web/tests/live.phase2.spec.ts` against the real `--fake` API and SSE stream in CI
+(PR #220, web run 38853281308). This covers the done-line workflow; the remaining page-level checklists above stay separate.
+
 ### Phase 3 — the rest of the pages (#95)
 
 - [ ] Builder (largest page, 2k lines of Tk): tower, start-from, controls, costs/expectations, tray states (edit, saved,

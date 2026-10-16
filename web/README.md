@@ -15,6 +15,18 @@ pnpm test           # Playwright smoke tests against out/, so build first; no AP
 
 ## Running with the API
 
+On Windows, after `python tasks.py web:build`, run `start_web.bat` from the repository root and open
+`http://127.0.0.1:8787/chat/`. The launcher uses the main checkout's Python environment and workspace when started from a
+Git worktree. Keep its console open while using the app; startup errors remain visible there.
+
+To choose the real workspace explicitly from another checkout:
+
+```bash
+python -m studio_api --workspace /path/to/TRAINER --port 8787
+```
+
+Use one running app per workspace. `--workspace` cannot be combined with `--fake`.
+
 ```bash
 # repo root: the API over empty in-memory data (drop --fake for a real workspace)
 .venv/bin/python -m studio_api --fake --port 8787
@@ -56,7 +68,8 @@ TypeScript, so a hand-edited `api-schema.ts` fails there. Do not edit either fil
 ## Tests against the live API
 
 `tests/live.spec.ts` runs against `python -m studio_api --fake` serving `out/` (the `live` Playwright project), and checks that
-the status strip goes from Connecting to Connected. It needs the Python requirements, so it is skipped unless `API_LIVE=1`:
+the status strip goes from Connecting to Connected. Any `tests/live.<page>.spec.ts` runs in the same project, against a
+`--fake` API that runs a queued job when `POST /queue/start` is called: `step` rises on `train` events, then a version is added. Uploaded files are parsed into memory; no training weights or workspace records are written. Live specs share one worker, and the server uses `--fake-step-seconds 0.25` so progress can be observed. `live.phase2.spec.ts` imports a text file, selects it for pretraining, starts the queue and checks the trained version, including after a refresh. It needs the Python requirements, so it is skipped unless `API_LIVE=1`:
 
 ```bash
 API_LIVE=1 API_PYTHON=$PWD/../.venv/bin/python pnpm test   # API_PYTHON defaults to `python`

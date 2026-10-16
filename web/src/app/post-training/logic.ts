@@ -2,14 +2,7 @@ import type { components } from "@/lib/api-schema";
 import { T, fill } from "./copy";
 
 export type Options = components["schemas"]["OptionsOut"];
-/** The result of POST /post-training/status (the schema types a job result as any): studio_api PostTrainingOut. */
-export type Status = {
-  rounds?: Record<string, { status: string; note: string }>;
-  counts?: Record<string, number>;
-  gates?: Record<string, Gate>;
-  overlap?: Record<string, { checked: number; left_out: number; note?: string }>;
-  example?: { prompt?: string; answer?: string } | null;
-};
+export type Status = components["schemas"]["PostTrainingOut"];
 export type JobOut = components["schemas"]["studio_api__models_work__JobOut"];
 export type VersionRow = components["schemas"]["Version"];
 export type Queue = components["schemas"]["QueueStateModel"];

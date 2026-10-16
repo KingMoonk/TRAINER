@@ -17,10 +17,10 @@ export function UpNextCard({ queue, actions }: { queue: Queue | undefined; actio
     setDragging(null);
     setOver(null);
   };
-  const drop = (target: number) => {
-    const from = jobs.findIndex((j) => j.id === dragging);
+  const drop = (target: number, id: string) => {
+    const from = jobs.findIndex((j) => j.id === id);
     const index = dropIndex(target, jobs.length);
-    if (dragging && from >= 0 && index !== from) actions.move.mutate({ id: dragging, index });
+    if (from >= 0 && index !== from) actions.move.mutate({ id, index });
     end();
   };
   return (
@@ -56,7 +56,7 @@ export function UpNextCard({ queue, actions }: { queue: Queue | undefined; actio
                       actions={actions}
                       onDragStart={() => setDragging(job.id)}
                       onDragOver={() => setOver(n)}
-                      onDrop={() => drop(n)}
+                      onDrop={(id) => drop(n, id)}
                       onDragEnd={end}
                     />
                   ))}
@@ -88,7 +88,7 @@ function Row({
   actions: QueueActions;
   onDragStart: () => void;
   onDragOver: () => void;
-  onDrop: () => void;
+  onDrop: (id: string) => void;
   onDragEnd: () => void;
 }) {
   const held = job.status === "held";
@@ -98,26 +98,38 @@ function Row({
   return (
     <li
       data-testid={`job-${job.id}`}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", job.id);
-        onDragStart();
-      }}
       onDragOver={(e) => {
         e.preventDefault();
         onDragOver();
       }}
       onDrop={(e) => {
         e.preventDefault();
-        onDrop();
+        onDrop(e.dataTransfer.getData("text/plain"));
       }}
       onDragEnd={onDragEnd}
       className={cn("flex flex-wrap items-center gap-3 rounded-lg border-2 bg-muted/20 p-2 transition-colors", active ? "border-violet-500" : "border-border")}
     >
-      <span aria-hidden title={T.dragHandle} className="cursor-grab select-none px-1 text-lg text-muted-foreground">
+      <button
+        type="button"
+        draggable
+        aria-label={`${T.dragHandle}: ${name}`}
+        title={T.dragHandle}
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", job.id);
+          onDragStart();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const target = dropIndex(n + (e.key === "ArrowUp" ? -1 : 1), last + 1);
+            if (target !== n) move(target);
+          }
+        }}
+        className="cursor-grab select-none rounded px-1 text-lg text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring active:cursor-grabbing"
+      >
         {"⠇"}
-      </span>
+      </button>
       <span className={cn("w-5 text-center font-semibold", held ? "text-muted-foreground" : "text-violet-400")}>{n + 1}</span>
       <div className="min-w-0 flex-1">
         <div className={cn("truncate font-medium", held && "text-muted-foreground")}>
