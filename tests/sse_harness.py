@@ -89,6 +89,8 @@ class Capture:
         if self._task is not None:
             self._loop.call_soon_threadsafe(self._task.cancel)
         self._thread.join(TIMEOUT)
+        if not self._thread.is_alive():
+            self._loop.close()
 
 
 class ApiCase(unittest.TestCase):
