@@ -19,6 +19,8 @@ class LinearConfig:
 
 
 class LinearAttention(Layer):
+    cacheable = True
+
     def __init__(self, cfg, dims):
         super().__init__(dims)
         d = dims.d_model
@@ -37,6 +39,11 @@ class LinearAttention(Layer):
         # Causal prefix sums of k_i v_j and of k; each position reads only earlier positions. Memory: T × h² per head.
         kv = torch.cumsum(k.unsqueeze(-1) * v.unsqueeze(-2), dim=2)
         ks = torch.cumsum(k, dim=2)
+        if ctx.cache is not None:
+            # Generation: the sums so far are the whole state ([B, H, h, h] and [B, H, h]), so a new token costs the same at any length.
+            if ctx.block in ctx.cache:
+                kv, ks = kv + ctx.cache[ctx.block][0].unsqueeze(2), ks + ctx.cache[ctx.block][1].unsqueeze(2)
+            ctx.cache[ctx.block] = (kv[:, :, -1].clone(), ks[:, :, -1].clone())  # a copy, so the [T, h, h] sums are freed
         numerator = torch.einsum("bhti,bhtij->bhtj", q, kv)
         denominator = (q * ks).sum(dim=-1, keepdim=True) + self.eps
         stream = ctx.emit("linear.out", numerator / denominator)

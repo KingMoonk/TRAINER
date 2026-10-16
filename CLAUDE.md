@@ -4,3 +4,4 @@
 - Only run `tasks.py test:ci` or `test:ci:e2e`, `tests/gui_*.py`, or `tests.e2e_train` if trying to debug CI issues. 
 - A new test that opens a window goes in `gui_*.py` with that import as its first import; `test_*.py` must stay window-free.
 - While iterating, run just the affected tests (see `.claude/rules/affected-tests.md`).
+- Git: every task in its own worktree, cut from origin/master; the sync-master hook keeps master current. Details: `.claude/rules/git-workflow.md`.
