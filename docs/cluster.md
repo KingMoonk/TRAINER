@@ -2,7 +2,7 @@
 
 Several machines can pool their compute. Each one runs the API as a node; a node alone is a cluster of one. Nodes find each
 other over a Tailscale network (a *tailnet*), hand whole jobs to each other, and exchange trained versions through a bucket.
-Nothing is split across machines: one training run always stays on one machine.
+A distributed pretraining run uses several machines at once with DiLoCo; `docs/distributed.md` is its design.
 
 Three things to set up, in this order: the tailnet, the node list in the workspace config, and the bucket.
 
@@ -118,7 +118,8 @@ characters of the file's sha256: publishing the same checkpoint twice uploads no
 last, so other machines list a version only once its weights are complete, and they check the hash before using a download.
 
 Pulling a version writes an ordinary float32 checkpoint on the local disk. It has no optimizer state, so a run resumed from it
-restarts the optimizer. Nothing else is uploaded: datasets, runs, logs, tokenizers and the optimizer never leave the machine.
+restarts the optimizer. Nothing else is uploaded: datasets, runs, logs, tokenizers and the optimizer never leave the machine,
+except that a distributed run sends its training windows to its own members over the tailnet (`docs/distributed.md`).
 
 ### Set up Cloudflare R2
 
