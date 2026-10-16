@@ -2,6 +2,24 @@ import { expect, test, type Page } from "@playwright/test";
 
 // Browser coverage is CI-only. Keep numeric expectations independent of lossView.
 const prompt = "The largest planet in our solar system is Jupiter";
+
+test("a version link uses that checkpoint without choosing the best", async ({ page }) => {
+  const state = await mockLoss(page);
+  await page.goto("/loss/?version=2");
+  await expect.poll(() => state.requests.length).toBeGreaterThan(0);
+  expect(state.requests[0].version).toBe(2);
+  expect(state.bestRequests).toBe(0);
+});
+
+test("an unavailable version needs an explicit choice before falling back", async ({ page }) => {
+  const state = await mockLoss(page);
+  await page.goto("/loss/?version=999");
+  await expect(page.getByRole("alert")).toContainText("Version 999 has no available trained checkpoint.");
+  expect(state.requests).toHaveLength(0);
+  expect(state.bestRequests).toBe(0);
+  await page.getByRole("button", { name: "Choose another version" }).click();
+  await expect.poll(() => state.requests.length).toBeGreaterThan(0);
+});
 const version = (number: number, checkpoint: string | null = `checkpoint-${number}`) => ({
   number, name: `version ${number}`, change: "Loss fixture", spec: {}, parent: null,
   status: checkpoint ? "trained" : "saved", best_checkpoint: checkpoint, scorecard: {}, verdict: "",

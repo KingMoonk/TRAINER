@@ -40,6 +40,7 @@ async function mockApi(page: Page, options: { trained?: boolean } = {}) {
       return route.fulfill({ status: path === "/inspect/head-stats" ? 200 : 202, json: make(body) });
     });
   await answer("/versions/best", () => job(options.trained === false ? { ...version, best_checkpoint: null } : version));
+  await page.route("**/versions", (route) => route.fulfill({ json: [version, { ...version, number: 7, name: "v7" }] }));
   await page.route("**/versions/current", (route) => route.fulfill({ json: options.trained === false ? { ...version, best_checkpoint: null } : version }));
   await answer("/inspect/prepared", () => job({ ids, tokens }));
   await answer("/inspect/forward", () => job(forwardResult(2, 3)));
@@ -61,6 +62,24 @@ async function mockApi(page: Page, options: { trained?: boolean } = {}) {
   return calls;
 }
 
+for (const path of ["head-lab", "head-zoom"]) {
+  test(`${path}: a version link inspects that version without asking for the best`, async ({ page }) => {
+    const calls = await mockApi(page);
+    await page.goto(`/${path}/?version=7`);
+    await expect.poll(() => calls["/inspect/forward"]?.length ?? 0).toBeGreaterThan(0);
+    expect(calls["/inspect/forward"][0]).toMatchObject({ version: 7 });
+    expect(calls["/versions/best"]).toBeUndefined();
+  });
+
+  test(`${path}: a missing requested version does not inspect a different one`, async ({ page }) => {
+    const calls = await mockApi(page);
+    await page.goto(`/${path}/?version=999`);
+    await expect(page.getByText("Version 999 is not available.", { exact: true })).toBeVisible();
+    expect(calls["/inspect/forward"]).toBeUndefined();
+    expect(calls["/versions/best"]).toBeUndefined();
+  });
+}
+
 test("Head lab: shows the heads, switches one off, and ranks them", async ({ page }) => {
   const calls = await mockApi(page);
   await page.goto("/head-lab/");
@@ -73,7 +92,7 @@ test("Head lab: shows the heads, switches one off, and ranks them", async ({ pag
   await expect(page.getByRole("heading", { name: "Block 2 · head 3" })).toBeVisible();
   await page.getByRole("button", { name: "Show the three tests" }).click();
   await expect(page.getByRole("group", { name: "The three pattern tests" })).toContainText("Previous word");
-  await expect(page.getByRole("link", { name: /Step through one head/ })).toHaveAttribute("href", "/head-zoom/?block=1&head=2");
+  await expect(page.getByRole("link", { name: /Step through one head/ })).toHaveAttribute("href", "/head-zoom/?version=3&block=1&head=2");
 
   await page.getByRole("button", { name: "Switch it off" }).click();
   await expect(page.getByText("switched off", { exact: true }).first()).toBeVisible();

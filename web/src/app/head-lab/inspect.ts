@@ -56,7 +56,13 @@ export class Stale extends Error {
  * The version the look-inside pages read: the one Chat follows, else the newest (the Tk pages' current()). Null when there is
  * none, which the pages say in a sentence.
  */
-export async function readVersion(isStale?: () => boolean): Promise<Version | null> {
+export async function readVersion(isStale?: () => boolean, number?: number): Promise<Version | null> {
+  if (number !== undefined) {
+    const versions = await unwrap(api.GET("/versions"));
+    const selected = versions.find((version) => version.number === number);
+    if (!selected) throw new Error(`Version ${number} is not available.`);
+    return selected;
+  }
   const best = await runJob<Version | null>(unwrap(api.POST("/versions/best")), isStale);
   return best ?? (await unwrap(api.GET("/versions/current")));
 }
