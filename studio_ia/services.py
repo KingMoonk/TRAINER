@@ -1605,7 +1605,8 @@ class WorkspaceServices(Services):
         v = self.current_version()
         if v is None or not v.spec:
             return {}
-        context = v.spec["dims"]["n_ctx"]
+        spec = studio_spec.validate_spec(v.spec)
+        context = spec["dims"]["n_ctx"]
 
         def make():
             import studio_data_kinds as dk
@@ -1615,7 +1616,7 @@ class WorkspaceServices(Services):
             # total size comes from stored character counts, so pieces are scaled up ("estimated") for larger text.
             sample, total = dk.text_sample(self.workspace, ids, PREVIEW_CHARS, exclude=set(self._heldout()))
             self.note("Building the word list")
-            module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
+            module, cfg = studio_spec.module_of("tokenizer", spec["tokenizer"])
             tok = module.fit(cfg, [{"text": d} for d in sample])
             self.note("Counting word pieces")
             encoded = [tok.encode(d) for d in sample]
@@ -1623,7 +1624,7 @@ class WorkspaceServices(Services):
             estimated = total > chars
             pieces = round(counted * total / max(1, chars)) if estimated else counted
             return {"pieces": pieces if sample else None, "estimated": estimated,
-                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
+                    "params": studio_estimate.estimate(spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         key = self._preview_key(v, dataset_ids, rows)
         store = self._previews()
