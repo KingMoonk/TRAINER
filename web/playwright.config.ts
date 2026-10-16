@@ -27,6 +27,8 @@ export default defineConfig({
       ? [
           {
             name: "live",
+            workers: 1, // These specs share one in-memory workspace.
+            fullyParallel: false,
             testMatch: ["live.spec.ts", "live.*.spec.ts"],
             use: { ...devices["Desktop Chrome"], baseURL: `http://127.0.0.1:${LIVE_PORT}` },
           },
@@ -43,7 +45,7 @@ export default defineConfig({
     ...(live
       ? [
           {
-            command: `${process.env.API_PYTHON ?? "python"} -m studio_api --fake --port ${LIVE_PORT}`,
+            command: `${process.env.API_PYTHON ?? "python"} -m studio_api --fake --fake-step-seconds 0.25 --port ${LIVE_PORT}`,
             cwd: "..",
             url: `http://127.0.0.1:${LIVE_PORT}/builder/`,
             reuseExistingServer: !process.env.CI,

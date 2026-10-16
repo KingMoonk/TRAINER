@@ -7,6 +7,23 @@ STEPS = 4
 
 
 class FakeJobTests(ApiCase):
+    def test_uploaded_text_is_available_to_the_next_page(self):
+        payload = [("files", ("phase2-notes.txt", b"A small boat crossed the quiet lake.", "text/plain"))]
+        first = self.job("POST", "/data/text/import", files=payload)
+        self.assertEqual(first["status"], "done", first)
+        self.assertIn("1 added", first["result"][0])
+        rows = self.services.data("text").rows
+        self.assertTrue(any(row["dataset"] == "phase2-notes" and row["b"] == "A small boat crossed the quiet lake." for row in rows))
+        second = self.job("POST", "/data/text/import", files=payload)
+        self.assertIn("0 added, 1 duplicates", second["result"][0])
+
+    def test_fake_step_duration_is_configurable_and_validated(self):
+        from studio_api.__main__ import parse
+        self.assertEqual(parse(["--fake", "--fake-step-seconds", ".25"]).fake_step_seconds, .25)
+        for value in ("-1", "nan", "inf"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                parse(["--fake", "--fake-step-seconds", value])
+
     def make_services(self):
         return FakeServices(job_steps=STEPS, step_seconds=0, sleep=lambda s: None)
 

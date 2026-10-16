@@ -853,7 +853,30 @@ class FakeServices(Services):
         return added
 
     def import_data(self, kind, paths):
-        return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
+        from studio_core import normalize, parse_file
+        from studio_data_kinds import classify, rule_of
+        report = []
+        for source in paths:
+            path = Path(source)
+            try:
+                added = duplicate = invalid = 0
+                for item in parse_file(path):
+                    row = normalize(item)
+                    if row is None or classify(row) != kind:
+                        invalid += 1
+                        continue
+                    a, b = (path.stem, row["text"]) if kind == "text" else \
+                        (row["user"], rule_of(row)) if kind == "problems" else (row["user"], row["assistant"])
+                    status = "In use" if kind == "text" else "Ready" if kind == "problems" else "Good"
+                    if self._add_row(kind, a, b, status, dataset=path.stem):
+                        added += 1
+                    else:
+                        duplicate += 1
+                report.append(f"{path.name}: {added} added, {duplicate} duplicates, {invalid} invalid")
+            except (OSError, ValueError) as exc:
+                report.append(f"{path.name}: {plain_error(exc)}")
+        self.emit("data", {"kind": kind})
+        return report
 
     def collection(self, kind="text"):
         return getattr(self, "_collection", []) if kind == "text" else getattr(self, "_collections", {}).get(kind, [])
