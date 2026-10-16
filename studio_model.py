@@ -866,6 +866,12 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         return record
     except BaseException as exc:
         record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
+        if step:  # keep what the run learned since its last checkpoint, so it can resume; a failing save must not hide `exc`
+            try:
+                save("last.npz")
+                record["checkpoint"] = "last.npz"
+            except Exception:
+                pass
         atomic_json(directory / "run.json", record)
         raise
 

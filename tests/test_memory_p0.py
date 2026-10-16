@@ -1,4 +1,5 @@
 """Issue #13 P0: weights-only loads, KV-cached generation, the chat-model LRU, OOM recovery in train()."""
+import json
 import shutil
 import tempfile
 import unittest
@@ -207,6 +208,54 @@ class OutOfMemory(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 train(dict(CONFIG, batch_size=2, validation=0), EXAMPLES, Path(d) / "r", telemetry_every=0)
             self.assertEqual(studio_model.read_metrics(Path(d) / "r" / "metrics.jsonl"), [])
+
+
+class FailedRun(unittest.TestCase):
+    """A run that dies between evals keeps its progress in last.npz (issue #169)."""
+
+    @staticmethod
+    def failing_after(good_steps):
+        real, calls = ScratchTransformer.forward, []
+
+        def forward(self, ids, *args, **kwargs):
+            if kwargs.get("training"):
+                calls.append(len(ids))
+                if len(calls) > good_steps:
+                    raise OSError("No space left on device")
+            return real(self, ids, *args, **kwargs)
+
+        return forward
+
+    def test_a_failure_after_step_two_keeps_last_checkpoint_and_resumes_from_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            with mock.patch.object(ScratchTransformer, "forward", self.failing_after(2)), self.assertRaises(OSError):
+                train(dict(CONFIG, steps=5, eval_every=5), EXAMPLES, root / "r", telemetry_every=0)
+            record = json.loads((root / "r" / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual((record["status"], record["step"], record["checkpoint"]), ("failed", 2, "last.npz"))
+            self.assertEqual(load_checkpoint(root / "r" / "last.npz")["step"], 2)
+            events = []
+            record = train(dict(CONFIG, steps=5, eval_every=5), EXAMPLES, root / "r2", resume=root / "r" / "last.npz", emit=events.append, telemetry_every=0)
+            self.assertEqual((record["status"], record["step"]), ("completed", 5))
+            self.assertEqual([e["step"] for e in events if e["type"] == "metric" and e["step"]], [3, 5])  # continues from step 2 (reports are throttled), not 0
+
+    def test_a_failure_before_the_first_step_leaves_no_checkpoint(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ScratchTransformer, "forward", self.failing_after(0)):
+            with self.assertRaises(OSError):
+                train(dict(CONFIG), EXAMPLES, Path(d) / "r", telemetry_every=0)
+            record = json.loads((Path(d) / "r" / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual((record["status"], record["step"]), ("failed", 0))
+            self.assertNotIn("checkpoint", record)
+            self.assertFalse((Path(d) / "r" / "last.npz").exists())
+
+    def test_a_failing_save_does_not_hide_the_original_error(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ScratchTransformer, "forward", self.failing_after(2)), \
+                mock.patch.object(studio_model.np, "savez_compressed", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "No space left"):
+                train(dict(CONFIG, steps=5, eval_every=5), EXAMPLES, Path(d) / "r", telemetry_every=0)
+            record = json.loads((Path(d) / "r" / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "failed")
+            self.assertNotIn("checkpoint", record)
 
 
 if __name__ == "__main__":
