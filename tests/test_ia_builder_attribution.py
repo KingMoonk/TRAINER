@@ -9,6 +9,7 @@ from unittest import mock
 
 from studio_core import Workspace
 from studio_ia import attribution as A
+from studio_ia import design as D
 from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices, Version, WorkspaceServices
 from studio_spec import default_spec
@@ -17,7 +18,7 @@ FACTS = dict(data="d1", steps=300, tokens=9000, lr=0.001, start=None, extra=Fals
 
 
 def spec(blocks, **train):
-    s = B.write_spec(default_spec(), dict(B.read_spec(default_spec()), L=blocks))
+    s = D.write_spec(default_spec(), dict(D.read_spec(default_spec()), L=blocks))
     for path, value in train.items():
         slot, *keys = path.split("__")
         target = s["train"][slot]["config"] if slot != "run" else s["train"].setdefault("run", {})
@@ -89,7 +90,7 @@ class Confounders(unittest.TestCase):
         self.assertEqual(A.spec_changes(spec(2), spec(4, optimizer__lr=0.003)), (["learning rate"], False))
         self.assertEqual(A.spec_changes(spec(2), spec(4, run__steps=500)), (["steps"], False))
         self.assertEqual(A.spec_changes(spec(2), spec(4, run__steps=500, run__batch_size=16)), (["steps", "batch size"], False))
-        roomy = B.write_spec(default_spec(), dict(B.read_spec(default_spec()), L=4, W=2))
+        roomy = D.write_spec(default_spec(), dict(D.read_spec(default_spec()), L=4, W=2))
         self.assertEqual(A.spec_changes(spec(2), roomy), (["thinking room"], False))
 
     def test_run_differences_are_named(self):
@@ -265,9 +266,9 @@ class Services(unittest.TestCase):
     def test_the_page_passes_facts_and_compares_only_when_blocks_changed(self):
         calls = []
         vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
-        B.expectations(B.read_spec(default_spec()), B.read_spec(default_spec()), vs, facts=lambda n: calls.append(n) or FACTS)
+        D.expectations(D.read_spec(default_spec()), D.read_spec(default_spec()), vs, facts=lambda n: calls.append(n) or FACTS)
         self.assertEqual(calls, [])
-        out = B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6), vs,
+        out = D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6), vs,
                              facts=lambda n: calls.append(n) or FACTS)
         self.assertEqual(calls, [1, 2])
         self.assertTrue(any("effect of the change" in t for t in out))
@@ -293,7 +294,7 @@ class TkThread(unittest.TestCase):
         services.run_facts.assert_not_called()
         services.compare_runs.assert_not_called()
         self.assertEqual([lane for _, _, lane in queued], ["slow"])
-        out = B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6), vs, facts=facts, compares=compares)
+        out = D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6), vs, facts=facts, compares=compares)
         self.assertTrue(any("checking what else changed" in t for t in out))
         self.assertFalse(any("effect of the change" in t for t in out))
 
@@ -307,7 +308,7 @@ class TkThread(unittest.TestCase):
         facts, compares = B.BuilderPage.attribution_inputs(page, vs)
         self.assertEqual((facts(1), facts(2), compares()), (FACTS, FACTS, []))
         self.assertEqual(len(queued), 1)  # nothing asked again
-        out = B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6), vs, facts=facts, compares=compares)
+        out = D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6), vs, facts=facts, compares=compares)
         self.assertTrue(any("effect of the change" in t for t in out))
         page.attr_fresh.clear()  # the page was refreshed: read again, showing the last result meanwhile
         self.assertIsNotNone(B.BuilderPage.attribution_inputs(page, vs)[0])
@@ -322,7 +323,7 @@ class TkThread(unittest.TestCase):
         then(work())
         facts, compares = B.BuilderPage.attribution_inputs(page, vs)
         self.assertEqual(facts(1), {})
-        self.assertIn("could not check", B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6),
+        self.assertIn("could not check", D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6),
                                                          vs, facts=facts, compares=compares)[-1])
 
     def test_a_worker_that_fails_in_an_unexpected_way_still_frees_the_pair(self):
@@ -336,7 +337,7 @@ class TkThread(unittest.TestCase):
         facts, compares = B.BuilderPage.attribution_inputs(page, vs)
         self.assertEqual(facts(1), {})
         self.assertEqual(len(queued), 1)  # shown as could not check, not asked again until the page refreshes
-        self.assertIn("could not check", B.expectations(dict(B.read_spec(default_spec()), L=4), dict(B.read_spec(default_spec()), L=6),
+        self.assertIn("could not check", D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6),
                                                          vs, facts=facts, compares=compares)[-1])
 
     def test_without_a_block_change_nothing_is_gathered(self):

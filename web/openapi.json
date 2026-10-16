@@ -203,6 +203,35 @@
         "title": "Added",
         "type": "object"
       },
+      "Block": {
+        "properties": {
+          "block": {
+            "title": "Block",
+            "type": "integer"
+          },
+          "own": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Own",
+            "type": "array"
+          },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Parts",
+            "type": "object"
+          }
+        },
+        "required": [
+          "block",
+          "parts",
+          "own"
+        ],
+        "title": "Block",
+        "type": "object"
+      },
       "Body_import_data_data__kind__import_post": {
         "properties": {
           "files": {
@@ -253,6 +282,66 @@
         "title": "Body_import_pretrained_post_training_imports_post",
         "type": "object"
       },
+      "Changes": {
+        "properties": {
+          "chips": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chips",
+            "type": "array"
+          },
+          "parts_changed": {
+            "title": "Parts Changed",
+            "type": "boolean"
+          },
+          "warm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Warm"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "chips",
+          "parts_changed",
+          "warm"
+        ],
+        "title": "Changes",
+        "type": "object"
+      },
+      "ChangesBody": {
+        "properties": {
+          "base": {
+            "additionalProperties": true,
+            "title": "Base",
+            "type": "object"
+          },
+          "cur": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "draft_spec": {
+            "additionalProperties": true,
+            "title": "Draft Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "base",
+          "draft_spec",
+          "cur",
+          "draft"
+        ],
+        "title": "ChangesBody",
+        "type": "object"
+      },
       "Chip": {
         "properties": {
           "known": {
@@ -269,6 +358,118 @@
           "known"
         ],
         "title": "Chip",
+        "type": "object"
+      },
+      "Choices": {
+        "properties": {
+          "H": {
+            "minimum": 1.0,
+            "title": "H",
+            "type": "integer"
+          },
+          "L": {
+            "minimum": 1.0,
+            "title": "L",
+            "type": "integer"
+          },
+          "M": {
+            "$ref": "#/components/schemas/Parts"
+          },
+          "O": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Own"
+            },
+            "title": "O",
+            "type": "array"
+          },
+          "T": {
+            "minimum": 1.0,
+            "title": "T",
+            "type": "integer"
+          },
+          "V": {
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "integer"
+          },
+          "W": {
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "W",
+            "type": "integer"
+          },
+          "d": {
+            "minimum": 1.0,
+            "title": "D",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "L",
+          "H",
+          "W",
+          "V",
+          "d",
+          "T",
+          "M"
+        ],
+        "title": "Choices",
+        "type": "object"
+      },
+      "ChoicesBody": {
+        "properties": {
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          }
+        },
+        "required": [
+          "choices"
+        ],
+        "title": "ChoicesBody",
+        "type": "object"
+      },
+      "ChooseBody": {
+        "properties": {
+          "block": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "short": {
+            "title": "Short",
+            "type": "string"
+          },
+          "slot": {
+            "enum": [
+              "embedding",
+              "position",
+              "head",
+              "norm",
+              "mixer",
+              "channel"
+            ],
+            "title": "Slot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "choices",
+          "slot",
+          "short"
+        ],
+        "title": "ChooseBody",
         "type": "object"
       },
       "CleanRequest": {
@@ -294,6 +495,39 @@
           }
         },
         "title": "CleanRequest",
+        "type": "object"
+      },
+      "ComputeBody": {
+        "properties": {
+          "preview": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "v": {
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spec",
+          "v"
+        ],
+        "title": "ComputeBody",
         "type": "object"
       },
       "CorrectionRequest": {
@@ -692,6 +926,66 @@
           "is_dir"
         ],
         "title": "Entry",
+        "type": "object"
+      },
+      "ExpectBody": {
+        "properties": {
+          "base": {
+            "additionalProperties": true,
+            "title": "Base",
+            "type": "object"
+          },
+          "cur": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "draft_spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Spec"
+          }
+        },
+        "required": [
+          "cur",
+          "draft",
+          "base"
+        ],
+        "title": "ExpectBody",
+        "type": "object"
+      },
+      "Expectations": {
+        "properties": {
+          "details": {
+            "title": "Details",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "headline",
+          "details",
+          "lines"
+        ],
+        "title": "Expectations",
         "type": "object"
       },
       "FieldsModel": {
@@ -1226,6 +1520,24 @@
         "title": "JobModel",
         "type": "object"
       },
+      "Knobs": {
+        "properties": {
+          "H": {
+            "title": "H",
+            "type": "boolean"
+          },
+          "W": {
+            "title": "W",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "H",
+          "W"
+        ],
+        "title": "Knobs",
+        "type": "object"
+      },
       "LeashOut": {
         "properties": {
           "beta": {
@@ -1247,6 +1559,24 @@
           "note"
         ],
         "title": "LeashOut",
+        "type": "object"
+      },
+      "Line": {
+        "properties": {
+          "bad": {
+            "title": "Bad",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "bad"
+        ],
+        "title": "Line",
         "type": "object"
       },
       "Listing": {
@@ -1322,6 +1652,35 @@
         "title": "LossRequest",
         "type": "object"
       },
+      "LrBody": {
+        "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "title": "LrBody",
+        "type": "object"
+      },
       "Message": {
         "properties": {
           "content": {
@@ -1343,6 +1702,43 @@
           "content"
         ],
         "title": "Message",
+        "type": "object"
+      },
+      "ModuleInfo": {
+        "properties": {
+          "blurb": {
+            "title": "Blurb",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "short": {
+            "title": "Short",
+            "type": "string"
+          },
+          "tip": {
+            "title": "Tip",
+            "type": "string"
+          }
+        },
+        "required": [
+          "short",
+          "name",
+          "blurb",
+          "tip",
+          "fields"
+        ],
+        "title": "ModuleInfo",
         "type": "object"
       },
       "MoveTo": {
@@ -1502,6 +1898,87 @@
         "title": "Node",
         "type": "object"
       },
+      "Option": {
+        "properties": {
+          "blurb": {
+            "title": "Blurb",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "short": {
+            "title": "Short",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "short",
+          "name",
+          "blurb",
+          "why"
+        ],
+        "title": "Option",
+        "type": "object"
+      },
+      "OptionsBody": {
+        "properties": {
+          "base": {
+            "additionalProperties": true,
+            "title": "Base",
+            "type": "object"
+          },
+          "block": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "slot": {
+            "enum": [
+              "embedding",
+              "position",
+              "head",
+              "norm",
+              "mixer",
+              "channel"
+            ],
+            "title": "Slot",
+            "type": "string"
+          },
+          "was": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Choices"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "base",
+          "choices",
+          "slot"
+        ],
+        "title": "OptionsBody",
+        "type": "object"
+      },
       "OptionsOut": {
         "properties": {
           "default_teacher": {
@@ -1576,6 +2053,35 @@
         "title": "Outlook",
         "type": "object"
       },
+      "Own": {
+        "properties": {
+          "block": {
+            "minimum": 0.0,
+            "title": "Block",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "slot": {
+            "enum": [
+              "norm",
+              "mixer",
+              "channel"
+            ],
+            "title": "Slot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "block",
+          "slot",
+          "id"
+        ],
+        "title": "Own",
+        "type": "object"
+      },
       "PairRequest": {
         "properties": {
           "chosen": {
@@ -1617,6 +2123,44 @@
           }
         },
         "title": "PairSaved",
+        "type": "object"
+      },
+      "Parts": {
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "embedding": {
+            "title": "Embedding",
+            "type": "string"
+          },
+          "head": {
+            "title": "Head",
+            "type": "string"
+          },
+          "mixer": {
+            "title": "Mixer",
+            "type": "string"
+          },
+          "norm": {
+            "title": "Norm",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "string"
+          }
+        },
+        "required": [
+          "embedding",
+          "position",
+          "head",
+          "norm",
+          "mixer",
+          "channel"
+        ],
+        "title": "Parts",
         "type": "object"
       },
       "Passive": {
@@ -1821,15 +2365,91 @@
         "title": "PlanModel",
         "type": "object"
       },
-      "PretrainedImport": {
+      "Preset": {
         "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
           "name": {
-            "default": "gpt2",
             "title": "Name",
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "term": {
+            "title": "Term",
             "type": "string"
           }
         },
-        "title": "PretrainedImport",
+        "required": [
+          "key",
+          "term",
+          "name",
+          "spec"
+        ],
+        "title": "Preset",
+        "type": "object"
+      },
+      "PresetCost": {
+        "properties": {
+          "fits": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fits"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "need": {
+            "title": "Need",
+            "type": "integer"
+          },
+          "params": {
+            "title": "Params",
+            "type": "integer"
+          },
+          "recipe": {
+            "title": "Recipe",
+            "type": "string"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "slow": {
+            "title": "Slow",
+            "type": "boolean"
+          },
+          "step": {
+            "title": "Step",
+            "type": "number"
+          }
+        },
+        "required": [
+          "params",
+          "need",
+          "fits",
+          "rows",
+          "step",
+          "slow",
+          "lines",
+          "recipe"
+        ],
+        "title": "PresetCost",
         "type": "object"
       },
       "PreviewJob": {
@@ -2469,6 +3089,62 @@
         "title": "ReferencesModel",
         "type": "object"
       },
+      "Registry": {
+        "properties": {
+          "block_slots": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Block Slots",
+            "type": "array"
+          },
+          "heads": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Heads",
+            "type": "array"
+          },
+          "part_slots": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Part Slots",
+            "type": "array"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/SlotInfo"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "widths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Widths",
+            "type": "array"
+          },
+          "words": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "part_slots",
+          "block_slots",
+          "slots",
+          "words",
+          "widths",
+          "heads"
+        ],
+        "title": "Registry",
+        "type": "object"
+      },
       "Reply": {
         "properties": {
           "reply": {
@@ -2491,6 +3167,24 @@
           "reply"
         ],
         "title": "Reply",
+        "type": "object"
+      },
+      "ResizeBody": {
+        "properties": {
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "n": {
+            "minimum": 1.0,
+            "title": "N",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "choices",
+          "n"
+        ],
+        "title": "ResizeBody",
         "type": "object"
       },
       "Review": {
@@ -2686,6 +3380,103 @@
         "title": "Sample",
         "type": "object"
       },
+      "Sizes": {
+        "properties": {
+          "activations": {
+            "title": "Activations",
+            "type": "integer"
+          },
+          "fits": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fits"
+          },
+          "memory": {
+            "title": "Memory",
+            "type": "integer"
+          },
+          "params": {
+            "title": "Params",
+            "type": "integer"
+          },
+          "table": {
+            "title": "Table",
+            "type": "integer"
+          },
+          "time": {
+            "title": "Time",
+            "type": "number"
+          }
+        },
+        "required": [
+          "params",
+          "table",
+          "time",
+          "memory",
+          "activations",
+          "fits"
+        ],
+        "title": "Sizes",
+        "type": "object"
+      },
+      "SizesBody": {
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "v": {
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "spec",
+          "v"
+        ],
+        "title": "SizesBody",
+        "type": "object"
+      },
+      "SlotInfo": {
+        "properties": {
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/ModuleInfo"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slot": {
+            "title": "Slot",
+            "type": "string"
+          },
+          "tip": {
+            "title": "Tip",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "name",
+          "tip",
+          "modules"
+        ],
+        "title": "SlotInfo",
+        "type": "object"
+      },
       "SnapshotOut": {
         "properties": {
           "index": {
@@ -2751,6 +3542,20 @@
           "state"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "SpecBody": {
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "title": "SpecBody",
         "type": "object"
       },
       "StartRequest": {
@@ -2997,6 +3802,39 @@
           "name"
         ],
         "title": "TeacherOut",
+        "type": "object"
+      },
+      "Text": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Text",
+        "type": "object"
+      },
+      "Tower": {
+        "properties": {
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/Block"
+            },
+            "title": "Blocks",
+            "type": "array"
+          },
+          "knobs": {
+            "$ref": "#/components/schemas/Knobs"
+          }
+        },
+        "required": [
+          "blocks",
+          "knobs"
+        ],
+        "title": "Tower",
         "type": "object"
       },
       "TraceRequest": {
@@ -3440,6 +4278,44 @@
         "title": "ViewerStatus",
         "type": "object"
       },
+      "Warm": {
+        "properties": {
+          "carries": {
+            "title": "Carries",
+            "type": "boolean"
+          },
+          "chip": {
+            "title": "Chip",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "preserving": {
+            "title": "Preserving",
+            "type": "boolean"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "carries",
+          "preserving",
+          "chip",
+          "state",
+          "text"
+        ],
+        "title": "Warm",
+        "type": "object"
+      },
       "WordList": {
         "properties": {
           "chips": {
@@ -3579,6 +4455,34 @@
           "lists"
         ],
         "title": "WordListsModel",
+        "type": "object"
+      },
+      "WriteBody": {
+        "properties": {
+          "base": {
+            "additionalProperties": true,
+            "title": "Base",
+            "type": "object"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "was": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Choices"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "base",
+          "choices"
+        ],
+        "title": "WriteBody",
         "type": "object"
       },
       "studio_api__models_work__JobOut": {
@@ -5027,6 +5931,568 @@
         "summary": "Data",
         "tags": [
           "data"
+        ]
+      }
+    },
+    "/design/changes": {
+      "post": {
+        "description": "change_chips, parts_changed and warm_outlook for a draft against the version it started from.",
+        "operationId": "changes_design_changes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangesBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Changes"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Changes",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/choose": {
+      "post": {
+        "description": "choose: the choices after picking a module for a part, for every block or for one.",
+        "operationId": "choose_design_choose_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChooseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Choices"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Choose",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/compute-lines": {
+      "post": {
+        "description": "compute_lines: how much text a design needs against the text you have, and how long a run should take.",
+        "operationId": "compute_lines_design_compute_lines_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComputeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Line"
+                  },
+                  "title": "Response Compute Lines Design Compute Lines Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compute Lines",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/expectations": {
+      "post": {
+        "description": "design_expectation for the draft, and expectations for its changes. \"Last time blocks changed\" reads the history\n(Services.versions, run_facts, compare_runs), only when the block count differs, as the page does.",
+        "operationId": "expectations_design_expectations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expectations"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Expectations",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/lr-text": {
+      "post": {
+        "description": "lr_text: the sentence under \"Find a learning rate\".",
+        "operationId": "lr_text_design_lr_text_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LrBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Text"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lr Text",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/part-options": {
+      "post": {
+        "description": "part_options: one part's menu, with why_not's reason on every module the design cannot take.",
+        "operationId": "part_options_design_part_options_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Option"
+                  },
+                  "title": "Response Part Options Design Part Options Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Part Options",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/preset-cost": {
+      "post": {
+        "description": "preset_cost: what a design costs on this machine before it is loaded, and its training recipe in one line.",
+        "operationId": "preset_cost_design_preset_cost_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpecBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresetCost"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preset Cost",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/presets": {
+      "get": {
+        "description": "preset_specs: the ready-made designs, GPT-2's with its word list when that is on this computer.",
+        "operationId": "presets_design_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Preset"
+                  },
+                  "title": "Response Presets Design Presets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Presets",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/read": {
+      "post": {
+        "description": "read_spec: the editable choices of a spec (defaults filled in).",
+        "operationId": "read_design_read_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpecBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Choices"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/registry": {
+      "get": {
+        "description": "The modules every part can take, with their hover help and settings, plus the knob labels.",
+        "operationId": "design_registry_design_registry_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Design Registry",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/resize": {
+      "post": {
+        "description": "resize: the choices with n blocks.",
+        "operationId": "resize_design_resize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResizeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Choices"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resize",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/sizes": {
+      "post": {
+        "description": "sizes: size, time and memory of a design under word list v, and whether it fits this computer (fits).",
+        "operationId": "sizes_design_sizes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SizesBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sizes"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sizes",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/tower": {
+      "post": {
+        "description": "What the tower paints: every block's parts (block_parts, own_slots) and which knobs apply (knob_applies).",
+        "operationId": "tower_design_tower_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChoicesBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tower"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tower",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/write": {
+      "post": {
+        "description": "write_spec: `base` with only the choices that changed rewritten.",
+        "operationId": "write_design_write_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Write Design Write Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write",
+        "tags": [
+          "design"
         ]
       }
     },
@@ -7018,48 +8484,6 @@
           }
         },
         "summary": "Current Version",
-        "tags": [
-          "versions"
-        ]
-      }
-    },
-    "/versions/import-pretrained": {
-      "post": {
-        "description": "Saves the pretrained model's design as a new version; the download and conversion are queued (GET /queue).",
-        "operationId": "import_pretrained_versions_import_pretrained_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PretrainedImport"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Version"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Import Pretrained",
         "tags": [
           "versions"
         ]

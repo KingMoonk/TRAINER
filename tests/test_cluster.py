@@ -41,7 +41,7 @@ class Registry(unittest.TestCase):
         self.assertEqual(sc.node_url("windows-box"), f"http://windows-box:{port}/node")
         self.assertEqual(sc.node_url("box.tail1234.ts.net"), f"http://box.tail1234.ts.net:{port}/node")
         self.assertEqual(sc.node_url("http://100.64.0.7:9000"), "http://100.64.0.7:9000/node")
-        self.assertEqual(sc.node_url("https://box.ts.net/api/"), f"https://box.ts.net:{port}/node")
+        self.assertEqual(sc.node_url("https://box.ts.net/api/"), "https://box.ts.net/node")
         self.assertEqual(sc.node_url("http://[fd7a::1]"), f"http://[fd7a::1]:{port}/node")
         self.assertEqual(sc.node_url("http://[fd7a::1]:9000/x"), "http://[fd7a::1]:9000/node")
 
@@ -223,3 +223,42 @@ class Placement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Callers(unittest.TestCase):
+    def test_defaults_let_in_the_trainer_tag_only(self):
+        self.assertEqual(sc.allowed_callers({}), (("tag:trainer",), ()))
+
+    def test_configured(self):
+        state = {"studioConfig": {"cluster": {"allowTags": [" tag:gpu "], "allowUsers": ["me@example.com"]}}}
+        self.assertEqual(sc.allowed_callers(state), (("tag:gpu",), ("me@example.com",)))
+
+    def test_bad_values_say_what_to_fix(self):
+        for cluster, text in (("x", "studioConfig.cluster"), ({"allowTags": "tag:a"}, "allowTags"), ({"allowTags": ["trainer"]}, "tag:"),
+                              ({"allowUsers": [3]}, "allowUsers")):
+            with self.assertRaisesRegex(ValueError, text):
+                sc.allowed_callers({"studioConfig": {"cluster": cluster}})
+
+
+class PollThroughPeerClient(unittest.TestCase):
+    def test_default_fetch_asks_the_peer_with_one_attempt(self):
+        calls = []
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"hostname": "box", "device": "cpu"}'
+
+        def opener(request, timeout):
+            calls.append((request.full_url, timeout))
+            return Resp()
+
+        with mock.patch("studio_peer.urllib.request.urlopen", opener):
+            (info,) = sc.poll(["https://box.ts.net"])
+        self.assertEqual((info.online, info.hostname), (True, "box"))
+        self.assertEqual(calls, [("https://box.ts.net/node", sc.POLL_TIMEOUT)])
