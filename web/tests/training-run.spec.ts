@@ -1,5 +1,25 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("the chart separates raw loss, schedule bands and the learning-rate scale", async ({ page }) => {
+  const state = await mockApi(page, { events: false });
+  state.points = 6;
+  await page.goto("/training-run/");
+  const chart = page.locator("svg.recharts-surface").first();
+  await expect(chart.locator(".schedule-band")).toHaveCount(3);
+  for (const phase of ["warm-up", "steady", "cool-down"]) await expect(chart.getByText(phase, { exact: true })).toBeVisible();
+  const raw = chart.locator(".series-steps .recharts-line-curve");
+  await expect(raw).toHaveAttribute("stroke-opacity", "0.2");
+  await expect(raw).toHaveAttribute("stroke-width", "1");
+  await expect(chart.locator(".series-smooth .recharts-line-curve")).toHaveAttribute("stroke-opacity", "1");
+  const lr = chart.locator(".series-lr .recharts-line-curve");
+  await expect(lr).toHaveAttribute("stroke-dasharray", "4 3");
+  await expect(chart.locator(".recharts-yAxis")).toHaveCount(2);
+  // Rates of 0.00015–0.0003 must occupy their own vertical scale, not collapse
+  // into a flat zero line on the loss axis, whose references reach 8 bits.
+  await expect.poll(() => lr.evaluate((element) => (element as SVGGraphicsElement).getBBox().height)).toBeGreaterThan(5);
+  await expect(chart.getByText("Learning rate", { exact: true })).toBeVisible();
+});
+
 // The Training run page against a mocked API: it reads GET /training-run and /queue on load (so a run in progress, or one that
 // has ended, shows without any event), and a `train` event makes it read again and redraw the chart in place.
 
@@ -11,7 +31,7 @@ const curve = (n: number) => ({
   steps: POINTS.slice(0, n),
   smooth: POINTS.slice(0, n),
   heldout: POINTS.slice(0, n).filter((_p, i) => i % 2 === 1),
-  lr: [],
+  lr: POINTS.slice(0, n).map(([step]) => [step, step <= 20 ? step / 20 * 0.0003 : 0.0003 * (1 - (step - 20) / 80)]),
   phases: [[0, 10, "warm-up"], [10, 50, "steady"], [50, 60, "cool-down"]],
   total: 100,
   samples: n > 2 ? [{ step: 20, text: "The cat sat" }] : [],

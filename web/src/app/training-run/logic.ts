@@ -1,7 +1,7 @@
 // Page logic that stays in the browser. phase_at, history_of and the switch note are served by GET /training-run (they live in
 // studio_ia/pages/training_run.py); the rows under "what it writes now" are built here from copy this page owns.
 
-import type { Series } from "@/components/series-chart";
+import type { Band, Series } from "@/components/series-chart";
 import { fill, GATE_SEEDS, SWITCH, T } from "./copy";
 
 /** A [step, value] point; the schema types a pair as number[]. */
@@ -30,22 +30,31 @@ function level(id: string, label: string, y: number | null | undefined, from: nu
   return y == null ? [] : [{ id, label, points: [{ x: from, y }, { x: to, y }] }];
 }
 
-/** The series the shared chart draws: smoothed training error, held-back error and the reference lines, all in bits per character. */
+/** Training error and references share the left axis; learning rate has its own scale. */
 export function chartSeries(
-  curve: { smooth: readonly Pair[]; heldout: readonly Pair[] },
+  curve: { steps: readonly Pair[]; smooth: readonly Pair[]; heldout: readonly Pair[]; lr: readonly Pair[] },
   refs: { uniform_bpc?: number | null; unigram_bpc?: number | null; best_so_far_bpc?: number | null },
-  labels: { train: string; held: string; uniform: string; unigram: string; best: string },
+  labels: { train: string; raw: string; lr: string; held: string; uniform: string; unigram: string; best: string },
 ): Series[] {
-  const xs = [...curve.smooth, ...curve.heldout].map((p) => p[0]);
+  const xs = [...curve.steps, ...curve.smooth, ...curve.heldout, ...curve.lr].map((p) => p[0]);
   const from = xs.length ? Math.min(...xs) : 0;
   const to = xs.length ? Math.max(...xs) : 0;
   return [
-    { id: "smooth", label: labels.train, points: curve.smooth.map(([x, y]) => ({ x, y })) },
-    { id: "held", label: labels.held, points: curve.heldout.map(([x, y]) => ({ x, y })) },
+    { id: "steps", label: labels.raw, points: curve.steps.map(([x, y]) => ({ x, y })), color: "var(--chart-1)", opacity: 0.2, strokeWidth: 1, interpolation: "linear" },
+    { id: "smooth", label: labels.train, points: curve.smooth.map(([x, y]) => ({ x, y })), color: "var(--chart-1)" },
+    { id: "held", label: labels.held, points: curve.heldout.map(([x, y]) => ({ x, y })), color: "var(--chart-2)" },
     ...level("uniform", labels.uniform, refs.uniform_bpc, from, to),
     ...level("unigram", labels.unigram, refs.unigram_bpc, from, to),
     ...level("best", labels.best, refs.best_so_far_bpc, from, to),
+    ...(curve.lr.length ? [{ id: "lr", label: labels.lr, axis: "right" as const, points: curve.lr.map(([x, y]) => ({ x, y })),
+      color: "var(--chart-5)", dash: "4 3", interpolation: "linear" as const }] : []),
   ];
+}
+
+export function phaseBands(phases: readonly (readonly (number | string)[])[]): Band[] {
+  return phases.flatMap(([from, to, label], index) =>
+    typeof from === "number" && typeof to === "number" && typeof label === "string" &&
+    Number.isFinite(from) && Number.isFinite(to) && to > from ? [{ id: `${label}-${index}`, label, from, to }] : []);
 }
 
 export function switchText(

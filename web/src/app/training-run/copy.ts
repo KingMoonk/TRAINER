@@ -2,6 +2,8 @@
 // stays while the Tk page uses it.
 
 export const T = {
+  perStep: "Per-step training error",
+  learningRate: "Learning rate",
   nothingTraining: "Nothing is training.",
   starting: "Starting",
   noVersion: "No version yet: design one in the Network designer, then train it in Pretraining.",

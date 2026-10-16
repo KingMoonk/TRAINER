@@ -13,7 +13,7 @@ import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { fill, STATUS, T } from "./copy";
-import { bits, chartSeries, last, progressLine, sampleRows, switchText, type JobParams } from "./logic";
+import { bits, chartSeries, last, phaseBands, progressLine, sampleRows, switchText, type JobParams } from "./logic";
 
 const REFRESH_MS = 1500; // live events redraw at most this often, as the Tk page does
 
@@ -73,6 +73,8 @@ export default function Page() {
       curve && refs
         ? chartSeries(curve, refs, {
             train: T.trainingText,
+            raw: T.perStep,
+            lr: T.learningRate,
             held: T.heldBack,
             uniform: T.uniformGuess,
             unigram: T.wordFrequencies,
@@ -81,7 +83,8 @@ export default function Page() {
         : [],
     [curve, refs, parent],
   );
-  const hasPoints = !!curve && (curve.smooth.length > 0 || curve.heldout.length > 0);
+  const bands = useMemo(() => phaseBands(curve?.phases ?? []), [curve?.phases]);
+  const hasPoints = !!curve && (curve.steps.length > 0 || curve.smooth.length > 0 || curve.heldout.length > 0 || curve.lr.length > 0);
 
   const nowStep = run?.running && run.total ? run.step : null;
   const samples = curve?.samples;
@@ -169,7 +172,7 @@ export default function Page() {
               )}
               {hasPoints ? (
                 <div title={T.coolDownDrop}>
-                  <SeriesChart series={series} xLabel="step" yLabel="bits per character" />
+              <SeriesChart series={series} bands={bands} xLabel="step" yLabel="bits per character" rightLabel={T.learningRate} />
                 </div>
               ) : (
                 <p className="py-10 text-center text-sm text-muted-foreground">{T.noPointsYet}</p>
