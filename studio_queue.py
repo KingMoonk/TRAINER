@@ -154,10 +154,14 @@ def next_start(plan, now):
 class Runner:
     """Runs one job at a time, each in a worker process of its own (studio_worker). `prepare(job)` runs in this process just before a
     job starts: it fills in what the handler would otherwise ask the app for (output folder, checkpoints) and returns the context
-    the handler gets, {"root", "run_dir"}. Without it the context is the folder above data/ and its runs/."""
+    the handler gets, {"root", "run_dir"}. Without it the context is the folder above data/ and its runs/.
 
-    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now):
+    `ledger` (studio_memory.Ledger) is what the app holds outside the job, chat's models: its total is taken off the share a job
+    gets. `make_room()` asks chat to evict its oldest model and says whether it did; it runs on the runner thread, never the Tk one."""
+
+    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, ledger=None, make_room=None):
         self.path, self.handlers, self.prepare, self.tick, self.clock = Path(path), handlers, prepare, tick, clock
+        self.ledger, self.make_room = ledger, make_room
         self.root = self.path.parent.parent
         self.handles = set()           # live workers: the running job's and any cool-down branched off it
         self.lock = threading.RLock()
@@ -445,12 +449,33 @@ class Runner:
         return (f"Not enough disk space for this run: {size_text(free)} free, about {size_text(need)} needed. "
                 "Free space in Resources › Storage.")
 
+    def _share(self, job):
+        """The share of the device's memory the job may take: the plan's, less what chat's models hold there. A job with less than
+        one chat model's bytes to spare first has chat evict its oldest. Only a pretrain job sizes anything by the share."""
+        share = MEMORY[self.plan.memory]
+        if self.ledger is None or job.kind != "pretrain":
+            return share
+        import studio_memory
+        from studio_model import validate_config
+        try:
+            device = studio_memory.device_of(validate_config(job.params["config"]))
+            total = studio_memory.budget(device, 1.)
+        except Exception:  # noqa: BLE001 - an invalid config or a missing GPU fails the job in its worker, with the reason
+            return share
+        held = self.ledger.total(device)
+        while self.make_room and share * total - held < self.ledger.largest(device) and self.make_room():
+            held, before = self.ledger.total(device), held
+            if held == before:
+                break
+        return max(0., share - held / total)
+
     def _run(self, job):
         handler = self.handlers.get(job.kind)
         short = self._disk_problem()
+        share = self._share(job)  # before the lock: evicting waits on chat's own lock
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
-            job.params = {**job.params, "memory_share": MEMORY[self.plan.memory]}  # studio_memory.batch_cap fits the job's batch to it
+            job.params = {**job.params, "memory_share": share}  # studio_memory.batch_cap fits the job's batch to it
             self.stop_event.clear()
             self._save()
         started = time.monotonic()

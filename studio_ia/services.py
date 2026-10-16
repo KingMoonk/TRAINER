@@ -939,7 +939,7 @@ RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference n
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 RANGE_CHARS = 400_000  # characters of the chosen text the learning-rate test trains on: a hundred small steps never read more
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
-CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
+CHAT_MODELS = 3  # most chat models kept loaded; their bytes are also in the ledger, which the queue takes off a job's share
 FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
 
 LN2 = math.log(2)
@@ -1012,7 +1012,8 @@ class WorkspaceServices(Services):
         super().__init__()
         self._reads(workspace)
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
-                                          prepare=lambda job: studio_jobs.prepare(job, self))
+                                          prepare=lambda job: studio_jobs.prepare(job, self),
+                                          ledger=self.ledger, make_room=self.evict_oldest_chat)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
         workspace.progress = self.note
@@ -1025,7 +1026,9 @@ class WorkspaceServices(Services):
         self.root = Path(workspace.root)
         self.store = studio_versions.VersionStore(self.root)
         self.store.versions = lambda: self._rows()  # tolerant of the simpler list schema
+        import studio_memory
         self._models, self._cache = {}, {}
+        self.ledger = studio_memory.Ledger()  # the bytes of the chat models in _models
         self._lock = threading.RLock()
         self._made = {}  # cache key -> the lock held while it is being made
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
@@ -2307,13 +2310,31 @@ class WorkspaceServices(Services):
 
     def chat(self, version, messages, on_text, stop):
         from studio_model import LocalModel
+        import studio_memory
         ckpt = self._checkpoint(version)
         with self._lock:
-            model = self._models.pop(ckpt, None) or LocalModel(ckpt, device="cpu")
+            model = self._models.pop(ckpt, None)
+            if model is None:
+                model = LocalModel(ckpt, device="cpu")
+                self.ledger.register(ckpt, studio_memory.weight_bytes(model.model), "cpu")
             self._models[ckpt] = model  # most recently used last; the dict is the LRU order
             while len(self._models) > CHAT_MODELS:
-                del self._models[next(iter(self._models))]
+                self._evict_chat()
         return model.generate(messages, on_text=on_text, stop=stop)
+
+    def _evict_chat(self):
+        """Drop the least recently used chat model (the lock is held). A reply still running on it keeps it alive until it ends."""
+        ckpt = next(iter(self._models))
+        del self._models[ckpt]
+        self.ledger.release(ckpt)
+
+    def evict_oldest_chat(self):
+        """The queue's call when a job is about to start with no room to spare. Runs on the runner thread. False when none is loaded."""
+        with self._lock:
+            if not self._models:
+                return False
+            self._evict_chat()
+            return True
 
     def inspect_forward(self, version, text, hooks=True):
         import studio_inspect
