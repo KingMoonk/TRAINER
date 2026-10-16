@@ -1,5 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("generation links follow the selected data kind and passive training is reachable", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/your-data/");
+  await expect(page.getByRole("link", { name: /Passive training: see or stop it/ })).toHaveAttribute("href", "/passive/");
+  for (const [tab, link, kind] of [
+    [/^Text it reads/, "Generate prose", "text"],
+    [/^Conversations it practises/, "Make extra conversations", "conversations"],
+    [/^Problems/, "Generate problems a rule can check", "problems"],
+  ] as const) {
+    await page.getByRole("tab", { name: tab }).click();
+    await expect(page.getByRole("link", { name: link, exact: true })).toHaveAttribute("href", `/make-data/?kind=${kind}`);
+  }
+});
+
 // The Your data page against a mocked API (as chat.spec.ts does): three summaries read as jobs, the rows a page at a time, the
 // recommended collection with live download progress, an uploaded file imported as a job, a folder on the server picked.
 

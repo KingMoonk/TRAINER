@@ -2,6 +2,7 @@
 // BUILDER table) in studio_ia/copy.py, which stay while the Tk pages use them.
 
 export const T = {
+  makeData: "Make extra data",
   h1: "Pretraining",
   lead: "Feed it text. It learns by predicting the next word, over and over.",
   modelLabel: "Model being trained",

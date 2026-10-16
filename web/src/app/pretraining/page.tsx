@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -88,6 +90,7 @@ export default function PretrainingPage() {
       <div className="flex flex-col gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">{T.h1}</h1>
         <p className="max-w-prose text-muted-foreground">{T.lead}</p>
+        <Link href="/make-data/?kind=text" className="w-fit text-sm text-violet-400 hover:underline">{T.makeData} ›</Link>
       </div>
 
       <div>

@@ -1,5 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("Pretraining opens prose generation", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/pretraining/");
+  await expect(page.getByRole("link", { name: /Make extra data/ })).toHaveAttribute("href", "/make-data/?kind=text");
+});
+
 // The Pretraining page against a mocked API (as chat.spec.ts does): the sets, the plan the server works out from the page's
 // choices, the size preview and the learning-rate range test as jobs whose results arrive on /events, and Add to the queue.
 

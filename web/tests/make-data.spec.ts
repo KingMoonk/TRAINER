@@ -1,5 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
+for (const [kind, label] of [["text", /Generate prose/], ["conversations", /Rewrite/], ["problems", /Problems/], ["invalid", /Problems/]] as const) {
+  test(`a ${kind} link opens the matching generator`, async ({ page }) => {
+    await setup(page);
+    await page.goto(`/make-data/?kind=${kind}`);
+    await expect(page.getByRole("group", { name: "What to make" }).getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true");
+  });
+}
+
 async function setup(page: Page) {
   const state = { drafts: [] as { id: string; a: string; b: string; status: string; dataset: string }[], requests: [] as object[], reviews: [] as boolean[], fail: false };
   await page.route("**/events", (route) => route.abort());

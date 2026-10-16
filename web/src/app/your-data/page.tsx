@@ -5,13 +5,13 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap, type ApiEvent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { CollectionCard } from "./collection-card";
-import { KIND, KINDS, T, fill, type Kind } from "./copy";
+import { KIND, KINDS, MAKE_LABELS, T, fill, type Kind } from "./copy";
 import { useApiEvents } from "./events";
 import { ItemForm } from "./forms";
 import { ImportCard } from "./import-card";
@@ -189,6 +189,7 @@ function YourData() {
           <Link href="/storage" className="text-violet-400 hover:underline">
             {T.storageLink}
           </Link>
+          <Link href="/passive/" className="text-violet-400 hover:underline">{T.passiveLink}</Link>
         </div>
       </div>
       <Link href={back.href} className="w-fit text-sm text-violet-400 hover:underline">
@@ -246,6 +247,7 @@ function YourData() {
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => setPanel(panel === "add" ? null : "add")}>{KIND[kind].add}</Button>
+        <Link href={`/make-data/?kind=${kind}`} className={buttonVariants({ variant: "outline" })}>{MAKE_LABELS[kind]}</Link>
         <Button variant="outline" onClick={() => setPanel(panel === "import" ? null : "import")}>
           {T.importFiles}
         </Button>
