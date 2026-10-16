@@ -28,9 +28,14 @@ class JobModel(Model):
     eta_s: float | None = None
     created_at: float = 0.0
     error: str = ""
+    node: str = ""  # the peer it runs or ran on; "" when it runs here
+    epoch: int = 0  # the lease epoch it was last placed at
+    owner: str = ""  # a job another node queued and this one runs: how to reach that node
 
 
 class NewJob(BaseModel):
+    """`params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved."""
+
     kind: str
     label: str = ""
     note: str = ""
@@ -116,9 +121,10 @@ def get_queue(services: Services) -> QueueStateModel:
 
 @router.get("/jobs")
 def list_jobs(services: Services) -> list[JobModel]:
-    """The running job first, then Up next in order."""
+    """The running job first, then the jobs running on a peer, then Up next in order."""
     state = services.queue()
-    return [JobModel.model_validate(j) for j in ([state.job] if state.job is not None else []) + list(state.up_next)]
+    away = [j for j in getattr(getattr(services, "runner", None), "jobs", ()) if j.node and j.status == "running" and not j.owner]
+    return [JobModel.model_validate(j) for j in ([state.job] if state.job is not None else []) + away + list(state.up_next)]
 
 
 @router.post("/jobs", status_code=201)
