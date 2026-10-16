@@ -797,11 +797,9 @@ def temperature_spread(n, requested=None, low=.5, high=1.2):
 def sample_candidates(model, messages, cfg, stop):
     """N distinct replies at a temperature spread (duplicates are re-sampled hotter)."""
     n = max(2, min(8, int(cfg["candidates"])))
-    answers = []
-    for temperature in temperature_spread(n, cfg.get("temperatures")):
-        if stop.is_set():
-            return answers
-        answers.append(model.generate(messages, max_tokens=cfg["max_tokens"], temperature=temperature, top_k=40, stop=stop))
+    answers = model.generate_group(messages, n, max_tokens=cfg["max_tokens"], temperature=temperature_spread(n, cfg.get("temperatures")), top_k=40, stop=stop)
+    if stop.is_set():
+        return []
     seen, unique = set(), []
     for answer in answers:
         if answer.strip() not in seen:
@@ -901,16 +899,18 @@ def compare_checkpoints(a, b, prompts, judge, samples=2, max_tokens=120, tempera
     wins = ties = losses = errors = 0
     shown, total, done = [], len(prompts) * max(1, int(samples)), 0
     failures = 0
+    count = max(1, int(samples))
     for prompt in prompts:
-        for _ in range(max(1, int(samples))):
+        if stop.is_set():
+            break
+        messages = prompt["messages"]
+        # each model reads the prompt once and writes all its `samples` replies together
+        replies_a = model_a.generate_group(messages, count, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
+        replies_b = model_b.generate_group(messages, count, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
+        for reply_a, reply_b in zip(replies_a, replies_b):
             if stop.is_set():
                 break
             done += 1
-            messages = prompt["messages"]
-            reply_a = model_a.generate(messages, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
-            reply_b = model_b.generate(messages, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
-            if stop.is_set():
-                break
             scores, reason = None, ""
             if reply_a.strip() == reply_b.strip():
                 outcome = "tie"
