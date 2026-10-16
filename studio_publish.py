@@ -407,3 +407,15 @@ class S3Store(_Store):
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None
             if not token:
                 return sorted(names)
+
+
+def configured_store(studio_config=None, environ=None):
+    """The version store a workspace uses: the shared folder `studioConfig.store.folder` names, else the one the TRAINER_STORE_* variables
+    describe (a shared folder, else a bucket), else None (a cluster of one). The routes and the queue's dispatch both use this."""
+    environ = os.environ if environ is None else environ
+    store = (studio_config or {}).get("store")
+    folder = str(store.get("folder") or "").strip() if isinstance(store, dict) else ""
+    folder = folder or (environ.get("TRAINER_STORE_FOLDER") or "").strip()
+    if folder:
+        return FolderStore(folder)
+    return S3Store.from_env(environ)

@@ -9,8 +9,9 @@ job in this node's own queue (it runs in its own worker process, studio_worker, 
 third of its duration with the job's progress, publishes the job's checkpoints to the version store, and reports the end. It stops the
 job itself when the lease cannot be renewed in time (self-fencing) or the owner answers 409 (the job has moved on).
 
-The version store is a shared folder (`TRAINER_STORE_FOLDER`) or an S3-compatible bucket (`TRAINER_STORE_*`, docs/cluster.md). A job
-that leaves this machine needs it: the checkpoints and the finished version travel through it, so without it nothing is dispatched.
+The version store is the shared folder the workspace names (`studioConfig.store.folder`), else a shared folder (`TRAINER_STORE_FOLDER`)
+or an S3-compatible bucket (`TRAINER_STORE_*`, docs/cluster.md). A job that leaves this machine needs it: the checkpoints and the
+finished version travel through it, so without it nothing is dispatched.
 `TRAINER_NODE_ADDRESS` is how peers reach this node when the address they see the request come from is not it (behind a proxy).
 """
 from __future__ import annotations
@@ -30,26 +31,12 @@ from studio_peer import PeerClient
 POLL_EVERY = 5.  # seconds between polls of the peers
 TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
-NO_STORE = ("A job can only leave this machine once a version store is set up, because its checkpoints and its result travel through "
-            "it. Set TRAINER_STORE_FOLDER to a shared folder, or the TRAINER_STORE_* bucket variables (docs/cluster.md).")
 LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result")  # not for the runner
 TERMINAL = ("done", "failed", "stopped")
 
 
 def client_for(address, **options):
     return PeerClient(address, **options)
-
-
-def default_store(environ=None):
-    """The version store this machine's environment describes: a shared folder, else a bucket, else None. A half-set bucket is a
-    ValueError that names the missing variables."""
-    environ = os.environ if environ is None else environ
-    folder = (environ.get("TRAINER_STORE_FOLDER") or "").strip()
-    if folder:
-        from studio_publish import FolderStore
-        return FolderStore(folder)
-    from studio_publish import S3Store
-    return S3Store.from_env(environ)
 
 
 def checkpoint_step(path):
@@ -91,7 +78,7 @@ class Cluster:
         self.runner, self.client_for, self.clock, self.lease_s, self.threads = runner, client_for, clock, lease_s, threads
         self.environ = os.environ if environ is None else environ
         self.address = address if address is not None else (self.environ.get("TRAINER_NODE_ADDRESS") or "").strip() or None
-        self._store_factory = store or (lambda: default_store(self.environ))
+        self._store_factory = store or self.workspace_store
         self._own_factory = own or (lambda: studio_cluster.own_info(version=_version()))
         self._own = None
         self.health = sched.Health(clock)
@@ -100,7 +87,7 @@ class Cluster:
         self.waiting = {}  # job id -> why it is waiting
         self._known = {}  # peer address -> its last NodeInfo
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
-        self._store, self._store_problem, self._store_made = None, "", False
+        self._store, self._store_problem, self._store_mtime = None, "", object()  # object(): not yet read, equal to no mtime
         self.polled = threading.Event()
         self._threads = []
         self._lock = threading.RLock()
@@ -124,17 +111,37 @@ class Cluster:
                 self._peers, self.config_problem = [], str(exc)
         return self._peers
 
+    def workspace_store(self):
+        """The version store the workspace names (`studioConfig.store.folder`), else the one the environment describes."""
+        import studio_publish
+        return studio_publish.configured_store(self._studio_config(), self.environ)
+
     def store(self):
-        """The version store, or None (see `store_problem`)."""
-        if not self._store_made:
+        """The version store, or None (see `store_problem`). It is looked up again when the workspace file changes, as the peers are."""
+        import studio_publish
+        mtime = self._workspace_mtime()
+        if mtime != self._store_mtime:
+            self._store_mtime, self._store_problem = mtime, ""
             try:
-                self._store, self._store_problem = self._store_factory(), ""
+                self._store = self._store_factory()
             except ValueError as exc:
                 self._store, self._store_problem = None, str(exc)
             if self._store is None and not self._store_problem:
-                self._store_problem = NO_STORE
-            self._store_made = True
+                self._store_problem = studio_publish.NO_STORE
         return self._store
+
+    def _workspace_mtime(self):
+        try:
+            return (self.runner.root / "data" / "workspace.json").stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _studio_config(self):
+        try:
+            config = json.loads((self.runner.root / "data" / "workspace.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return config.get("studioConfig") or {} if isinstance(config, dict) else {}
 
     @property
     def store_problem(self):

@@ -1565,10 +1565,7 @@ class WorkspaceServices(Services):
     def version_store(self):
         """The store `studioConfig.store.folder` names in the workspace, else the one the TRAINER_STORE_* variables describe."""
         import studio_publish
-        import studio_remote
-        config = self.setting("store")
-        folder = str(config.get("folder") or "").strip() if isinstance(config, dict) else ""
-        store = studio_publish.FolderStore(folder) if folder else studio_remote.default_store()
+        store = studio_publish.configured_store(self.workspace.state["studioConfig"])
         if store is None:
             raise RuntimeError(studio_publish.NO_STORE)
         return store
