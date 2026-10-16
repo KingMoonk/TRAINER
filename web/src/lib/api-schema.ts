@@ -4111,6 +4111,8 @@ export interface components {
              * @default The cat sat on the mat because it was tired.
              */
             text: string;
+            /** Version */
+            version?: number | null;
         };
         /** ProblemRule */
         ProblemRule: {
@@ -9061,7 +9063,9 @@ export interface operations {
     };
     snapshots_viewer_snapshots_get: {
         parameters: {
-            query?: never;
+            query?: {
+                version?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9075,6 +9079,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

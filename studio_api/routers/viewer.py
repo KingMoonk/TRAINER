@@ -88,6 +88,7 @@ class StartRequest(BaseModel):
 
 
 class ProbeRequest(BaseModel):
+    version: int | None = Field(default=None, ge=1)
     text: str = Field(default=T["probe_text"], min_length=2)
 
 
@@ -96,18 +97,19 @@ class ProbeResult(BaseModel):
     note: str
 
 
-def snapshot_paths(request: Request):
+def snapshot_paths(request: Request, number=None):
     """The snapshots a client may name: the version's training snapshots, then the ones a probe saved (oldest first)."""
     services = request.app.state.services
-    paths = [str(path) for path in services.viewer_snapshots()]
-    return paths + [path for path in probes(request) if path not in paths]
+    version = pick_version(services, number)
+    paths = [str(path) for path in services.viewer_snapshots(version.number)]
+    return paths + [path for path in probes(request, version.number) if path not in paths]
 
 
-def probes(request: Request):
+def probes(request: Request, number):
     """The snapshots "Run one real step" saved since the server started, oldest first."""
     if not hasattr(request.app.state, "viewer_probes"):
-        request.app.state.viewer_probes = []
-    return request.app.state.viewer_probes
+        request.app.state.viewer_probes = {}
+    return request.app.state.viewer_probes.setdefault(number, [])
 
 
 def pick_version(services, number):
@@ -128,7 +130,7 @@ def build(request: Request, state: ViewControls):
     model.choose(**(state.selection or {}))  # ValueError for a field or a coordinate that is not one
     model.level, model.mode = state.level, state.mode
     model.reduce_motion, model.show_numbers = state.reduce_motion, state.show_numbers
-    paths = snapshot_paths(request)
+    paths = snapshot_paths(request, version.number)
     view = scene_json.ViewState(head_stage=state.head_stage, tile_kind=state.tile_kind, cell=list(state.cell), playing=state.playing,
                                 snapshot_paths=paths, note=state.note, probing=state.probing)
     scene_json.scrub_to(model, view, state.snapshot, known(paths))  # a snapshot that will not load is said in the note
@@ -206,9 +208,9 @@ def action(request: Request, body: ActionRequest):
 
 
 @router.get("/snapshots", response_model=list[SnapshotOut])
-def snapshots(request: Request):
+def snapshots(request: Request, version: int | None = None):
     """The snapshots a scene can show, oldest first: a scene's `snapshot` is an index into this list."""
-    return [SnapshotOut(index=index, name=path.replace("\\", "/").rsplit("/", 1)[-1]) for index, path in enumerate(snapshot_paths(request))]
+    return [SnapshotOut(index=index, name=path.replace("\\", "/").rsplit("/", 1)[-1]) for index, path in enumerate(snapshot_paths(request, version))]
 
 
 @router.post("/probe", response_model=JobOut, status_code=202)
@@ -216,16 +218,16 @@ def probe(request: Request, body: ProbeRequest | None = None):
     """Run one real training step of the current version's checkpoint on a sentence, without touching training. A job: the result
     is {snapshot, note}, the new snapshot's index (see /viewer/snapshots) and the sentence to show."""
     services = request.app.state.services
-    text = (body or ProbeRequest()).text
+    options = body or ProbeRequest()
+    version = pick_version(services, options.version)
 
     def run(stop):
-        version = services.current_version()
-        path = services.viewer_probe_step(text) if version is not None else None
+        path = services.viewer_probe_step(options.text, version.number)
         if path is None:
             raise ValueError(T["probe_no_checkpoint"])
-        if str(path) not in probes(request):
-            probes(request).append(str(path))
-        return {"snapshot": snapshot_paths(request).index(str(path)), "note": T["probe_done"].format(n=version.number)}
+        if str(path) not in probes(request, version.number):
+            probes(request, version.number).append(str(path))
+        return {"snapshot": snapshot_paths(request, version.number).index(str(path)), "note": T["probe_done"].format(n=version.number)}
     return start_job(request, "viewer.probe", run, ProbeResult)
 
 

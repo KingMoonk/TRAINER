@@ -121,6 +121,19 @@ class ServicesTest(unittest.TestCase):
         paths = self.svc.viewer_snapshots()
         self.assertEqual(sorted(paths), sorted(str(path) for path in made))
         self.assertTrue(paths[0].endswith("step_00000010.npz"))  # each run's snapshots in step order
+        self.assertEqual(self.svc.viewer_snapshots(version.number), paths)
+        other = self.svc.versions()[0]
+        self.assertFalse(set(paths) & set(self.svc.viewer_snapshots(other.number)))
+        self.assertEqual(self.svc.viewer_snapshots(999), [])
+
+    def test_viewer_probe_uses_the_selected_versions_checkpoint(self):
+        from studio_snapshot import one_step
+        older = self.svc.versions()[0]
+        with mock.patch("studio_snapshot.one_step", wraps=one_step) as step:
+            path = self.svc.viewer_probe_step("The cat sat on the mat.", older.number)
+        self.addCleanup(lambda: Path(path).unlink(missing_ok=True))
+        self.assertEqual(step.call_args.args[0], older.best_checkpoint)
+        self.assertIsNone(self.svc.viewer_probe_step("The cat sat on the mat.", 999))
 
     def test_viewer_probe_step_saves_one_real_snapshot(self):
         from studio_snapshot import load
