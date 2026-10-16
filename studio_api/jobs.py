@@ -90,6 +90,7 @@ class Jobs:
             record.status, record.started_at = "running", time.time()
             self._announce(record)
             done = threading.Event()
+            self.services.loading = ("", None)  # a note from an earlier read is not this job's
             threading.Thread(target=self._progress, args=(record, done), daemon=True).start()
             try:  # an exception with plain = True is already a sentence for people: the job's error is that sentence
                 result = work(stop)
@@ -98,6 +99,9 @@ class Jobs:
                 self._finish(record, "failed", error=str(exc) if getattr(exc, "plain", False) else f"{type(exc).__name__}: {exc}")
             else:
                 done.set()
+                text, fraction = self.services.loading
+                if text:  # the poll may not have seen the last note (a short job): the finished record keeps it
+                    record.progress, record.fraction = text, fraction
                 self._finish(record, "cancelled" if stop.is_set() else "done", result=result)
 
     def _progress(self, record, done):

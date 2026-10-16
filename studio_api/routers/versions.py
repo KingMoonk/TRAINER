@@ -61,6 +61,25 @@ class PublishedVersion(BaseModel):
     local_number: int | None = Field(None, description="the version number it has here")
 
 
+class SharedVersion(BaseModel):
+    """What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights."""
+    key: str
+    number: int
+    name: str | None = None
+    change: str | None = None
+    parent: int | None = None
+    spec: dict
+    scorecard: dict = Field(default_factory=dict, description="as measured on this machine")
+    origin: str = Field(description="this machine's name in the version store")
+    device: str | None = None
+    step: int | None = None
+    published_at: str = Field(description="when this copy of the weights was made")
+    weights_dtype: str = "float16"
+    size: int = Field(description="bytes of the weights file")
+    sha256: str = Field(description="of the weights file")
+    format: int = 1
+
+
 def _known(services, number):
     if not any(v.number == number for v in services.versions()):
         raise HTTPException(404, f"No version {number}")
@@ -129,9 +148,28 @@ def publish_version(number: int, request: Request, services=Depends(get_services
 @router.post("/{number}/pull", response_model=JobOut, status_code=202)
 def pull_version(number: int, request: Request, origin: str | None = None, services=Depends(get_services)):
     """Download a published version and add it here as a trained version (`number` is its number on the machine that published it;
-    `origin` says which machine when several published one). The job's result is the new version. 409 when no store is configured."""
+    `origin` says which machine when several published one). The job's result is the new version, and its progress says where the
+    weights came from. The machine that published it is asked first (`/weights`), when the workspace lists it among its nodes and it
+    answers; with `origin` given the store is not read then. Otherwise, or when it cannot send it, they come from the store. 409 when
+    no store is configured."""
     services.version_store()
     return _job(request, "versions.pull", lambda stop: services.pull_version(number, origin))
+
+
+@router.get("/{number}/weights/meta", response_model=SharedVersion)
+def version_weights_meta(number: int, services=Depends(get_services)):
+    """The description of version `number`'s weights file (`GET /versions/{number}/weights`), for a peer that pulls it from this
+    machine. The first call makes the half-precision copy and may take a while. 409 when the version has not trained."""
+    _known(services, number)
+    return services.share_version(number)[1]
+
+
+@router.get("/{number}/weights", response_class=FileResponse)
+def version_weights(number: int, services=Depends(get_services)):
+    """Stream version `number`'s weights to a peer: half precision, no optimizer state, as `publish` would upload them. Describe
+    them first with `/weights/meta`; the sha256 there is what the download must hash to."""
+    _known(services, number)
+    return FileResponse(services.share_version(number)[0], media_type="application/octet-stream", filename=f"version-{number}-weights.npz")
 
 
 def _file_name(services, number, kind):
