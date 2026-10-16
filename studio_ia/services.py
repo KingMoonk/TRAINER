@@ -255,6 +255,28 @@ class Services:
         """prediction: what the person guessed the change would do ({dimension: direction}), stored with the version."""
         raise NotImplementedError
 
+    # sharing versions between machines (studio_publish; docs/cluster.md). All of it is disk or network: call it off the Tk thread.
+    def version_store(self):
+        """The version store this machine shares versions through (a studio_publish.RemoteStore). Raises RuntimeError with a plain
+        sentence when none is set up, and ValueError naming what is missing when a bucket is half set."""
+        raise NotImplementedError
+
+    def publish_version(self, number):
+        """Upload version `number`'s weights (half precision, no optimizer state) and metadata to the version store. Returns
+        {key, number, origin}. Publishing the same weights again uploads nothing. Raises studio_publish.StoreError, a sentence that
+        says what to do, when the version has no weights or the store cannot be used."""
+        raise NotImplementedError
+
+    def published_versions(self):
+        """What the version store holds, newest first: [{key, number, name, change, origin, device, step, published_at, size, scorecard,
+        mine (published by this machine), local (this workspace has it), local_number}]. Raises like publish_version."""
+        raise NotImplementedError
+
+    def pull_version(self, number, origin=None):
+        """Download published version `number` (from the machine `origin` when more than one published a version with that number)
+        and add it here as a trained version. Pulling what is already here returns that version. Returns the Version."""
+        raise NotImplementedError
+
     def setting(self, key, default=None):
         """A choice the person made that the app remembers (the Builder's Advanced toggle). Read from memory: safe on Tk."""
         return self._settings.get(key, default)
@@ -693,6 +715,19 @@ class FakeServices(Services):
         self._versions.append(v)
         self.emit("versions", v)
         return v
+
+    def version_store(self):
+        from studio_publish import NO_STORE
+        raise RuntimeError(NO_STORE)  # a cluster of one
+
+    def publish_version(self, number):
+        return self.version_store()
+
+    def published_versions(self):
+        return self.version_store()
+
+    def pull_version(self, number, origin=None):
+        return self.version_store()
 
     def queue(self):
         return self._queue
@@ -1525,6 +1560,82 @@ class WorkspaceServices(Services):
         v = self._version(row)
         self.emit("versions", v)
         return v
+
+    # sharing versions between machines -------------------------------------------
+    def version_store(self):
+        """The store `studioConfig.store.folder` names in the workspace, else the one the TRAINER_STORE_* variables describe."""
+        import studio_publish
+        import studio_remote
+        config = self.setting("store")
+        folder = str(config.get("folder") or "").strip() if isinstance(config, dict) else ""
+        store = studio_publish.FolderStore(folder) if folder else studio_remote.default_store()
+        if store is None:
+            raise RuntimeError(studio_publish.NO_STORE)
+        return store
+
+    def _through(self, store, work):
+        """work(), with whatever the store throws as a StoreError that says what to do."""
+        import studio_publish
+        try:
+            return work()
+        except Exception as error:  # noqa: BLE001 - disk, network and the provider's own errors all end as a sentence
+            raise studio_publish.store_error(error, store) from error
+
+    def publish_version(self, number):
+        store = self.version_store()
+        try:
+            row = self.store.get(number)
+        except KeyError:
+            raise ValueError(f"No version {number}.") from None
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard")}
+        key = self._through(store, lambda: store.publish(version, self._abs(row.get("best_checkpoint"))))
+        self.store.add_published(number, key)
+        return {"key": key, "number": number, "origin": key.split("/")[0]}
+
+    def published_versions(self):
+        import studio_publish
+        store = self.version_store()
+        entries = self._through(store, store.list)
+        own = studio_publish.own_origin(store)
+        here = {key: row["number"] for row in self._rows() for key in row.get("published") or ()}
+        return [{**{k: entry.get(k) for k in ("key", "number", "name", "change", "origin", "device", "step", "published_at", "size")},
+                 "scorecard": entry.get("scorecard") or {}, "mine": entry.get("origin") == own,
+                 "local": entry["key"] in here, "local_number": here.get(entry["key"])} for entry in reversed(entries)]
+
+    def pull_version(self, number, origin=None):
+        store = self.version_store()
+        from studio_publish import StoreError
+        entry = self._published(self._through(store, store.list), number, origin)
+        key = entry["key"]
+        if not entry.get("spec"):
+            raise StoreError(f"The published version {key} carries no design, so it cannot be added here. Publish it again from {entry.get('origin')}.")
+        row = next((r for r in self._rows() if key in (r.get("published") or ())), None)
+        if row is not None and row.get("best_checkpoint") and Path(self._abs(row["best_checkpoint"])).is_file():
+            return self._version(row)  # already here
+        path = self._through(store, lambda: store.pull(key, self.root / "data" / "pulled"))
+        if row is not None:  # the file was cleaned away: put it back under the same version
+            self.store.set_best_checkpoint(row["number"], path)
+            row = self.store.get(row["number"])
+        else:
+            name = f"{entry.get('name') or 'Version ' + str(number)} from {entry.get('origin')}"
+            change = f"pulled from {entry.get('origin')}: {entry.get('change') or 'no description'}"
+            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, key))
+        v = self._version(row)
+        self.emit("versions", v)
+        return v
+
+    @staticmethod
+    def _published(entries, number, origin):
+        """The published entry for version `number` (the newest, when its machine published several), or a sentence on why none."""
+        from studio_publish import StoreError
+        found = [e for e in entries if e.get("number") == number and (origin is None or e.get("origin") == origin)]
+        if not found:
+            by = f" by {origin}" if origin else ""
+            raise StoreError(f"Version {number} is not published{by}. Publish it from the machine that trained it, then pull it again.")
+        origins = sorted({e.get("origin") for e in found})
+        if len(origins) > 1:
+            raise StoreError(f"Version {number} is published by {', '.join(origins)}. Say which machine to pull it from.")
+        return max(found, key=lambda e: e.get("published_at") or "")
 
     # queue ------------------------------------------------------------------
     def queue(self):

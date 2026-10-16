@@ -14,6 +14,7 @@ from starlette.background import BackgroundTask
 
 from studio_api.app import get_services
 from studio_ia.services import Version
+from studio_versions import NoCheckpoint
 
 router = APIRouter(prefix="/versions", tags=["versions"])
 
@@ -41,6 +42,23 @@ class NewVersion(BaseModel):
 def _job(request, kind, work):
     record = request.app.state.jobs.submit(kind, work)
     return JobOut(**{k: getattr(record, k) for k in JobOut.model_fields})
+
+
+class PublishedVersion(BaseModel):
+    """One version in the version store: what its machine published, and whether this workspace has it."""
+    key: str
+    number: int
+    name: str | None = None
+    change: str | None = None
+    origin: str = Field(description="the machine that published it")
+    device: str | None = Field(None, description="the device that trained it (cuda, mps, cpu), when the checkpoint recorded one")
+    step: int | None = None
+    published_at: str | None = None
+    size: int | None = Field(None, description="bytes of the weights file in the store")
+    scorecard: dict = Field(default_factory=dict, description="as measured on the machine that trained it")
+    mine: bool = Field(description="this machine published it")
+    local: bool = Field(description="this workspace already has it as a version")
+    local_number: int | None = Field(None, description="the version number it has here")
 
 
 def _known(services, number):
@@ -86,6 +104,34 @@ def run_facts(number: int, request: Request, services=Depends(get_services)):
 def run_speed(number: int, request: Request, services=Depends(get_services)):
     _known(services, number)
     return _job(request, "versions.run_speed", lambda stop: services.run_speed(number))
+
+
+@router.get("/published", response_model=list[PublishedVersion])
+def published_versions(services=Depends(get_services)):
+    """The versions in the version store, newest first. 409 with a sentence on what to set up when no store is configured, or on what
+    to do when it cannot be reached."""
+    return services.published_versions()
+
+
+@router.post("/{number}/publish", response_model=JobOut, status_code=202)
+def publish_version(number: int, request: Request, services=Depends(get_services)):
+    """Upload the version's weights (half precision, no optimizer state) and metadata to the version store. The job's result is
+    {key, number, origin}. 409 with a sentence when no store is configured or the version has not trained."""
+    version = next((v for v in services.versions() if v.number == number), None)
+    if version is None:
+        raise HTTPException(404, f"No version {number}")
+    services.version_store()
+    if not version.best_checkpoint:
+        raise NoCheckpoint(number)
+    return _job(request, "versions.publish", lambda stop: services.publish_version(number))
+
+
+@router.post("/{number}/pull", response_model=JobOut, status_code=202)
+def pull_version(number: int, request: Request, origin: str | None = None, services=Depends(get_services)):
+    """Download a published version and add it here as a trained version (`number` is its number on the machine that published it;
+    `origin` says which machine when several published one). The job's result is the new version. 409 when no store is configured."""
+    services.version_store()
+    return _job(request, "versions.pull", lambda stop: services.pull_version(number, origin))
 
 
 def _file_name(services, number, kind):

@@ -2,7 +2,8 @@
 
 Kept independent of studio_archdb (that store is keyed by architecture revisions); a version only
 references run directories and checkpoint paths. Version = {number, name, change, parent, spec, created_at,
-runs, best_checkpoint, status, scorecard, verdict, prediction}. prediction is the guess made on saving ({dimension: direction}, Build your model).
+runs, best_checkpoint, status, scorecard, verdict, prediction, published}. prediction is the guess made on saving ({dimension: direction}, Build your model).
+published (absent until used) lists the version-store keys this version was published under, or was pulled from (studio_publish).
 """
 from __future__ import annotations
 
@@ -120,6 +121,24 @@ class VersionStore:
                            status="saved", scorecard={}, verdict=None, prediction=dict(prediction or {}))
             self._write(versions + [version])
             return copy.deepcopy(version)
+
+    def add_pulled(self, spec, name, change, checkpoint, key):
+        """A version another machine published, as a trained version here: its design, and `checkpoint` (the pulled file) as its weights.
+        Its scorecard stays empty, because the numbers measured there were on that machine's held-back text. Returns the new row."""
+        spec = validate_spec(spec)
+        with self._lock:
+            versions = self.versions()
+            version = dict(number=len(versions) + 1, name=name, change=change, parent=None, spec=spec,
+                           created_at=time.strftime("%Y-%m-%dT%H:%M:%S"), runs=[], best_checkpoint=str(checkpoint),
+                           status="trained", scorecard={}, verdict=None, prediction={}, published=[key])
+            self._write(versions + [version])
+            return copy.deepcopy(version)
+
+    def add_published(self, number, key):
+        """Remember that version `number` is in the version store under `key`."""
+        with self._lock:
+            keys = self.get(number).get("published") or []
+            return self._update(number, published=keys if key in keys else [*keys, key])
 
     def _update(self, number, **fields):
         with self._lock:

@@ -4418,6 +4418,129 @@
         "title": "ProblemRules",
         "type": "object"
       },
+      "PublishedVersion": {
+        "description": "One version in the version store: what its machine published, and whether this workspace has it.",
+        "properties": {
+          "change": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device that trained it (cuda, mps, cpu), when the checkpoint recorded one",
+            "title": "Device"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "local": {
+            "description": "this workspace already has it as a version",
+            "title": "Local",
+            "type": "boolean"
+          },
+          "local_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the version number it has here",
+            "title": "Local Number"
+          },
+          "mine": {
+            "description": "this machine published it",
+            "title": "Mine",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "origin": {
+            "description": "the machine that published it",
+            "title": "Origin",
+            "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "scorecard": {
+            "additionalProperties": true,
+            "description": "as measured on the machine that trained it",
+            "title": "Scorecard",
+            "type": "object"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "bytes of the weights file in the store",
+            "title": "Size"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "required": [
+          "key",
+          "number",
+          "origin",
+          "mine",
+          "local"
+        ],
+        "title": "PublishedVersion",
+        "type": "object"
+      },
       "Question": {
         "properties": {
           "key": {
@@ -12695,6 +12818,32 @@
         ]
       }
     },
+    "/versions/published": {
+      "get": {
+        "description": "The versions in the version store, newest first. 409 with a sentence on what to set up when no store is configured, or on what\nto do when it cannot be reached.",
+        "operationId": "published_versions_versions_published_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PublishedVersion"
+                  },
+                  "title": "Response Published Versions Versions Published Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Published Versions",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
     "/versions/{number}/checkpoint-step": {
       "post": {
         "operationId": "checkpoint_step_versions__number__checkpoint_step_post",
@@ -12781,6 +12930,108 @@
           }
         },
         "summary": "Export Version",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/publish": {
+      "post": {
+        "description": "Upload the version's weights (half precision, no optimizer state) and metadata to the version store. The job's result is\n{key, number, origin}. 409 with a sentence when no store is configured or the version has not trained.",
+        "operationId": "publish_version_versions__number__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__versions__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Version",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/pull": {
+      "post": {
+        "description": "Download a published version and add it here as a trained version (`number` is its number on the machine that published it;\n`origin` says which machine when several published one). The job's result is the new version. 409 when no store is configured.",
+        "operationId": "pull_version_versions__number__pull_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__versions__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pull Version",
         "tags": [
           "versions"
         ]
