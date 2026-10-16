@@ -1,7 +1,8 @@
 # GitHub issues
 
 - Work comes from GitHub issues on `KingMoonk/TRAINER`. mgwedd and KingMoonk each run their own agent fleet; the issue is the hand-off between them, so it must make sense to an agent with no other context.
-- Find or open the issue before starting work. Track every TODO, bug and open question as an issue, not in code comments, docs or chat.
+- Every feature and every non-trivial bug fix is tracked in an issue, whether the main session or a subagent does it. Find or open the issue before starting work, claim it, and close it through the PR. Only trivial fixes (a typo, a one-line obvious fix, a rule or doc tweak the user asked for in chat) may skip the issue.
+- Track every TODO, bug and open question as an issue, not in code comments, docs or chat.
 - One issue is one PR-sized piece of work. Larger work is a parent issue whose checklist links its child issues.
 - Labels: exactly one type, `enhancement` (feature), `bug` or `discovery` (a question to investigate; done means the answer is written in the issue and follow-ups are filed). Plus one area: `api`, `web`, `cluster`, `viewer`, `training` or `ci`.
 - Claim before work: an agent starts on an issue only once it is assigned to the authenticated gh user (`gh api user --jq .login`). Assign it first with `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me`, then re-read the issue to confirm no one else is on it. If it is assigned to someone else, do not start: ask them. This keeps the two fleets from colliding.

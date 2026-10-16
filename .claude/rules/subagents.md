@@ -12,9 +12,11 @@
   - `grunt` (Haiku) for repetitive, mechanical or read-heavy work: sweeping searches, collecting facts across many files, migrating N similar call sites, renames, running tests and summarising failures, reading logs.
 - Never Opus for a subagent unless the user asks for it. When spawning a general-purpose agent instead of these two, still pass `model: "sonnet"` or `model: "haiku"`.
 
-## Every task that changes files is an issue, a branch and a PR
+## Delegated work: an issue, a branch and a PR
 
-1. Before delegating, find or open the GitHub issue (`.claude/rules/github-issues.md`). Its acceptance criteria are the subagent's definition of done.
+The same issue rule applies on the main thread (`.claude/rules/github-issues.md`). For a subagent:
+
+1. Before delegating, find or open the GitHub issue. Its acceptance criteria are the subagent's definition of done.
 2. The subagent claims it: `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me`, then re-reads it to confirm no one else holds it.
 3. It works on its own branch in its own worktree, off `origin/wedd-compute-cluster` (`.claude/rules/git-workflow.md`). Two subagents never share a worktree or edit the same files.
 4. It commits (Conventional Commits), pushes, and opens a PR with `--base wedd-compute-cluster`.
