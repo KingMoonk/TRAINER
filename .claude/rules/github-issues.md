@@ -1,7 +1,7 @@
 # GitHub issues
 
 - Work comes from GitHub issues on `KingMoonk/TRAINER`. mgwedd and KingMoonk each run their own agent fleet; the issue is the hand-off between them, so it must make sense to an agent with no other context.
-- Every feature and every non-trivial bug fix is tracked in an issue, whether the main session or a subagent does it. Find or open the issue before starting work, claim it, and close it through the PR. Only trivial fixes (a typo, a one-line obvious fix, a rule or doc tweak the user asked for in chat) may skip the issue.
+- Features and bug fixes are tracked in an issue, whether the main session or a subagent does them: find or open it before starting, claim it, and close it through the PR. Small fixes and tweaks (copy, styling, a quick obvious fix, config or rule changes) don't need one.
 - Track every TODO, bug and open question as an issue, not in code comments, docs or chat.
 - One issue is one PR-sized piece of work. Larger work is a parent issue whose checklist links its child issues.
 - Labels: exactly one type, `enhancement` (feature), `bug` or `discovery` (a question to investigate; done means the answer is written in the issue and follow-ups are filed). Plus one area: `api`, `web`, `cluster`, `viewer`, `training` or `ci`.
