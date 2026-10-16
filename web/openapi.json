@@ -1039,6 +1039,30 @@
         "title": "Expectations",
         "type": "object"
       },
+      "ExportRow": {
+        "properties": {
+          "gguf_problem": {
+            "default": "",
+            "description": "why this design cannot be written as GGUF, in plain words; \"\" when it can",
+            "title": "Gguf Problem",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "number",
+          "name"
+        ],
+        "title": "ExportRow",
+        "type": "object"
+      },
       "FieldsModel": {
         "properties": {
           "fields": {
@@ -8797,6 +8821,32 @@
           }
         },
         "summary": "Clean Storage",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/exports": {
+      "get": {
+        "description": "The versions that have trained, so can be exported, each with the reason GGUF is unavailable for it (if it is).",
+        "operationId": "exports_storage_exports_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExportRow"
+                  },
+                  "title": "Response Exports Storage Exports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Exports",
         "tags": [
           "storage"
         ]
