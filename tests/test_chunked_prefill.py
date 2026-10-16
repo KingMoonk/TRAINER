@@ -15,6 +15,7 @@ from tests.test_memory_p0 import CACHED, local, positions
 SHORT = [{"role": "user", "content": "Hi"}]                                       # 6 prompt tokens
 LONG = [{"role": "user", "content": "Count from 4 to 9, slowly."}]                # 30 prompt tokens: nearly the 32-token window
 IDS = np.random.default_rng(0).integers(6, 200, size=30)
+OVERLONG = LONG + [{"role": "assistant", "content": "4, 5, 6"}, {"role": "user", "content": "More, please."}]   # longer than the window
 CHUNKS = (4, 7, 29, 100)   # 29 leaves a last chunk of one token (linear attention's running sums must carry across it); 100 is the whole prompt in one pass
 
 
@@ -61,11 +62,11 @@ class SameLogits(unittest.TestCase):
                 model = local(mixer, position).model
                 whole = model.forward(IDS[None])[0, -1]
                 exact = KVCache()
-                torch.testing.assert_close(batch_logits(model, [list(IDS)], False, exact)[0], whole, atol=1e-5, rtol=1e-4)
+                torch.testing.assert_close(batch_logits(model, [list(IDS)], False, exact, chunk=None)[0], whole, atol=1e-5, rtol=1e-4)
                 for size in CHUNKS:
                     with self.subTest(mixer=mixer, position=position, chunk=size), chunked(size), Recorder() as recorder:
                         cache = KVCache()
-                        got = batch_logits(model, [list(IDS)], False, cache)[0]
+                        got = batch_logits(model, [list(IDS)], False, cache, chunk=size)[0]
                         torch.testing.assert_close(got, whole, atol=1e-5, rtol=1e-4)
                         same_cache(self, cache, exact)   # n, keys and values, or linear attention's running sums
                         self.assertEqual(cache["n"], len(IDS))
@@ -77,7 +78,7 @@ class SameLogits(unittest.TestCase):
         cache = KVCache()
         model.forward(IDS[None, :10], cache=cache)
         with chunked(5), Recorder() as recorder:
-            got = batch_logits(model, [list(IDS[:25])], False, cache)[0]
+            got = batch_logits(model, [list(IDS[:25])], False, cache, chunk=5)[0]
         torch.testing.assert_close(got, model.forward(IDS[None, :25])[0, -1], atol=1e-5, rtol=1e-4)
         self.assertEqual([shape[1] for shape in recorder.shapes], [5, 5, 5])
 
@@ -87,7 +88,7 @@ class SameLogits(unittest.TestCase):
         window = np.concatenate((IDS, IDS[:2]))   # 32 tokens: the whole context
         model.forward(window[None, :20], cache=cache)
         with chunked(8), Recorder() as recorder:
-            got = batch_logits(model, [list(window)], True, cache)[0]
+            got = batch_logits(model, [list(window)], True, cache, chunk=8)[0]
         torch.testing.assert_close(got, model.forward(window[None])[0, -1], atol=1e-5, rtol=1e-4)
         self.assertEqual([shape[1] for shape in recorder.shapes], [8, 8, 8, 8])
         self.assertEqual(cache["n"], 32)
@@ -101,6 +102,23 @@ class SameLogits(unittest.TestCase):
         self.assertTrue(all(shape[1] >= 6 for shape in recorder.shapes))
         with chunked(1000):
             self.assertEqual(model.generate(SHORT, temperature=0, max_tokens=5), reply)
+
+
+class OnlyTheFirstPrefill(unittest.TestCase):
+    def test_a_sliding_reprefill_after_the_first_token_is_one_pass(self):
+        for mixer in CACHED:
+            with self.subTest(mixer=mixer), chunked(8), Recorder() as recorder:
+                local(mixer, positions(mixer)[0]).generate(LONG, temperature=0, max_tokens=8)   # the 30-token prompt outgrows the 32-token window after two tokens
+            self.assertEqual([shape[1] for shape in recorder.shapes[:5]], [8, 8, 8, 6, 1], "the first prefill is chunked")
+            slid = [shape[1] for shape in recorder.shapes[5:]]
+            self.assertIn(32, slid, "a re-prefill runs the whole window")
+            self.assertTrue(all(count in (1, 32) for count in slid), slid)
+
+    def test_complete_chunks_only_the_first_prefill(self):
+        with chunked(8), Recorder() as recorder:
+            local("attention", "learned").complete("Counting up from 4: 4, 5, 6, 7", max_tokens=8)
+        self.assertEqual([shape[1] for shape in recorder.shapes[:5]], [8, 8, 8, 7, 1])
+        self.assertTrue(all(shape[1] in (1, 32) for shape in recorder.shapes[5:]), recorder.shapes)
 
 
 class SameReplies(unittest.TestCase):
@@ -153,17 +171,12 @@ class StopBetweenChunks(unittest.TestCase):
                 self.assertEqual(recorder.shapes, [(1, 8)])
                 self.assertEqual(seen, [""])
 
-    def test_stop_during_a_sliding_reprefill(self):
+    def test_stop_during_the_first_prefill_of_a_prompt_longer_than_the_context(self):
         stop = threading.Event()
-        model = local("attention", "learned")
-        with chunked(8), Recorder() as warm:
-            model.generate(LONG, temperature=0, max_tokens=6)   # the window slides after two tokens
-        passes = len(warm.shapes)
-        self.assertGreater(passes, 6)
-        with chunked(8), Recorder(stop, after=passes + 1) as recorder:   # the first chunk of the next re-prefill
-            reply = model.generate(LONG, temperature=0, max_tokens=30, stop=stop)
-        self.assertEqual(len(recorder.shapes), passes + 1)
-        self.assertLessEqual(len(reply), 30)
+        with chunked(8), Recorder(stop, after=2) as recorder:   # the prompt is cut to the 32-token window and prefilled in four chunks
+            reply = local("gqa", "rope").generate(OVERLONG, temperature=0, max_tokens=20, stop=stop)
+        self.assertEqual(reply, "")
+        self.assertEqual(recorder.shapes, [(1, 8), (1, 8)])
 
     def test_a_stop_set_before_the_prefill_runs_nothing(self):
         stop = threading.Event()
