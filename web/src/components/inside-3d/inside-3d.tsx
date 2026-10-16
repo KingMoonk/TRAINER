@@ -256,7 +256,7 @@ export function Inside3d({ version }: { version?: number }) {
         </Card>
 
         <p className="text-xs text-muted-foreground">
-          Showing a recorded scene from <code>src/fixtures/scene.json</code> until the live viewer API lands.
+          Scenes use this version’s saved design and snapshots. A probe runs one step without changing its training checkpoint.
         </p>
       </aside>
     </main>
