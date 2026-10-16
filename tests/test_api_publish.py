@@ -18,7 +18,7 @@ from studio_spec import default_spec
 from tests.test_publish import CONFIG, StubError, StubS3
 
 ENV_NAMES = ("TRAINER_STORE_FOLDER", "TRAINER_STORE_ENDPOINT", "TRAINER_STORE_BUCKET", "TRAINER_STORE_PREFIX", "TRAINER_STORE_KEY_ID",
-             "TRAINER_STORE_SECRET", "TRAINER_STORE_REGION")
+             "TRAINER_STORE_SECRET", "TRAINER_STORE_REGION", "TRAINER_STORE_LIMIT_GB")
 WEIGHTS = np.random.default_rng(3).integers(-64, 64, 4096).astype(np.float32) / 8  # exact in float16: a pull must give them back unchanged
 
 
@@ -273,6 +273,47 @@ class StoreErrors(PublishCase):
             client.fail_head = None
             key = self.a.publish()["result"]["key"]
         self.assertEqual(sorted(k for _, k in client.objects), [f"{key}.json", f"{key}.npz"])
+
+    def test_an_upload_past_the_free_tier_ends_the_job_with_the_sizes_and_uploads_nothing_and_room_made_lets_a_retry_through(self):
+        self.a.train()
+        client = StubS3()
+        client.objects["versions", "elsewhere/big.bin"] = b"x"
+        client.sizes["elsewhere/big.bin"] = 9_500_000_000 - 100  # 100 bytes of room under the cap: no version fits
+        with self.bucket(client):
+            job = self.a.publish(expect="failed")
+            self.assertRegex(job["error"], r"^Not uploaded: this upload needs [\d.]+ KB and the bucket already holds 9\.50 GB, which would "
+                                           r"make 9\.50 GB, over the 9\.50 GB limit \(the default cap, 0\.5 GB under the R2 free tier\)\. "
+                                           r"Delete versions")
+            self.assertNotIn("StoreLimitError", job["error"])  # the sentence as it is, without the exception's name
+            self.assertEqual(self.a.client.get(f"/jobs/{job['id']}").json()["error"], job["error"])
+            self.assertEqual([c for c in client.log if c[0] in ("upload_file", "put_object")], [])
+            self.assertEqual(self.a.services.store.get(1).get("published") or [], [])
+            client.sizes.clear()  # versions deleted from the bucket
+            self.a.publish()
+        self.assertEqual(len([c for c in client.log if c[0] in ("upload_file", "put_object")]), 2)
+
+    def test_a_bucket_whose_usage_cannot_be_read_ends_the_job_saying_so_and_not_that_the_limit_was_hit(self):
+        self.a.train()
+
+        class Unreadable(StubS3):
+            def list_multipart_uploads(self, **kwargs):
+                raise ConnectionError("no route to host")
+
+        client = Unreadable()
+        with self.bucket(client):
+            said = self.a.publish(expect="failed")["error"]
+        self.assertIn("the bucket's usage could not be read", said)
+        self.assertNotIn("Not uploaded", said)
+        self.assertEqual([c for c in client.log if c[0] in ("upload_file", "put_object")], [])
+
+    def test_a_limit_setting_above_the_free_tier_ends_the_job_naming_the_setting(self):
+        self.a.train()
+        os.environ["TRAINER_STORE_LIMIT_GB"] = "50"
+        client = StubS3()
+        with self.bucket(client):
+            said = self.a.publish(expect="failed")["error"]
+        self.assertIn("TRAINER_STORE_LIMIT_GB is 50, above the 10 GB free tier", said)
+        self.assertEqual(client.objects, {})
 
     def test_an_unreachable_bucket_ends_the_job_with_what_to_do_and_a_retry_works(self):
         self.a.train()

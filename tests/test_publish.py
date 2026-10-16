@@ -2,6 +2,8 @@
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -259,6 +261,8 @@ class StubS3:
 
     def __init__(self):
         self.objects, self.log, self.fail_head = {}, [], None
+        self.sizes = {}  # key -> the size list_objects_v2 reports instead of the real one: a bucket that is nearly full, without the bytes
+        self.pending = {}  # (key, upload id) -> the sizes of the parts of a multipart upload that was started and not finished
 
     def upload_file(self, filename, bucket, key):
         self.log.append(("upload_file", bucket, key))
@@ -292,14 +296,35 @@ class StubS3:
             raise StubError("404")
         return {}
 
+    def delete_object(self, Bucket, Key):
+        self.log.append(("delete_object", Bucket, Key))
+        self.objects.pop((Bucket, Key), None)
+
     def list_objects_v2(self, Bucket, Prefix="", ContinuationToken=None):
         self.log.append(("list_objects_v2", Bucket, Prefix))
         keys = sorted(key for bucket, key in self.objects if bucket == Bucket and key.startswith(Prefix))
         start = int(ContinuationToken or 0)
         page = keys[start:start + 1]
         more = start + 1 < len(keys)
-        return {"Contents": [{"Key": key, "Size": len(self.objects[Bucket, key])} for key in page], "IsTruncated": more,
+        return {"Contents": [{"Key": key, "Size": self.sizes.get(key, len(self.objects[Bucket, key]))} for key in page], "IsTruncated": more,
                 **({"NextContinuationToken": str(start + 1)} if more else {})}
+
+    def list_multipart_uploads(self, Bucket, KeyMarker=None, UploadIdMarker=None):
+        self.log.append(("list_multipart_uploads", Bucket))
+        ordered = sorted(self.pending)
+        start = ordered.index((KeyMarker, UploadIdMarker)) + 1 if KeyMarker else 0
+        page, more = ordered[start:start + 1], start + 1 < len(ordered)
+        return {"Uploads": [{"Key": key, "UploadId": upload} for key, upload in page], "IsTruncated": more,
+                **({"NextKeyMarker": page[-1][0], "NextUploadIdMarker": page[-1][1]} if more else {})}
+
+    def list_parts(self, Bucket, Key, UploadId, PartNumberMarker=0):
+        self.log.append(("list_parts", Bucket, Key))
+        if (Key, UploadId) not in self.pending:
+            raise StubError("NoSuchUpload")
+        sizes, start = self.pending[Key, UploadId], int(PartNumberMarker or 0)
+        page, more = sizes[start:start + 1], start + 1 < len(sizes)
+        return {"Parts": [{"PartNumber": start + 1, "Size": size} for size in page], "IsTruncated": more,
+                "NextPartNumberMarker": start + 1}  # S3 sends this on the last page too
 
 
 CONFIG = {"endpoint": "https://abc.r2.cloudflarestorage.com", "bucket": "versions", "prefix": "/trainer/", "key_id": "AKID",
@@ -435,3 +460,439 @@ class Zip(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+GB = 10**9
+CAP = studio_publish.DEFAULT_CAP_BYTES
+UPLOADS = ("upload_file", "put_object")
+
+
+class FreeTier(Checkpoints):
+    """The bucket store never takes an upload that would take the whole bucket past the free tier."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = StubS3()
+
+    def store(self, limit=None, **config):
+        return S3Store({**CONFIG, **config}, client=self.client, origin="windows", limit=limit)
+
+    def fill(self, size, key="elsewhere/other-project/data.bin"):
+        """Make the bucket report `size` more bytes, in an object outside the store's prefix."""
+        self.client.objects["versions", key] = b"x"
+        self.client.sizes[key] = size
+
+    def uploads(self):
+        return [call for call in self.client.log if call[0] in UPLOADS]
+
+    def needed(self, checkpoint=None):
+        """What publishing `checkpoint` puts in the bucket, measured on a bucket of its own."""
+        probe = StubS3()
+        S3Store(CONFIG, client=probe, origin="windows").publish(VERSION, checkpoint or self.base)
+        return sum(len(data) for data in probe.objects.values())
+
+    def test_the_default_limit_keeps_half_a_gigabyte_of_headroom_under_the_free_tier(self):
+        self.assertEqual(studio_publish.FREE_TIER_BYTES, 10 * GB)
+        self.assertEqual(studio_publish.DEFAULT_CAP_BYTES, 9_500_000_000)
+        self.assertEqual(studio_publish.store_limit(None), 9_500_000_000)
+        self.assertEqual(studio_publish.store_limit(""), 9_500_000_000)
+
+    def test_the_default_cap_refuses_what_the_free_tier_itself_would_take(self):
+        needed = self.needed()
+        self.fill(9_500_000_000 - needed + 1)  # under 10 GB, over the cap
+        with self.assertRaises(studio_publish.StoreLimitError) as caught:
+            self.store().publish(VERSION, self.base)
+        self.assertIn("over the 9.50 GB limit (the default cap, 0.5 GB under the R2 free tier)", str(caught.exception))
+        self.assertEqual(self.uploads(), [])
+        self.store(limit="10").publish(VERSION, self.base)  # the last half GB is for whoever sets it on purpose
+
+    def test_the_setting_sets_the_limit_up_to_the_free_tier_and_never_above_it(self):
+        self.assertEqual(studio_publish.store_limit("5"), 5 * GB)
+        self.assertEqual(studio_publish.store_limit(" 0.5 "), GB // 2)
+        self.assertEqual(studio_publish.store_limit("10"), 10 * GB)
+        self.assertEqual(studio_publish.store_limit("9.8"), 9_800_000_000)  # between the cap and the free tier: allowed when asked for
+        for bad in ("10.5", "11", "1000", "0", "-1", "ten", "nan", "inf"):
+            with self.assertRaises(studio_publish.StoreLimitError, msg=bad) as caught:
+                studio_publish.store_limit(bad)
+            self.assertIn("TRAINER_STORE_LIMIT_GB", str(caught.exception))
+        with self.assertRaisesRegex(studio_publish.StoreLimitError, "above the 10 GB free tier"):
+            studio_publish.store_limit("12")
+
+    def test_an_upload_that_fits_goes_up(self):
+        self.fill(5 * GB)
+        key = self.store().publish(VERSION, self.base)
+        self.assertIn(("versions", f"trainer/{key}.json"), self.client.objects)
+
+    def test_an_upload_that_would_pass_the_limit_is_refused_naming_the_sizes_and_nothing_goes_up(self):
+        needed = self.needed()
+        self.fill(CAP - needed + 1)
+        store = self.store()
+        with self.assertRaises(studio_publish.StoreLimitError) as caught:
+            store.publish(VERSION, self.base)
+        said = str(caught.exception)
+        self.assertIn(f"needs {studio_publish.size_text(needed)}", said)
+        self.assertIn(f"already holds {studio_publish.size_text(CAP - needed + 1)}", said)
+        self.assertIn("over the 9.50 GB limit (the default cap", said)
+        self.assertTrue(caught.exception.plain)
+        self.assertEqual(self.uploads(), [])  # neither the weights nor the .json
+        self.assertEqual(studio_publish.store_error(caught.exception, store), caught.exception)  # the UI shows it as it is
+
+    def test_the_limit_is_inclusive_to_the_byte(self):
+        needed = self.needed()
+        self.fill(CAP - needed)
+        self.store().publish(VERSION, self.base)  # exactly the cap: allowed
+        self.assertEqual(len(self.uploads()), 2)
+        again = self.store()
+        self.fill(1, key="elsewhere/one-more-byte")
+        with self.assertRaises(studio_publish.StoreLimitError):
+            again.publish(dict(VERSION, number=4), self.tuned)
+
+    def test_the_size_is_checked_once_for_the_weights_and_the_json_together_before_the_first_put(self):
+        self.store().publish(VERSION, self.base)
+        first_put = next(i for i, call in enumerate(self.client.log) if call[0] in UPLOADS)
+        listings = [i for i, call in enumerate(self.client.log) if call[0] == "list_objects_v2"]
+        self.assertTrue(listings and max(listings) < first_put)
+        self.client.log.clear()
+        self.store().publish(VERSION, self.base)  # already published: nothing to upload, so no listing of the bucket either
+        self.assertEqual([call[0] for call in self.client.log if call[0] == "list_objects_v2"], [])
+
+    def test_a_json_that_alone_tips_the_bucket_over_is_refused_before_the_weights_go_up(self):
+        needed = self.needed()
+        self.fill(CAP - needed + 1)  # the weights alone would fit; with the .json they do not
+        with self.assertRaises(studio_publish.StoreLimitError):
+            self.store().publish(VERSION, self.base)
+        self.assertEqual(self.uploads(), [])
+
+    def test_the_whole_bucket_counts_not_just_the_prefix_and_every_page_of_the_listing(self):
+        needed = self.needed()
+        store = self.store()
+        store.publish(VERSION, self.tuned)  # a few small objects in the prefix
+        for index in range(4):
+            self.fill(GB, key=f"zzz/other-{index}")  # the stub pages one key at a time: the big ones are on later pages
+        self.client.log.clear()
+        self.fill(CAP - 4 * GB - needed + 1, key="zzzz/last-page")  # the cap - needed + 1 together with the 4 GB above, past the limit
+        with self.assertRaises(studio_publish.StoreLimitError):
+            store.publish(dict(VERSION, number=5), self.base)
+        pages = [c for c in self.client.log if c[0] == "list_objects_v2"]
+        self.assertGreater(len(pages), 3)
+        self.assertTrue(all(call[2] == "" for call in pages), pages)  # no Prefix: the free tier counts everything
+
+    def test_a_bucket_whose_size_cannot_be_read_refuses_the_upload(self):
+        store = self.store()
+
+        def broken(**kwargs):
+            raise ConnectionError("no route to host")
+
+        self.client.list_objects_v2 = broken
+        with self.assertRaises(studio_publish.StoreLimitError) as caught:
+            store.publish(VERSION, self.base)
+        self.assertIn("usage could not be read", str(caught.exception))
+        self.assertNotIn("Not uploaded", str(caught.exception))  # it does not say the limit was reached
+        self.assertNotIn("over the", str(caught.exception))
+        self.assertIn("Could not reach the version store", str(caught.exception))
+        self.assertEqual(self.uploads(), [])
+        self.assertNotIn(CONFIG["secret"], str(caught.exception))
+
+    def test_a_refused_key_while_reading_the_size_says_so(self):
+        def denied(**kwargs):
+            raise StubError("AccessDenied")
+
+        self.client.list_objects_v2 = denied
+        with self.assertRaisesRegex(studio_publish.StoreLimitError, "The bucket refused the key"):
+            self.store().publish(VERSION, self.base)
+        self.assertEqual(self.uploads(), [])
+
+    def test_a_lower_limit_from_the_setting_is_enforced(self):
+        self.fill(2 * GB)
+        with self.assertRaises(studio_publish.StoreLimitError) as caught:
+            self.store(limit="2").publish(VERSION, self.base)
+        self.assertIn("over the 2.00 GB limit (TRAINER_STORE_LIMIT_GB)", str(caught.exception))
+        self.assertEqual(self.uploads(), [])
+        self.store(limit="3").publish(VERSION, self.base)
+
+    def test_a_setting_above_the_free_tier_refuses_every_upload(self):
+        for bad in ("11", "ten"):
+            with self.assertRaises(studio_publish.StoreLimitError, msg=bad):
+                self.store(limit=bad).publish(VERSION, self.base)
+        self.assertEqual(self.uploads(), [])
+
+    def test_the_environment_carries_the_setting_to_the_store_without_handing_it_to_boto(self):
+        environment = {**Configuration.ENVIRONMENT, "TRAINER_STORE_LIMIT_GB": "1"}
+        with mock.patch.object(studio_publish, "_boto_client", return_value=self.client) as make:
+            store = S3Store.from_env(environment)
+        self.assertEqual(store.limit, "1")
+        self.assertNotIn("limit", make.call_args.args[0])
+        self.fill(GB)
+        with self.assertRaises(studio_publish.StoreLimitError):
+            store.publish(VERSION, self.base)
+
+    def test_the_limit_alone_does_not_make_a_bucket(self):
+        self.assertIsNone(S3Store.from_env({"TRAINER_STORE_LIMIT_GB": "5"}))
+
+    def test_two_uploads_at_once_cannot_both_take_the_last_room(self):
+        needed = self.needed()
+        self.fill(CAP - needed - needed // 2)  # room for one version, not two
+        store, results = self.store(), []
+        upload = self.client.upload_file
+
+        def slowly(*args):
+            time.sleep(.2)  # long enough for the other thread to look at the bucket while this one is still uploading
+            upload(*args)
+
+        self.client.upload_file = slowly
+
+        def publish(number):
+            try:
+                results.append(store.publish(dict(VERSION, number=number), self.base if number == 3 else self.tuned))
+            except studio_publish.StoreLimitError as error:
+                results.append(error)
+
+        threads = [threading.Thread(target=publish, args=(number,)) for number in (3, 4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(type(r).__name__ for r in results), ["StoreLimitError", "str"])
+
+    def test_the_parts_of_unfinished_uploads_count_over_the_whole_bucket_and_every_page(self):
+        needed = self.needed()
+        self.client.pending["elsewhere/big.bin", "u1"] = [GB, GB]
+        self.client.pending["zzz/other.bin", "u2"] = [GB, GB, GB]  # the stub pages one upload and one part at a time
+        self.fill(CAP - 5 * GB - needed + 1)
+        with self.assertRaises(studio_publish.StoreLimitError) as caught:
+            self.store().publish(VERSION, self.base)
+        self.assertNotIsInstance(caught.exception, studio_publish.StoreUsageError)
+        self.assertIn(f"already holds {studio_publish.size_text(CAP - needed + 1)}", str(caught.exception))
+        self.assertEqual(self.uploads(), [])
+        self.assertEqual(sum(1 for call in self.client.log if call[0] == "list_multipart_uploads"), 2)
+        self.assertEqual(sum(1 for call in self.client.log if call[0] == "list_parts"), 5)
+        self.client.sizes["elsewhere/other-project/data.bin"] -= 1  # one byte less: exactly the cap
+        self.store().publish(VERSION, self.base)
+        self.assertEqual(len(self.uploads()), 2)
+
+    def test_usage_adds_objects_and_unfinished_parts_and_says_which_is_which(self):
+        self.fill(3 * GB)
+        self.client.pending["a.bin", "u"] = [GB, 2 * GB]
+        store = self.store()
+        self.assertEqual(store.usage(), (1, 6 * GB))
+        self.assertEqual(store.usage_detail(), (1, 3 * GB, 1, 3 * GB))
+
+    def test_an_upload_that_finished_while_it_was_being_counted_is_not_an_error(self):
+        self.client.pending["a.bin", "u"] = [GB]
+        gone = self.client.list_parts
+
+        def finished(**kwargs):
+            self.client.pending.clear()
+            return gone(**kwargs)
+
+        self.client.list_parts = finished
+        self.assertEqual(self.store().usage(), (0, 0))
+
+    def test_unfinished_uploads_that_cannot_be_listed_refuse_the_upload(self):
+        for name, failure in (("list_multipart_uploads", ConnectionError("no route")), ("list_parts", StubError("AccessDenied"))):
+            client = self.client = StubS3()
+            client.pending["a.bin", "u"] = [GB]
+
+            def broken(failure=failure, **kwargs):
+                raise failure
+
+            setattr(client, name, broken)
+            with self.assertRaises(studio_publish.StoreUsageError, msg=name) as caught:
+                self.store().publish(VERSION, self.base)
+            self.assertIsInstance(caught.exception, studio_publish.StoreLimitError)
+            self.assertEqual(self.uploads(), [], name)
+
+    def test_a_listing_that_does_not_add_up_refuses_the_upload_instead_of_undercounting(self):
+        def listing(**fields):
+            return lambda **kwargs: {"Contents": [{"Key": "k", "Size": GB}], **fields}
+
+        broken = {
+            "truncated with no token": ("list_objects_v2", listing(IsTruncated=True)),
+            "a token on a page that says it is the last": ("list_objects_v2", listing(IsTruncated=False, NextContinuationToken="2")),
+            "a token and no IsTruncated": ("list_objects_v2", listing(NextContinuationToken="2")),
+            "the same token twice": ("list_objects_v2", listing(IsTruncated=True, NextContinuationToken="same")),
+            "no size": ("list_objects_v2", lambda **kwargs: {"Contents": [{"Key": "k"}], "IsTruncated": False}),
+            "an empty size": ("list_objects_v2", lambda **kwargs: {"Contents": [{"Key": "k", "Size": None}], "IsTruncated": False}),
+            "a negative size": ("list_objects_v2", lambda **kwargs: {"Contents": [{"Key": "k", "Size": -1}], "IsTruncated": False}),
+            "uploads truncated with no marker": ("list_multipart_uploads", lambda **kwargs: {"Uploads": [], "IsTruncated": True}),
+            "uploads that go round": ("list_multipart_uploads", lambda **kwargs: {
+                "Uploads": [{"Key": "a", "UploadId": "u"}], "IsTruncated": True, "NextKeyMarker": "a", "NextUploadIdMarker": "u"}),
+            "an upload with no id": ("list_multipart_uploads", lambda **kwargs: {"Uploads": [{"Key": "a"}], "IsTruncated": False}),
+        }
+        for what, (method, replacement) in broken.items():
+            self.client = StubS3()
+            setattr(self.client, method, replacement)
+            with self.assertRaises(studio_publish.StoreLimitError, msg=what) as caught:
+                self.store().publish(VERSION, self.base)
+            self.assertIsInstance(caught.exception, studio_publish.StoreUsageError, what)
+            self.assertIn("usage could not be added up", str(caught.exception), what)
+            self.assertEqual(self.uploads(), [], what)
+
+    def test_parts_that_do_not_add_up_refuse_the_upload_too(self):
+        for what, parts in (("truncated with no marker", {"Parts": [{"Size": GB}], "IsTruncated": True}),
+                            ("no size", {"Parts": [{"PartNumber": 1}], "IsTruncated": False}),
+                            ("parts that go round", {"Parts": [{"Size": 1}], "IsTruncated": True, "NextPartNumberMarker": 1})):
+            self.client = StubS3()
+            self.client.pending["a.bin", "u"] = [1]
+            self.client.list_parts = lambda parts=parts, **kwargs: parts
+            with self.assertRaises(studio_publish.StoreUsageError, msg=what):
+                self.store().publish(VERSION, self.base)
+            self.assertEqual(self.uploads(), [], what)
+
+    def test_the_last_page_of_a_complete_listing_may_carry_s3s_trailing_marker(self):
+        self.client.pending["a.bin", "u"] = [5]  # the stub sends NextPartNumberMarker on the last page, as S3 does
+        self.assertEqual(self.store().usage(), (0, 5))
+
+    def test_two_publishes_of_one_version_at_once_count_and_upload_once(self):
+        needed = self.needed()
+        self.fill(CAP - needed)  # room for exactly one copy
+        store, results = self.store(), []
+        upload = self.client.upload_file
+
+        def slowly(*args):
+            time.sleep(.2)
+            upload(*args)
+
+        self.client.upload_file = slowly
+
+        def publish():
+            results.append(store.publish_reporting(VERSION, self.base))
+
+        threads = [threading.Thread(target=publish) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(results), 2)  # neither was refused for the other's copy
+        self.assertEqual(results[0][0], results[1][0])
+        self.assertEqual(sorted(created for _, created in results), [False, True])
+        self.assertEqual(len(self.uploads()), 2)
+
+    def test_publish_reporting_says_whether_this_call_put_the_version_up(self):
+        store = self.store()
+        key, created = store.publish_reporting(VERSION, self.base)
+        self.assertTrue(created)
+        self.assertEqual(store.publish_reporting(VERSION, self.base), (key, False))
+        self.assertEqual(store.publish(VERSION, self.base), key)
+
+    def test_delete_removes_the_listing_first_then_the_weights_and_not_a_bad_key(self):
+        store = self.store()
+        key = store.publish(VERSION, self.base)
+        self.client.log.clear()
+        store.delete(key)
+        self.assertEqual([call[2] for call in self.client.log if call[0] == "delete_object"], [f"trainer/{key}.json", f"trainer/{key}.npz"])
+        self.assertFalse(store.exists(key))
+        self.assertEqual(self.client.objects, {})
+        store.delete(key)  # already gone: nothing to say
+        with self.assertRaises(ValueError):
+            store.delete("../escape")
+
+    def test_a_folder_store_deletes_too(self):
+        folder = FolderStore(self.shared, origin="mac")
+        key = folder.publish(VERSION, self.base)
+        folder.delete(key)
+        self.assertFalse(folder.exists(key))
+        folder.delete(key)
+
+    def test_a_shared_folder_has_no_limit_here(self):
+        key = FolderStore(self.shared, origin="mac").publish(VERSION, self.base)
+        self.assertTrue(FolderStore(self.shared).exists(key))
+
+    def test_sizes_read_in_the_unit_a_provider_counts_in(self):
+        self.assertEqual([studio_publish.size_text(n) for n in (0, 999, 1_500, 2_345_678, 9_990_000_000, 10 * GB)],
+                         ["0 B", "999 B", "1.50 KB", "2.35 MB", "9.99 GB", "10.00 GB"])
+
+
+class Check(Checkpoints):
+    """`python -m studio_publish --check`: what the bucket holds against its limit, with a fake client in place of the real bucket."""
+
+    ENVIRONMENT = {k: v for k, v in Configuration.ENVIRONMENT.items() if k != "TRAINER_STORE_REGION"}
+
+    def run_check(self, environ, client=None, args=("--check",)):
+        lines = []
+        patch = mock.patch.object(studio_publish, "_boto_client", return_value=client or StubS3())
+        with patch:
+            code = studio_publish.main(list(args), environ=environ, out=lines.append)
+        return code, "\n".join(lines)
+
+    def test_with_no_keys_set_it_says_not_configured_and_does_not_touch_the_network(self):
+        with mock.patch.object(studio_publish, "_boto_client", side_effect=AssertionError("no client without keys")):
+            lines = []
+            code = studio_publish.main(["--check", "--write"], environ={}, out=lines.append)
+        self.assertEqual(code, 1)
+        self.assertIn("Not configured", lines[0])
+        self.assertIn("docs/store.env.example", lines[0])
+
+    def test_a_half_set_environment_names_what_is_missing(self):
+        code, said = self.run_check({"TRAINER_STORE_BUCKET": "versions"})
+        self.assertEqual(code, 1)
+        self.assertIn("TRAINER_STORE_ENDPOINT", said)
+        self.assertNotIn("TRAINER_STORE_BUCKET,", said)
+
+    def test_it_prints_objects_bytes_limit_and_room_left_and_never_the_keys(self):
+        client = StubS3()
+        client.objects["versions", "trainer/a.bin"] = b"x" * 1000
+        client.objects["versions", "other/b.bin"] = b"y" * 500  # outside the prefix: still counted
+        client.sizes["trainer/a.bin"] = 2 * GB
+        code, said = self.run_check(self.ENVIRONMENT, client)
+        self.assertEqual(code, 0, said)
+        self.assertIn("2 objects, 2.00 GB", said)
+        self.assertIn("Unfinished uploads: 0, holding 0 B.", said)
+        self.assertIn("Limit: 9.50 GB (the default cap, 0.5 GB under the R2 free tier)", said)
+        self.assertIn("Room left: 7.50 GB", said)
+        self.assertIn("Write: not tried", said)
+        for secret in ("s3cr3t-value", "AKID"):
+            self.assertNotIn(secret, said)
+        self.assertEqual([c[0] for c in client.log if c[0] in UPLOADS + ("delete_object",)], [])
+
+    def test_write_puts_reads_back_and_deletes_a_test_object(self):
+        client = StubS3()
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--write"))
+        self.assertEqual(code, 0, said)
+        self.assertIn("Write: ok", said)
+        self.assertEqual(client.objects, {})
+        self.assertEqual([c[0] for c in client.log if c[0] in UPLOADS + ("delete_object", "get_object")],
+                         ["put_object", "get_object", "delete_object"])
+
+    def test_a_lower_limit_is_reported_and_a_limit_above_the_free_tier_fails(self):
+        code, said = self.run_check({**self.ENVIRONMENT, "TRAINER_STORE_LIMIT_GB": "4"})
+        self.assertEqual(code, 0, said)
+        self.assertIn("Limit: 4.00 GB (TRAINER_STORE_LIMIT_GB)", said)
+        code, said = self.run_check({**self.ENVIRONMENT, "TRAINER_STORE_LIMIT_GB": "20"})
+        self.assertEqual(code, 1)
+        self.assertIn("above the 10 GB free tier", said)
+
+    def test_a_bucket_over_the_limit_is_flagged_and_write_is_refused(self):
+        client = StubS3()
+        client.objects["versions", "x"] = b"x"
+        client.sizes["x"] = 11 * GB
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--write"))
+        self.assertEqual(code, 1)
+        self.assertIn("Room left: 0 B  OVER THE LIMIT", said)
+        self.assertIn("Write: failed", said)
+        self.assertEqual(client.objects, {("versions", "x"): b"x"})
+
+    def test_a_refused_key_or_an_unreachable_bucket_fails_with_what_to_do(self):
+        for failure, expected in ((StubError("InvalidAccessKeyId"), "The bucket refused the key"),
+                                  (ConnectionError("no route"), "Could not reach the version store")):
+            client = StubS3()
+
+            def broken(failure=failure, **kwargs):
+                raise failure
+
+            client.list_objects_v2 = broken
+            code, said = self.run_check(self.ENVIRONMENT, client)
+            self.assertEqual(code, 1)
+            self.assertIn(expected, said)
+            self.assertNotIn("s3cr3t-value", said)
+
+    def test_it_runs_as_a_module(self):
+        import os
+        import subprocess
+        # The real environment minus the store settings: a hand-made one lacks what Python needs to start on Windows.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("TRAINER_STORE_")}
+        env["PYTHONPATH"] = ""
+        done = subprocess.run([sys.executable, "-m", "studio_publish", "--check"], capture_output=True, text=True, timeout=60,
+                              cwd=Path(studio_publish.__file__).parent, env=env)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("Not configured", done.stdout, done.stderr)

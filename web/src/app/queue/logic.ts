@@ -6,6 +6,8 @@ import { T, fill } from "./copy";
 export type Queue = components["schemas"]["QueueStateModel"];
 export type Job = components["schemas"]["JobModel"];
 export type Plan = components["schemas"]["PlanModel"];
+/** The jobs this machine handed to a peer and that are running there: they are in the jobs list but not in the queue state. */
+export const awayJobs = (jobs: Job[]): Job[] => jobs.filter((j) => j.node && j.status === "running" && !j.owner);
 export type ToggleKey = "idle_only" | "pause_on_battery" | "keep_awake" | "chat_follows_best";
 
 export function minutes(seconds: number | null | undefined): string {

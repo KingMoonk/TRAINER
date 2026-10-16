@@ -140,6 +140,9 @@ except that a distributed run sends its training windows to its own members over
 4. The endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (the account id is on the same Overview page). A bucket
    created in a jurisdiction (EU, FedRAMP) uses `<ACCOUNT_ID>.eu.r2.cloudflarestorage.com` and the like.
 5. Leave `TRAINER_STORE_REGION` unset: R2 uses `auto`.
+6. Keep the keys outside the repository. `docs/store.env.example` is the template: copy it to `~/.config/trainer/store.env`, fill in
+   the endpoint, bucket, key id and secret, and source it from your shell profile (`~/.zshrc`):
+   `[ -f ~/.config/trainer/store.env ] && . ~/.config/trainer/store.env`. Open a new shell, then run the check below.
 
 ### Set up Backblaze B2
 
@@ -150,10 +153,92 @@ except that a distributed run sends its training windows to its own members over
 4. Set `TRAINER_STORE_REGION` to the region in the endpoint (`us-west-004`). B2 expects the region its endpoint names; `auto`
    is R2's value.
 
+### Check the connection
+
+```bash
+python -m studio_publish --check            # reads the settings, lists the bucket, prints objects, bytes used, limit and room left
+python -m studio_publish --check --write    # also writes, reads back and deletes a small test object
+```
+
+With no keys set it prints `Not configured` and says what to set; a half-set environment names what is missing. A refused key, a
+wrong bucket or an unreachable endpoint ends with a sentence on what to check. It exits 0 when everything works and 1 otherwise,
+and it never prints the key id or the secret. The write test goes through the same limit as any upload. It is a command to run in
+a terminal, not something the app does on its own.
+
+### The free tier is a hard limit
+
+A bucket store never takes an upload that would take the bucket past its limit. The limit is **9.5 GB** (9.5 x 10^9 bytes) unless
+`TRAINER_STORE_LIMIT_GB` says otherwise: 0.5 GB under R2's 10 GB free storage, so that a second machine uploading at the same moment,
+or a measurement that is a little behind, cannot carry the bucket past the free tier. Before the first byte of a publish goes up, the
+store adds up the size of **every object in the bucket** (all pages of the listing, whatever the prefix, since the free tier counts
+the whole bucket) and of **every unfinished multipart upload** (see below), adds the size of the weights and the metadata it is about
+to put, and refuses when the total passes the limit. The refusal is a plain sentence with the sizes, for example:
+
+> Not uploaded: this upload needs 412.30 MB and the bucket already holds 9.20 GB, which would make 9.61 GB, over the 9.50 GB
+> limit (the default cap, 0.5 GB under the R2 free tier). Delete versions you no longer need from the bucket (the Cloudflare
+> dashboard, R2, the bucket's Objects), then publish again.
+
+- **An upload that cannot be checked is refused**, and says so. If the listing fails (no network, a refused key), or its answer does not add
+  up (a page that says it is truncated but gives no continuation token, a token on a page that says it is the last, a repeated
+  token, an object without a size), the upload is refused with "the bucket's usage could not be read", not with "limit reached". Try
+  again; if it keeps happening, run `python -m studio_publish --check`.
+- `TRAINER_STORE_LIMIT_GB` sets the limit. Anything up to 10 is allowed (`9.8` gives less headroom than the default; `5` gives more).
+  A value above 10, or one that is not a positive number, is an error: every upload fails with a sentence naming the setting.
+  It cannot raise the limit past the free tier.
+- Publishing a version that is already in the bucket uploads nothing, so it is never refused. The check for "already there" is made
+  while the upload slot is held, so two publishes of the same version at once put it up once and count it once.
+- Each upload that goes ahead lists the whole bucket and its unfinished uploads first: one R2 Class A operation per 1,000 objects (the
+  free tier allows a million a month).
+- The refusal reaches you where the upload was asked for: `POST /versions/{n}/publish` is a job, and the sentence is the job's `error`
+  (`GET /jobs/{id}`, and the `job` event on `/events`). The web app has no screen for that publish job, so read it there or in the
+  terminal. A job running on another node is described under "Jobs on other nodes" below.
+- Only a bucket store has the limit. A shared folder (`TRAINER_STORE_FOLDER`) is limited by its disk.
+
+#### Unfinished multipart uploads count
+
+An upload cut off part-way (a lost connection, a killed process) leaves its uploaded parts in the bucket, invisible in the object
+listing, and R2 bills them as storage. The check counts them: it lists the bucket's in-progress multipart uploads and adds up their
+parts, so a bucket with a pile of orphans refuses new uploads instead of drifting past the free tier. If that listing fails, the
+upload is refused. `python -m studio_publish --check` prints `Unfinished uploads: N, holding X`.
+
+To stop orphans collecting, add an **abort incomplete multipart uploads** lifecycle rule to the bucket (Cloudflare dashboard, R2, the
+bucket, Settings, Object lifecycle rules, "Abort incomplete multipart uploads" after 1 day). R2 has a 7-day rule by default; a
+shorter one frees the space sooner. Parts of an unfinished upload can also be aborted by hand from any S3 client.
+
+What the limit does not see, so leave some room: a second machine uploading at the same moment (the check is made against what the
+bucket holds when it is made; uploads from one machine are serialized, which is why the default sits under 10). R2 bills storage as the average of each day's peak over the month, so 10 GB at any moment is a conservative cap. Other
+things in the same bucket do count, which is the point: use a bucket of its own, or a lower `TRAINER_STORE_LIMIT_GB`.
+
+#### Jobs on other nodes
+
+A job a peer runs for you publishes a checkpoint to the store about every time it saves one, and publishes its result when it ends.
+Only one checkpoint per job is kept: **after the owner has taken a new checkpoint, the runner deletes that job's previous checkpoint**
+(the weights and their metadata), and when the result is stored it deletes the rest. It deletes only objects its own upload created,
+so a version someone else published, or one already in the bucket, is never touched. A delete that fails is logged and is not
+fatal; the key is tried again with the next cleanup. A checkpoint is never deleted before the owner has the key of its replacement,
+so the owner is never left pointing at something gone. When the store refuses:
+
+- **A checkpoint: the job keeps training.** The checkpoint is only a way to resume if the node is lost, so losing one is not worth
+  stopping a run for. The runner does not offer that checkpoint again (it would be refused again, and each try lists the bucket); it
+  tries the next one it saves. A refusal because the usage could not be read is tried again after a short wait instead. The refusal
+  is reported, never dropped: the runner's row in `GET /cluster/jobs` says it in `waiting_reason`, and it travels to the owner on the
+  next lease renewal, where it is added to the job's note (`Checkpoint at step N not shared: ...`, once per reason; the Queue page
+  shows it under "Running on other machines") and sent as a `cluster` event with `state: "checkpoint_refused"`. When room is made,
+  the next checkpoint goes through and the report clears. Until then, if the node is lost the job resumes from the last checkpoint
+  that did make it, or starts again.
+- **The result: the work is not lost.** The runner first deletes this job's checkpoints (they are the likeliest thing filling the
+  bucket) and tries the result once more. If it is still refused, the job ends `failed` with the sentence, and the sentence ends
+  with where the finished weights are kept: on the runner's disk, in its run folder, at the path it names. Free some room and publish
+  from there, or copy the file by hand. The runner keeps its checkpoints in that case, and does not retry when the usage could not be
+  read at all.
+- **A catch-up job's starting version: it waits.** The job is not failed and the peer is not blamed or put on a cool-down; the job's
+  waiting reason is the plain limit sentence (a `cluster` event with `state: "store_refused"`), and it is offered again after a
+  short wait.
+
 ### Environment variables
 
-Set these on every machine, with the same bucket and prefix, before starting the app. All but the last two are required; none
-set at all means no bucket (the machine works alone).
+Set these on every machine, with the same bucket and prefix, before starting the app. The first four are required and the last three optional; none
+of the bucket variables set at all means no bucket (the machine works alone).
 
 | variable | meaning | R2 | B2 |
 | --- | --- | --- | --- |
@@ -163,6 +248,7 @@ set at all means no bucket (the machine works alone).
 | `TRAINER_STORE_SECRET` | the secret | Secret Access Key | applicationKey |
 | `TRAINER_STORE_PREFIX` | a folder inside the bucket, so the bucket can hold other things (optional, default none) | `trainer` | `trainer` |
 | `TRAINER_STORE_REGION` | the signing region (optional) | leave unset (`auto`) | e.g. `us-west-004` |
+| `TRAINER_STORE_LIMIT_GB` | the most the whole bucket may hold, in GB (optional; default 9.5, maximum 10; see "The free tier is a hard limit") | `9.5` | `9.5` |
 
 On macOS or Linux, put them in the shell profile of the account that starts the app:
 

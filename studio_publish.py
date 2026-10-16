@@ -31,20 +31,29 @@ The .json goes up last, so a version is listed only once its weights are complet
 A node can also hand a version straight to a peer, without the store (`shared_copy`): the same two things, the same bytes, the
 same key, cached under `data/shared/` so a peer's metadata call and its weights call build the copy once.
 
+A bucket store never takes an upload that would pass 9.5 GB, half a GB under the provider's 10 GB free tier: see `S3Store._admit`
+and `DEFAULT_CAP_BYTES`.
+`python -m studio_publish --check` reads the TRAINER_STORE_* settings and says what the bucket holds (docs/cluster.md).
+
 Everything here is slow (disk and network): call it from a worker, never the Tk thread.
 """
 from __future__ import annotations
 
+import argparse
+import contextlib
 import errno
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import socket
+import sys
 import tempfile
 import threading
 import time
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -66,6 +75,11 @@ NO_STORE = ("No version store is set up, so versions cannot be shared between ma
 ENV = {"endpoint": "TRAINER_STORE_ENDPOINT", "bucket": "TRAINER_STORE_BUCKET", "prefix": "TRAINER_STORE_PREFIX",
        "key_id": "TRAINER_STORE_KEY_ID", "secret": "TRAINER_STORE_SECRET", "region": "TRAINER_STORE_REGION"}
 REQUIRED = ("endpoint", "bucket", "key_id", "secret")
+FREE_TIER_BYTES = 10 * 10**9  # Cloudflare R2's free storage. The most a bucket store ever lets the whole bucket hold.
+FREE_TIER_GB = 10
+DEFAULT_CAP_GB = 9.5  # what the bucket may hold unless TRAINER_STORE_LIMIT_GB says otherwise: headroom for what the check cannot see
+DEFAULT_CAP_BYTES = int(DEFAULT_CAP_GB * 10**9)
+LIMIT_ENV = "TRAINER_STORE_LIMIT_GB"  # sets the limit anywhere up to FREE_TIER_GB; a value above that is an error, never a way to raise it
 
 
 @runtime_checkable
@@ -101,6 +115,51 @@ class StoreError(RuntimeError):
     """A failure of a version store, already written for people: what went wrong and what to do. `plain` tells the API's jobs to show
     the message as it is, without the exception's name in front."""
     plain = True
+
+
+class StoreLimitError(StoreError):
+    """An upload the bucket store refused so the bucket stays inside its free tier: it would pass the limit, the bucket's size could not
+    be read, or the limit setting is not valid. Nothing was uploaded."""
+
+
+class StoreUsageError(StoreLimitError):
+    """The bucket's size could not be read, or what it said did not add up, so the upload could not be checked and was refused. Unlike
+    its parent this says nothing about the limit being reached: it is worth trying again."""
+
+
+def size_text(count):
+    """`count` bytes as people read them: decimal units, the ones a provider's free tier is counted in."""
+    for unit, size in (("GB", 10**9), ("MB", 10**6), ("KB", 10**3)):
+        if count >= size:
+            return f"{count / size:.2f} {unit}"
+    return f"{count} B"
+
+
+def store_limit(setting=None):
+    """The most bytes the bucket may hold: `DEFAULT_CAP_BYTES` (9.5 GB), or `setting` (TRAINER_STORE_LIMIT_GB, in GB) when one is given.
+    The setting may be anything up to the free tier's 10 GB, so it can lower the cap or use the last half GB on purpose. A setting above
+    the free tier, or one that is not a positive number, is a StoreLimitError: a mistyped limit must not raise the limit."""
+    text = str(setting if setting is not None else "").strip()
+    if not text:
+        return DEFAULT_CAP_BYTES
+    try:
+        gigabytes = float(text)
+    except ValueError:
+        gigabytes = math.nan
+    if not math.isfinite(gigabytes) or gigabytes <= 0:
+        raise StoreLimitError(f"{LIMIT_ENV} is {text!r}, which is not a number of gigabytes above 0. Nothing was uploaded. "
+                              f"Set it to a number up to {FREE_TIER_GB}, or remove it.")
+    if gigabytes > FREE_TIER_GB:
+        raise StoreLimitError(f"{LIMIT_ENV} is {text}, above the {FREE_TIER_GB} GB free tier. It can only lower the limit, so nothing was "
+                              f"uploaded. Set it to {FREE_TIER_GB} or less, or remove it.")
+    return int(gigabytes * 10**9)
+
+
+def limit_source(setting=None):
+    """Where the limit comes from, for a sentence: the default cap with its headroom, or the setting."""
+    if str(setting if setting is not None else "").strip():
+        return LIMIT_ENV
+    return f"the default cap, {FREE_TIER_GB - DEFAULT_CAP_GB:g} GB under the R2 free tier"
 
 
 _DENIED = ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied", "403", "InvalidToken", "ExpiredToken", "AllAccessDisabled")
@@ -277,13 +336,35 @@ class _Store:
 
     @slow("publish a version")
     def publish(self, version, checkpoint_path):
+        return self.publish_reporting(version, checkpoint_path)[0]
+
+    @slow("publish a version")
+    def publish_reporting(self, version, checkpoint_path):
+        """`publish`, and whether this call put the objects up: (key, created). False when the version was already there, in which case
+        the objects are not this caller's to delete."""
         with tempfile.TemporaryDirectory(prefix="trainer-publish-") as scratch:
             artifact, meta = build_artifact(version, checkpoint_path, scratch, self.origin)
             key = meta["key"]
-            if not self.exists(key):
-                self._put_file(key + ".npz", artifact)
-                self._put_bytes(key + ".json", json.dumps(meta, indent=1).encode())  # last: it is what makes the version visible
-            return key
+            described = json.dumps(meta, indent=1).encode()
+            with self._admit(artifact.stat().st_size + len(described), key) as room:  # once for both objects, before the first byte
+                if room:
+                    self._put_file(key + ".npz", artifact)
+                    self._put_bytes(key + ".json", described)  # last: it is what makes the version visible
+            return key, bool(room)
+
+    @contextlib.contextmanager
+    def _admit(self, size, key=None):
+        """A context to hold the upload of `size` bytes in, under `key` when it has one. It yields True when the upload should go ahead and
+        False when `key` is published already (nothing to upload). A store with a limit raises StoreLimitError here, before anything is put;
+        the look-up of `key` happens inside whatever lock the check holds, so two uploads of one key cannot both count."""
+        yield key is None or not self.exists(key)
+
+    @slow("delete a version")
+    def delete(self, key):
+        """Remove a published version, its listing first so nobody is offered weights that are going. A missing object is not an error."""
+        key = _check_key(key)
+        self._delete(key + ".json")
+        self._delete(key + ".npz")
 
     @slow("pull a version")
     def pull(self, key, dest_dir):
@@ -365,6 +446,9 @@ class FolderStore(_Store):
     def _has(self, name):
         return self._path(name).is_file()
 
+    def _delete(self, name):
+        self._path(name).unlink(missing_ok=True)
+
     def _json_names(self):
         return sorted(path.relative_to(self.root).as_posix() for path in self.root.glob("*/*.json")) if self.root.is_dir() else []
 
@@ -388,18 +472,35 @@ def _boto_client(config):
                       request_checksum_calculation="when_required", response_checksum_validation="when_required"))
 
 
+_admission = threading.Lock()  # one check-then-upload at a time in this process, so two uploads cannot each see room the other takes
+_UNSURE = "Nothing was uploaded: the bucket's usage could not be added up, because "
+
+
+def _size(entry, what, name):
+    """The size an S3 listing gives for `entry`; a listing without one is not trusted (StoreUsageError), never counted as empty."""
+    size = entry.get("Size")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise StoreUsageError(_UNSURE + f"the listing gave no usable size for {what} ({name}).")
+    return size
+
+
 class S3Store(_Store):
     """An S3-compatible bucket through boto3. `config` is {"endpoint", "bucket", "key_id", "secret"} plus optional "prefix"
-    (a folder in the bucket) and "region"; `from_env()` reads the same from TRAINER_STORE_* variables. `client` is for tests."""
+    (a folder in the bucket) and "region"; `from_env()` reads the same from TRAINER_STORE_* variables. `client` is for tests.
 
-    def __init__(self, config, client=None, origin=None):
+    The bucket is never filled past `DEFAULT_CAP_BYTES` (9.5 GB, under R2's 10 GB free storage): before an upload `_admit` adds up every
+    object in the bucket, not just the prefix, and the parts of uploads started and not finished, and refuses when the upload would
+    pass the limit or when the sum cannot be read or does not add up. `limit` is the TRAINER_STORE_LIMIT_GB text: any limit up to 10 GB.
+    Another machine uploading at the same moment is not seen: the check is against what the bucket holds when it is made."""
+
+    def __init__(self, config, client=None, origin=None, limit=None):
         missing = [name for name in REQUIRED if not str(config.get(name) or "").strip()]
         if missing:
             raise ValueError("The bucket store is missing " + ", ".join(f"{ENV[name]}" for name in missing) + ".")
         self.bucket = config["bucket"].strip()
         prefix = (config.get("prefix") or "").strip().strip("/")
         self.prefix = prefix + "/" if prefix else ""
-        self.origin = origin
+        self.origin, self.limit = origin, limit
         self.client = client or _boto_client(config)
 
     @classmethod
@@ -407,7 +508,7 @@ class S3Store(_Store):
         """The store the TRAINER_STORE_* variables describe; None when none of them is set (a cluster of one)."""
         environ = os.environ if environ is None else environ
         config = {name: environ.get(variable, "").strip() for name, variable in ENV.items()}
-        return cls(config) if any(config.values()) else None
+        return cls(config, limit=environ.get(LIMIT_ENV)) if any(config.values()) else None
 
     def __repr__(self):
         return f"S3Store(bucket={self.bucket!r}, prefix={self.prefix!r})"
@@ -443,6 +544,106 @@ class S3Store(_Store):
             raise
         return True
 
+    def _delete(self, name):
+        self.client.delete_object(Bucket=self.bucket, Key=self.prefix + name)  # S3 says nothing when the key is not there
+
+    def usage(self):
+        """(objects, bytes) the whole bucket holds, whatever the prefix: the free tier is counted over everything in it. The bytes include
+        the parts of uploads that were started and never finished (they are stored, and billed, until aborted). Any page or answer that
+        does not add up is a StoreUsageError: a sum that might be short is not a sum."""
+        objects, stored, _, pending = self.usage_detail()
+        return objects, stored + pending
+
+    def usage_detail(self):
+        """(objects, bytes in objects, unfinished uploads, bytes in their parts) of the whole bucket."""
+        uploads, pending = self._unfinished()  # first: an upload that finishes meanwhile is then counted as an object
+        objects, stored = self._objects()
+        return objects, stored, uploads, pending
+
+    def _objects(self):
+        count, total, token, seen = 0, 0, None, set()
+        while True:
+            page = self.client.list_objects_v2(Bucket=self.bucket, **({"ContinuationToken": token} if token else {}))
+            for item in page.get("Contents", ()):
+                count, total = count + 1, total + _size(item, "an object", item.get("Key"))
+            following = page.get("NextContinuationToken")
+            if bool(page.get("IsTruncated")) != bool(following):
+                raise StoreUsageError(_UNSURE + "its list of objects was cut off without saying where it goes on, or went on after it said "
+                                      "it had ended.")
+            if not following:
+                return count, total
+            if following in seen:
+                raise StoreUsageError(_UNSURE + "its list of objects went round in a circle.")
+            seen.add(following)
+            token = following
+
+    def _unfinished(self):
+        """(uploads, bytes) in the multipart uploads started in the bucket and not completed or aborted. R2 keeps their parts, and bills
+        them, until the upload is aborted (docs/cluster.md has the lifecycle rule that aborts them after a day)."""
+        uploads, total, marker, seen = 0, 0, {}, set()
+        while True:
+            page = self.client.list_multipart_uploads(Bucket=self.bucket, **marker)
+            for upload in page.get("Uploads", ()):
+                uploads += 1
+                total += self._parts(upload.get("Key"), upload.get("UploadId"))
+            following = {"KeyMarker": page.get("NextKeyMarker"), "UploadIdMarker": page.get("NextUploadIdMarker")}
+            if not page.get("IsTruncated"):  # (S3 may still send markers on the last page; they are not followed)
+                return uploads, total
+            if not (following["KeyMarker"] or following["UploadIdMarker"]):
+                raise StoreUsageError(_UNSURE + "its list of unfinished uploads was cut off without saying where it goes on.")
+            point = (following["KeyMarker"], following["UploadIdMarker"])
+            if point in seen:
+                raise StoreUsageError(_UNSURE + "its list of unfinished uploads went round in a circle.")
+            seen.add(point)
+            marker = {name: value for name, value in following.items() if value}
+
+    def _parts(self, key, upload_id):
+        total, marker, seen = 0, None, set()
+        if not key or not upload_id:
+            raise StoreUsageError(_UNSURE + "an unfinished upload came without its name.")
+        while True:
+            try:
+                page = self.client.list_parts(Bucket=self.bucket, Key=key, UploadId=upload_id, **({"PartNumberMarker": marker} if marker else {}))
+            except Exception as error:  # noqa: BLE001
+                if str(getattr(error, "response", {}).get("Error", {}).get("Code", "")) == "NoSuchUpload":
+                    return total  # it finished or was aborted since it was listed: if it finished, the objects list has it
+                raise
+            for part in page.get("Parts", ()):
+                total += _size(part, "an unfinished upload's part", key)
+            if not page.get("IsTruncated"):  # (S3 sends the last part's number even then; it is not followed)
+                return total
+            following = page.get("NextPartNumberMarker")
+            if not following:
+                raise StoreUsageError(_UNSURE + "the parts of an unfinished upload were cut off without saying where they go on.")
+            if following in seen:
+                raise StoreUsageError(_UNSURE + "the parts of an unfinished upload went round in a circle.")
+            seen.add(following)
+            marker = following
+
+    @contextlib.contextmanager
+    def _admit(self, size, key=None):
+        limit = store_limit(self.limit)
+        with _admission:
+            if key is not None and self.exists(key):  # inside the lock: a second publish of this key finds it there, and counts nothing
+                yield False
+                return
+            try:
+                used = self.usage()[1]
+            except StoreUsageError as error:
+                _log.warning("Could not add up bucket %s: %s", self.bucket, error)
+                raise
+            except Exception as error:  # noqa: BLE001 - an upload that cannot be checked is not made
+                _log.warning("Could not read the size of bucket %s: %s", self.bucket, type(error).__name__)
+                raise StoreUsageError("Nothing was uploaded: the bucket's usage could not be read, so the upload could not be checked "
+                                      f"against the {size_text(limit)} limit. Try again; if it keeps happening, run python -m studio_publish "
+                                      f"--check. {store_error(error, self)}") from error
+            if used + size > limit:
+                raise StoreLimitError(
+                    f"Not uploaded: this upload needs {size_text(size)} and the bucket already holds {size_text(used)}, which would make "
+                    f"{size_text(used + size)}, over the {size_text(limit)} limit ({limit_source(self.limit)}). "
+                    "Delete versions you no longer need from the bucket (the Cloudflare dashboard, R2, the bucket's Objects), then publish again.")
+            yield True
+
     def _json_names(self):
         names, token = [], None
         while True:
@@ -463,3 +664,82 @@ def configured_store(studio_config=None, environ=None):
     if folder:
         return FolderStore(folder)
     return S3Store.from_env(environ)
+
+
+# ---- the connection check -----------------------------------------------------------------------------------------
+
+NOT_CONFIGURED = ("Not configured: no bucket is set, so there is nothing to check. Set TRAINER_STORE_ENDPOINT, TRAINER_STORE_BUCKET, "
+                  "TRAINER_STORE_KEY_ID and TRAINER_STORE_SECRET (a template is in docs/store.env.example, and docs/cluster.md has the steps), "
+                  "then run this again.")
+
+
+def _round_trip(store):
+    """Write a few bytes into the bucket, read them back and delete them: what a publish needs, with nothing left behind."""
+    name, data = f".check-{uuid.uuid4().hex[:12]}", b"trainer store check"
+    with store._admit(len(data)):  # the same limit as any upload
+        store.client.put_object(Bucket=store.bucket, Key=store.prefix + name, Body=data)
+    try:
+        if store._get_bytes(name) != data:
+            raise StoreError("The bucket gave back something other than what was written. Check the endpoint and the bucket, then try again.")
+    finally:
+        store.client.delete_object(Bucket=store.bucket, Key=store.prefix + name)
+
+
+def check(environ=None, write=False, out=print):
+    """Report on the version store the TRAINER_STORE_* variables describe: what the bucket holds against its limit, and with `write` a
+    write, read and delete round trip. Prints plain lines (never the key or the secret); returns the exit code, 0 when everything works."""
+    environ = os.environ if environ is None else environ
+    folder = (environ.get("TRAINER_STORE_FOLDER") or "").strip()
+    if folder:
+        out(f"Shared folder: {folder} ({'there' if Path(folder).is_dir() else 'NOT THERE, check that the drive or share is connected'}). "
+            "While it is set the app uses it instead of a bucket.")
+    try:
+        store = S3Store.from_env(environ)
+    except (ValueError, RuntimeError) as error:
+        out(f"Not ready: {error}")
+        return 1
+    if store is None:
+        out("No bucket is set. Nothing else to check." if folder else NOT_CONFIGURED)
+        return 0 if folder and Path(folder).is_dir() else 1
+    out(f"Bucket: {store.bucket}, prefix {store.prefix or '(none)'}")
+    try:
+        limit = store_limit(store.limit)
+        objects, stored, uploads, pending = store.usage_detail()
+    except StoreError as error:
+        out(f"Failed: {error}")
+        return 1
+    except Exception as error:  # noqa: BLE001 - whatever the provider throws ends as a sentence, the log has the rest
+        out(f"Failed: {store_error(error, store)}")
+        return 1
+    used = stored + pending
+    out(f"Read: ok. The bucket holds {objects} object{'s' if objects != 1 else ''}, {size_text(stored)}.")
+    out(f"Unfinished uploads: {uploads}, holding {size_text(pending)}" + (" (counted; abort them, see docs/cluster.md)." if uploads else "."))
+    out(f"Limit: {size_text(limit)} ({limit_source(store.limit)})")
+    out(f"Room left: {size_text(max(limit - used, 0))}" + ("  OVER THE LIMIT: uploads are refused until versions are deleted." if used > limit else ""))
+    if write:
+        try:
+            _round_trip(store)
+        except StoreError as error:
+            out(f"Write: failed. {error}")
+            return 1
+        except Exception as error:  # noqa: BLE001
+            out(f"Write: failed. {store_error(error, store)}")
+            return 1
+        out("Write: ok. A test object was written, read back and deleted.")
+    else:
+        out("Write: not tried. Add --write to write, read back and delete a test object.")
+    return 0
+
+
+def main(argv=None, environ=None, out=print):
+    parser = argparse.ArgumentParser(prog="python -m studio_publish", description="Check the version store (TRAINER_STORE_* variables).")
+    parser.add_argument("--check", action="store_true", help="read the settings, list the bucket, print objects, bytes used, limit and room left")
+    parser.add_argument("--write", action="store_true", help="with --check: also write, read back and delete a small test object")
+    args = parser.parse_args(argv)
+    if not args.check:
+        parser.error("say what to do: --check")
+    return check(environ, write=args.write, out=out)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

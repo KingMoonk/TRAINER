@@ -5309,6 +5309,11 @@ export interface components {
                 [key: string]: unknown;
             }[];
             /**
+             * Problem
+             * @default
+             */
+            problem: string;
+            /**
              * State
              * @default running
              */
