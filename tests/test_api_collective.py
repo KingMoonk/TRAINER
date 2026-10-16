@@ -1,0 +1,190 @@
+"""studio_api.routers.collective: the DiLoCo wire protocol over FastAPI's TestClient, and two members training through it."""
+import socket
+import tempfile
+import threading
+import types
+import unittest
+from pathlib import Path
+
+import numpy as np
+import uvicorn
+from fastapi.testclient import TestClient
+
+import studio_diloco
+import studio_jobs
+import studio_model
+from studio_queue import Job
+from tests import diloco_support as support
+
+
+class Collective(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.client = self.enterContext(TestClient(support.app()))
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+
+    def start(self, run="r1", **changes):
+        coordinator = support.build(self.dir / run, run, **changes)
+        studio_diloco.COORDINATORS[run] = coordinator
+        return coordinator
+
+    def delta_body(self, coordinator, dtype="float32", value=.01):
+        return studio_diloco.encode_arrays(support.constant_delta(coordinator, value), dtype)
+
+    def post_delta(self, run, number, generation, epoch=0, node="a", body=b"", **fields):
+        params = {"node": node, "generation": generation, "epoch": epoch, "tokens": 10, "steps": 2, **fields}
+        return self.client.post(f"/collective/{run}/rounds/{number}/delta", params=params, content=body,
+                                headers={"content-type": "application/octet-stream"})
+
+
+class WireProtocol(Collective):
+    def test_a_member_joins_downloads_and_contributes_through_every_route(self):
+        coordinator = self.start(inner_steps=2, rounds=2, outer_lr=1.)
+        joined = self.client.post("/collective/r1/join", json={"node": "a", "epoch": 3})
+        self.assertEqual(joined.status_code, 200, joined.text)
+        info = joined.json()
+        self.assertEqual((info["node"], info["round"], info["inner_steps"], info["rounds"], info["total_steps"], info["delta_dtype"]),
+                         ("a", 0, 2, 2, 4, "float32"))
+        self.assertEqual(info["config"]["context"], 32)
+        view = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()
+        self.assertEqual((view["state"], view["member"], view["rank"], view["generation"]), ("open", True, 0, 1))
+        self.assertEqual(view["shards"], list(range(coordinator.shard_count)))
+        theta = self.client.get("/collective/r1/params", params={"round": 0})
+        self.assertEqual(theta.headers["content-type"], "application/octet-stream")
+        name = next(iter(coordinator.theta))
+        np.testing.assert_array_equal(studio_diloco.decode_arrays(theta.content)[name], coordinator.theta[name])
+        shard = self.client.get("/collective/r1/shards/0")
+        self.assertEqual(shard.content, coordinator.shard_bytes(0))
+        self.assertEqual(self.client.get(f"/collective/r1/shards/{coordinator.shard_count}").status_code, 404)
+        before = coordinator.theta[name].copy()
+        accepted = self.post_delta("r1", 0, view["generation"], epoch=3, body=self.delta_body(coordinator), loss=2.5)
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        np.testing.assert_allclose(coordinator.theta[name], before - .01, rtol=1e-5)
+        after = self.client.get("/collective/r1/rounds/0", params={"node": "a", "wait": 1}).json()
+        self.assertEqual((after["state"], after["current"]), ("closed", 1))
+        self.assertEqual(self.client.get("/collective/r1/rounds/1", params={"node": "a"}).json()["state"], "open")
+        self.assertEqual(self.client.post("/collective/r1/leave", json={"node": "a", "generation": 1, "epoch": 3}).status_code, 204)
+
+    def test_half_precision_deltas_are_accepted(self):
+        coordinator = self.start(inner_steps=2, delta_dtype="float16", outer_lr=1.)
+        self.client.post("/collective/r1/join", json={"node": "a"})
+        view = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()
+        name = next(iter(coordinator.theta))
+        before = coordinator.theta[name].copy()
+        body = self.delta_body(coordinator, "float16")
+        self.assertLess(len(body), len(self.delta_body(coordinator)))
+        self.assertEqual(self.post_delta("r1", 0, view["generation"], body=body).status_code, 202)
+        np.testing.assert_allclose(coordinator.theta[name], before - .01, atol=1e-5)
+
+    def test_a_stale_generation_round_or_epoch_is_409_and_not_applied(self):
+        coordinator = self.start(inner_steps=2, outer_lr=1.)
+        self.client.post("/collective/r1/join", json={"node": "a", "epoch": 5})
+        generation = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()["generation"]
+        before = {k: v.copy() for k, v in coordinator.theta.items()}
+        body = self.delta_body(coordinator)
+        for why, answer in {"generation": self.post_delta("r1", 0, generation + 1, epoch=5, body=body),
+                            "round": self.post_delta("r1", 1, generation, epoch=5, body=body),
+                            "epoch": self.post_delta("r1", 0, generation, epoch=4, body=body),
+                            "stranger": self.post_delta("r1", 0, generation, epoch=5, node="b", body=body)}.items():
+            with self.subTest(why):
+                self.assertEqual(answer.status_code, 409, answer.text)
+                self.assertTrue(answer.json()["detail"])
+        self.assertEqual(self.client.post("/collective/r1/join", json={"node": "a", "epoch": 4}).status_code, 409)
+        self.assertEqual(coordinator.current.contributions, {})
+        for name, value in before.items():
+            np.testing.assert_array_equal(coordinator.theta[name], value)
+        self.assertEqual(self.client.get("/collective/r1/params", params={"round": 1}).status_code, 409)
+        self.assertEqual(self.post_delta("r1", 0, generation, epoch=5, body=body).status_code, 202)
+        self.assertEqual(self.post_delta("r1", 0, generation, epoch=5, body=body).status_code, 409)  # a round takes one contribution each
+
+    def test_a_malformed_delta_is_400(self):
+        coordinator = self.start(inner_steps=2)
+        self.client.post("/collective/r1/join", json={"node": "a"})
+        generation = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()["generation"]
+        self.assertEqual(self.post_delta("r1", 0, generation, body=b"junk").status_code, 400)
+        wrong = studio_diloco.encode_arrays({"nope": np.zeros(2)}, "float32")
+        self.assertEqual(self.post_delta("r1", 0, generation, body=wrong).status_code, 400)
+        self.assertEqual(coordinator.current.contributions, {})
+
+    def test_an_unknown_or_malformed_run_is_refused(self):
+        self.assertEqual(self.client.post("/collective/nope/join", json={"node": "a"}).status_code, 404)
+        self.assertEqual(self.client.get("/collective/nope/rounds/0").status_code, 404)
+        self.assertEqual(self.client.post("/collective/bad run/join", json={"node": "a"}).status_code, 422)
+
+
+class Training(Collective):
+    def train(self, members, run, **changes):
+        """Run `members` member threads against the coordinator over the routes; return the finished coordinator."""
+        coordinator = self.start(run, **changes)
+        errors = []
+
+        def member(index):
+            try:
+                studio_diloco.run_member(support.Peer(self.client), run, f"node{index}", 0, self.dir / f"{run}-m{index}", self.dir / f"{run}-out{index}",
+                                         lambda event: None, threading.Event(), wait=.5)
+            except Exception as exc:  # noqa: BLE001 - reported below
+                errors.append(exc)
+        threads = [threading.Thread(target=member, args=(i,)) for i in range(members)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(240)
+        self.assertEqual(errors, [])
+        self.assertTrue(coordinator.finished)
+        return coordinator
+
+    def test_two_members_over_the_routes_beat_one_member_after_the_same_steps_per_member(self):
+        shape = dict(inner_steps=4, rounds=6, outer_lr=.7, outer_momentum=.9, min_members=1, delta_dtype="float16")
+        one = self.train(1, "one", **shape)
+        two = self.train(2, "two", **{**shape, "min_members": 2})
+        self.assertEqual([len(r["contributed"]) for r in two.history], [2] * 6)
+        self.assertEqual([r["steps"] for r in two.history][0], {"node0": 4, "node1": 4})
+        losses = (one.history[-1]["val_loss"], two.history[-1]["val_loss"])
+        print(f"final validation loss after 6 rounds x 4 steps per member: 1 member {losses[0]:.4f}, 2 members {losses[1]:.4f}")
+        self.assertLess(losses[1], losses[0])
+        self.assertLess(two.history[-1]["val_loss"], two.history[0]["val_loss"])
+        first = two.history[0]["generation"]
+        self.assertTrue(all(r["generation"] == first for r in two.history))
+        self.assertEqual(sorted(p.name for p in (self.dir / "two").glob("last.npz")), ["last.npz"])
+        self.assertFalse((self.dir / "two-m0" / "data" / "remote_shards" / "two").exists())  # members delete their shard cache when the run ends
+
+
+class OwnerJob(unittest.TestCase):
+    """The owner's pretrain_distributed job end to end: prepare() starts the coordinator in the app, the handler is its local
+    member and talks to it over a real socket with studio_peer.PeerClient."""
+
+    def test_prepare_then_the_handler_trains_a_run_over_http_and_leaves_a_loadable_checkpoint(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            sock = socket.socket()
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            sock.close()
+            server = uvicorn.Server(uvicorn.Config(support.app(), host="127.0.0.1", port=port, log_level="error"))
+            thread = threading.Thread(target=server.run, daemon=True)
+            thread.start()
+            self.addCleanup(thread.join, 10)
+            self.addCleanup(setattr, server, "should_exit", True)
+            self.addCleanup(studio_diloco.COORDINATORS.clear)
+            services = types.SimpleNamespace(root=Path(tmp), workspace=types.SimpleNamespace(run_dir=Path(tmp) / "runs"), examples=lambda p: support.EXAMPLES)
+            job = Job("pretrain_distributed", params={"config": support.CONFIG, "inner_steps": 3, "rounds": 2, "shards": 4, "api_port": port,
+                                                      "outer_lr": .7, "outer_momentum": .9})
+            context = studio_jobs.prepare(job, services)
+            self.assertIn(job.id, studio_diloco.COORDINATORS)
+            self.assertEqual(job.params["coordinator_url"], f"http://127.0.0.1:{port}")
+            events = []
+            studio_jobs.HANDLERS["pretrain_distributed"](job, types.SimpleNamespace(root=context["root"], run_dir=context["run_dir"]),
+                                                         events.append, threading.Event(), threading.Event())
+            coordinator = studio_diloco.COORDINATORS[job.id]
+            self.assertTrue(coordinator.finished)
+            self.assertEqual(len(coordinator.history), 2)
+            self.assertTrue(any(e.get("type") == "metric" for e in events))  # the local member's training shows on the job
+            checkpoint = studio_model.load_checkpoint(Path(job.params["output_dir"]) / "last.npz")
+            self.assertEqual(checkpoint["step"], 6)
+            self.assertFalse((Path(tmp) / "data" / "remote_shards" / job.id).exists())
+            coordinator.release()
+
+
+if __name__ == "__main__":
+    unittest.main()
