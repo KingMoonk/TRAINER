@@ -1,0 +1,474 @@
+"""The Builder's design maths, Tk-free: what a draft design is (read_spec/write_spec), which modules it can take and
+why not, what it costs and what to expect of it. The Tk page (studio_ia.pages.builder) and the API (studio_api.routers.design)
+both call these; nothing here touches a widget or holds state.
+"""
+from __future__ import annotations
+
+import copy
+import os
+import sys
+
+import studio_registry as registry
+from studio_arch import model_spec_presets
+from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM, plan, step_seconds, throughput
+from studio_estimate import estimate
+from studio_glossary import MODULE_TERMS, glossary_text
+from studio_slots import BLOCK_SLOTS
+from studio_spec import block_at, set_block, validate_spec
+from studio_validate import errors, validate
+from studio_versions import OTHER_PARTS, _facts, spec_diff
+from studio_warmstart import NOTES
+from studio_ia.attribution import attribute, blocks_change_text
+from studio_ia.copy import BUILDER as T
+from studio_ia.expectation import expectation
+
+FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
+TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
+VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large / whole words (the cap; less on little data)
+WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
+WIDTHS = ("Narrow", "Normal", "Wide")
+HEADS = (1, 4, 8)
+PART_SLOTS = ("embedding", "position", "head")  # the model-wide parts the tower shows; every block has BLOCK_SLOTS
+PART_TERMS = dict(embedding="embedding", position="position", norm="norm", mixer="token_mixer", channel="mlp", head="output_head")
+WORD_TERMS = ("bytes", "bpe", "gpt2_bpe", "whole_words")  # GLOSSARY entries behind WORDS
+STEPS, ROWS = 1000, 16  # a catch-up job here; the Pretraining page is where length, rows and data are chosen
+EXPECT = dict(
+    more="More blocks: each word gets more rounds of processing, and every training step takes longer. With little data it may memorize rather than learn; watch the test line.",
+    fewer="Fewer blocks: smaller and faster. It may not get its error as low.",
+    heads="Different look-back heads: same size, same speed. Each block splits its looking into {how} views. Whether that helps at this size is something to test, not assume.",
+    wider="More thinking room: more to learn in every block, so bigger and slower.",
+    narrower="Less thinking room: smaller and faster, with less capacity in every block.",
+    letters="Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.",
+    small="Small word list: built from your own data. A much smaller table; text splits into somewhat more pieces.",
+    large="Large word list: GPT-2’s list. A big table, short sequences.",
+    words="Whole words: one entry per frequent word in your own data. Short sequences, but a word that is not in the list is lost.",
+)
+WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.NOTES[kind]
+    same=("weights carry over exactly", "live"), heads=("weights carry over, not exactly", "attention"),
+    removed=("weights carry over, minus what was removed", "attention"), other=("weights carry over, changed parts start fresh", "attention"),
+    scratch=("starts from scratch", "needs_training"))
+
+
+def module_name(slot, short):
+    return registry.get(slot, short).name
+
+
+def module_tip(slot, short):
+    """Hover help for a module: what it is and why you would pick it (studio_glossary), then the registry's exact description."""
+    return f"{glossary_text(MODULE_TERMS[slot][short])}\n\n{registry.get(slot, short).blurb}"
+
+
+def part_tip(slot):
+    return glossary_text(PART_TERMS[slot])
+
+
+def fields_of(slot, short):
+    return {f["name"] for f in registry.fields(registry.get(slot, short))}
+
+
+def knob_applies(s, key):
+    """Whether look-back heads (H) or thinking room (W) mean anything for the all-blocks look-back / thinking-room choice."""
+    slot, field = {"H": ("mixer", "heads"), "W": ("channel", "d_ff")}[key]
+    return field in fields_of(slot, s["M"][slot])
+
+
+def block_parts(s, i):
+    """{slot: module id} of block i: the all-blocks choice, or the block's own."""
+    return {slot: s["O"].get((i, slot), s["M"][slot]) for slot in BLOCK_SLOTS}
+
+
+def own_slots(s, i):
+    """The slots block i has its own module in."""
+    return [slot for slot in BLOCK_SLOTS if (i, slot) in s["O"]]
+
+
+def choose(s, slot, short, block=None):
+    """The choices after picking module `short` for `slot`: for every block (which drops that slot's per-block picks),
+    or for block `block` only (picking the all-blocks module there drops its own pick)."""
+    parts, own = dict(s["M"]), dict(s["O"])
+    if block is None or slot not in BLOCK_SLOTS:
+        parts[slot] = short
+        own = {key: value for key, value in own.items() if key[1] != slot}
+    elif short == parts[slot]:
+        own.pop((block, slot), None)
+    else:
+        own[block, slot] = short
+    return dict(s, M=parts, O=own)
+
+
+def resize(s, n):
+    """The choices with n blocks: per-block picks of blocks that are gone go with them."""
+    return dict(s, L=n, O={key: value for key, value in s["O"].items() if key[0] < n})
+
+
+def entry_for(slot, short, old, s):
+    """Slot entry for module `short`: settings it shares with the module it replaces carry over; heads and a non-default
+    thinking room follow the knobs."""
+    names = fields_of(slot, short)
+    config = {key: value for key, value in (old or {}).get("config", {}).items() if key in names}
+    if "heads" in names and "heads" not in config:
+        config["heads"] = s["H"]
+    if "d_ff" in names and "d_ff" not in config and s["W"] != 1:
+        config["d_ff"] = FF[s["W"]] * s["d"]
+    return {"id": short, "config": config}
+
+
+def sizes(spec, v):
+    """Size, time and memory of a design under word list v, summed from every module's own estimate (studio_estimate).
+    params · table: the word table, position and head · time: training work per row of T pieces · memory: weights, gradients
+    and Adam state at 16 bytes per parameter · activations: bytes kept per row for the backward pass."""
+    e = estimate(spec, VS[v])
+    d, t = spec["dims"]["d_model"], spec["dims"]["n_ctx"]
+    # the estimate leaves the vocabulary matrices out of compute (Kaplan et al.); a step still pays for the output scores
+    return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * VS[v] * d) * t,
+                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t)
+
+
+def read_spec(spec):
+    """ModelSpec -> the editable choices: L blocks, H heads, W thinking room, V word list, d and T, M the module of every part
+    ({slot: id}; the block slots hold the all-blocks choice) and O the per-block picks ({(block index, slot): id})."""
+    spec = validate_spec(spec)
+    f, block = _facts(spec), spec["block"]
+    word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
+    room = (block["channel"]["config"].get("d_ff") or 4 * f["width"]) / f["width"]
+    parts = {slot: spec[slot]["id"] for slot in PART_SLOTS} | {slot: block[slot]["id"] for slot in BLOCK_SLOTS}
+    own = {(o["index"], slot): o[slot]["id"] for o in spec["blocks"] for slot in BLOCK_SLOTS if slot in o}
+    return dict(L=f["blocks"], H=block["mixer"]["config"].get("heads") or 4, W=0 if room < 4 else 1 if room == 4 else 2, V=word,
+                d=f["width"], T=f["context"], M=parts, O=own)
+
+
+def write_spec(base, s, was=None):
+    """`base` with only the choices that differ between `was` (default: base's own) and `s` rewritten."""
+    spec = copy.deepcopy(validate_spec(base))
+    was = was or read_spec(spec)
+    if s["L"] != was["L"]:
+        spec["dims"]["n_layer"] = s["L"]
+    for slot in PART_SLOTS:
+        if s["M"][slot] != was["M"][slot]:
+            spec[slot] = entry_for(slot, s["M"][slot], spec[slot], s)
+    for slot in BLOCK_SLOTS:
+        if s["M"][slot] != was["M"][slot]:
+            spec["block"][slot] = entry_for(slot, s["M"][slot], spec["block"][slot], s)
+    if s["H"] != was["H"] and "heads" in spec["block"]["mixer"]["config"]:
+        spec["block"]["mixer"]["config"]["heads"] = s["H"]
+    if s["W"] != was["W"] and "d_ff" in spec["block"]["channel"]["config"]:
+        spec["block"]["channel"]["config"]["d_ff"] = FF[s["W"]] * s["d"]
+    for key in sorted(set(s["O"]) | set(was["O"])):
+        if s["O"].get(key) == was["O"].get(key):
+            continue
+        index, slot = key
+        if key in s["O"]:
+            set_block(spec, index, slot, entry_for(slot, s["O"][key], block_at(spec, index)[slot], s))
+        else:
+            for override in spec["blocks"]:
+                if override["index"] == index:
+                    override.pop(slot, None)
+    if s["V"] != was["V"]:
+        spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": {}}
+    return validate_spec(spec)
+
+
+def why_not(base, s, was, slot, short, block=None):
+    """Why picking module `short` for `slot` (all blocks, or just `block`) cannot work in this design, or "" when it can.
+    The 3D viewer's swaps get the same checks (validate_spec, then studio_validate's errors); only problems the pick adds count."""
+    try:
+        before = set(errors(write_spec(base, s, was)))
+    except ValueError:
+        before = set()
+    try:
+        after = write_spec(base, choose(s, slot, short, block), was)
+    except ValueError as error:
+        return str(error)
+    return next((text for text in errors(after) if text not in before), "")
+
+
+def part_options(base, s, was, slot, block=None):
+    """[(module id, name, blurb, why it cannot be picked or "")] for one part's menu, in the registry's order."""
+    current = s["O"].get((block, slot), s["M"][slot]) if block is not None else s["M"][slot]
+    return [(m.short, m.name, m.blurb, "" if m.short == current else why_not(base, s, was, slot, m.short, block))
+            for m in registry.for_slot(slot)]
+
+
+def part_changes(cur, draft):
+    """Plain-words chips for every module the draft changes: all-blocks choices first, then each block's own."""
+    out = [T["part_change"].format(part=T["part_" + slot].lower(), name=module_name(slot, draft["M"][slot]))
+           for slot in ("embedding", "position", *BLOCK_SLOTS, "head") if draft["M"][slot] != cur["M"][slot]]
+    for i in range(draft["L"]):
+        for slot in BLOCK_SLOTS:
+            a, b = cur["O"].get((i, slot)), draft["O"].get((i, slot))
+            if a != b and (b or i < cur["L"]):
+                out.append(T["block_part_change"].format(n=i + 1, part=T["part_" + slot].lower(),
+                                                         name=module_name(slot, b) if b else T["same_as_others"]))
+    return out
+
+
+def change_chips(old_spec, new_spec, cur, draft):
+    """The not-saved chips: spec_diff's sentences, with its catch-all replaced by the parts that changed."""
+    plain = spec_diff(old_spec, new_spec)
+    out = [c for c in plain if c != OTHER_PARTS] + part_changes(cur, draft)
+    if recipe_of(validate_spec(old_spec)) != recipe_of(new_spec):
+        out.append(T["recipe_change"].format(recipe=recipe_text(new_spec)))
+    return out or plain
+
+
+def parts_changed(cur, draft):
+    """True when a module changed anywhere both designs have it (blocks only one of them has are added or removed)."""
+    return any(cur["M"][slot] != draft["M"][slot] for slot in PART_SLOTS) or \
+        any(block_parts(cur, i) != block_parts(draft, i) for i in range(min(cur["L"], draft["L"])))
+
+
+def new_issues(old_spec, new_spec):
+    """Advice (warnings and notes, not errors) the new design gets that the old one did not."""
+    old = {issue.text for issue in validate(old_spec)}
+    return [issue.text for issue in validate(new_spec) if issue.level != "ERROR" and issue.text not in old]
+
+
+def warm_kind(cur, draft):
+    """How the old weights carry into the draft: scratch | heads | other | removed | same (the studio_warmstart rules)."""
+    if draft["V"] != cur["V"]:
+        return "scratch"
+    if draft["H"] != cur["H"]:
+        return "heads"
+    if parts_changed(cur, draft):
+        return "other"
+    if draft["L"] < cur["L"] or draft["W"] < cur["W"]:
+        return "removed"
+    return "same"
+
+
+def warm_outlook(cur, draft):
+    """None when nothing changed, else {kind, carries, preserving, chip, state, text} for the cost panel."""
+    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V", "M", "O")):
+        return None
+    kind = warm_kind(cur, draft)
+    chip, state = WARM[kind]
+    return dict(kind=kind, carries=kind != "scratch", preserving=kind == "same", chip=chip, state=state, text=NOTES[kind])
+
+
+def ram_bytes():
+    """Physical memory of this computer, or None when the OS does not say."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def fits(c, ram=None):
+    """True/False: weights, gradients, optimizer state and activations for 16 rows fit in physical memory; None if unknown.
+    `c` is a sizes() dict."""
+    ram = ram or ram_bytes()
+    if ram is None:
+        return None
+    return c["memory"] + ROWS * c["activations"] <= ram
+
+
+# ---------------------------------------------------------------------------------------------- ready-made designs
+
+PRESETS = (("starter", "starter_model"), ("tiny_llama_style", "llama_model"), ("gpt2_small_style", "gpt2_model"),
+           ("gpt3_small_style", "gpt3_model"), ("gpt3_medium_style", "gpt3_model"))  # studio_arch key, GLOSSARY entry
+SLOW_STEP = 30  # seconds per step past which a design is called very slow
+
+
+def gpt2_words_ready():
+    """True when GPT-2's word list is already on this computer (nothing is downloaded to find out)."""
+    from studio_modules.tokenizer.bpe_gpt2 import GPT2Config, asset_paths
+    return all(path.exists() for path in asset_paths(GPT2Config()))
+
+
+def preset_specs(gpt2_words=False):
+    """[(key, spec)] of studio_arch's presets in PRESETS order (Tiny Llama only when its modules are registered).
+    With gpt2_words the GPT-2 and GPT-3 designs read text with GPT-2's word list, as the originals did."""
+    presets = model_spec_presets()
+    out = []
+    for key, _term in PRESETS:
+        if key not in presets:
+            continue
+        spec = presets[key]
+        if gpt2_words and key.startswith("gpt"):
+            spec = validate_spec(dict(spec, tokenizer={"id": "bpe_gpt2"}, name=spec["name"].replace("byte tokenizer", "GPT-2 word list")))
+        out.append((key, spec))
+    return out
+
+
+def gpu_kind():
+    """"cuda" or "mps" when this process already found a GPU, else "". It only reads an earlier check: importing torch or
+    running a Metal/CUDA calculation from the Builder (on a worker thread, while Tk runs) crashes the app on macOS."""
+    backend = sys.modules.get("studio_backend")
+    if backend is None or not backend.gpu_status.cache_info().currsize:
+        return ""
+    status = backend.gpu_status()
+    return status["kind"] if status["available"] else ""
+
+
+def preset_term(key):
+    return dict(PRESETS)[key]
+
+
+def amount(n):
+    """1.4 GB, 86.8M style: one decimal, the unit a person reads."""
+    for size, unit in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if n >= size:
+            return f"{n / size:.1f}{unit}"
+    return str(round(n))
+
+
+def gigabytes(n):
+    return f"{n / 1e9:.1f} GB" if n >= 1e8 else f"{n / 1e6:.0f} MB"
+
+
+def duration(seconds):
+    """'about 5 minutes': a rough time, in the largest unit that keeps it a readable number."""
+    if seconds < 1:
+        return "under a second"
+    for size, unit, limit in ((1, "seconds", 90), (60, "minutes", 5400), (3600, "hours", 172800), (86400, "days", float("inf"))):
+        if seconds < limit:
+            return f"about {seconds / size:.0f} {unit}"
+
+
+def preset_cost(spec, ram=None, gpu=None):
+    """What a design costs before it is loaded: {params, need, fits, rows, step, slow, lines}. `lines` are the card's sentences:
+    size, whether it fits this computer (and at how many rows per step it would), and how long a step takes.
+    ram: bytes (None = ask the OS); gpu: "cuda"/"mps" when training will use one, "" or None for the processor alone."""
+    s = read_spec(spec)
+    c = sizes(spec, s["V"])
+    ram = ram or ram_bytes()
+    need = c["memory"] + ROWS * c["activations"]
+    ok = None if ram is None else need <= ram
+    rows = ROWS if ok or ram is None else max(0, int((ram - c["memory"]) // max(1, c["activations"])))
+    step = step_seconds({"batch_size": ROWS, "context": s["T"], "layers": s["L"]}, c["params"], gpu or "cpu")
+    lines = [T["preset_size"].format(params=amount(c["params"]), memory=gigabytes(c["memory"]))]
+    if ram is None:
+        lines.append(T["preset_fit_unknown"])
+    elif ok:
+        lines.append(T["preset_fits"].format(need=gigabytes(need), rows=ROWS, ram=gigabytes(ram)))
+    elif rows:
+        lines.append(T["preset_fits_fewer"].format(rows=ROWS, need=gigabytes(need), ram=gigabytes(ram), fit=rows))
+    else:
+        lines.append(T["preset_no_fit"].format(need=gigabytes(c["memory"] + c["activations"]), ram=gigabytes(ram)))
+    lines.append(T["preset_speed_gpu" if gpu else "preset_speed_cpu"].format(step=duration(step)))
+    if step > SLOW_STEP:
+        lines[-1] += " " + T["preset_slow"].format(steps=STEPS, total=duration(step * STEPS))
+    return dict(params=c["params"], need=need, fits=ok, rows=rows, step=step, slow=step > SLOW_STEP, lines=lines)
+
+
+def passes_text(passes):
+    """"one pass", "under one pass" or "2.5 passes": how many times a run reads the text."""
+    if passes < .95:
+        return "under one pass"
+    return "one pass" if passes <= 1.05 else f"{passes:.1f} passes" if passes < 10 else f"{passes:.0f} passes"
+
+
+def compute_lines(params, context, layers, preview, gpu=""):
+    """[(sentence, bad)] for the cost panel: how much text a design of `params` parameters needs, against the word pieces
+    `preview` (services.pretrain_preview; None while it is being counted) found, and how long a run of ROWS rows should be.
+    Speed is the newest run's measured one, else studio_compute.throughput (the Pretraining page's time model)."""
+    if preview is None:
+        return [(T["compute_counting"], False)]
+    pieces = preview.get("pieces")
+    if not pieces:
+        return [(T["compute_none"], False)]
+    speed = preview.get("tokens_per_second") or throughput(ROWS, context, params, layers, gpu or "cpu")
+    p = plan(params, pieces, tokens_per_second=speed, batch_tokens=ROWS * context)
+    tail = (T["compute_under"] if p["under_trained"] else T["compute_repeats"] if p["over_repeated"]
+            else T["compute_reread"].format(times=f"{p['epochs_for_optimal']:.1f}", most=MAX_EPOCHS) if params > p["data_params"]
+            else T["compute_roomy"] if p["data_params"] >= 4 * params else T["compute_enough"])
+    about = "about " if preview.get("estimated") else ""
+    lines = [(T["compute_supports"].format(supported=about + amount(p["data_params"]), rule=TOKENS_PER_PARAM, params=amount(params)) + tail,
+              p["under_trained"]),
+             (T["compute_steps"].format(steps=p["steps"], rows=ROWS, passes=passes_text(p["epochs"]))
+              + T["compute_time"].format(time=duration(p["seconds_needed"])), False)]
+    if p["over_repeated"]:
+        lines.append((T["compute_repeat"].format(rule=TOKENS_PER_PARAM, times=f"{p['epochs_for_optimal']:.0f}", most=MAX_EPOCHS), True))
+    return lines
+
+
+def lr_text(result, current=None):
+    """The sentence under "Find a learning rate" for a finished (or failed or stopped) range test; "" before one has run.
+    `current` is the rate the design trains with now."""
+    if not result:
+        return ""
+    if result.get("error"):
+        return T["lr_failed"].format(error=result["error"])
+    if result.get("cancelled"):
+        return T["lr_stopped"]
+    failed = result.get("failed_at") or (result["rates"][-1] if result.get("rates") else None)
+    if not result.get("suggestion"):
+        return T["lr_blew_up_early"].format(rate=f"{failed:.2g}") if result.get("diverged") and failed else T["lr_flat"]
+    text = T["lr_result"].format(rate=f"{result['suggestion']:.2g}", steepest=f"{result['rates'][result['steepest']]:.2g}",
+                                 current=f"{current:.2g}" if current else "its own default")
+    if result.get("diverged"):
+        text += " " + T["lr_blew_up"].format(rate=f"{failed:.2g}")
+    return text
+
+
+def recipe_text(spec):
+    """The optimizer and schedule a spec carries, in one line: "AdamW · learning rate 0.0006 · β2 0.95 · … · cosine to 10%"."""
+    optimizer, schedule = spec["train"]["optimizer"], spec["train"]["schedule"]
+    parts = [registry.get("optimizer", optimizer["id"]).name]
+    for key, label in (("lr", "learning rate"), ("beta1", "β1"), ("beta2", "β2"), ("weight_decay", "weight decay")):
+        if key in optimizer["config"]:
+            parts.append(f"{label} {optimizer['config'][key]:g}")
+    sched = registry.get("schedule", schedule["id"]).name
+    if "min_lr" in schedule["config"]:
+        sched += f" to {schedule['config']['min_lr']:.0%}"
+    return " · ".join(parts + [sched])
+
+
+def recipe_of(spec):
+    """The parts of the training recipe a design carries (not the run settings the Pretraining page chooses)."""
+    return {slot: spec["train"][slot] for slot in ("objective", "optimizer", "schedule", "init")}
+
+
+def blocks_change_pair(versions):
+    """(older, newer, blocks before, blocks after) for the latest block-count change in the history, else None. Reads no files."""
+    vs = [v for v in versions if v.spec]
+    for i in range(len(vs) - 1, 0, -1):
+        a, b = _facts(vs[i - 1].spec)["blocks"], _facts(vs[i].spec)["blocks"]
+        if a != b:
+            return vs[i - 1], vs[i], a, b
+    return None
+
+
+def last_blocks_change(versions, facts=None, compares=None):
+    """(from, to, v_from, v_to, attribution) for the latest block-count change in the history, else None. The attribution
+    (studio_ia.attribution) has the signed move in held-back error and what else differed. `facts(number)` and `compares()`
+    give the runs' facts and the saved Compare runs (Services.run_facts and Services.compare_runs, which read files: the page
+    gathers them on a worker). With no `facts` they are not known yet, and the attribution says it is still checking."""
+    pair = blocks_change_pair(versions)
+    if pair is None:
+        return None
+    old, new, a, b = pair
+    known = facts is not None
+    return a, b, old.number, new.number, attribute(old, new, facts(old.number) if known else None, facts(new.number) if known else None,
+                                                   compares() if compares else ())
+
+
+def design_expectation(s, spec):
+    """(headline, details) for the choices in `s` and their spec: what a design this size and word list can be expected to write."""
+    c = sizes(spec, s["V"])
+    return expectation(c["params"], TOKENIZERS[s["V"]], embedding_params=c["table"])
+
+
+def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
+    """What to expect from each change, then the advice (`issues`, from new_issues) the new design gets."""
+    a, b, out = cur, draft, []
+    if b["L"] > a["L"]:
+        out.append(EXPECT["more"])
+    if b["L"] < a["L"]:
+        out.append(EXPECT["fewer"])
+    if b["L"] != a["L"] and (last := last_blocks_change(versions, facts, compares)):
+        out.append(blocks_change_text(*last))
+    if b["H"] != a["H"]:
+        out.append(EXPECT["heads"].format(how="more, narrower" if b["H"] > a["H"] else "fewer, wider"))
+    if b["W"] > a["W"]:
+        out.append(EXPECT["wider"])
+    if b["W"] < a["W"]:
+        out.append(EXPECT["narrower"])
+    if b["V"] != a["V"]:
+        out.append(EXPECT[("letters", "small", "large", "words")[b["V"]]])
+    for slot in ("embedding", "position", *BLOCK_SLOTS, "head"):
+        if b["M"][slot] != a["M"][slot]:
+            module = registry.get(slot, b["M"][slot])
+            out.append(T["part_expect"].format(part=T["part_" + slot], name=module.name, blurb=module.blurb))
+    out.extend(issues)
+    return out or [T["change_something"]]

@@ -2,7 +2,7 @@
 
 Several machines can pool their compute. Each one runs the API as a node; a node alone is a cluster of one. Nodes find each
 other over a Tailscale network (a *tailnet*), hand whole jobs to each other, and exchange trained versions through a bucket.
-Nothing is split across machines: one training run always stays on one machine.
+A distributed pretraining run uses several machines at once with DiLoCo; `docs/distributed.md` is its design.
 
 Three things to set up, in this order: the tailnet, the node list in the workspace config, and the bucket.
 
@@ -18,7 +18,7 @@ a port. The tailnet is the whole perimeter: the API is not exposed to the intern
 3. Check the machines see each other: `tailscale ping windows-box` from the Mac. It says whether the path is direct or goes
    through a relay (DERP). A relayed path works but is slower; job placement does not depend on it, only the speed of copying
    files between the two.
-4. Run the API on each node and keep it listening on the tailnet address (see `docs/node.md`). The default port is `8787`.
+4. Run the API on each node and bind it to the tailnet address (`--bind`, see `docs/node.md`), so the other nodes can call it. The default port is `8787`.
 
 ## Inviting a second user
 
@@ -44,16 +44,18 @@ the API port on the machines that are nodes. In the admin console, **Access cont
   "tagOwners": {"tag:trainer": ["autogroup:admin"]},
   "groups": {"group:trainer": ["you@example.com", "friend@example.com"]},
   "acls": [
-    // people in the group reach the API on any node
-    {"action": "accept", "src": ["group:trainer"], "dst": ["tag:trainer:8787"]},
-    // nodes reach each other's API (to poll /node and hand over jobs)
+    // people in the group open the web UI that `tailscale serve` publishes on 443
+    {"action": "accept", "src": ["group:trainer"], "dst": ["tag:trainer:443"]},
+    // nodes call each other's API directly on 8787 (to poll /node and hand over jobs)
     {"action": "accept", "src": ["tag:trainer"], "dst": ["tag:trainer:8787"]}
   ]
 }
 ```
 
-Replace the emails with the Tailscale logins. Behind `tailscale serve` (the recommended setup, `docs/node.md`) the nodes are
-reached on port `443`, so use `tag:trainer:443` in both rules; use `8787` only if the API is reached directly on its own port. Anything not accepted is denied, so
+Replace the emails with the Tailscale logins. Browsers use port `443` (`tailscale serve`); nodes use the API's own port `8787`, and the
+API identifies them by asking Tailscale who owns the source address, so a node must carry `tag:trainer` (or a tag listed in
+`studioConfig.cluster.allowTags`, `docs/node.md`). A person who should call a node's API directly on `8787` too needs their
+login in `studioConfig.cluster.allowUsers` and a rule for `:8787`. Anything not accepted is denied, so
 this also keeps the people in the group off the machines' other ports (SSH, file sharing). A tagged machine no longer
 belongs to a person: its logins are managed through the tag, so tag the nodes only after you are sure you can still reach
 them from your own devices (the first rule does that).
@@ -71,8 +73,9 @@ should see the others (the list names the *other* machines; the machine itself i
 }
 ```
 
-Each entry is a tailnet name (port `8787` is assumed), or a full URL when the API is on another port or behind
-`tailscale serve` (`https://windows-box.tail1234.ts.net`). Blank and repeated entries are ignored. With no `nodes` (or an empty
+Each entry is a tailnet name (port `8787` is assumed, the direct node-to-node path), or a full URL when the API is on another port
+or behind `tailscale serve` (`https://windows-box.tail1234.ts.net`, port 443; a caller through serve is a person, so it needs a
+login the ACL lets through, not a tagged node). Blank and repeated entries are ignored. With no `nodes` (or an empty
 list) the machine works alone.
 
 Each machine asks the others for `GET /node` with a two-second timeout and shows what answered: hostname, version, device
@@ -118,7 +121,8 @@ characters of the file's sha256: publishing the same checkpoint twice uploads no
 last, so other machines list a version only once its weights are complete, and they check the hash before using a download.
 
 Pulling a version writes an ordinary float32 checkpoint on the local disk. It has no optimizer state, so a run resumed from it
-restarts the optimizer. Nothing else is uploaded: datasets, runs, logs, tokenizers and the optimizer never leave the machine.
+restarts the optimizer. Nothing else is uploaded: datasets, runs, logs, tokenizers and the optimizer never leave the machine,
+except that a distributed run sends its training windows to its own members over the tailnet (`docs/distributed.md`).
 
 ### Set up Cloudflare R2
 

@@ -48,10 +48,21 @@ def plan(params, data_tokens, seconds=None, tokens_per_second=None, batch_tokens
     return out
 
 
+def step_seconds(cfg, params, kind, scale=1.0):
+    """Rough seconds for one optimizer step. Fitted to measurements of the CPU and CUDA backends; Apple GPUs use the CUDA curve."""
+    batch, context, accumulation = int(cfg.get("batch_size", 4)), int(cfg.get("context", 256)), int(cfg.get("accumulation", 1))
+    tokens = batch * context
+    if kind in ("cuda", "mps"):
+        seconds = accumulation * (0.04 + 0.05 * int(cfg.get("layers", 2))) * max(0.25, tokens / 1024) ** 0.3
+    else:
+        tokens_per_second = 4.0e6 / max(float(params), 1000.0) ** 0.57
+        seconds = tokens * accumulation / tokens_per_second
+    return seconds * scale
+
+
 def throughput(batch, context, params, layers, kind="cpu", accumulation=1):
-    """Estimated tokens per second: the Pretraining page's own time model (studio_ux.step_seconds), so both pages agree.
+    """Estimated tokens per second: the Pretraining page's own time model (step_seconds), so both pages agree.
     Prefer a measured number (the newest run's tokens_per_second) when there is one."""
-    from studio_ux import step_seconds
     cfg = {"batch_size": batch, "context": context, "layers": layers, "accumulation": accumulation}
     return batch * context * accumulation / step_seconds(cfg, params, kind)
 

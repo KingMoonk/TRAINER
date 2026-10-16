@@ -2,6 +2,7 @@
 import copy
 import unittest
 
+from studio_ia import design as D
 from studio_ia.pages import builder as B
 from studio_ia.pages import compare as K
 from studio_ia.pages import quicktest as Q
@@ -14,45 +15,45 @@ from studio_spec import default_spec, validate_spec
 
 
 def choices(**patch):
-    return dict(B.read_spec(default_spec()), **patch)
+    return dict(D.read_spec(default_spec()), **patch)
 
 
 class Builder(unittest.TestCase):
     def test_write_spec_touches_only_what_changed(self):
         base = validate_spec(default_spec())
         base["tokenizer"] = {"id": "bpe_custom", "config": {"vocab_size": 700}}
-        same = B.write_spec(base, B.read_spec(base))
+        same = D.write_spec(base, D.read_spec(base))
         self.assertEqual(same, validate_spec(base))  # no change: nothing rewritten, tokenizer config kept
-        more = B.write_spec(base, dict(B.read_spec(base), L=base["dims"]["n_layer"] + 2))
+        more = D.write_spec(base, dict(D.read_spec(base), L=base["dims"]["n_layer"] + 2))
         self.assertEqual(more["tokenizer"]["config"], {"vocab_size": 700})
         self.assertEqual(more["dims"]["n_layer"], base["dims"]["n_layer"] + 2)
-        words = B.write_spec(base, dict(B.read_spec(base), V=2))
+        words = D.write_spec(base, dict(D.read_spec(base), V=2))
         self.assertEqual(words["tokenizer"]["id"], "bpe_gpt2")
 
     def test_anchor_keeps_parts_the_picture_cannot_show(self):
         anchor = validate_spec(default_spec())
         anchor["train"]["optimizer"]["config"]["lr"] = 3e-4
-        was = B.read_spec(anchor)
-        out = B.write_spec(anchor, dict(was, H=8), was)
+        was = D.read_spec(anchor)
+        out = D.write_spec(anchor, dict(was, H=8), was)
         self.assertEqual(out["train"]["optimizer"]["config"]["lr"], 3e-4)
         self.assertEqual(out["block"]["mixer"]["config"]["heads"], 8)
 
     def test_warm_start_outlook_follows_the_warmstart_rules(self):
         cur = choices()
-        self.assertIsNone(B.warm_outlook(cur, dict(cur)))
-        more = B.warm_outlook(cur, dict(cur, L=cur["L"] + 2))
+        self.assertIsNone(D.warm_outlook(cur, dict(cur)))
+        more = D.warm_outlook(cur, dict(cur, L=cur["L"] + 2))
         self.assertEqual((more["kind"], more["carries"], more["preserving"]), ("same", True, True))
-        wide = B.warm_outlook(cur, dict(cur, W=min(2, cur["W"] + 1)))
+        wide = D.warm_outlook(cur, dict(cur, W=min(2, cur["W"] + 1)))
         self.assertTrue(wide["preserving"] or cur["W"] == 2)
-        heads = B.warm_outlook(cur, dict(cur, H=8 if cur["H"] != 8 else 4))
+        heads = D.warm_outlook(cur, dict(cur, H=8 if cur["H"] != 8 else 4))
         self.assertEqual((heads["kind"], heads["carries"], heads["preserving"]), ("heads", True, False))
-        fewer = B.warm_outlook(cur, dict(cur, L=max(1, cur["L"] - 1)))
+        fewer = D.warm_outlook(cur, dict(cur, L=max(1, cur["L"] - 1)))
         self.assertEqual((fewer["kind"], fewer["preserving"]), ("removed", False))
-        scratch = B.warm_outlook(cur, dict(cur, V=(cur["V"] + 1) % 3, H=8))
+        scratch = D.warm_outlook(cur, dict(cur, V=(cur["V"] + 1) % 3, H=8))
         self.assertEqual((scratch["kind"], scratch["carries"]), ("scratch", False))  # word list beats every other change
 
     def test_cost_formulas_and_words(self):
-        a, b = (B.sizes(B.write_spec(default_spec(), choices(L=n)), 0) for n in (2, 4))
+        a, b = (D.sizes(D.write_spec(default_spec(), choices(L=n)), 0) for n in (2, 4))
         self.assertGreater(b["params"], a["params"])
         self.assertGreater(b["time"], a["time"])
         self.assertEqual(a["memory"], 16 * a["params"])
@@ -61,28 +62,28 @@ class Builder(unittest.TestCase):
         self.assertEqual(B.say(150, 100, "bigger", "smaller"), "about 1.5× smaller")
         self.assertEqual(B.bar(50, 100), (50, 100))
         # time per step is the modules' own training work plus the output scores, for every piece of a row
-        spec = B.write_spec(default_spec(), choices())
+        spec = D.write_spec(default_spec(), choices())
         e, d, t = estimate(spec, 256), spec["dims"]["d_model"], spec["dims"]["n_ctx"]
-        self.assertEqual(B.sizes(spec, 0)["time"], (e["train_flops_per_token"] + 6 * 256 * d) * t)
+        self.assertEqual(D.sizes(spec, 0)["time"], (e["train_flops_per_token"] + 6 * 256 * d) * t)
 
     def test_memory_fit_is_a_comparison_with_ram(self):
-        c = B.sizes(B.write_spec(default_spec(), choices()), 0)
-        need = c["memory"] + B.ROWS * c["activations"]
-        self.assertTrue(B.fits(c, ram=need))
-        self.assertFalse(B.fits(c, ram=need - 1))
+        c = D.sizes(D.write_spec(default_spec(), choices()), 0)
+        need = c["memory"] + D.ROWS * c["activations"]
+        self.assertTrue(D.fits(c, ram=need))
+        self.assertFalse(D.fits(c, ram=need - 1))
 
     def test_last_change_comes_from_history_never_a_guess(self):
-        s2, s4 = B.write_spec(default_spec(), choices(L=2)), B.write_spec(default_spec(), choices(L=4))
+        s2, s4 = D.write_spec(default_spec(), choices(L=2)), D.write_spec(default_spec(), choices(L=4))
         vs = [Version(1, spec=s2, scorecard={"bpc": 3.0}), Version(2, spec=s4, scorecard={"bpc": 2.5})]
-        last = B.last_blocks_change(vs)
+        last = D.last_blocks_change(vs)
         self.assertEqual(last[:4], (2, 4, 1, 2))
         self.assertAlmostEqual(last[4]["change"], -0.5)
-        self.assertIsNone(B.last_blocks_change([Version(1, spec=s2), Version(2, spec=s4)])[4]["change"])
-        self.assertIsNone(B.last_blocks_change(vs[:1]))
-        out = B.expectations(choices(L=4), choices(L=6), vs)
+        self.assertIsNone(D.last_blocks_change([Version(1, spec=s2), Version(2, spec=s4)])[4]["change"])
+        self.assertIsNone(D.last_blocks_change(vs[:1]))
+        out = D.expectations(choices(L=4), choices(L=6), vs)
         self.assertTrue(any("Last time blocks changed (2 → 4, version 1 → 2): error fell 0.50 bits per character (lower is better)" in t
                             for t in out))
-        self.assertEqual(B.expectations(choices(), choices()), [B.T["change_something"]])
+        self.assertEqual(D.expectations(choices(), choices()), [B.T["change_something"]])
 
     def test_chart_continues_from_the_old_end_and_never_invents(self):
         self.assertEqual(B.chart_args(None, None, None)["smooth"], [])
@@ -116,11 +117,11 @@ class Builder(unittest.TestCase):
 
 class QuickTest(unittest.TestCase):
     def test_descriptions_and_costs_use_the_exact_formulas(self):
-        spec = B.write_spec(default_spec(), choices(L=4, H=4, W=1))
+        spec = D.write_spec(default_spec(), choices(L=4, H=4, W=1))
         self.assertEqual(Q.describe(spec), "4 blocks · 4 look-back heads · normal thinking room")
-        same = B.write_spec(spec, dict(B.read_spec(spec), H=8))
+        same = D.write_spec(spec, dict(D.read_spec(spec), H=8))
         self.assertEqual(Q.cost_sentence(spec, same), "same size · same work per step")
-        bigger = B.write_spec(spec, dict(B.read_spec(spec), L=8))
+        bigger = D.write_spec(spec, dict(D.read_spec(spec), L=8))
         self.assertIn("bigger", Q.cost_sentence(spec, bigger))
 
     def test_time_left_and_marks(self):
