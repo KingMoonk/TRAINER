@@ -1,6 +1,15 @@
-import { PagePlaceholder } from "@/components/page-placeholder";
-import { routeFor } from "@/lib/routes";
+"use client";
+
+import { Suspense } from "react";
+import { HeadLab } from "@/app/head-lab/head-lab";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useVersionParameter } from "@/lib/version-param";
 
 export default function Page() {
-  return <PagePlaceholder route={routeFor("head_lab")} />;
+  return <Suspense fallback={<Skeleton className="m-8 h-64" />}><VersionedHeadLab /></Suspense>;
+}
+
+function VersionedHeadLab() {
+  const version = useVersionParameter();
+  return <HeadLab key={version ?? "best"} requestedVersion={version} />;
 }

@@ -34,6 +34,21 @@ def sse(kind, payload):
     return f"data: {encode({'kind': kind, 'payload': payload})}\n\n"
 
 
+def status_snapshot(services):
+    """The shell's current state, including a truthful snapshot for a newly connected browser."""
+    version, queue = services.current_version(), services.queue()
+    try:
+        disk = services.free_space() / 1_000_000_000
+    except (OSError, NotImplementedError):
+        disk = None
+    return {
+        "version": f"{version.name or f'Version {version.number}'} · {version.status}" if version else None,
+        "queue": {"state": "paused" if queue.paused else "running" if queue.job else "idle",
+                  "running": int(queue.job is not None), "waiting": sum(job.status == "waiting" for job in queue.up_next)},
+        "resources": {"device": None, "diskFreeGb": disk},
+    }
+
+
 class Broadcaster:
     """Fans Services events out to asyncio queues, one per open /events response.
 
@@ -41,6 +56,7 @@ class Broadcaster:
     """
 
     def __init__(self, services):
+        self.services = services
         self._clients = {}
         self._off = services.watch(self.publish)
 
@@ -48,7 +64,7 @@ class Broadcaster:
         text = sse(kind, payload)
         for queue, loop in list(self._clients.values()):
             try:
-                loop.call_soon_threadsafe(queue.put_nowait, text)
+                loop.call_soon_threadsafe(queue.put_nowait, (kind, text))
             except RuntimeError:
                 pass  # loop closed: the client is gone
 
@@ -76,9 +92,13 @@ async def events(request: Request):
         queue = broadcaster.open()
         try:
             yield ": connected\n\n"
+            yield sse("status", await asyncio.to_thread(status_snapshot, broadcaster.services))
             while not await request.is_disconnected():
                 try:
-                    yield await asyncio.wait_for(queue.get(), KEEPALIVE)
+                    kind, text = await asyncio.wait_for(queue.get(), KEEPALIVE)
+                    yield text
+                    if kind in {"queue", "versions", "blocked", "plan", "storage"}:
+                        yield sse("status", await asyncio.to_thread(status_snapshot, broadcaster.services))
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"
         finally:

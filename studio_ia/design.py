@@ -5,6 +5,9 @@ both call these; nothing here touches a widget or holds state.
 from __future__ import annotations
 
 import copy
+import math
+import uuid
+from pathlib import Path
 import os
 import sys
 
@@ -14,13 +17,23 @@ from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM, plan, step_seconds, thr
 from studio_estimate import estimate
 from studio_glossary import MODULE_TERMS, glossary_text
 from studio_slots import BLOCK_SLOTS
-from studio_spec import block_at, set_block, validate_spec
+from studio_spec import block_at, config_from_spec, set_block, validate_spec
 from studio_validate import errors, validate
 from studio_versions import OTHER_PARTS, _facts, spec_diff
 from studio_warmstart import NOTES
-from studio_ia.attribution import attribute, blocks_change_text
+from studio_ia.attribution import attribute, blocks_change_text, run_changes, signed_move
+from studio_ia import pieces as cut
+from studio_ia.services import Job
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
+
+
+def say(x, y, more, less):
+    """Describe a cost ratio using the same wording in Builder and Quick test."""
+    r = y / x
+    if abs(r - 1) < 0.05:
+        return T["about_same"]
+    return T["about_multiplier"].format(mult=f"{r if r > 1 else 1 / r:.1f}") + " " + (more if r > 1 else less)
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
@@ -484,3 +497,338 @@ def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
             out.append(T["part_expect"].format(part=T["part_" + slot], name=module.name, blurb=module.blurb))
     out.extend(issues)
     return out or [T["change_something"]]
+
+
+# Guess, train, check: shared desktop and web learning loop.
+
+GUESSES = dict(error=("lower", "higher"), step=("faster", "slower"), memory=("less", "more"))  # dimension -> its two directions
+
+
+SAME = .05  # a step time or memory within 5% is the same (the cost panel's "about the same")
+
+
+def _positive(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x > 0
+
+
+def train_memory(c):
+    """Bytes training needs at ROWS rows per step: weights, gradients and Adam state, plus activations. `c` is a sizes() dict."""
+    return c["memory"] + ROWS * c["activations"]
+
+
+def prediction_questions(old_spec, new_spec):
+    """The dimensions worth a guess for the change from old_spec to new_spec: held-back error always, step time and memory
+    only when the design's estimate says they move (a guess the cost panel already answers "about the same" is no question)."""
+    a, b = sizes(old_spec, read_spec(old_spec)["V"]), sizes(new_spec, read_spec(new_spec)["V"])
+    out = ["error"]
+    if abs(b["time"] / a["time"] - 1) >= SAME:
+        out.append("step")
+    if abs(train_memory(b) / train_memory(a) - 1) >= SAME:
+        out.append("memory")
+    return out
+
+
+def direction(key, before, after):
+    """Which way dimension `key` moved: error by the signed move in bits per character (a move under 0.005 is "same"), step
+    time and memory by ratio (within SAME is "same"). One of GUESSES[key], or "same"; None when either number is missing."""
+    if key == "error":
+        change = signed_move(before, after)
+        if change is None:
+            return None
+        return "same" if round(abs(change), 2) == 0 else "lower" if change < 0 else "higher"
+    if not (_positive(before) and _positive(after)):
+        return None
+    if abs(after / before - 1) < SAME:
+        return "same"
+    return GUESSES[key][after > before]
+
+
+def scored(v):
+    """A version's held-back bits per character, or None."""
+    bpc = (v.scorecard or {}).get("bpc") if v else None
+    return bpc if isinstance(bpc, (int, float)) and not isinstance(bpc, bool) else None
+
+
+def trained(v):
+    return bool(v and (v.best_checkpoint or scored(v) is not None))
+
+
+def results(old, new, speeds=None):
+    """{dimension: {before, after, way, measured}} for the change from version `old` to `new`. Error is each version's held-back
+    score (two scoring methods are not a move); step time is measured when `speeds` ({number: seconds per step}) has both,
+    else the design's estimate; memory is always the design's estimate."""
+    speeds = speeds or {}
+    same_method = (old.scorecard or {}).get("bpc_method") == (new.scorecard or {}).get("bpc_method")
+    a, b = (scored(old), scored(new)) if same_method else (None, scored(new))
+    out = {"error": dict(before=a, after=b, way=direction("error", a, b), measured=True)}
+    try:
+        ca, cb = sizes(old.spec, read_spec(old.spec)["V"]), sizes(new.spec, read_spec(new.spec)["V"])
+    except (KeyError, TypeError, ValueError):
+        ca = cb = None
+    sa, sb = speeds.get(old.number), speeds.get(new.number)
+    if _positive(sa) and _positive(sb):
+        out["step"] = dict(before=sa, after=sb, way=direction("step", sa, sb), measured=True)
+    elif ca:
+        out["step"] = dict(before=ca["time"], after=cb["time"], way=direction("step", ca["time"], cb["time"]), measured=False)
+    if ca:
+        ma, mb = train_memory(ca), train_memory(cb)
+        out["memory"] = dict(before=ma, after=mb, way=direction("memory", ma, mb), measured=False)
+    return out
+
+
+def seconds_text(s):
+    return f"{s * 1000:.0f} ms" if s < 1 else f"{s:.1f} s"
+
+
+def ratio_text(key, r):
+    """'about 1.4× slower', 'about the same'."""
+    return say(r["before"], r["after"], *({"step": (T["cost_slower"], T["cost_faster"]), "memory": (T["cost_more"], T["cost_less"])}[key]))
+
+
+def outcome(key, guess, r, is_trained):
+    """"hit", "miss" or None (not checked yet) for one guess against its result `r` (a results() entry, or None)."""
+    if not is_trained or not r or r["way"] is None:
+        return None
+    return "hit" if r["way"] == guess else "miss"
+
+
+def result_sentence(key, r):
+    if key == "error":
+        if r["before"] is None:
+            return ""
+        return T["result_error_flat" if r["way"] == "same" else "result_error"].format(a=r["before"], b=r["after"])
+    if key == "step" and r["measured"]:
+        return T["result_step"].format(a=seconds_text(r["before"]), b=seconds_text(r["after"]))
+    return T["result_step_estimated" if key == "step" else "result_memory"].format(say=ratio_text(key, r))
+
+
+def guess_check(old, new, speeds=None):
+    """The check of version `new`'s stored guess: {lines, hits, misses, state}, or None when it has none (or no version before it).
+    Each line is "You expected lower error. It went from 2.31 to 2.18 bits per character. A hit."; before training it says when
+    it will be checked. state is a StateTray state: live (all hits), attention (a miss), neutral (nothing checked yet)."""
+    guesses = {k: g for k, g in (getattr(new, "prediction", None) or {}).items() if g in GUESSES.get(k, ())}
+    if not guesses or old is None:
+        return None
+    rs, done = results(old, new, speeds), trained(new)
+    lines, hits, misses = [], 0, 0
+    for key in GUESSES:
+        if key not in guesses:
+            continue
+        guess, r = guesses[key], rs.get(key)
+        line = T["guess_expected"].format(what=T["guess_" + guess])
+        result = outcome(key, guess, r, done)
+        if not done:
+            line += " " + T["guess_waiting"].format(n=new.number)
+        elif result is None:
+            line += " " + T["guess_no_score"].format(n=new.number)
+        else:
+            line += " " + " ".join(filter(None, (result_sentence(key, r), T["guess_" + result])))
+        hits, misses = hits + (result == "hit"), misses + (result == "miss")
+        lines.append(line)
+    return dict(lines=lines, hits=hits, misses=misses, state="attention" if misses else "live" if hits else "neutral")
+
+
+def page_said(old, new):
+    """The first "what to expect" sentence for the change from version `old` to `new` (what the page said before it trained)."""
+    try:
+        return expectations(read_spec(old.spec), read_spec(new.spec))[0]
+    except (KeyError, TypeError, ValueError):
+        return ""
+
+
+def check_text(old, new, speeds=None):
+    """(state, kicker, text) for the guess tray of version `new`, or None when it has no guess to show."""
+    check = guess_check(old, new, speeds)
+    if check is None:
+        return None
+    said = page_said(old, new)
+    question = (getattr(new, "prediction", None) or {}).get("question")
+    text = " ".join(([T["check_question"].format(question=question)] if question else []) + check["lines"]
+                    + ([T["guess_page_said"].format(text=said)] if said and said != T["change_something"] else []))
+    return check["state"], T["guess_kicker"].format(n=new.number), text
+
+
+def split_steps(cur, draft):
+    """The draft as a chain of one-change choices [s1, …, sk]: each is the one before with one more of the draft's choices
+    applied, and the last has all of them. Word list, blocks, heads and thinking room first (the knobs act on the modules they
+    find), then each part, then each block's own pick. A knob the draft's module has no use for (heads left over from before a
+    swap) is no step of its own: it rides along with the last one."""
+    steps, s = [], dict(cur)
+
+    def take(patch):
+        nonlocal s
+        s = dict(s, **patch)
+        steps.append(s)
+    if draft["V"] != s["V"]:
+        take(dict(V=draft["V"]))
+    if draft["L"] != s["L"]:
+        take(resize(s, draft["L"]))
+    for key in ("H", "W"):
+        if draft[key] != s[key] and knob_applies(draft, key):
+            take({key: draft[key]})
+    for slot in (*PART_SLOTS, *BLOCK_SLOTS):
+        if draft["M"][slot] != s["M"][slot]:
+            take(dict(M=dict(s["M"], **{slot: draft["M"][slot]})))
+    for key in sorted(set(s["O"]) | set(draft["O"])):
+        if draft["O"].get(key) != s["O"].get(key):
+            own = dict(s["O"])
+            if key in draft["O"]:
+                own[key] = draft["O"][key]
+            else:
+                own.pop(key)
+            take(dict(O=own))
+    if steps:
+        steps[-1] = dict(draft)
+    return steps
+
+
+def split_plan(base, was, cur, draft):
+    """[(choices, spec, chips)] saving the draft as one version per change, each written onto the one before; [] when that is
+    not possible: fewer than two changes, or a step on the way would be a design that cannot work. A step that changes nothing
+    in the spec (heads on a look-back without heads) is folded into the next."""
+    out, prev_s, prev_spec = [], was, write_spec(base, was, was)
+    try:
+        for s in split_steps(cur, draft):
+            spec = write_spec(base, s, was)
+            if spec == prev_spec:
+                continue
+            if errors(spec):
+                return []
+            out.append((s, spec, change_chips(prev_spec, spec, prev_s, s)))
+            prev_s, prev_spec = s, spec
+    except ValueError:
+        return []
+    return out if len(out) > 1 and out[-1][1] == write_spec(base, draft, was) else []
+
+
+def split_jobs(start, plan, mode, parent_checkpoint, datasets, run_dir, new_id=lambda: uuid.uuid4().hex[:8]):
+    """The pretrain jobs for split versions start, start + 1, …, chained: the first starts as `mode` from `parent_checkpoint`,
+    each later one starts from the best checkpoint the one before writes (its output folder is set here, so the path is known
+    before it runs; the queue runs them in order). A step that changes the word list trains from scratch."""
+    jobs, before = [], parent_checkpoint
+    for i, (s, spec, _chips) in enumerate(plan):
+        prev = plan[i - 1][0] if i else None
+        step_mode = "from_scratch" if (i == 0 and mode == "from_scratch") or (prev and s["V"] != prev["V"]) else "catch_up"
+        job_id = new_id()
+        job = catchup_job(job_id, start + i, spec, step_mode, before, datasets)
+        out = str(Path(run_dir) / f"queue_{job_id}") if run_dir else None
+        job.params["output_dir"] = out
+        jobs.append(job)
+        before = str(Path(out) / "best.npz") if out else None
+    return jobs
+
+
+def notebook(versions, speeds=None, facts=None):
+    """One row per version, oldest first: {number, change, effects, guesses, note, state, question}. effects says what the version did to
+    held-back error, step time and memory against the version before it; guesses is the stored guess with ✓ or ✗; note says
+    when the comparison is not about one change (several changes at once, or the runs also differed in data, steps, learning
+    rate or extra training: studio_ia.attribution.run_changes on Services.run_facts). Reads no files: `speeds` and `facts`
+    ({number: …}) are what a worker read."""
+    speeds, facts, rows, old = speeds or {}, facts or {}, [], None
+    for v in versions:
+        row = dict(number=v.number, change=v.change or "", effects="", guesses="", note="", state="neutral",
+                   question=(getattr(v, "prediction", None) or {}).get("question") or "")
+        done = trained(v)
+        if old is None or not (old.spec and v.spec):
+            row["effects"] = T["notebook_error_only"].format(b=scored(v)) if scored(v) is not None else \
+                T["notebook_not_trained" if not done else "notebook_no_score"]
+        else:
+            rs = results(old, v, speeds)
+            err = rs["error"]
+            parts = [T["notebook_not_trained"] if not done else T["notebook_no_score"] if err["after"] is None
+                     else T["notebook_error"].format(a=err["before"], b=err["after"]) if err["before"] is not None
+                     else T["notebook_error_only"].format(b=err["after"])]
+            for key in ("step", "memory"):
+                if key in rs:
+                    parts.append(T["notebook_" + key].format(say=ratio_text(key, rs[key]))
+                                 + ("" if rs[key]["measured"] else T["notebook_estimated"]))
+            row["effects"] = ", ".join(parts)
+            check = guess_check(old, v, speeds)
+            if check:
+                marks = {"hit": " ✓", "miss": " ✗"}
+                guesses = getattr(v, "prediction", None) or {}
+                said = [T["guess_" + guesses[k]] + marks.get(outcome(k, guesses[k], rs.get(k), done), "")
+                        for k in GUESSES if guesses.get(k) in GUESSES[k]]
+                row["guesses"] = T["notebook_guessed"].format(guesses=", ".join(said))
+                row["state"] = check["state"]
+            elif v.number > 1:
+                row["guesses"] = T["notebook_no_guess"]
+            try:
+                many = len(change_chips(old.spec, v.spec, read_spec(old.spec), read_spec(v.spec)))
+            except (KeyError, TypeError, ValueError):
+                many = 0
+            ran = run_changes(facts[old.number], facts[v.number])[0] if facts.get(old.number) and facts.get(v.number) else []
+            ran = [name for name in ran if name not in ("starting weights", "tokens")]  # a catch-up always starts from the version before
+            row["note"] = "; ".join(filter(None, (T["notebook_many"].format(count=many) if many > 1 else "",
+                                                  T["notebook_also"].format(names=", ".join(ran)) if ran else "")))
+        rows.append(row)
+        old = v
+    return rows
+
+
+def guesses_from(picked):
+    """{dimension: direction} from the save-time chips ({dimension: the label picked, or None}); unpicked ones are left out."""
+    out = {}
+    for key, label in picked.items():
+        labels = [T["predict_" + d] for d in GUESSES[key]]
+        if label in labels:
+            out[key] = GUESSES[key][labels.index(label)]
+    return out
+
+
+def notebook_lines(rows):
+    """The notebook card's lines: one per version, or why there are none (still reading: rows is None)."""
+    if rows is None:
+        return [T["notebook_reading"]]
+    return [notebook_line(row) for row in rows] or [T["notebook_empty"]]
+
+
+def notebook_line(row):
+    """'Version 3 · more blocks (2 → 4) → error 2.31 → 2.18, steps about 1.4× slower · asked “…” · you guessed lower error ✓'."""
+    head = f"{T['notebook_version'].format(n=row['number'])} · {row['change']}" if row["change"] else T["notebook_version"].format(n=row["number"])
+    asked = T["notebook_asked"].format(question=row["question"]) if row.get("question") else ""
+    return " · ".join(filter(None, (f"{head} → {row['effects']}", asked, row["guesses"], row["note"])))
+
+
+MISSING = {1: "Built from your text: add some in Your data to see these pieces.",
+           2: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
+           3: "Built from your text: add some in Your data to see these pieces."}
+
+
+def pieces_for(v, lists):
+    """([(label, state)], count line) for the example sentence under word list v. `lists` = services.word_lists(), or None
+    while it is still being read. The count line puts every list's count side by side, in the order of the buttons."""
+    if lists is None:
+        lists = {"tokenizers": (cut.Tokenizer("byte"), None, None, None), "sentence": cut.EXAMPLE}
+        note = "Reading your text…"
+    else:
+        note = MISSING.get(v)
+    line = " · ".join("–" if n is None else f"{n:,}" for n in cut.counts(lists)) + " pieces"
+    tok = lists["tokenizers"][v]
+    if tok is None:
+        return [(note, "neutral")], line
+    chips = [(label, "pieces" if known else "attention") for label, known in cut.chips(tok, lists["sentence"])]
+    lost = sum(state == "attention" for _, state in chips)
+    if lost:
+        line += f", {lost} word{'s' if lost > 1 else ''} lost to “unknown”"
+    return chips, line
+
+
+def pill_text(job, base):
+    """Header pill: what is training now, else where the current version stands."""
+    if job:
+        n = job.params.get("version", base.number if base else 0)
+        if not n:
+            return "Training (no version yet)"
+        scratch = job.params.get("mode") == "from_scratch"
+        return f"Version {n} {'is training' if scratch or job.kind != 'pretrain' else 'is catching up'}"
+    return f"Version {base.number} is {base.status}" if base else "No saved version yet"
+
+
+def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
+    """The pretrain job for a saved version, in the shape the Pretraining page queues."""
+    cfg_ = {**config_from_spec(spec), "steps": STEPS, "batch_size": ROWS, "validation": .1}
+    scratch = mode == "from_scratch"
+    return Job(job_id, "pretrain", f"Version {number} {'from scratch' if scratch else 'catch-up'}",
+               params={"config": cfg_, "datasets": list(datasets), "mode": mode, "init_from": None if scratch else parent_checkpoint,
+                       "output_dir": None, "user_text": False, "version": number})

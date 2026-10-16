@@ -91,8 +91,12 @@ async function mockApi(page: Page, start: { running?: boolean; reason?: string |
     record(route);
     return route.fulfill(json({ started: true }));
   });
-  await page.route("**/queue/plan", (route) => {
+  await page.route("**/queue/plan", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill(json(state.plan));
     const body = record(route) as Record<string, unknown>;
+    // Make overlapping user edits deterministic: an older render must never
+    // send a whole stale plan while the preceding save is still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 150));
     state.plan = body;
     if (body.idle_only === false) state.reason = null;
     return route.fulfill(json(state.plan));
@@ -166,9 +170,30 @@ test("a waiting row is reordered by dragging it", async ({ page }) => {
   const { calls } = await mockApi(page);
   await page.goto("/queue/");
   await expect(rows(page)).toHaveCount(3);
-  await rows(page).nth(0).dragTo(rows(page).nth(2));
+  // Bring both ends into view before mouse-down. Scrolling the target after
+  // mouse-down can move the grip away before Chromium starts the native drag.
+  await rows(page).nth(2).scrollIntoViewIfNeeded();
+  await rows(page).nth(0).getByRole("button", { name: "Drag to reorder: First waiting" }).dragTo(rows(page).nth(2));
   await expect(rows(page).nth(2)).toContainText("First waiting");
   expect(calls).toEqual([expect.objectContaining({ path: "/queue/jobs/a/move", body: { index: 2 } })]);
+});
+
+test("the reorder grip supports arrow keys and keeps focus on its job", async ({ page }) => {
+  const { calls } = await mockApi(page);
+  await page.goto("/queue/");
+  const grip = page.getByRole("button", { name: "Drag to reorder: First waiting" });
+  await grip.focus();
+  await grip.press("ArrowUp");
+  expect(calls).toEqual([]);
+  await grip.press("ArrowDown");
+  await expect(rows(page).nth(1)).toContainText("First waiting");
+  await expect(grip).toBeFocused();
+  await grip.press("ArrowUp");
+  await expect(rows(page).nth(0)).toContainText("First waiting");
+  expect(calls).toEqual([
+    expect.objectContaining({ path: "/queue/jobs/a/move", body: { index: 1 } }),
+    expect.objectContaining({ path: "/queue/jobs/a/move", body: { index: 0 } }),
+  ]);
 });
 
 test("pause, resume, checkpoint now, stop after cool-down and stop", async ({ page }) => {

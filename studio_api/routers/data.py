@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from studio_api.app import get_services
 from studio_api.models_queue_data import JobRecordModel, Model, submit
+import studio_rules
 
 router = APIRouter(prefix="/data", tags=["data"])
 Services = Annotated[Any, Depends(get_services)]
@@ -114,6 +115,17 @@ class GenerateReport(BaseModel):
     duplicates: int
     checked: int
     passed: int
+
+
+class ProblemRule(BaseModel):
+    id: str
+    label: str
+
+
+class ProblemRules(BaseModel):
+    rules: list[ProblemRule]
+    max_problems: int = 5000
+    max_drafts: int = 200
 
 
 class DraftRequest(BaseModel):
@@ -299,6 +311,12 @@ def draft_count(services: Services) -> Count:
     return Count(count=services.draft_count())
 
 
+@router.get("/problems/rules")
+def problem_rules() -> ProblemRules:
+    """Generatable rules in desktop picker order; imported answer keys cannot generate examples."""
+    return ProblemRules(rules=[ProblemRule(id=rule, label=studio_rules.LABELS[rule]) for rule in studio_rules.RULES])
+
+
 @router.post("/refresh_downloads", status_code=202)
 def refresh_downloads(request: Request, services: Services) -> RebuiltJob:
     """Services.refresh_downloads as a job: rebuild downloads converted by an older app version. Result: the ids rebuilt."""
@@ -350,12 +368,16 @@ def review_data(example_id: str, body: Review, services: Services) -> None:
     """Services.review_data: keep marks a draft Good; otherwise the example is deleted."""
     _example_fields(services, example_id)
     services.review_data(example_id, body.keep)
+    services.emit("data", {})
 
 
 @router.post("/problems/generate")
 def generate_problems(body: GenerateRequest, services: Services) -> GenerateReport:
     """Services.generate_problems: rule-made problems (store=false previews)."""
-    return GenerateReport.model_validate(services.generate_problems(body.rule, body.n, body.store))
+    report = GenerateReport.model_validate(services.generate_problems(body.rule, body.n, body.store))
+    if report.added:
+        services.emit("data", {"kind": "problems"})
+    return report
 
 
 # per-kind routes ----------------------------------------------------------------------------------------------------
@@ -367,9 +389,9 @@ def data(kind: Kind, body: SummaryRequest, request: Request, services: Services)
 
 @router.get("/{kind}/rows")
 def data_page(kind: Kind, services: Services, query: str = "", cursor: str | None = None,
-              limit: Annotated[int, Query(ge=1, le=1000)] = 200) -> RowsPage:
+              limit: Annotated[int, Query(ge=1, le=1000)] = 200, review_only: bool = False) -> RowsPage:
     """Services.data_page: one page of the kind's rows whose text holds `query`, read from storage so every row can be reached."""
-    rows, following = services.data_page(kind, query, _uncursor(cursor), limit)
+    rows, following = services.data_page(kind, query, _uncursor(cursor), limit, review_only=review_only)
     return RowsPage(rows=[DataRow.model_validate(r) for r in rows], next_cursor=_cursor(following))
 
 
@@ -406,4 +428,9 @@ def import_paths(kind: Kind, body: PathsRequest, request: Request, services: Ser
 def make_drafts(kind: DraftKind, body: DraftRequest, request: Request, services: Services) -> DraftsJob:
     """Services.make_drafts as a job (a local model writes them): the result is how many were stored for review. A missing
     local model fails the job with a plain sentence."""
-    return submit(request, "make_drafts", lambda stop: {"count": services.make_drafts(kind, body.n)}, DraftsJob)
+    def write(stop):
+        count = services.make_drafts(kind, body.n)
+        if count:
+            services.emit("data", {"kind": kind})
+        return {"count": count}
+    return submit(request, "make_drafts", write, DraftsJob)

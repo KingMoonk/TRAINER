@@ -18,11 +18,12 @@ class ChattingServices(FakeServices):
 
     def __init__(self):
         super().__init__()
-        self.asked, self.taught, self.rated = [], [], []
+        self.asked, self.taught, self.rated, self.ablated = [], [], [], []
         self.fail = None
 
     def chat(self, version, messages, on_text, stop, ablate=None):
         self.asked.append((version, messages))
+        self.ablated.append(ablate)
         if self.fail:
             raise self.fail
         for text in ("Hel", "Hello", "Hello there"):
@@ -55,6 +56,13 @@ class ChatApiTest(unittest.TestCase):
         self.assertEqual(parse(response.text), [("text", {"text": "Hel"}), ("text", {"text": "Hello"}), ("text", {"text": "Hello there"}),
                                                 ("done", {"text": "Hello there"})])
         self.assertEqual(self.services.asked, [(2, [{"role": "user", "content": "Hi"}])])
+
+    def test_the_heads_to_switch_off_reach_the_model_for_this_reply_only(self):
+        self.client.post("/chat/reply", json={**ASK, "ablate": [[0, 1], [1, 3]]})
+        self.client.post("/chat/reply", json=ASK)
+        self.client.post("/chat/reply", json={**ASK, "ablate": []})
+        self.assertEqual(self.services.ablated, [[(0, 1), (1, 3)], None, None])
+        self.assertEqual(self.client.post("/chat/reply", json={**ASK, "ablate": [[0]]}).status_code, 422)
 
     def test_a_reply_that_reports_nothing_is_sent_whole(self):
         self.app.state.services = FakeServices()

@@ -8,7 +8,7 @@ export type QueueState = "idle" | "running" | "paused";
 
 /** What the status strip shows. The `status` event replaces it whole. */
 export type StudioStatus = {
-  /** The version being trained or last trained ("v3"), null before the first one. */
+  /** Current saved version and its state; null before the first design is saved. */
   version: string | null;
   queue: { state: QueueState; running: number; waiting: number };
   resources: { device: string | null; diskFreeGb: number | null };

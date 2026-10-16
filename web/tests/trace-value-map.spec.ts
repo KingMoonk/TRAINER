@@ -1,5 +1,18 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+for (const [path, endpoint] of [["trace", "trace"], ["value-map", "value-map"]]) {
+  test(`${path}: carries the linked version into the inspection request`, async ({ page }) => {
+    let body: { version: number } | undefined;
+    await page.route("**/events", (route) => route.abort());
+    await page.route(`**/inspect/${endpoint}`, (route) => {
+      body = route.request().postDataJSON();
+      return route.fulfill({ status: 202, json: job(`inspect.${endpoint}`, "done", path === "trace" ? TRACE : VALUE_MAP) });
+    });
+    await page.goto(`/${path}/?version=7`);
+    await expect.poll(() => body?.version).toBe(7);
+  });
+}
+
 // The Trace and Value map pages against mocked job endpoints: tests/serve-out.mjs has no API, so each test fulfils the POST, and
 // the result reaches the page the way it does against the real server: on GET /events, or from GET /jobs/{id}.
 
