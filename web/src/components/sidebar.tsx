@@ -10,7 +10,8 @@ import { Separator } from "@/components/ui/separator";
 // one the current page belongs to.
 export function Sidebar() {
   const pathname = usePathname();
-  const current = ROUTES.find((r) => r.href === pathname);
+  // The export uses trailing slashes (next.config.ts), so the pathname is "/queue/" and the route href is "/queue".
+  const current = ROUTES.find((r) => r.href === pathname.replace(/\/$/, ""));
   const stages = AREAS.filter((a) => !a.utility);
   const utilities = AREAS.filter((a) => a.utility);
   const row = (area: (typeof AREAS)[number]) => (
@@ -34,7 +35,6 @@ export function Sidebar() {
         <Separator className="my-2" />
         {utilities.map(row)}
       </nav>
-      <div className="mt-auto px-3 pt-4 text-xs text-muted-foreground">Nothing is training</div>
     </aside>
   );
 }

@@ -7,6 +7,8 @@ TanStack Query. Static export: `pnpm build` writes `out/`, which the API server 
 pnpm install
 pnpm dev            # http://localhost:3000
 pnpm lint && pnpm typecheck && pnpm build
+pnpm exec playwright install chromium   # once
+pnpm test           # Playwright smoke tests against out/, so build first; no API needed
 ```
 
 `NEXT_PUBLIC_API_URL` points `src/lib/api.ts` at the API server; leave it unset when the API serves `out/` itself.

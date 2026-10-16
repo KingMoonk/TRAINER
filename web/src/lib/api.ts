@@ -34,8 +34,13 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
 export type ApiEvent = { kind: string; payload: unknown };
 
 /** Open the event stream and call `onEvent` for each event. Returns the function that closes it. */
-export function subscribe(onEvent: (event: ApiEvent) => void, onError?: (error: Event) => void): () => void {
+export function subscribe(
+  onEvent: (event: ApiEvent) => void,
+  onError?: (error: Event) => void,
+  onOpen?: () => void,
+): () => void {
   const source = new EventSource(apiUrl("/events"));
+  if (onOpen) source.onopen = onOpen;
   source.onmessage = (message: MessageEvent<string>) => {
     try {
       onEvent(JSON.parse(message.data) as ApiEvent);
