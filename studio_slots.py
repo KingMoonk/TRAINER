@@ -6,6 +6,7 @@ Training-side modules build an objective, an Optimizer, a schedule, an initializ
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import math
 from dataclasses import dataclass
@@ -205,15 +206,36 @@ class Optimizer:
     states = ()  # e.g. ("m", "v"): one tensor per parameter each, saved in checkpoints
 
     def __init__(self, cfg=None):
-        self.cfg, self.steps = cfg, 0
+        self.cfg, self.steps, self.home = cfg, 0, None
 
-    def attach(self, model):
+    def attach(self, model, home=None):
+        """Allocate the per-parameter state next to the parameters, or in `home` (a studio_memory.StateHome) to offload it:
+        the tensors then live on the host between steps and update() streams one parameter's state through the device."""
+        self.home = home
         self.xp, self.roles, self.lr_scale = torch, model.roles, model.lr_scale
         self.owner = getattr(model, "owner", {})
         self.elementwise = getattr(model, "elementwise", frozenset())
         for name in self.states:
-            setattr(self, name, {key: torch.zeros_like(as_tensor(value)) for key, value in model.p.items()})
+            setattr(self, name, {key: home.zeros_like(as_tensor(value)) if home else torch.zeros_like(as_tensor(value))
+                                 for key, value in model.p.items()})
         return self
+
+    @contextlib.contextmanager
+    def _resident(self, key, device):
+        """With the state offloaded, the parameter's state on `device` for the duration (apply() reads self.<state>[key]),
+        and back in the host copy after; otherwise nothing to do."""
+        if self.home is None:
+            yield
+            return
+        stored = {name: getattr(self, name)[key] for name in self.states}
+        for name, host in stored.items():
+            getattr(self, name)[key] = self.home.fetch(host, device)
+        try:
+            yield
+        finally:
+            for name, host in stored.items():
+                resident, getattr(self, name)[key] = getattr(self, name)[key], host
+                self.home.store(host, resident)
 
     def decays(self, key):
         return self.roles.get(key) in DECAY_ROLES
@@ -235,7 +257,10 @@ class Optimizer:
         self.steps += 1
         for key, parameter in model.p.items():
             rate = learning_rate * self.lr_scale[key] if key in self.lr_scale else learning_rate
-            self.apply(key, parameter, grads[key] * multiplier, rate)
+            with self._resident(key, parameter.device):
+                self.apply(key, parameter, grads[key] * multiplier, rate)
+        if self.home is not None and grads:
+            self.home.synchronize(next(iter(grads.values())).device)
         return norm
 
     def apply(self, key, parameter, gradient, lr):

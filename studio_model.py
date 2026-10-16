@@ -41,6 +41,7 @@ from studio_ui_guard import slow
 import studio_shards
 from studio_arch import parameter_breakdown, validate_spec
 from studio_backend import DEVICES
+from studio_memory import StateHome
 from studio_core import ROOT, atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
@@ -161,12 +162,14 @@ class AdamW(_AdamW):
         self.attach(model)
 
 
-def build_optimizer(model):
-    """The optimizer and schedule the model's spec names, ready to step it. `model` may be a studio_lora.Trainable view."""
+def build_optimizer(model, offload=False):
+    """The optimizer and schedule the model's spec names, ready to step it. `model` may be a studio_lora.Trainable view.
+    `offload` keeps the optimizer state in host memory (pinned on CUDA) and streams it through the device for each update."""
     train = model.spec["train"]
     optimizer, optimizer_cfg = module_of("optimizer", train["optimizer"])
     schedule, schedule_cfg = module_of("schedule", train["schedule"])
-    return optimizer.build(optimizer_cfg, model.dims, None).attach(model), schedule.build(schedule_cfg, model.dims, None)
+    home = StateHome.for_device(model.backend.device) if offload else None
+    return optimizer.build(optimizer_cfg, model.dims, None).attach(model, home), schedule.build(schedule_cfg, model.dims, None)
 
 
 def vocabulary_guess(cfg, vocab=263):
@@ -641,10 +644,12 @@ def _initialize_from(model, tokenizer, path):
 @slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
-          schedule_window=None):
+          schedule_window=None, offload_optimizer=False):
     """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
     step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
-    Left None (the default) the schedule spans this run alone."""
+    Left None (the default) the schedule spans this run alone.
+    offload_optimizer keeps the optimizer state in host memory and streams it through the device for each update: slower,
+    the same result, and a model whose state does not fit the GPU can train (studio_memory.offload_wanted says when)."""
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
@@ -721,7 +726,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     model = ScratchTransformer(cfg, tokenizer.vocab_size)
     transplanted = _initialize_from(model, tokenizer, init_from) if init_from else None
     trainable = attach_lora(model, cfg["lora"]) if cfg["lora"] else model  # LoRA: the base is frozen; the optimizer sees only the adapters
-    optimizer, schedule = build_optimizer(trainable)
+    optimizer, schedule = build_optimizer(trainable, offload=offload_optimizer)
     step, best, history = 0, float("inf"), []
     if checkpoint:
         model.load_weights(checkpoint["model"])
@@ -763,6 +768,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         emit({"type": "info", "text": model.precision_note})
     if split["note"]:
         emit({"type": "info", "text": split["note"]})
+    if offload_optimizer:
+        emit({"type": "info", "text": "Keeping the optimizer state in host memory and streaming it to the device for each update: "
+                                      "slower steps, but the state no longer has to fit the device."})
     emit({"type": "info", "text": f"{model.backend.name} · {model.parameter_count:,} parameters · {tokenizer.vocab_size} tokens · {len(train_samples)} training windows ({cfg['windowing']}, "
                                   f"{train_samples.describe()['from_start']:.0%} start at the prompt, {train_samples.nbytes / 1024 ** 2:.1f} MB"
                                   f"{(' on disk, reused' if reused else ' on disk') if streamed else ''})"})
