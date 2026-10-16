@@ -24,7 +24,7 @@ class ApiBoundaryTests(unittest.TestCase):
                     violations.append(f"{path.relative_to(ROOT)}:{node.lineno}")
         self.assertEqual(violations, [], "API imports desktop pages: " + ", ".join(violations))
 
-    def test_quicktest_descriptions_work_without_tk(self):
+    def test_quicktest_and_training_run_work_without_tk(self):
         # A fresh interpreter prevents another test's cached desktop imports hiding a dependency.
         code = """
 import importlib.abc
@@ -39,6 +39,9 @@ from studio_spec import default_spec, validate_spec
 spec = validate_spec(default_spec())
 assert 'blocks' in _describe(spec)
 assert _cost(spec, spec) == 'same size · same work per step'
+from studio_api.routers.training_run import training_run
+from studio_ia.services import FakeServices
+training_run(FakeServices())
 """
         result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
