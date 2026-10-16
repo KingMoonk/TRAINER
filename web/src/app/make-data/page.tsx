@@ -2,7 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,7 +22,17 @@ type Rules = components["schemas"]["ProblemRules"];
 const KINDS: Kind[] = ["problems", "conversations", "text"];
 
 export default function Page() {
-  const [kind, setKind] = useState<Kind>("problems");
+  return <Suspense fallback={<Skeleton className="m-8 h-48" />}><LinkedGenerator /></Suspense>;
+}
+
+function LinkedGenerator() {
+  const requested = useSearchParams().get("kind");
+  const kind = KINDS.find((kind) => kind === requested) ?? "problems";
+  return <MakeData key={kind} initialKind={kind} />;
+}
+
+function MakeData({ initialKind }: { initialKind: Kind }) {
+  const [kind, setKind] = useState<Kind>(initialKind);
   const [making, setMaking] = useState(false);
   const cache = useQueryClient();
   const rules = useQuery({ queryKey: ["data", "problem-rules"], queryFn: ({ signal }) => unwrap(api.GET("/data/problems/rules", { signal })), staleTime: Infinity });
