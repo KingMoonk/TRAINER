@@ -1,7 +1,9 @@
 import dataclasses
+import threading
 import unittest
 
-from tests.sse_harness import ApiCase
+from studio_ia.services import FakeServices
+from tests.sse_harness import TIMEOUT, ApiCase
 
 
 def ids(state):
@@ -10,6 +12,12 @@ def ids(state):
 
 class QueueRouterTests(ApiCase):
     prefix = "/queue"
+
+    def make_services(self):
+        """A fake whose job never advances (its first step waits for the test to end), so POST /queue/start leaves the queue as it was."""
+        release = threading.Event()
+        self.addCleanup(release.set)
+        return FakeServices(sleep=lambda seconds: release.wait(TIMEOUT))
 
     def add(self, label):
         return self.call("POST", "/queue/jobs", 201, json={"kind": "pretrain", "label": label, "params": {"version": 1}})
@@ -43,7 +51,8 @@ class QueueRouterTests(ApiCase):
         self.assertFalse(self.call("POST", "/queue/resume")["paused"])
         self.assertEqual(self.call("POST", "/queue/checkpoint_now"), {"started": False})  # nothing is running
         self.assertEqual(self.call("POST", "/queue/stop_after_cooldown")["stopping"], False)
-        self.assertEqual(ids(self.call("POST", "/queue/start")), [b["id"], a["id"], c["id"]])
+        started = self.call("POST", "/queue/start")  # the fake runs the first job: it leaves Up next and becomes the running job
+        self.assertEqual((started["job"]["id"], ids(started)), (b["id"], [a["id"], c["id"]]))
 
         plan = self.call("GET", "/queue/plan")
         self.assertEqual(plan["hours"], "any")
