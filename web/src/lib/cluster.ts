@@ -38,9 +38,14 @@ export function useCluster() {
   });
 }
 
-/** What a machine is called on a page: its name, else the address it was listed by. */
-export function nodeName(node: Pick<QueueNode, "hostname" | "address">): string {
-  return node.hostname || node.address;
+/**
+ * What a machine is called on a page: its name, else the address it was listed by. When another listed machine has the same name, the
+ * address is added (a job is pinned to the address). This machine keeps its bare name: its address is only "local".
+ */
+export function nodeName(node: QueueNode, nodes: QueueNode[]): string {
+  const name = node.hostname || node.address;
+  const shared = node.hostname && !node.local && nodes.some((n) => n !== node && n.hostname.toLowerCase() === node.hostname.toLowerCase());
+  return shared ? `${name} (${node.address})` : name;
 }
 
 /** The last time a machine answered, as a clock time, or "" when it never did. */

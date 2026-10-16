@@ -8,6 +8,7 @@ one list of rows. Slow: call it from a worker, never the Tk thread.
 """
 from __future__ import annotations
 
+import collections
 import dataclasses
 import socket
 import threading
@@ -100,6 +101,14 @@ def _name(node):
     return node.hostname or node.address
 
 
+def _names(nodes):
+    """Each listed machine's name by address: its hostname, with its address added when another listed machine has the same hostname
+    (the pin uses the address, so the address tells them apart). This machine keeps its bare hostname: its address is only LOCAL."""
+    counts = collections.Counter(n.hostname.lower() for n in nodes if n.hostname)
+    return {n.address: f"{n.hostname} ({n.address})" if n.hostname and counts[n.hostname.lower()] > 1 and n.address != studio_cluster.LOCAL
+            else _name(n) for n in nodes}
+
+
 def _pinned(params):
     value = params.get("pinned") if isinstance(params, dict) else None
     return value.strip() if isinstance(value, str) else ""
@@ -110,17 +119,18 @@ def merge(own, peers, jobs, waiting=None):
     surveys. A job a peer runs for another node is left to its owner's row, and a peer's job that runs here is already in `jobs`."""
     waiting = waiting or {}
     nodes = [own, *(p.info for p in peers)]
+    names = _names(nodes)
 
     def row(job_id, kind, label, status, params, ref, queued_on, here, why, peer=None):
         node = _find(nodes, ref) if ref else None
-        return Row(job_id, kind, label, status, node.address if node else "", _name(node) if node else ref, queued_on, here,
+        return Row(job_id, kind, label, status, node.address if node else "", names[node.address] if node else ref, queued_on, here,
                    _pinned(params), why, bool(peer and peer.stale))
 
     rows = []
     for job in jobs:
         if job.status in STATES:
             ref = (getattr(job, "node", "") or studio_cluster.LOCAL) if job.status == "running" else _pinned(job.params)
-            rows.append(row(job.id, job.kind, job.label or "", job.status, job.params, ref, _name(own), True, waiting.get(job.id, "")))
+            rows.append(row(job.id, job.kind, job.label or "", job.status, job.params, ref, names[own.address], True, waiting.get(job.id, "")))
     for peer in peers:
         for job in peer.jobs:
             status, params = job.get("status"), job.get("params")
@@ -129,6 +139,6 @@ def merge(own, peers, jobs, waiting=None):
             ref = (job.get("node") or peer.info.address) if status == "running" else _pinned(params)
             if status == "running" and _find(nodes, ref) is own:
                 continue
-            rows.append(row(job["id"], str(job.get("kind", "")), str(job.get("label") or ""), status, params, ref, _name(peer.info),
+            rows.append(row(job["id"], str(job.get("kind", "")), str(job.get("label") or ""), status, params, ref, names[peer.info.address],
                             False, "", peer))
     return rows

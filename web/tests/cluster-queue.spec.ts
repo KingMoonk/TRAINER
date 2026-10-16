@@ -123,6 +123,36 @@ test("pinning a waiting job to the other machine changes where its row says it w
   expect(pins.at(-1)).toEqual({ path: "/queue/jobs/w1/pin", body: { pinned: null } });
 });
 
+test("two machines with the same hostname are told apart by their address", async ({ page }) => {
+  const state = twoMachines();
+  const twin = (address: string) => ({ ...NODES.gpu, address, pin: address });
+  state.nodes = [NODES.me, twin("10.0.0.2:8000"), twin("10.0.0.3:8000")];
+  // The server adds the address to a row's machine name when another listed machine has the same hostname.
+  state.jobs = [
+    row("w1", "First waiting", { node: "10.0.0.3:8000", hostname: "gpu-box (10.0.0.3:8000)", pinned: "10.0.0.3:8000" }),
+    row("w2", "Second waiting"),
+    row("g1", "Version 9 pretraining", { status: "running", node: "10.0.0.2:8000", hostname: "gpu-box (10.0.0.2:8000)", queued_on: "gpu-box (10.0.0.2:8000)", queued_here: false }),
+    row("g2", "Version 10 pretraining", { node: "10.0.0.3:8000", hostname: "gpu-box (10.0.0.3:8000)", queued_on: "gpu-box (10.0.0.3:8000)", queued_here: false, pinned: "10.0.0.3:8000" }),
+  ];
+  await setup(page, state);
+  await page.goto("/queue/");
+
+  const other = page.getByTestId("other-machines");
+  await expect(other.getByTestId("node-local")).toHaveText("mac-mini (this machine)");
+  await expect(other.getByTestId("node-10.0.0.2:8000")).toHaveText("gpu-box (10.0.0.2:8000)");
+  await expect(other.getByTestId("node-10.0.0.3:8000")).toHaveText("gpu-box (10.0.0.3:8000)");
+  await expect(other.getByTestId("other-g1")).toContainText("Running on gpu-box (10.0.0.2:8000)");
+  await expect(other.getByTestId("other-g1")).toContainText("queued on gpu-box (10.0.0.2:8000)");
+  await expect(other.getByTestId("other-g2")).toContainText("Pinned to gpu-box (10.0.0.3:8000)");
+  await expect(page.getByTestId("place-w1")).toHaveText("Pinned to gpu-box (10.0.0.3:8000): it runs there or waits");
+
+  const select = page.getByRole("combobox", { name: "Run on: First waiting" });
+  await expect(select.getByRole("option")).toHaveText(["Any machine", "mac-mini (this machine)", "gpu-box (10.0.0.2:8000)", "gpu-box (10.0.0.3:8000)"]);
+  await expect(select).toHaveValue("10.0.0.3:8000");
+
+  await expect(page.getByRole("status", { name: "Status" })).toContainText("mac-mini (this machine), gpu-box (10.0.0.2:8000), gpu-box (10.0.0.3:8000)");
+});
+
 test("a machine that stops answering keeps its last rows, greyed and labelled", async ({ page }) => {
   const state = twoMachines();
   await setup(page, state);

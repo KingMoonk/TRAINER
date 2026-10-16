@@ -62,6 +62,26 @@ class Merge(unittest.TestCase):
                           ("p3", "held", "", "", "gpu-box", False)])
         self.assertEqual(rows["p2"].pinned, "here-box")
 
+    def test_machines_that_share_a_hostname_get_their_address_in_the_name_and_others_keep_the_bare_hostname(self):
+        net = Net(a=peer("twin", job("pa", "running")), b=peer("TWIN", job("pb", params={"pinned": "a"})), c=peer("gpu-box", job("pc")))
+        rows = self.merge(net, [Job("pretrain", "away", status="running", id="m", node="b"), Job("pretrain", "pin", id="n", params={"pinned": "a"}),
+                                Job("pretrain", "free", id="o")])[1]
+        self.assertEqual([(r.id, r.hostname, r.queued_on) for r in rows.values()],
+                         [("m", "TWIN (b)", "here-box"), ("n", "twin (a)", "here-box"), ("o", "", "here-box"), ("pa", "twin (a)", "twin (a)"),
+                          ("pb", "twin (a)", "TWIN (b)"), ("pc", "", "gpu-box")])
+        self.assertEqual((rows["n"].node, rows["pb"].node), ("a", "a"))  # the address is still what tells them apart
+
+    def test_a_peer_with_this_machines_hostname_is_told_apart_and_this_machine_keeps_its_bare_name(self):
+        net = Net(a=peer("here-box", job("pa", "running")))
+        rows = self.merge(net, [Job("pretrain", "now", status="running", id="m")])[1]
+        self.assertEqual([(r.id, r.hostname, r.queued_on) for r in rows.values()],
+                         [("m", "here-box", "here-box"), ("pa", "here-box (a)", "here-box (a)")])
+
+    def test_an_offline_peer_with_no_known_name_does_not_collide(self):
+        net = Net(a=DOWN, b=DOWN, c=peer("gpu-box", job("pc", "running")))
+        rows = self.merge(net)[1]
+        self.assertEqual([(r.id, r.hostname, r.queued_on) for r in rows.values()], [("pc", "gpu-box", "gpu-box")])
+
     def test_a_job_a_peer_runs_for_someone_else_or_that_runs_here_is_not_listed_twice(self):
         net = Net(gpu=peer("gpu-box", job("mine", "running", node="here-box"), job("guest", "running", owner="other:8787"),
                            job("theirs", "running", node="third")), third=peer("third"))
