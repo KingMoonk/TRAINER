@@ -91,11 +91,11 @@ class Jobs:
             self._announce(record)
             done = threading.Event()
             threading.Thread(target=self._progress, args=(record, done), daemon=True).start()
-            try:
+            try:  # an exception with plain = True is already a sentence for people: the job's error is that sentence
                 result = work(stop)
             except Exception as exc:  # noqa: BLE001 - the job's failure is its result
                 done.set()
-                self._finish(record, "failed", error=f"{type(exc).__name__}: {exc}")
+                self._finish(record, "failed", error=str(exc) if getattr(exc, "plain", False) else f"{type(exc).__name__}: {exc}")
             else:
                 done.set()
                 self._finish(record, "cancelled" if stop.is_set() else "done", result=result)

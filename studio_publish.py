@@ -32,8 +32,10 @@ Everything here is slow (disk and network): call it from a worker, never the Tk 
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -55,6 +57,8 @@ HALF_MAX = float(np.finfo(np.float16).max)
 FORMAT = 1
 _EPOCH = (1980, 1, 1, 0, 0, 0)  # the earliest time a zip entry can carry; a constant keeps the file's bytes a function of its arrays
 _KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
+NO_STORE = ("No version store is set up, so versions cannot be shared between machines. Set TRAINER_STORE_FOLDER to a shared folder, "
+            "or the TRAINER_STORE_* bucket variables (docs/cluster.md), or \"studioConfig\": {\"store\": {\"folder\": ...}} in the workspace.")
 ENV = {"endpoint": "TRAINER_STORE_ENDPOINT", "bucket": "TRAINER_STORE_BUCKET", "prefix": "TRAINER_STORE_PREFIX",
        "key_id": "TRAINER_STORE_KEY_ID", "secret": "TRAINER_STORE_SECRET", "region": "TRAINER_STORE_REGION"}
 REQUIRED = ("endpoint", "bucket", "key_id", "secret")
@@ -82,6 +86,56 @@ class RemoteStore(Protocol):
 def _origin_name(origin):
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", (origin or socket.gethostname()).lower()).strip(".-")
     return name or "node"
+
+
+def own_origin(store=None):
+    """The name this machine's versions are published under in `store`: the store's own origin, else the hostname."""
+    return _origin_name(getattr(store, "origin", None))
+
+
+class StoreError(RuntimeError):
+    """A failure of a version store, already written for people: what went wrong and what to do. `plain` tells the API's jobs to show
+    the message as it is, without the exception's name in front."""
+    plain = True
+
+
+_DENIED = ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied", "403", "InvalidToken", "ExpiredToken", "AllAccessDisabled")
+_log = logging.getLogger(__name__)
+
+
+def store_error(error, store=None):
+    """`error`, raised while using `store`, as a StoreError whose sentence says what to do about it. The log keeps the original."""
+    if isinstance(error, StoreError):
+        return error
+    folder = isinstance(store, FolderStore)
+    code = str(getattr(error, "response", {}).get("Error", {}).get("Code", ""))
+    if isinstance(error, (NoCheckpoint, ValueError)) or (isinstance(error, FileNotFoundError) and "checkpoint" in str(error)):
+        text = str(error)  # these are written for people already (no checkpoint, a weight half precision cannot hold, a failed hash)
+    elif isinstance(error, KeyError) and error.args:
+        name = str(error.args[0])
+        text = name if name.startswith("No published version") else (
+            f"{name} is missing from the version store. Publish the version again from the machine that has it, then try again.")
+    elif isinstance(error, FileNotFoundError) and folder:
+        text = str(error)
+    elif isinstance(error, OSError) and getattr(error, "errno", None) == errno.ENOSPC:
+        text = "The disk is full. Free space in Resources › Storage, then try again."
+    elif code in _DENIED:
+        text = ("The bucket refused the key. Check TRAINER_STORE_KEY_ID and TRAINER_STORE_SECRET, and that the key can read and write "
+                "this bucket, then try again.")
+    elif code == "NoSuchBucket":
+        text = f"The bucket {getattr(store, 'bucket', '')} was not found. Check TRAINER_STORE_BUCKET and TRAINER_STORE_ENDPOINT, then try again."
+    elif folder and isinstance(error, OSError):
+        text = (f"The shared folder {store.root} could not be read or written ({error.strerror or error}). "
+                "Check that it is connected and that you can write to it, then try again.")
+    elif isinstance(error, (OSError, TimeoutError)) or type(error).__name__ in (
+            "EndpointConnectionError", "ConnectTimeoutError", "ReadTimeoutError", "ConnectionClosedError", "SSLError"):
+        where = f" at {getattr(store, 'bucket', None)}" if getattr(store, "bucket", None) else ""
+        text = f"Could not reach the version store{where}. Check the connection and TRAINER_STORE_ENDPOINT, then try again."
+    else:
+        _log.error("Unexpected %s from the version store", type(error).__name__, exc_info=error)
+        text = (f"The version store failed ({code or type(error).__name__}). Check its settings (docs/cluster.md) and that the bucket "
+                "or folder is reachable, then try again. The log has the details.")
+    return StoreError(text)
 
 
 def _check_key(key):

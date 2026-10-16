@@ -181,3 +181,21 @@ setx TRAINER_STORE_PREFIX "trainer"
 A half-set environment is an error that names the missing variables, not a silent fallback to working alone. The app never writes the
 secret to the workspace or the logs; keep it out of anything you commit. If it leaks, delete the token or key in the
 provider's console and make a new one: the bucket's contents are unaffected.
+
+### Publishing and pulling from the API
+
+With a store set up, the API shares versions:
+
+| route | what it does |
+| --- | --- |
+| `POST /versions/{n}/publish` | A job: uploads version `n`'s weights and metadata. Its result is `{key, number, origin}`. |
+| `GET /versions/published` | What the store holds, newest first: each entry has `origin` (the machine that published it), `mine`, and `local` / `local_number` (whether this workspace has it as a version). |
+| `POST /versions/{n}/pull` | A job: downloads published version `n` and adds it here as a trained version. `?origin=<machine>` picks one when two machines published a version `n`. Pulling what is already here returns that version. |
+
+`n` in a pull is the number the publishing machine gave the version. A pulled version has no scorecard: the numbers measured on the other
+machine used its held-back text, so they are not comparable here. Its file is kept under `data/pulled/`.
+
+Without a store the routes answer `409` with a sentence on what to set up; a store that fails (an unmounted folder, a refused key, an
+unreachable bucket) ends the job with a sentence on what to check, and running it again retries. The store is the shared folder in the
+workspace config, `"studioConfig": {"store": {"folder": "/path/to/share"}}`, else the `TRAINER_STORE_FOLDER` or `TRAINER_STORE_*` variables
+above. (The queue's own dispatch between nodes reads only the variables.)

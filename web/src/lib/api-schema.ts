@@ -1915,6 +1915,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/versions/published": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Published Versions
+         * @description The versions in the version store, newest first. 409 with a sentence on what to set up when no store is configured, or on what
+         *     to do when it cannot be reached.
+         */
+        get: operations["published_versions_versions_published_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/versions/{number}/checkpoint-step": {
         parameters: {
             query?: never;
@@ -1946,6 +1967,48 @@ export interface paths {
         get: operations["export_version_versions__number__export_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/versions/{number}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Version
+         * @description Upload the version's weights (half precision, no optimizer state) and metadata to the version store. The job's result is
+         *     {key, number, origin}. 409 with a sentence when no store is configured or the version has not trained.
+         */
+        post: operations["publish_version_versions__number__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/versions/{number}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull Version
+         * @description Download a published version and add it here as a trained version (`number` is its number on the machine that published it;
+         *     `origin` says which machine when several published one). The job's result is the new version. 409 when no store is configured.
+         */
+        post: operations["pull_version_versions__number__pull_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3649,6 +3712,61 @@ export interface components {
              * @default The cat sat on the mat because it was tired.
              */
             text: string;
+        };
+        /**
+         * PublishedVersion
+         * @description One version in the version store: what its machine published, and whether this workspace has it.
+         */
+        PublishedVersion: {
+            /** Change */
+            change?: string | null;
+            /**
+             * Device
+             * @description the device that trained it (cuda, mps, cpu), when the checkpoint recorded one
+             */
+            device?: string | null;
+            /** Key */
+            key: string;
+            /**
+             * Local
+             * @description this workspace already has it as a version
+             */
+            local: boolean;
+            /**
+             * Local Number
+             * @description the version number it has here
+             */
+            local_number?: number | null;
+            /**
+             * Mine
+             * @description this machine published it
+             */
+            mine: boolean;
+            /** Name */
+            name?: string | null;
+            /** Number */
+            number: number;
+            /**
+             * Origin
+             * @description the machine that published it
+             */
+            origin: string;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Scorecard
+             * @description as measured on the machine that trained it
+             */
+            scorecard?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Size
+             * @description bytes of the weights file in the store
+             */
+            size?: number | null;
+            /** Step */
+            step?: number | null;
         };
         /**
          * QueueStateModel
@@ -7621,6 +7739,26 @@ export interface operations {
             };
         };
     };
+    published_versions_versions_published_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedVersion"][];
+                };
+            };
+        };
+    };
     checkpoint_step_versions__number__checkpoint_step_post: {
         parameters: {
             query?: never;
@@ -7671,6 +7809,70 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_version_versions__number__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pull_version_versions__number__pull_post: {
+        parameters: {
+            query?: {
+                origin?: string | null;
+            };
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
             };
             /** @description Validation Error */
             422: {
