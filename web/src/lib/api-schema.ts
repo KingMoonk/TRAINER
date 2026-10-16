@@ -4,6 +4,46 @@
  */
 
 export interface paths {
+    "/benchmark/compare-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Plan
+         * @description The runs a Compare setup would make, and how each variant is matched to the base. Queues nothing. 422 says why a setup cannot run.
+         */
+        post: operations["compare_plan_benchmark_compare_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/benchmark/compare-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Queue
+         * @description Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.
+         */
+        post: operations["compare_queue_benchmark_compare_queue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/benchmark/compare-runs": {
         parameters: {
             query?: never;
@@ -1976,6 +2016,56 @@ export interface components {
              */
             days?: number | null;
         };
+        /** ComparePlan */
+        ComparePlan: {
+            /** Base */
+            base?: number | null;
+            /** N Runs */
+            n_runs: number;
+            /** N Sweeps */
+            n_sweeps: number;
+            /** Variants */
+            variants: components["schemas"]["PlanRow"][];
+            /** Wall Seconds */
+            wall_seconds: number;
+        };
+        /**
+         * CompareSetup
+         * @description What Compare runs asks: the base version, the variants (other saved versions), and how to hold them equal.
+         */
+        CompareSetup: {
+            /** Base */
+            base?: number | null;
+            /**
+             * Guess
+             * @default
+             */
+            guess: string;
+            /**
+             * Mode
+             * @default params
+             * @enum {string}
+             */
+            mode: "params" | "compute" | "tokens" | "wall-clock";
+            /**
+             * Question
+             * @default
+             */
+            question: string;
+            /**
+             * Retune Lr
+             * @default true
+             */
+            retune_lr: boolean;
+            /**
+             * Seeds
+             * @default 3
+             * @enum {integer}
+             */
+            seeds: 1 | 3 | 5;
+            /** Variants */
+            variants?: number[];
+        };
         /** CorrectionRequest */
         CorrectionRequest: {
             /** Correction */
@@ -2643,6 +2733,30 @@ export interface components {
              */
             start_hour: number;
         };
+        /** PlanRow */
+        PlanRow: {
+            /** Adjustments */
+            adjustments?: unknown[];
+            /** Changes */
+            changes?: string[];
+            /** Matched */
+            matched: boolean;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Relative Error */
+            relative_error?: number | null;
+            /** Steps */
+            steps?: number | null;
+            /** Variant */
+            variant: number;
+        };
         /** PretrainedImport */
         PretrainedImport: {
             /**
@@ -2788,6 +2902,15 @@ export interface components {
              * @default []
              */
             up_next: components["schemas"]["JobModel"][];
+        };
+        /** Queued */
+        Queued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Outlook */
+            outlook: string;
         };
         /** RangeJob */
         RangeJob: {
@@ -3571,6 +3694,72 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    compare_plan_benchmark_compare_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareSetup"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComparePlan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_queue_benchmark_compare_queue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareSetup"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Queued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     compare_runs_benchmark_compare_runs_post: {
         parameters: {
             query?: never;

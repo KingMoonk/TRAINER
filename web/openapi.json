@@ -296,6 +296,109 @@
         "title": "CleanRequest",
         "type": "object"
       },
+      "ComparePlan": {
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "n_runs": {
+            "title": "N Runs",
+            "type": "integer"
+          },
+          "n_sweeps": {
+            "title": "N Sweeps",
+            "type": "integer"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/PlanRow"
+            },
+            "title": "Variants",
+            "type": "array"
+          },
+          "wall_seconds": {
+            "title": "Wall Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "variants",
+          "n_runs",
+          "n_sweeps",
+          "wall_seconds"
+        ],
+        "title": "ComparePlan",
+        "type": "object"
+      },
+      "CompareSetup": {
+        "description": "What Compare runs asks: the base version, the variants (other saved versions), and how to hold them equal.",
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "guess": {
+            "default": "",
+            "title": "Guess",
+            "type": "string"
+          },
+          "mode": {
+            "default": "params",
+            "enum": [
+              "params",
+              "compute",
+              "tokens",
+              "wall-clock"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "question": {
+            "default": "",
+            "title": "Question",
+            "type": "string"
+          },
+          "retune_lr": {
+            "default": true,
+            "title": "Retune Lr",
+            "type": "boolean"
+          },
+          "seeds": {
+            "default": 3,
+            "enum": [
+              1,
+              3,
+              5
+            ],
+            "title": "Seeds",
+            "type": "integer"
+          },
+          "variants": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Variants",
+            "type": "array"
+          }
+        },
+        "title": "CompareSetup",
+        "type": "object"
+      },
       "CorrectionRequest": {
         "properties": {
           "correction": {
@@ -1821,6 +1924,73 @@
         "title": "PlanModel",
         "type": "object"
       },
+      "PlanRow": {
+        "properties": {
+          "adjustments": {
+            "items": {},
+            "title": "Adjustments",
+            "type": "array"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "relative_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Error"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "variant": {
+            "title": "Variant",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "variant",
+          "name",
+          "matched",
+          "parameters"
+        ],
+        "title": "PlanRow",
+        "type": "object"
+      },
       "PretrainedImport": {
         "properties": {
           "name": {
@@ -2125,6 +2295,29 @@
           }
         },
         "title": "QueueStateModel",
+        "type": "object"
+      },
+      "Queued": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "outlook": {
+            "title": "Outlook",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "outlook"
+        ],
+        "title": "Queued",
         "type": "object"
       },
       "RangeJob": {
@@ -3907,6 +4100,90 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/benchmark/compare-plan": {
+      "post": {
+        "description": "The runs a Compare setup would make, and how each variant is matched to the base. Queues nothing. 422 says why a setup cannot run.",
+        "operationId": "compare_plan_benchmark_compare_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparePlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Plan",
+        "tags": [
+          "benchmark"
+        ]
+      }
+    },
+    "/benchmark/compare-queue": {
+      "post": {
+        "description": "Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.",
+        "operationId": "compare_queue_benchmark_compare_queue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Queue",
+        "tags": [
+          "benchmark"
+        ]
+      }
+    },
     "/benchmark/compare-runs": {
       "post": {
         "description": "The finished Compare runs experiments, oldest first. The result is a list of CompareRunOut.",
