@@ -2452,17 +2452,6 @@
         "title": "PresetCost",
         "type": "object"
       },
-      "PretrainedImport": {
-        "properties": {
-          "name": {
-            "default": "gpt2",
-            "title": "Name",
-            "type": "string"
-          }
-        },
-        "title": "PretrainedImport",
-        "type": "object"
-      },
       "PreviewJob": {
         "properties": {
           "created_at": {
@@ -8495,48 +8484,6 @@
           }
         },
         "summary": "Current Version",
-        "tags": [
-          "versions"
-        ]
-      }
-    },
-    "/versions/import-pretrained": {
-      "post": {
-        "description": "Saves the pretrained model's design as a new version; the download and conversion are queued (GET /queue).",
-        "operationId": "import_pretrained_versions_import_pretrained_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PretrainedImport"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Version"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Import Pretrained",
         "tags": [
           "versions"
         ]
