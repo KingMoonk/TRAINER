@@ -141,6 +141,8 @@ class Services:
         self._subscribers: list[Callable[[str, Any], None]] = []
         self._ui = None  # a Tk widget; set by the shell so events hop onto the Tk thread
         self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
+        self._raw: list[Callable[[str, Any], None]] = []  # watchers that take events on the emitting thread (the API)
+        self._raw_lock = threading.Lock()
 
     # events ---------------------------------------------------------------
     def bind_ui(self, widget):
@@ -155,9 +157,28 @@ class Services:
         self._subscribers.append(callback)
         return lambda: self._subscribers.remove(callback) if callback in self._subscribers else None
 
+    def watch(self, callback):
+        """callback(kind, payload) runs synchronously on whichever thread emits, never through Tk; safe to call from any
+        thread. For code with no Tk loop (the API server). Keep the callback quick: it runs inside emit(), on the worker
+        that emitted. Returns an unsubscribe function."""
+        with self._raw_lock:
+            self._raw.append(callback)
+
+        def off():
+            with self._raw_lock:
+                if callback in self._raw:
+                    self._raw.remove(callback)
+        return off
+
     def emit(self, kind, payload=None):
         """Safe from any thread. On the Tk thread delivery is scheduled with `after`; another thread only queues the event
-        for pump(), because a Tk call from a worker can reach an app that is already destroyed and crash the process."""
+        for pump(), because a Tk call from a worker can reach an app that is already destroyed and crash the process.
+        Watchers (watch()) are told first, right here on the emitting thread; the Tk path below is unchanged by them."""
+        with self._raw_lock:
+            raw = list(self._raw)
+        for callback in raw:
+            callback(kind, payload)
+
         def deliver():
             for callback in list(self._subscribers):
                 callback(kind, payload)
