@@ -1,6 +1,24 @@
 {
   "components": {
     "schemas": {
+      "Accepted": {
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "epoch"
+        ],
+        "title": "Accepted",
+        "type": "object"
+      },
       "ActionOut": {
         "properties": {
           "answer": {
@@ -497,6 +515,63 @@
         "title": "CleanRequest",
         "type": "object"
       },
+      "ClusterJob": {
+        "properties": {
+          "epoch": {
+            "default": 0,
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "lease": {
+            "default": "",
+            "title": "Lease",
+            "type": "string"
+          },
+          "node": {
+            "default": "",
+            "title": "Node",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "runner"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "waiting_reason": {
+            "default": "",
+            "title": "Waiting Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "role",
+          "status"
+        ],
+        "title": "ClusterJob",
+        "type": "object"
+      },
       "ComputeBody": {
         "properties": {
           "preview": {
@@ -773,6 +848,41 @@
         "title": "DataSet",
         "type": "object"
       },
+      "Dispatch": {
+        "properties": {
+          "fetch": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Fetch",
+            "type": "object"
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobSpec"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/LeaseModel"
+          },
+          "owner_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Address"
+          }
+        },
+        "required": [
+          "job",
+          "lease"
+        ],
+        "title": "Dispatch",
+        "type": "object"
+      },
       "DownloadRequest": {
         "properties": {
           "ids": {
@@ -1002,6 +1112,50 @@
           "fields"
         ],
         "title": "FieldsModel",
+        "type": "object"
+      },
+      "Finished": {
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "status": {
+            "enum": [
+              "done",
+              "failed",
+              "stopped"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "status"
+        ],
+        "title": "Finished",
         "type": "object"
       },
       "ForwardRequest": {
@@ -1467,10 +1621,80 @@
             "title": "Created At",
             "type": "number"
           },
+          "epoch": {
+            "default": 0,
+            "title": "Epoch",
+            "type": "integer"
+          },
           "error": {
             "default": "",
             "title": "Error",
             "type": "string"
+          },
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta S"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "node": {
+            "default": "",
+            "title": "Node",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "owner": {
+            "default": "",
+            "title": "Owner",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Params",
+            "type": "object"
+          },
+          "status": {
+            "default": "waiting",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "JobModel",
+        "type": "object"
+      },
+      "JobSpec": {
+        "properties": {
+          "created_at": {
+            "default": 0.0,
+            "title": "Created At",
+            "type": "number"
           },
           "eta_s": {
             "anyOf": [
@@ -1506,18 +1730,13 @@
             "default": {},
             "title": "Params",
             "type": "object"
-          },
-          "status": {
-            "default": "waiting",
-            "title": "Status",
-            "type": "string"
           }
         },
         "required": [
           "id",
           "kind"
         ],
-        "title": "JobModel",
+        "title": "JobSpec",
         "type": "object"
       },
       "Knobs": {
@@ -1536,6 +1755,36 @@
           "W"
         ],
         "title": "Knobs",
+        "type": "object"
+      },
+      "LeaseModel": {
+        "properties": {
+          "duration_s": {
+            "exclusiveMinimum": 0.0,
+            "title": "Duration S",
+            "type": "number"
+          },
+          "epoch": {
+            "minimum": 1.0,
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "node",
+          "epoch",
+          "duration_s"
+        ],
+        "title": "LeaseModel",
         "type": "object"
       },
       "LeashOut": {
@@ -1756,6 +2005,7 @@
         "type": "object"
       },
       "NewJob": {
+        "description": "`params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.",
         "properties": {
           "eta_s": {
             "anyOf": [
@@ -3145,6 +3395,66 @@
         "title": "Registry",
         "type": "object"
       },
+      "Renewal": {
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "events": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "state": {
+            "default": "running",
+            "title": "State",
+            "type": "string"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "waiting": {
+            "default": false,
+            "title": "Waiting",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "epoch"
+        ],
+        "title": "Renewal",
+        "type": "object"
+      },
+      "Renewed": {
+        "properties": {
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "duration_s"
+        ],
+        "title": "Renewed",
+        "type": "object"
+      },
       "Reply": {
         "properties": {
           "reply": {
@@ -3609,6 +3919,19 @@
           }
         },
         "title": "StatusRequest",
+        "type": "object"
+      },
+      "Stop": {
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch"
+        ],
+        "title": "Stop",
         "type": "object"
       },
       "StorageUse": {
@@ -5113,6 +5436,217 @@
         "summary": "Reply",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/cluster/jobs": {
+      "get": {
+        "description": "Jobs queued here that run or wait to run on a peer (with the reason for a wait), and jobs this node runs for another.",
+        "operationId": "jobs_cluster_jobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterJob"
+                  },
+                  "title": "Response Jobs Cluster Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Jobs",
+        "tags": [
+          "cluster"
+        ]
+      },
+      "post": {
+        "description": "Take a job another node owns. 409 when this node cannot run it (no version store, a kind that does not leave its owner) or the\nlease is older than one it holds.",
+        "operationId": "dispatch_cluster_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Dispatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dispatch",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/jobs/{job_id}/finished": {
+      "post": {
+        "description": "A runner's job ended; the finished version is in the store. 409 for any epoch but the current one.",
+        "operationId": "finished_cluster_jobs__job_id__finished_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Finished"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finished",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/jobs/{job_id}/renew": {
+      "post": {
+        "description": "A runner extends its lease and reports progress; its events are re-emitted here as if the job ran here. 409 for any epoch but\nthe current one: the job has been placed again, and the runner must stop its copy.",
+        "operationId": "renew_cluster_jobs__job_id__renew_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Renewal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Renewed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Renew",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/jobs/{job_id}/stop": {
+      "post": {
+        "description": "The owner no longer wants this copy of the job. 409 when the epoch is not the one this node holds.",
+        "operationId": "stop_cluster_jobs__job_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Stop"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop",
+        "tags": [
+          "cluster"
         ]
       }
     },
@@ -7763,7 +8297,7 @@
     },
     "/queue/jobs": {
       "get": {
-        "description": "The running job first, then Up next in order.",
+        "description": "The running job first, then the jobs running on a peer, then Up next in order.",
         "operationId": "list_jobs_queue_jobs_get",
         "responses": {
           "200": {
