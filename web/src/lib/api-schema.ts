@@ -1257,6 +1257,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/post-training/import-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Import Models
+         * @description Models this server can import; size is the expected download in bytes.
+         */
+        get: operations["import_models_post_training_import_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/post-training/imports": {
         parameters: {
             query?: never;
@@ -3224,6 +3244,15 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** ImportModelOut */
+        ImportModelOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Size */
+            size: number;
+        };
         /** Inspect */
         Inspect: {
             /** Version */
@@ -3620,6 +3649,23 @@ export interface components {
             /** Outlook */
             outlook: string;
         };
+        /** OverlapOut */
+        OverlapOut: {
+            /**
+             * Checked
+             * @default 0
+             */
+            checked: number;
+            /**
+             * Left Out
+             * @default 0
+             */
+            left_out: number;
+            /** Note */
+            note?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** Own */
         Own: {
             /** Block */
@@ -3834,6 +3880,60 @@ export interface components {
             steps?: number | null;
             /** Variant */
             variant: number;
+        };
+        /** PostTrainingJobOut */
+        PostTrainingJobOut: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["PostTrainingOut"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /**
+         * PostTrainingOut
+         * @description Services.post_training: missing keys are fine, a client reads them as unknown.
+         */
+        PostTrainingOut: {
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+            /** Example */
+            example?: unknown;
+            /** Gates */
+            gates?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Overlap */
+            overlap?: {
+                [key: string]: components["schemas"]["OverlapOut"];
+            };
+            /** Rounds */
+            rounds?: {
+                [key: string]: components["schemas"]["RoundState"];
+            };
         };
         /** Prediction */
         Prediction: {
@@ -4479,6 +4579,19 @@ export interface components {
             teacher_version?: number | null;
             /** Version */
             version?: number | null;
+        };
+        /** RoundState */
+        RoundState: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Status
+             * @default idle
+             */
+            status: string;
         };
         /** RowsPage */
         RowsPage: {
@@ -7247,6 +7360,26 @@ export interface operations {
             };
         };
     };
+    import_models_post_training_import_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportModelOut"][];
+                };
+            };
+        };
+    };
     import_pretrained_post_training_imports_post: {
         parameters: {
             query?: never;
@@ -7396,7 +7529,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                    "application/json": components["schemas"]["PostTrainingJobOut"];
                 };
             };
             /** @description Validation Error */
