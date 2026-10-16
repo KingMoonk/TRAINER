@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import torch
 
@@ -71,14 +72,54 @@ def causal_softmax_attention(ctx, q, k, v, scale, position, heads):
     return merge_heads(ctx.emit("attn.head_out", attention @ v))
 
 
+@lru_cache(maxsize=None)
+def reduced_dtype(device):
+    """The half-precision dtype a KV cache is stored in on `device`: bfloat16 where the device really holds and converts it, float16 otherwise.
+
+    A cache only stores and converts; it never multiplies in this dtype, so every CPU qualifies for bfloat16. A CUDA GPU
+    needs bfloat16 support (Ampere or newer), and an Apple GPU needs a PyTorch/macOS pair that runs bfloat16 tensors (probed).
+    bfloat16 keeps float32's range at about 3 significant digits; float16 has more digits but overflows beyond 65504.
+    """
+    if device == "cuda":
+        return torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    try:
+        probe = torch.ones((2, 2), dtype=torch.bfloat16, device=device)
+        if device == "cpu" or float(torch.cat((probe, probe), dim=-2).float().sum()) == 8.:
+            return torch.bfloat16
+    except Exception:
+        pass
+    return torch.float16
+
+
+class KVCache(dict):
+    """The `cache` of CompiledModel.forward: {"n": tokens cached, block index: (keys, values)}, a plain dict plus the dtype new entries are stored in.
+
+    dtype=None keeps keys and values as the forward pass computes them (float32 without autocast), which is what a plain
+    `{"n": 0}` does. A half dtype stores them in that dtype, halving the bytes per cached token; attention upcasts them to the
+    compute dtype when it reads them. An entry keeps the dtype it was first stored in, so a plain dict copy of this cache still works.
+    """
+
+    def __init__(self, dtype=None):
+        super().__init__(n=0)
+        self.dtype = dtype
+
+
+def new_cache(device, reduced=True):
+    """A fresh cache for generating on `device`: reduced=True stores keys and values in reduced_dtype(device), False exactly as computed."""
+    return KVCache(reduced_dtype(device) if reduced else None)
+
+
 def cached(ctx, k, v):
-    """With a KV cache: append this pass's keys/values to the block's stored ones and return them all."""
+    """With a KV cache: append this pass's keys/values to the block's stored ones and return them all, in the dtype they were computed in
+    (the cache may hold them in half precision; the maths of attending stays that of the compute dtype)."""
     if ctx.cache is not None:
         if ctx.block in ctx.cache:
-            k, v = torch.cat((ctx.cache[ctx.block][0], k), dim=-2), torch.cat((ctx.cache[ctx.block][1], v), dim=-2)
-            ctx.cache[ctx.block] = (k, v)
-        else:
-            ctx.cache[ctx.block] = (k.clone(), v.clone())  # k and v are views of the q/k/v projection; keep only their own bytes
+            old_k, old_v = ctx.cache[ctx.block]
+            stored = torch.cat((old_k, k.to(old_k.dtype)), dim=-2), torch.cat((old_v, v.to(old_v.dtype)), dim=-2)
+            ctx.cache[ctx.block] = stored
+            return stored[0].to(k.dtype), stored[1].to(v.dtype)
+        dtype = k.dtype if k.dtype in HALF else getattr(ctx.cache, "dtype", None) or k.dtype  # a half-precision pass is already stored as it is
+        ctx.cache[ctx.block] = (k.to(dtype, copy=True), v.to(dtype, copy=True))  # k and v are views of the q/k/v projection; keep only their own bytes
     return k, v
 
 
