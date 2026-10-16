@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
 import time
 import urllib.error
 import urllib.parse
@@ -17,6 +18,7 @@ import urllib.request
 DEFAULT_PORT = 8787  # studio_cluster.DEFAULT_PORT; repeated so this module imports nothing of the app
 TIMEOUT = 10.  # seconds per attempt
 RETRIES = 2  # extra attempts after a connection failure
+BLOCK = 1 << 20  # bytes read at a time when a body goes to a file
 BACKOFF = .5  # seconds before the first retry; doubled each time, with up to half again of jitter
 
 
@@ -63,11 +65,19 @@ class PeerClient:
     def get_bytes(self, path, params=None, timeout=None):
         return self._call("GET", path, params, None, None, timeout)
 
+    def get_file(self, path, target, params=None, timeout=None):
+        """GET a binary body straight into the file `target`, a block at a time (a version's weights are too big to hold in memory).
+        `timeout` bounds each wait for the peer, not the whole transfer. A retry starts the file over."""
+        def save(response):
+            with open(target, "wb") as stream:
+                shutil.copyfileobj(response, stream, BLOCK)
+        self._call("GET", path, params, None, None, timeout, save)
+
     def post_bytes(self, path, data, params=None, timeout=None):
         """POST a binary body (an .npz); extra fields go in the query string."""
         return _json(self._call("POST", path, params, bytes(data), "application/octet-stream", timeout))
 
-    def _call(self, method, path, params, data, content_type, timeout):
+    def _call(self, method, path, params, data, content_type, timeout, read=None):
         url = self.url(path, params)
         request = urllib.request.Request(url, data=data, method=method)
         if content_type:
@@ -76,7 +86,7 @@ class PeerClient:
         for attempt in range(self.retries + 1):
             try:
                 with self._open(request, timeout=timeout or self.timeout) as response:
-                    return response.read()
+                    return read(response) if read else response.read()
             except urllib.error.HTTPError as exc:  # the peer answered: never retried
                 detail = _detail(exc)
                 raise PeerError(f"{self.address} answered {exc.code} to {method} /{path.lstrip('/')}: {detail}",

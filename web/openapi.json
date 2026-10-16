@@ -6019,6 +6019,126 @@
         "title": "Sample",
         "type": "object"
       },
+      "SharedVersion": {
+        "description": "What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights.",
+        "properties": {
+          "change": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "format": {
+            "default": 1,
+            "title": "Format",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "origin": {
+            "description": "this machine's name in the version store",
+            "title": "Origin",
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "published_at": {
+            "description": "when this copy of the weights was made",
+            "title": "Published At",
+            "type": "string"
+          },
+          "scorecard": {
+            "additionalProperties": true,
+            "description": "as measured on this machine",
+            "title": "Scorecard",
+            "type": "object"
+          },
+          "sha256": {
+            "description": "of the weights file",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "description": "bytes of the weights file",
+            "title": "Size",
+            "type": "integer"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "weights_dtype": {
+            "default": "float16",
+            "title": "Weights Dtype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "number",
+          "spec",
+          "origin",
+          "published_at",
+          "size",
+          "sha256"
+        ],
+        "title": "SharedVersion",
+        "type": "object"
+      },
       "Sizes": {
         "properties": {
           "activations": {
@@ -12980,7 +13100,7 @@
     },
     "/versions/{number}/pull": {
       "post": {
-        "description": "Download a published version and add it here as a trained version (`number` is its number on the machine that published it;\n`origin` says which machine when several published one). The job's result is the new version. 409 when no store is configured.",
+        "description": "Download a published version and add it here as a trained version (`number` is its number on the machine that published it;\n`origin` says which machine when several published one). The job's result is the new version, and its progress says where the\nweights came from. The machine that published it is asked first (`/weights`), when the workspace lists it among its nodes and it\nanswers; with `origin` given the store is not read then. Otherwise, or when it cannot send it, they come from the store. 409 when\nno store is configured.",
         "operationId": "pull_version_versions__number__pull_post",
         "parameters": [
           {
@@ -13117,6 +13237,85 @@
           }
         },
         "summary": "Run Speed",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/weights": {
+      "get": {
+        "description": "Stream version `number`'s weights to a peer: half precision, no optimizer state, as `publish` would upload them. Describe\nthem first with `/weights/meta`; the sha256 there is what the download must hash to.",
+        "operationId": "version_weights_versions__number__weights_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Version Weights",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/weights/meta": {
+      "get": {
+        "description": "The description of version `number`'s weights file (`GET /versions/{number}/weights`), for a peer that pulls it from this\nmachine. The first call makes the half-precision copy and may take a while. 409 when the version has not trained.",
+        "operationId": "version_weights_meta_versions__number__weights_meta_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedVersion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Version Weights Meta",
         "tags": [
           "versions"
         ]
