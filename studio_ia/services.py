@@ -141,6 +141,7 @@ class Services:
         self._subscribers: list[Callable[[str, Any], None]] = []
         self._ui = None  # a Tk widget; set by the shell so events hop onto the Tk thread
         self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
+        self._settings = {}
         from studio_ia.snapshots import Snapshots
         self.snapshots = Snapshots(self)  # what the Tk thread reads instead of calling slow services; inert until the shell starts it
 
@@ -231,6 +232,14 @@ class Services:
     def save_version(self, spec, change_text, prediction=None):
         """prediction: what the person guessed the change would do ({dimension: direction}), stored with the version."""
         raise NotImplementedError
+
+    def setting(self, key, default=None):
+        """A choice the person made that the app remembers (the Builder's Advanced toggle). Read from memory: safe on Tk."""
+        return self._settings.get(key, default)
+
+    def set_setting(self, key, value):
+        """Remember a choice. WorkspaceServices writes it to disk: call it off the Tk thread."""
+        self._settings[key] = value
 
     # queue (S2) -----------------------------------------------------------
     def queue(self) -> QueueState:
@@ -1308,6 +1317,13 @@ class WorkspaceServices(Services):
             return None
         held = [r for r in read_metrics(Path(v.best_checkpoint).parent / "metrics.jsonl") if r.get("val_loss") is not None]
         return min(held, key=lambda r: r["val_loss"])["step"] if held else None  # best.npz is saved at the lowest held-back loss
+
+    def setting(self, key, default=None):
+        return self.workspace.state["studioConfig"].get(key, default)
+
+    def set_setting(self, key, value):
+        self.workspace.state["studioConfig"][key] = value
+        self.workspace.save()
 
     def save_version(self, spec, change_text, prediction=None):
         row = self.store.save_version(spec, change_text or None, prediction)
