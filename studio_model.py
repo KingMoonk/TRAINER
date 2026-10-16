@@ -44,6 +44,7 @@ from studio_backend import DEVICES
 from studio_core import ROOT, atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
+from studio_modules.mixer.attention import new_cache
 from studio_modules.objective.ce import cross_entropy  # noqa: F401  (part of this module's API)
 from studio_modules.ops import softmax as _softmax
 from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
@@ -897,10 +898,11 @@ def unsayable(tokenizer):
 
 
 @slow("run a model forward")
-def complete(model, tokenizer, prompt, max_tokens=48):
-    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
+def complete(model, tokenizer, prompt, max_tokens=48, reduced_cache=False):
+    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces.
+    reduced_cache: keep the KV cache in half precision (see new_cache); the default float32 cache reproduces the uncached maths."""
     tokens, result = [BOS] + tokenizer.encode(prompt), []
-    cache = {"n": 0} if model.can_cache else None
+    cache = new_cache(model.device, reduced_cache) if model.can_cache else None
     blocked = unsayable(tokenizer)
     with torch.no_grad():
         for _ in range(max_tokens):
@@ -915,6 +917,8 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 
 class LocalModel:
+    reduced_kv_cache = True  # generation keeps keys and values in bfloat16 (float16 where unsupported); False: float32, for tests and inspection
+
     @slow("build a model from a checkpoint")
     def __init__(self, path, seed=42, device="auto", data=None):
         data = data or load_checkpoint(path, weights_only=True)   # `data`: the same checkpoint, already loaded by the caller
@@ -937,7 +941,7 @@ class LocalModel:
         return self
 
     def complete(self, prompt, max_tokens=48):
-        return complete(self.model, self.tokenizer, prompt, max_tokens)
+        return complete(self.model, self.tokenizer, prompt, max_tokens, self.reduced_kv_cache)
 
     @slow("generate with a model")
     def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
@@ -963,7 +967,7 @@ class LocalModel:
             return cut
 
         blocked = unsayable(self.tokenizer)
-        cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
+        cache = new_cache(self.model.device, self.reduced_kv_cache) if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         available = self.tokenizer.vocab_size - OFFSET + 1
         k = available if int(top_k) <= 0 else min(int(top_k), available)
         # Sampling runs on the model's device and only the chosen id is copied back. Its stream is seeded from the model's NumPy
