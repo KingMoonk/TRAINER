@@ -3992,7 +3992,7 @@ export interface components {
         };
         /**
          * SwitchNote
-         * @description Which line the page says about Chat switching (studio_ia.pages.training_run.switch_note): the key is the copy's, gap is
+         * @description Which line the page says about Chat switching (studio_ia.training_logic.switch_note): the key is the copy's, gap is
          *     in bits per character, docs and need are set for gate_few_docs.
          */
         SwitchNote: {

@@ -1,5 +1,5 @@
 """The training-run page's one read: the run now (or the current version's latest run), with the page logic the Tk page
-keeps in studio_ia/pages/training_run.py (phase_at, history_of, switch_note) applied, so the browser does not repeat it.
+keeps in studio_ia/training_logic.py (phase_at, history_of, switch_note) applied, so the browser does not repeat it.
 
 The run is found from the queue and the version store, never from a path the client sends.
 """
@@ -19,7 +19,7 @@ EMPTY_CURVE = {"steps": [], "smooth": [], "heldout": [], "lr": [], "phases": [],
 
 
 class SwitchNote(Model):
-    """Which line the page says about Chat switching (studio_ia.pages.training_run.switch_note): the key is the copy's, gap is
+    """Which line the page says about Chat switching (studio_ia.training_logic.switch_note): the key is the copy's, gap is
     in bits per character, docs and need are set for gate_few_docs."""
 
     key: Literal["gate_few_docs", "gate_better", "gate_not_sure", "gate_not_better", "no_band_yet", "held_back_below", "held_back_inside"]
@@ -70,7 +70,7 @@ def _curve(services, state, version):
 def training_run(services: Services) -> RunPageModel:
     """The run the page shows: a running job's live run, else the newest version's latest run."""
     import studio_eval
-    from studio_ia.pages import training_run as page
+    from studio_ia import training_logic as page
 
     state = services.queue()
     version = _current(services)
