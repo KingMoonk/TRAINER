@@ -16,8 +16,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import studio_cluster
+import studio_cluster_queue
 import studio_scheduler as sched
 from studio_api.app import get_services
+from studio_api.routers.queue import local_jobs
 from studio_api.version import app_version
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
@@ -62,6 +64,35 @@ class ClusterJob(BaseModel):
     lease: str = ""  # held | lapsed | expired
     waiting_reason: str = ""
     checkpoint_step: int | None = None
+
+
+class QueueNode(BaseModel):
+    address: str  # the entry in the list, or "local" for this machine
+    hostname: str  # "" for a machine that never answered
+    pin: str  # what to send as a job's `pinned` to keep it on this machine: its address for a listed machine (two can share a hostname), else its hostname
+    local: bool
+    online: bool
+    error: str = ""
+    seen_at: float = 0.0  # when its queue was last read (epoch seconds); 0 for this machine and for one that never answered
+
+
+class QueueRow(BaseModel):
+    id: str
+    kind: str
+    label: str = ""
+    status: Literal["running", "waiting", "held"]
+    node: str  # address of the machine it runs on; for a waiting job the machine it is pinned to; "" when it may go anywhere
+    hostname: str  # that machine's name; the pin as typed when no machine answers to it; "" when it may go anywhere
+    queued_on: str  # the name of the machine whose queue holds it
+    queued_here: bool  # False for a job another machine queued: it cannot be changed from here
+    pinned: str = ""
+    waiting_reason: str = ""
+    stale: bool = False  # the machine is not answering: this is its last known queue
+
+
+class ClusterQueue(BaseModel):
+    nodes: list[QueueNode]  # this machine first, then the listed peers; empty for a cluster of one (nothing to show about machines)
+    jobs: list[QueueRow]  # every machine's running and waiting jobs; empty for a cluster of one
 
 
 class LeaseModel(BaseModel):
@@ -142,6 +173,27 @@ def save_nodes(body: NodeList, services=Depends(get_services)) -> NodeList:
     addresses = studio_cluster.clean_nodes(body.addresses)
     services.set_setting("nodes", addresses)
     return NodeList(addresses=addresses)
+
+
+@router.get("/merged")
+def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQueue:
+    """The jobs of every machine, each with the machine it runs on or is pinned to. The peers are asked at the same time, for their
+    node and their queue, and answer within two seconds or not at all; a peer that does not keeps its last known rows, marked stale.
+    Sync, so the peers are asked off the event loop. Empty when no other machine is listed."""
+    addresses = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
+    if not addresses:
+        return ClusterQueue(nodes=[], jobs=[])
+    state = request.app.state
+    if not hasattr(state, "peer_queues"):
+        state.peer_queues = studio_cluster_queue.Peers()
+    cluster = getattr(getattr(services, "runner", None), "cluster", None)
+    own = studio_cluster_queue.own_node(cluster)
+    peers = state.peer_queues.survey(addresses)
+    rows = studio_cluster_queue.merge(own, peers, local_jobs(services), getattr(cluster, "waiting", None))
+    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own.hostname or own.address, local=True, online=True),
+             *(QueueNode(address=p.info.address, hostname=p.info.hostname, pin=p.info.address, local=False,
+                         online=p.info.online, error=p.info.error, seen_at=p.seen_at) for p in peers)]
+    return ClusterQueue(nodes=nodes, jobs=[QueueRow(**asdict(r)) for r in rows])
 
 
 @router.get("/jobs")

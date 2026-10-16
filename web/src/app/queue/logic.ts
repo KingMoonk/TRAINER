@@ -1,5 +1,6 @@
 import type { components } from "@/lib/api-schema";
 import { ApiError } from "@/lib/api";
+import type { ClusterQueue, QueueNode, QueueRow } from "@/lib/cluster";
 import { T, fill } from "./copy";
 
 export type Queue = components["schemas"]["QueueStateModel"];
@@ -74,4 +75,27 @@ export function resumesText(resumesAt: string | null | undefined): string {
   if (!resumesAt) return "";
   const when = new Date(resumesAt);
   return Number.isNaN(when.getTime()) ? "" : fill(T.blockedAt, { when: when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) });
+}
+
+/** The machine-related row for job `id` in the merged queue, if the cluster has one. */
+export function rowFor(cluster: ClusterQueue | undefined, id: string): QueueRow | undefined {
+  return cluster?.jobs.find((row) => row.id === id);
+}
+
+/** Where a job runs, or where it will: its own words, for the line under its name. */
+export function placeText(row: QueueRow): string {
+  if (row.status === "running") return fill(T.runningOn, { node: row.hostname || row.node });
+  return row.pinned ? fill(T.pinnedTo, { node: row.hostname || row.pinned }) : T.runsAnywhere;
+}
+
+/** What a machine is called in the "Run on" list: its name, marked when it is this machine or not answering. */
+export function nodeLabel(node: QueueNode): string {
+  const name = node.hostname || node.address;
+  return node.local ? `${name} (${T.thisMachine})` : node.online ? name : `${name} (${T.offline})`;
+}
+
+/** The `pin` of the machine a job is pinned to, as the "Run on" list spells it ("" for any machine; the raw pin when no machine answers to it). */
+export function pinChoice(nodes: QueueNode[], pinned: string): string {
+  const lower = pinned.trim().toLowerCase();
+  return nodes.find((n) => n.pin.toLowerCase() === lower || n.address.toLowerCase() === lower || n.hostname.toLowerCase() === lower)?.pin ?? pinned;
 }

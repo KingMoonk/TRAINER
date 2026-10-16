@@ -54,6 +54,19 @@ export const T = {
   blockedAt: "It resumes {when}.",
   starts: "Starts: {outlook}",
   couldNotLoad: "Could not read the queue.",
+  elsewhere: "ON OTHER MACHINES",
+  elsewhereTip: "What the other machines in this cluster are running or have waiting. Change a job on the machine that queued it.",
+  nothingElsewhere: "Nothing is running or waiting on the other machines.",
+  thisMachine: "this machine",
+  runOn: "Run on",
+  anyMachine: "Any machine",
+  runsAnywhere: "Runs on any machine that fits it",
+  pinnedTo: "Pinned to {node}: it runs there or waits",
+  runningOn: "Running on {node}",
+  queuedOn: "queued on {node}",
+  notAnswering: "{node} is not answering{seen}. This is what it last reported.",
+  lastKnown: "last known",
+  offline: "offline",
 } as const;
 
 export const TOGGLES = [
