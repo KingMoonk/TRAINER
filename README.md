@@ -54,6 +54,17 @@ python tasks.py web:lint                    # eslint + tsc
 python tasks.py web:build                   # the static export, web/out
 ```
 
+The API (`studio_api/`) is the server the web UI talks to. Run it and the Next.js dev server together:
+
+```bash
+.venv/bin/python -m studio_api --fake --port 8787     # terminal 1: the API over empty in-memory data (drop --fake for your workspace)
+cd web && NEXT_PUBLIC_API_URL=http://127.0.0.1:8787 pnpm dev   # terminal 2: http://localhost:3000, talking to it
+```
+
+`NEXT_PUBLIC_API_URL` is the API's origin; the dev page is on another origin, so it needs the API to allow it. For a single
+origin instead, build the export (`python tasks.py web:build`) and open the API's own URL, `http://127.0.0.1:8787`, which serves
+`web/out`. The status strip says **Connected** when the event stream is up. To keep the API running on a machine, see `docs/node.md`.
+
 Every page is a placeholder until its phase lands; the Tk app (`python app.py`) is still the one to use.
 
 ## Finding hot spots
