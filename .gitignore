@@ -13,3 +13,6 @@ __pycache__/
 /BUILD.md
 /profile.svg
 /logs/
+/web/node_modules/
+/web/.next/
+/web/out/

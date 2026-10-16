@@ -4,6 +4,9 @@
     python tasks.py test:ci                   test + compileall + the window tests (tests/gui_*.py). CI only.
     python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). CI only.
     python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
+    python tasks.py web:lint                  eslint + tsc on the web UI (web/). Needs pnpm.
+    python tasks.py web:test                  Playwright smoke tests against web/out. Run web:build first, and `pnpm exec playwright install chromium` once.
+    python tasks.py web:build                 next build: the static export in web/out.
 
 Each level includes the one before it. The window tests open real Tk and Panda3D windows, so test:ci and test:ci:e2e refuse
 to run unless CI is set (GitHub Actions sets it). Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
@@ -17,6 +20,7 @@ from pathlib import Path
 PY = sys.executable
 VERBOSE = ["-v"] if os.environ.get("CI") else []  # CI logs list every test so a skip is visible
 APP = Path(__file__).with_name("app.py")
+WEB = Path(__file__).with_name("web")
 PROFILE = Path(__file__).with_name("profile.svg")
 
 
@@ -24,9 +28,9 @@ UNIT = {"GROUNDWORK_STRICT_UI": "1", "GROUNDWORK_STALL_LOG": "0"}  # a slow prim
 WINDOW = {"GROUNDWORK_STRICT_UI": "0", "GROUNDWORK_STALL_LOG": "0"}  # window tests drive pages on the Tk thread directly: they log it (studio_ui_guard)
 
 
-def run(*cmd, env=None):
+def run(*cmd, env=None, cwd=None):
     print("+", " ".join(cmd), flush=True)
-    code = subprocess.call(cmd, env={**os.environ, **(env or {})})
+    code = subprocess.call(cmd, env={**os.environ, **(env or {})}, cwd=cwd)
     if code:
         sys.exit(code)
 
@@ -69,7 +73,29 @@ def profile():
     print(f"wrote {PROFILE}; open it in a browser", flush=True)
 
 
-TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile}
+def pnpm(*args):
+    """Run a pnpm script in web/. pnpm.cmd on Windows, since subprocess does not search for .cmd without a shell."""
+    exe = shutil.which("pnpm")
+    if not exe:
+        sys.exit("pnpm is not installed. See web/README.md.")
+    run(exe, *args, cwd=WEB)
+
+
+def web_lint():
+    pnpm("lint")
+    pnpm("typecheck")
+
+
+def web_test():
+    pnpm("test")
+
+
+def web_build():
+    pnpm("build")
+
+
+TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
+         "web:lint": web_lint, "web:test": web_test, "web:build": web_build}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
