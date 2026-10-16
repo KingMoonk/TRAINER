@@ -6,6 +6,7 @@ for float16, `scaled = True` (gradients are produced under a loss scale, see Los
 """
 from __future__ import annotations
 
+import sys
 import time
 from functools import lru_cache
 
@@ -22,6 +23,23 @@ def _best_time(fn, runs=3):
     return best
 
 
+def cpu_bf16_crashes():
+    """True on a Windows machine whose OS has switched Intel AMX on: PyTorch's oneDNN then runs bfloat16 matrix multiplies (anything
+    from about 32x32) through AMX kernels that die with an illegal instruction (0xc000001d) on some of those machines (seen on Intel
+    family 6 model 207 CI runners; model 173 runs the same kernels fine, and `ONEDNN_MAX_CPU_ISA=AVX512_CORE_BF16` avoids the crash).
+    A crash cannot be caught, and a speed probe would itself run the failing multiply, so this is read from the OS without multiplying.
+    Conservative: it also covers AMX machines that would work."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        kernel.GetEnabledXStateFeatures.restype = ctypes.c_uint64
+        return bool(kernel.GetEnabledXStateFeatures() >> 17 & 3)   # XSTATE bits 17 and 18: AMX tile configuration and tile data
+    except Exception:
+        return False
+
+
 def _cpu_half_is_fast(dtype):
     """A CPU without half-precision matrix kernels runs them hundreds of times slower than float32, so probe the speed too."""
     a, b = torch.randn(256, 256), torch.randn(256, 256)
@@ -36,6 +54,8 @@ def _cpu_half_is_fast(dtype):
 @lru_cache(maxsize=None)
 def autocast_works(device, dtype):
     """True when `device` really runs a matrix multiply in `dtype` under torch.autocast, and on a CPU not slower than float32 (probed once, not assumed)."""
+    if device == "cpu" and dtype == torch.bfloat16 and cpu_bf16_crashes():
+        return False
     try:
         with torch.autocast(device_type=device, dtype=dtype):
             ones = torch.ones((8, 8), device=device)
