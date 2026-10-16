@@ -9,7 +9,7 @@ from studio_data_kinds import add_problems
 from studio_ia.copy import CHAT
 from studio_ia.pages.chat import against_chance, answering_version, few_shot_note, few_shot_rows, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, is_mixed_precision, live_view, lora_blocker, lora_config, lora_default, spread_text, step_line, teacher_options
-from studio_ia.pages.pretraining import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
+from studio_ia.pretraining_plan import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import export_default_name, export_rows, export_run, size_text, storage_state
 from studio_ia.copy import TRAINING as T
