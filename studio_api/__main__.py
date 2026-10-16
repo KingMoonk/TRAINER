@@ -2,6 +2,8 @@
 
 import argparse
 
+import studio_cluster
+
 LOCAL = ("127.0.0.1", "localhost", "::1")
 
 
@@ -9,7 +11,7 @@ def make(argv=None):
     parser = argparse.ArgumentParser(prog="python -m studio_api")
     parser.add_argument("--fake", action="store_true", help="serve FakeServices (no workspace)")
     parser.add_argument("--bind", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=studio_cluster.DEFAULT_PORT, help="port (default: the port other nodes expect)")
     args = parser.parse_args(argv)
     from studio_api.app import create_app
 
