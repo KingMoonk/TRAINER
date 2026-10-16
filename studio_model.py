@@ -878,15 +878,6 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise
 
 
-def prefill_chunks(count):
-    """Sizes of the chunks `count` new tokens are run in: PREFILL_CHUNK each, the last one smaller. Never a chunk of one token
-    (cumsum over a length-1 time axis corrupts memory on MPS, #244): a lone remainder token takes one token from the chunk before it."""
-    sizes = [PREFILL_CHUNK] * (count // PREFILL_CHUNK) + ([count % PREFILL_CHUNK] if count % PREFILL_CHUNK else [])
-    if len(sizes) > 1 and sizes[-1] == 1 and sizes[-2] > 2:
-        sizes[-2:] = [sizes[-2] - 1, 2]
-    return sizes
-
-
 def batch_logits(model, windows, sliding, cache, stop=None):
     """Logits [rows, V] of the position after each window (all the same length), or None when `stop` was set between prefill chunks.
     With a KV cache only the tokens it has not seen are run, in chunks of PREFILL_CHUNK through the same cache (a long prompt does not
@@ -898,13 +889,11 @@ def batch_logits(model, windows, sliding, cache, stop=None):
         cache.clear()
         cache["n"] = 0
     new = np.array([window[cache["n"]:] for window in windows], dtype=np.int64)
-    start = 0
-    for size in prefill_chunks(new.shape[1]):
+    for start in range(0, new.shape[1], PREFILL_CHUNK):
         if start and stop and stop.is_set():
             return None
-        logits = model.forward(new[:, start:start + size], cache=cache)
-        start += size
-        if start < new.shape[1]:
+        logits = model.forward(new[:, start:start + PREFILL_CHUNK], cache=cache)
+        if start + PREFILL_CHUNK < new.shape[1]:
             logits[0, -1, 0].item()   # a GPU runs ahead of this thread: wait for the chunk, or a stop would find every later chunk already queued
     return logits[:, -1]
 

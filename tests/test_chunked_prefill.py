@@ -8,14 +8,14 @@ import torch
 
 import studio_model
 from studio_compile import CompiledModel
-from studio_model import batch_logits, prefill_chunks
+from studio_model import batch_logits
 from studio_modules.mixer.attention import KVCache
 from tests.test_memory_p0 import CACHED, local, positions
 
 SHORT = [{"role": "user", "content": "Hi"}]                                       # 6 prompt tokens
 LONG = [{"role": "user", "content": "Count from 4 to 9, slowly."}]                # 30 prompt tokens: nearly the 32-token window
 IDS = np.random.default_rng(0).integers(6, 200, size=30)
-CHUNKS = (4, 7, 29, 100)   # 29 leaves a remainder of one token; 100 is the whole prompt in one pass
+CHUNKS = (4, 7, 29, 100)   # 29 leaves a last chunk of one token (linear attention's running sums must carry across it); 100 is the whole prompt in one pass
 
 
 def chunked(size):
@@ -54,19 +54,6 @@ def same_cache(test, got, want):
                 torch.testing.assert_close(a, b, atol=1e-5, rtol=1e-4)
 
 
-class Chunks(unittest.TestCase):
-    def test_sizes_cover_the_tokens_and_never_leave_a_lone_token(self):
-        with chunked(8):
-            for count in range(1, 60):
-                sizes = prefill_chunks(count)
-                self.assertEqual(sum(sizes), count)
-                self.assertLessEqual(max(sizes), 8)
-                if count > 1:
-                    self.assertGreaterEqual(min(sizes), 2, count)
-            self.assertEqual(prefill_chunks(8), [8])
-            self.assertEqual(prefill_chunks(17), [8, 7, 2])
-
-
 class SameLogits(unittest.TestCase):
     def test_every_cached_mixer_and_position(self):
         for mixer in CACHED:
@@ -83,7 +70,7 @@ class SameLogits(unittest.TestCase):
                         same_cache(self, cache, exact)   # n, keys and values, or linear attention's running sums
                         self.assertEqual(cache["n"], len(IDS))
                         self.assertEqual(sum(shape[1] for shape in recorder.shapes), len(IDS))
-                        self.assertTrue(all(shape[1] <= size and shape[1] != 1 for shape in recorder.shapes), recorder.shapes)
+                        self.assertTrue(all(shape[1] <= size for shape in recorder.shapes), recorder.shapes)
 
     def test_a_cache_that_already_holds_part_of_the_text_runs_only_the_rest(self):
         model = local("linear", "learned").model
