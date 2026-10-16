@@ -15,6 +15,18 @@ pnpm test           # Playwright smoke tests against out/, so build first; no AP
 
 ## Running with the API
 
+On Windows, after `python tasks.py web:build`, run `start_web.bat` from the repository root and open
+`http://127.0.0.1:8787/chat/`. The launcher uses the main checkout's Python environment and workspace when started from a
+Git worktree. Keep its console open while using the app; startup errors remain visible there.
+
+To choose the real workspace explicitly from another checkout:
+
+```bash
+python -m studio_api --workspace /path/to/TRAINER --port 8787
+```
+
+Use one running app per workspace. `--workspace` cannot be combined with `--fake`.
+
 ```bash
 # repo root: the API over empty in-memory data (drop --fake for a real workspace)
 .venv/bin/python -m studio_api --fake --port 8787

@@ -1,4 +1,4 @@
-"""python -m studio_api [--fake] [--bind HOST] [--port N] [--reload] [--dump-openapi FILE]"""
+"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--reload] [--dump-openapi FILE]"""
 
 import argparse
 import json
@@ -27,12 +27,19 @@ def schema_json():
 
 def parse(argv=None):
     parser = argparse.ArgumentParser(prog="python -m studio_api")
-    parser.add_argument("--fake", action="store_true", help="serve FakeServices (no workspace)")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--fake", action="store_true", help="serve FakeServices (no workspace)")
+    source.add_argument("--workspace", type=Path, help="existing folder containing data/ and runs/ (useful from a worktree)")
     parser.add_argument("--bind", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=studio_cluster.DEFAULT_PORT, help="port (default: the port other nodes expect)")
     parser.add_argument("--reload", action="store_true", help="restart when a .py file changes (development)")
     parser.add_argument("--dump-openapi", metavar="FILE", help="write the OpenAPI schema to FILE and exit (pnpm gen:api reads web/openapi.json)")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.workspace is not None:
+        args.workspace = args.workspace.expanduser().resolve()
+        if not args.workspace.is_dir():
+            parser.error(f"Workspace folder does not exist: {args.workspace}")
+    return args
 
 
 def build(args):
@@ -46,7 +53,8 @@ def build(args):
         from studio_core import Workspace
         from studio_ia.services import WorkspaceServices
 
-        services = WorkspaceServices(Workspace())
+        workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
+        services = WorkspaceServices(workspace)
     return create_app(services, open=args.fake or args.bind in LOCAL)
 
 
