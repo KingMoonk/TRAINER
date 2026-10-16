@@ -1,11 +1,12 @@
 # Delegating to subagents
 
-- Default: delegate non-trivial, well-defined work to a subagent. The main session scopes the task, writes the brief and reviews the PR that comes back.
-- Well defined means you can name the files involved and what done looks like. If you cannot, settle that first (read, ask the user), then delegate.
-- Do it yourself when:
-  - the work is trivial: one edit, a question, a few tool calls;
-  - writing the brief would take longer than doing the work, because the context is already loaded here;
-  - it needs a decision only the user can make.
+- Delegate only when it pays: the cost of briefing, waiting and reviewing the PR must be smaller than doing the work here. That means work that is both significant (many files or steps, a feature, a hard bug, a sweep across the codebase, or pieces that can run in parallel) and well defined (you can name the files and what done looks like).
+- Otherwise do it on the main thread. That includes:
+  - small work: an edit or a few, a question, a handful of tool calls;
+  - work whose context is already loaded here, so the brief would restate it;
+  - work that is not yet well defined: settle it first (read, ask the user), then decide;
+  - anything that needs a decision only the user can make.
+- When you do delegate, the main session scopes the task, writes the brief and reviews the PR that comes back.
 - Pick the agent by the kind of work:
   - `implementer` (Sonnet) for moderate or difficult work: features, bug fixes that need diagnosis, refactors, anything with design choices.
   - `grunt` (Haiku) for repetitive, mechanical or read-heavy work: sweeping searches, collecting facts across many files, migrating N similar call sites, renames, running tests and summarising failures, reading logs.
