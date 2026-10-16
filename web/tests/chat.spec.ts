@@ -16,6 +16,10 @@ const version = (number: number, extra: object = {}) => ({
 
 async function mockVersions(page: Page, versions: object[]) {
   await page.route("**/versions", (route) => route.fulfill({ json: versions }));
+  const trained = versions.filter((v) => "best_checkpoint" in v && v.best_checkpoint);
+  const job = (result: unknown) => ({ id: "metadata", kind: "versions", status: "done", result, progress: "", error: "", created_at: 0 });
+  await page.route("**/versions/best", (route) => route.fulfill({ json: job(trained.at(-1) ?? null) }));
+  await page.route("**/versions/*/checkpoint-step", (route) => route.fulfill({ json: job(100) }));
 }
 
 test("SseParser joins frames split across chunks, and skips comments and malformed frames", () => {
@@ -108,7 +112,7 @@ test("a correction is saved with the conversation up to the last message", async
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved for Post-training round 3.")).toBeVisible();
   expect(saved).toEqual({
-    version: null,
+    version: 1,
     messages: [{ role: "user", content: "Where is Paris?" }],
     correction: "Paris is in France.",
     whole_answer: false,
