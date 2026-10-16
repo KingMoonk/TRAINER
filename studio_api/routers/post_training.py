@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 import studio_registry as registry
 from studio_api.app import get_services
-from studio_api.models_work import JobStarted, VersionOut, start_job, version_out
+from studio_api.models_work import JobOut, VersionOut, start_job, version_out
 from studio_ia.copy import FEEDBACK as T
 from studio_ia.services import Job
 
@@ -145,7 +145,7 @@ def round_blocker(round_number, counts, teacher_is_version, has_teacher, checkpo
     return None if (counts.get(key) or 0) >= least else why
 
 
-@router.post("/status", response_model=JobStarted)
+@router.post("/status", response_model=JobOut, status_code=202)
 def read_status(request: Request, body: StatusRequest):
     """What each round has done for a version, and what is stored for the rounds to use. A job: it counts the stored data.
     The result is a PostTrainingOut."""
@@ -154,7 +154,7 @@ def read_status(request: Request, body: StatusRequest):
     return start_job(request, "post_training.status", lambda stop: services.post_training(version), PostTrainingOut)
 
 
-@router.post("/rows", response_model=JobStarted)
+@router.post("/rows", response_model=JobOut, status_code=202)
 def read_rows(request: Request, body: RowsRequest):
     """The rows behind a round (conversations, problems, rated pairs, corrections) or the held-back ones. A job: the held-back
     text is parsed once and its overlap with training is checked."""

@@ -11,11 +11,19 @@ from fastapi import Request
 from pydantic import BaseModel, Field
 
 
-class JobStarted(BaseModel):
-    """A long read is running. Its progress and result arrive on GET /events as "job" events; GET /jobs/{id} serves late joiners."""
+class JobOut(BaseModel):
+    """A studio_api.jobs.JobRecord as it stands when the job is submitted. Its progress and result arrive on GET /events as "job"
+    events; GET /jobs/{id} serves late joiners."""
     id: str
     kind: str
     status: str
+    progress: str = ""
+    fraction: float | None = None
+    result: Any = None
+    error: str = ""
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
 
 
 class VersionOut(BaseModel):
@@ -35,6 +43,8 @@ def plain(value):
     """Data a browser can parse: numpy become lists and numbers, dataclasses dicts, keys strings, NaN and infinity null."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return plain(dataclasses.asdict(value))
+    if hasattr(value, "model_dump"):  # a pydantic model
+        return plain(value.model_dump())
     if isinstance(value, dict):
         return {key if isinstance(key, str) else str(key): plain(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -56,10 +66,10 @@ def version_out(version) -> VersionOut:
     return VersionOut(**{field.name: getattr(version, field.name) for field in dataclasses.fields(version)})
 
 
-def start_job(request: Request, kind: str, read, model: type[BaseModel] | None = None) -> JobStarted:
+def start_job(request: Request, kind: str, read, model: type[BaseModel] | None = None) -> JobOut:
     """Run `read(stop)` on the jobs worker and answer with its id. The result is `plain(read(...))`, shaped by `model` when given."""
     def work(stop):
         result = plain(read(stop))
         return model.model_validate(result).model_dump(mode="json") if model else result
     record = request.app.state.jobs.submit(kind, work)
-    return JobStarted(id=record.id, kind=record.kind, status=record.status)
+    return JobOut(**{name: getattr(record, name) for name in JobOut.model_fields})

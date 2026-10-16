@@ -78,7 +78,7 @@ async def reply(body: ReplyRequest, request: Request):
 
     def put(kind, payload):
         try:
-            loop.call_soon_threadsafe(events.put_nowait, sse(kind, payload))
+            loop.call_soon_threadsafe(events.put_nowait, (kind, payload))
         except RuntimeError:
             stop.set()  # the loop is closed: nobody is listening, so the model should stop
 
@@ -90,12 +90,12 @@ async def reply(body: ReplyRequest, request: Request):
             yield ": connected\n\n"
             while True:
                 try:
-                    text = await asyncio.wait_for(events.get(), KEEPALIVE)
+                    kind, payload = await asyncio.wait_for(events.get(), KEEPALIVE)
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"  # a model still loading says nothing for a while
                     continue
-                yield text
-                if text.startswith(("event: done", "event: error")):
+                yield sse(kind, payload)  # the same framing as GET /events
+                if kind in ("done", "error"):
                     return
         finally:
             stop.set()  # the client left or the reply is over: either way the model should stop

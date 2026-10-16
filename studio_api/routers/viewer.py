@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import studio_scene_json as scene_json
 from studio_api.app import get_services
-from studio_api.models_work import JobStarted, plain, start_job
+from studio_api.models_work import JobOut, plain, start_job
 from studio_ia.copy import INSIDE3D as T
 from studio_scene import SceneModel
 from studio_snapshot import load as load_snapshot
@@ -211,7 +211,7 @@ def snapshots(request: Request):
     return [SnapshotOut(index=index, name=path.replace("\\", "/").rsplit("/", 1)[-1]) for index, path in enumerate(snapshot_paths(request))]
 
 
-@router.post("/probe", response_model=JobStarted)
+@router.post("/probe", response_model=JobOut, status_code=202)
 def probe(request: Request, body: ProbeRequest | None = None):
     """Run one real training step of the current version's checkpoint on a sentence, without touching training. A job: the result
     is {snapshot, note}, the new snapshot's index (see /viewer/snapshots) and the sentence to show."""
@@ -225,8 +225,8 @@ def probe(request: Request, body: ProbeRequest | None = None):
             raise ValueError(T["probe_no_checkpoint"])
         if str(path) not in probes(request):
             probes(request).append(str(path))
-        return ProbeResult(snapshot=snapshot_paths(request).index(str(path)), note=T["probe_done"].format(n=version.number))
-    return start_job(request, "viewer.probe", run)
+        return {"snapshot": snapshot_paths(request).index(str(path)), "note": T["probe_done"].format(n=version.number)}
+    return start_job(request, "viewer.probe", run, ProbeResult)
 
 
 @router.get("/status", response_model=ViewerStatus)

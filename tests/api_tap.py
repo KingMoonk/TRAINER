@@ -48,9 +48,10 @@ class EventTap:
                     with self._cond:
                         self.connected = True
                         self._cond.notify_all()
-                elif lines[0].startswith("event: "):
+                elif lines[0].startswith("data: "):
+                    event = json.loads(lines[0][6:])
                     with self._cond:
-                        self.events.append((lines[0][7:], json.loads(lines[1][6:])))
+                        self.events.append((event["kind"], event["payload"]))
                         self._cond.notify_all()
 
         await self.app(scope, receive, send)

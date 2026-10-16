@@ -30,7 +30,8 @@ def encode(payload):
 
 
 def sse(kind, payload):
-    return f"event: {kind}\ndata: {encode(payload)}\n\n"
+    """One unnamed SSE message whose data is {"kind", "payload"}: EventSource.onmessage in the browser sees every kind."""
+    return f"data: {encode({'kind': kind, 'payload': payload})}\n\n"
 
 
 class Broadcaster:

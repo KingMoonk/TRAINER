@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from studio_api.app import get_services
-from studio_api.models_work import JobStarted, plain, start_job
+from studio_api.models_work import JobOut, plain, start_job
 
 router = APIRouter(prefix="/benchmark", tags=["benchmark"])
 
@@ -69,7 +69,7 @@ class Verdict(Loose):
     reason: str = ""
 
 
-@router.post("/read", response_model=JobStarted)
+@router.post("/read", response_model=JobOut, status_code=202)
 def read_benchmark(request: Request):
     """The benchmark track as stored, one row per trained version; never scores anything. A job: it reads the held-back data.
     The result is a BenchmarkOut."""
@@ -77,14 +77,14 @@ def read_benchmark(request: Request):
     return start_job(request, "benchmark.read", lambda stop: services.benchmark(), BenchmarkOut)
 
 
-@router.post("/run", response_model=JobStarted)
+@router.post("/run", response_model=JobOut, status_code=202)
 def run_benchmark(request: Request, body: RunRequest):
     """Score (or read back) the suite for one trained version. Slow. The result is the suite's dict for that version."""
     services = request.app.state.services
     return start_job(request, "benchmark.run", lambda stop: services.run_benchmark(body.version))
 
 
-@router.post("/few-shot", response_model=JobStarted)
+@router.post("/few-shot", response_model=JobOut, status_code=202)
 def few_shot(request: Request, body: VersionRequest):
     """Lettered problems answered with 0, 1 and a few worked examples in the prompt, and no training. Slow.
     The result is a FewShotOut."""
@@ -92,7 +92,7 @@ def few_shot(request: Request, body: VersionRequest):
     return start_job(request, "benchmark.few_shot", lambda stop: services.few_shot(body.version), FewShotOut)
 
 
-@router.post("/compare-runs", response_model=JobStarted)
+@router.post("/compare-runs", response_model=JobOut, status_code=202)
 def compare_runs(request: Request):
     """The finished Compare runs experiments, oldest first. The result is a list of CompareRunOut."""
     services = request.app.state.services
