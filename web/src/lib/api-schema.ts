@@ -613,6 +613,287 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Changes
+         * @description change_chips, parts_changed and warm_outlook for a draft against the version it started from.
+         */
+        post: operations["changes_design_changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/choose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose
+         * @description choose: the choices after picking a module for a part, for every block or for one.
+         */
+        post: operations["choose_design_choose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/compute-lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compute Lines
+         * @description compute_lines: how much text a design needs against the text you have, and how long a run should take.
+         */
+        post: operations["compute_lines_design_compute_lines_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/expectations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Expectations
+         * @description design_expectation for the draft, and expectations for its changes. "Last time blocks changed" reads the history
+         *     (Services.versions, run_facts, compare_runs), only when the block count differs, as the page does.
+         */
+        post: operations["expectations_design_expectations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/lr-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lr Text
+         * @description lr_text: the sentence under "Find a learning rate".
+         */
+        post: operations["lr_text_design_lr_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/part-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Part Options
+         * @description part_options: one part's menu, with why_not's reason on every module the design cannot take.
+         */
+        post: operations["part_options_design_part_options_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/preset-cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preset Cost
+         * @description preset_cost: what a design costs on this machine before it is loaded, and its training recipe in one line.
+         */
+        post: operations["preset_cost_design_preset_cost_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Presets
+         * @description preset_specs: the ready-made designs, GPT-2's with its word list when that is on this computer.
+         */
+        get: operations["presets_design_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read
+         * @description read_spec: the editable choices of a spec (defaults filled in).
+         */
+        post: operations["read_design_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Design Registry
+         * @description The modules every part can take, with their hover help and settings, plus the knob labels.
+         */
+        get: operations["design_registry_design_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/resize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resize
+         * @description resize: the choices with n blocks.
+         */
+        post: operations["resize_design_resize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/sizes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sizes
+         * @description sizes: size, time and memory of a design under word list v, and whether it fits this computer (fits).
+         */
+        post: operations["sizes_design_sizes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/tower": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tower
+         * @description What the tower paints: every block's parts (block_parts, own_slots) and which knobs apply (knob_applies).
+         */
+        post: operations["tower_design_tower_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/write": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write
+         * @description write_spec: `base` with only the choices that changed rewritten.
+         */
+        post: operations["write_design_write_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -1606,26 +1887,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/versions/import-pretrained": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import Pretrained
-         * @description Saves the pretrained model's design as a new version; the download and conversion are queued (GET /queue).
-         */
-        post: operations["import_pretrained_versions_import_pretrained_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/versions/{number}/checkpoint-step": {
         parameters: {
             query?: never;
@@ -2058,6 +2319,17 @@ export interface components {
             /** Added */
             added: boolean;
         };
+        /** Block */
+        Block: {
+            /** Block */
+            block: number;
+            /** Own */
+            own: string[];
+            /** Parts */
+            parts: {
+                [key: string]: string;
+            };
+        };
         /** Body_import_data_data__kind__import_post */
         Body_import_data_data__kind__import_post: {
             /** Files */
@@ -2083,12 +2355,71 @@ export interface components {
             /** Weights */
             weights?: string | null;
         };
+        /** Changes */
+        Changes: {
+            /** Chips */
+            chips: string[];
+            /** Parts Changed */
+            parts_changed: boolean;
+            warm: components["schemas"]["Warm"] | null;
+        };
+        /** ChangesBody */
+        ChangesBody: {
+            /** Base */
+            base: {
+                [key: string]: unknown;
+            };
+            cur: components["schemas"]["Choices"];
+            draft: components["schemas"]["Choices"];
+            /** Draft Spec */
+            draft_spec: {
+                [key: string]: unknown;
+            };
+        };
         /** Chip */
         Chip: {
             /** Known */
             known: boolean;
             /** Label */
             label: string;
+        };
+        /** Choices */
+        Choices: {
+            /** H */
+            H: number;
+            /** L */
+            L: number;
+            M: components["schemas"]["Parts"];
+            /**
+             * O
+             * @default []
+             */
+            O: components["schemas"]["Own"][];
+            /** T */
+            T: number;
+            /** V */
+            V: number;
+            /** W */
+            W: number;
+            /** D */
+            d: number;
+        };
+        /** ChoicesBody */
+        ChoicesBody: {
+            choices: components["schemas"]["Choices"];
+        };
+        /** ChooseBody */
+        ChooseBody: {
+            /** Block */
+            block?: number | null;
+            choices: components["schemas"]["Choices"];
+            /** Short */
+            short: string;
+            /**
+             * Slot
+             * @enum {string}
+             */
+            slot: "embedding" | "position" | "head" | "norm" | "mixer" | "channel";
         };
         /** CleanRequest */
         CleanRequest: {
@@ -2103,6 +2434,19 @@ export interface components {
              * @description delete runs older than this many days; null = all history
              */
             days?: number | null;
+        };
+        /** ComputeBody */
+        ComputeBody: {
+            /** Preview */
+            preview?: {
+                [key: string]: unknown;
+            } | null;
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+            /** V */
+            v: number;
         };
         /** CorrectionRequest */
         CorrectionRequest: {
@@ -2259,6 +2603,28 @@ export interface components {
             path: string;
             /** Size */
             size?: number | null;
+        };
+        /** ExpectBody */
+        ExpectBody: {
+            /** Base */
+            base: {
+                [key: string]: unknown;
+            };
+            cur: components["schemas"]["Choices"];
+            draft: components["schemas"]["Choices"];
+            /** Draft Spec */
+            draft_spec?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** Expectations */
+        Expectations: {
+            /** Details */
+            details: string;
+            /** Headline */
+            headline: string;
+            /** Lines */
+            lines: string[];
         };
         /** FieldsModel */
         FieldsModel: {
@@ -2551,6 +2917,13 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** Knobs */
+        Knobs: {
+            /** H */
+            H: boolean;
+            /** W */
+            W: boolean;
+        };
         /** LeashOut */
         LeashOut: {
             /** Beta */
@@ -2568,6 +2941,13 @@ export interface components {
             generation: number;
             /** Node */
             node: string;
+        };
+        /** Line */
+        Line: {
+            /** Bad */
+            bad: boolean;
+            /** Text */
+            text: string;
         };
         /** Listing */
         Listing: {
@@ -2595,6 +2975,15 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** LrBody */
+        LrBody: {
+            /** Current */
+            current?: number | null;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** Message */
         Message: {
             /** Content */
@@ -2604,6 +2993,21 @@ export interface components {
              * @enum {string}
              */
             role: "system" | "user" | "assistant";
+        };
+        /** ModuleInfo */
+        ModuleInfo: {
+            /** Blurb */
+            blurb: string;
+            /** Fields */
+            fields: {
+                [key: string]: unknown;
+            }[];
+            /** Name */
+            name: string;
+            /** Short */
+            short: string;
+            /** Tip */
+            tip: string;
         };
         /** MoveTo */
         MoveTo: {
@@ -2679,6 +3083,33 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** Option */
+        Option: {
+            /** Blurb */
+            blurb: string;
+            /** Name */
+            name: string;
+            /** Short */
+            short: string;
+            /** Why */
+            why: string;
+        };
+        /** OptionsBody */
+        OptionsBody: {
+            /** Base */
+            base: {
+                [key: string]: unknown;
+            };
+            /** Block */
+            block?: number | null;
+            choices: components["schemas"]["Choices"];
+            /**
+             * Slot
+             * @enum {string}
+             */
+            slot: "embedding" | "position" | "head" | "norm" | "mixer" | "channel";
+            was?: components["schemas"]["Choices"] | null;
+        };
         /** OptionsOut */
         OptionsOut: {
             /** Default Teacher */
@@ -2699,6 +3130,18 @@ export interface components {
             /** Outlook */
             outlook: string;
         };
+        /** Own */
+        Own: {
+            /** Block */
+            block: number;
+            /** Id */
+            id: string;
+            /**
+             * Slot
+             * @enum {string}
+             */
+            slot: "norm" | "mixer" | "channel";
+        };
         /** PairRequest */
         PairRequest: {
             chosen: components["schemas"]["Reply"];
@@ -2712,6 +3155,21 @@ export interface components {
             record?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** Parts */
+        Parts: {
+            /** Channel */
+            channel: string;
+            /** Embedding */
+            embedding: string;
+            /** Head */
+            head: string;
+            /** Mixer */
+            mixer: string;
+            /** Norm */
+            norm: string;
+            /** Position */
+            position: string;
         };
         /** Passive */
         Passive: {
@@ -2824,13 +3282,37 @@ export interface components {
              */
             start_hour: number;
         };
-        /** PretrainedImport */
-        PretrainedImport: {
-            /**
-             * Name
-             * @default gpt2
-             */
+        /** Preset */
+        Preset: {
+            /** Key */
+            key: string;
+            /** Name */
             name: string;
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+            /** Term */
+            term: string;
+        };
+        /** PresetCost */
+        PresetCost: {
+            /** Fits */
+            fits: boolean | null;
+            /** Lines */
+            lines: string[];
+            /** Need */
+            need: number;
+            /** Params */
+            params: number;
+            /** Recipe */
+            recipe: string;
+            /** Rows */
+            rows: number;
+            /** Slow */
+            slow: boolean;
+            /** Step */
+            step: number;
         };
         /** PreviewJob */
         PreviewJob: {
@@ -3098,12 +3580,33 @@ export interface components {
             /** Unigram Bpc */
             unigram_bpc?: number | null;
         };
+        /** Registry */
+        Registry: {
+            /** Block Slots */
+            block_slots: string[];
+            /** Heads */
+            heads: number[];
+            /** Part Slots */
+            part_slots: string[];
+            /** Slots */
+            slots: components["schemas"]["SlotInfo"][];
+            /** Widths */
+            widths: string[];
+            /** Words */
+            words: string[];
+        };
         /** Reply */
         Reply: {
             /** Reply */
             reply: string;
             /** Version */
             version?: number | null;
+        };
+        /** ResizeBody */
+        ResizeBody: {
+            choices: components["schemas"]["Choices"];
+            /** N */
+            n: number;
         };
         /** Review */
         Review: {
@@ -3203,6 +3706,41 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** Sizes */
+        Sizes: {
+            /** Activations */
+            activations: number;
+            /** Fits */
+            fits: boolean | null;
+            /** Memory */
+            memory: number;
+            /** Params */
+            params: number;
+            /** Table */
+            table: number;
+            /** Time */
+            time: number;
+        };
+        /** SizesBody */
+        SizesBody: {
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+            /** V */
+            v: number;
+        };
+        /** SlotInfo */
+        SlotInfo: {
+            /** Modules */
+            modules: components["schemas"]["ModuleInfo"][];
+            /** Name */
+            name: string;
+            /** Slot */
+            slot: string;
+            /** Tip */
+            tip: string;
+        };
         /** SnapshotOut */
         SnapshotOut: {
             /** Index */
@@ -3240,6 +3778,13 @@ export interface components {
              * @default 0
              */
             total: number;
+        };
+        /** SpecBody */
+        SpecBody: {
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
         };
         /** StartRequest */
         StartRequest: {
@@ -3362,6 +3907,17 @@ export interface components {
             name: string;
             /** Number */
             number: number;
+        };
+        /** Text */
+        Text: {
+            /** Text */
+            text: string;
+        };
+        /** Tower */
+        Tower: {
+            /** Blocks */
+            blocks: components["schemas"]["Block"][];
+            knobs: components["schemas"]["Knobs"];
         };
         /** TraceRequest */
         TraceRequest: {
@@ -3587,6 +4143,21 @@ export interface components {
             /** Running */
             running: boolean;
         };
+        /** Warm */
+        Warm: {
+            /** Carries */
+            carries: boolean;
+            /** Chip */
+            chip: string;
+            /** Kind */
+            kind: string;
+            /** Preserving */
+            preserving: boolean;
+            /** State */
+            state: string;
+            /** Text */
+            text: string;
+        };
         /** WordList */
         WordList: {
             /** Chips */
@@ -3635,6 +4206,15 @@ export interface components {
             lists: (components["schemas"]["WordList"] | null)[];
             /** Sentence */
             sentence: string;
+        };
+        /** WriteBody */
+        WriteBody: {
+            /** Base */
+            base: {
+                [key: string]: unknown;
+            };
+            choices: components["schemas"]["Choices"];
+            was?: components["schemas"]["Choices"] | null;
         };
         /**
          * JobOut
@@ -4747,6 +5327,444 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SummaryJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    changes_design_changes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangesBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Changes"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    choose_design_choose_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChooseBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Choices"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compute_lines_design_compute_lines_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComputeBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Line"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    expectations_design_expectations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Expectations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lr_text_design_lr_text_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LrBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Text"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    part_options_design_part_options_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Option"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preset_cost_design_preset_cost_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresetCost"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    presets_design_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preset"][];
+                };
+            };
+        };
+    };
+    read_design_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Choices"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    design_registry_design_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Registry"];
+                };
+            };
+        };
+    };
+    resize_design_resize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResizeBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Choices"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sizes_design_sizes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SizesBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sizes"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tower_design_tower_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChoicesBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tower"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_design_write_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WriteBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -6285,39 +7303,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Version"] | null;
-                };
-            };
-        };
-    };
-    import_pretrained_versions_import_pretrained_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PretrainedImport"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Version"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

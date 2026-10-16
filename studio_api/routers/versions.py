@@ -38,10 +38,6 @@ class NewVersion(BaseModel):
     prediction: dict[str, str] | None = Field(None, description='the guess made on saving, e.g. {"error": "lower"}')
 
 
-class PretrainedImport(BaseModel):
-    name: str = "gpt2"
-
-
 def _job(request, kind, work):
     record = request.app.state.jobs.submit(kind, work)
     return JobOut(**{k: getattr(record, k) for k in JobOut.model_fields})
@@ -71,12 +67,6 @@ def current_version(services=Depends(get_services)):
 def best_version(request: Request, services=Depends(get_services)):
     """The version Chat follows. Weighing versions scores their checkpoints on the held-back text, so it is a job."""
     return _job(request, "versions.best", lambda stop: services.best_version())
-
-
-@router.post("/import-pretrained", response_model=Version, status_code=201)
-def import_pretrained(body: PretrainedImport, services=Depends(get_services)):
-    """Saves the pretrained model's design as a new version; the download and conversion are queued (GET /queue)."""
-    return services.import_pretrained(body.name)
 
 
 @router.post("/{number}/checkpoint-step", response_model=JobOut, status_code=202)

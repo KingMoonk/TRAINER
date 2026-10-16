@@ -12,14 +12,15 @@ Polling and the local probe are slow (network, a GPU check): call them from a wo
 """
 from __future__ import annotations
 
-import json
 import socket
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
+from studio_peer import PeerClient, base_url
+
 DEFAULT_PORT = 8787  # the API's port when a node is listed as a bare name; studio_api (Phase 1) must serve on the same one
 POLL_TIMEOUT = 2.  # seconds: a peer that does not answer this fast is offline for now
+DEFAULT_TAG = "tag:trainer"  # the tag a node carries to call its peers (docs/cluster.md)
 LOCAL = "local"  # the address of this machine's own NodeInfo
 
 # dtypes a device kind trains in. Conservative: bfloat16 on Apple's GPU is not listed, because torch's Metal kernels cover it unevenly.
@@ -89,13 +90,32 @@ def configured_nodes(state):
 
 
 def node_url(address):
-    """The `GET /node` URL of a configured entry: a URL as given (any path is replaced by /node), a bare name on DEFAULT_PORT."""
-    base = address if "://" in address else f"http://{address}"
-    scheme, _, rest = base.partition("://")
-    host = rest.split("/", 1)[0]
-    if ":" not in host.rsplit("]", 1)[-1]:
-        host += f":{DEFAULT_PORT}"
-    return f"{scheme}://{host}/node"
+    """The `GET /node` URL of a configured entry: a URL as given (any path is replaced by /node, so https://box.ts.net stays on
+    443 where `tailscale serve` listens), a bare name on DEFAULT_PORT."""
+    base = base_url(address)
+    if base.startswith("http://") and ":" not in base.partition("//")[2].rsplit("]", 1)[-1]:
+        base += f":{DEFAULT_PORT}"  # plain http without a port is the API's own port; https is serve's 443
+    return f"{base}/node"
+
+
+def allowed_callers(state):
+    """(tags, users) a direct caller may have, from `studioConfig.cluster` in the workspace config:
+    `{"allowTags": ["tag:trainer"], "allowUsers": ["me@example.com"]}`. Absent allowTags means tag:trainer; absent allowUsers means
+    nobody. Raises ValueError with a plain sentence for a bad value."""
+    config = state.get("studioConfig") if isinstance(state, dict) else None
+    cluster = (config or {}).get("cluster", {})
+    if not isinstance(cluster, dict):
+        raise ValueError('studioConfig.cluster in the workspace must be an object like {"allowTags": ["tag:trainer"], "allowUsers": []}.')
+    out = []
+    for key, default in (("allowTags", [DEFAULT_TAG]), ("allowUsers", [])):
+        values = cluster.get(key, default)
+        if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values):
+            raise ValueError(f"studioConfig.cluster.{key} in the workspace must be a list of non-empty text values.")
+        values = [v.strip() for v in values]
+        if key == "allowTags" and any(not v.startswith("tag:") for v in values):
+            raise ValueError('studioConfig.cluster.allowTags entries must look like "tag:trainer".')
+        out.append(tuple(values))
+    return tuple(out)
 
 
 def own_info(busy=False, version="", status=None, memory=None):
@@ -120,8 +140,10 @@ def own_info(busy=False, version="", status=None, memory=None):
 
 
 def fetch_json(url, timeout=POLL_TIMEOUT):
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    """GET `url` (a configured entry's /node URL) through studio_peer.PeerClient. One attempt: a peer that does not answer is
+    offline for now, and the next survey asks again."""
+    base, _, path = url.rpartition("/")
+    return PeerClient(base, timeout=timeout, retries=0).get_json(path)
 
 
 def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
