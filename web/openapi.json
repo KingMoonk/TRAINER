@@ -760,6 +760,72 @@
         "title": "ClusterJob",
         "type": "object"
       },
+      "ClusterNode": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "busy": {
+            "title": "Busy",
+            "type": "boolean"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "dtypes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dtypes",
+            "type": "array"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "hostname": {
+            "title": "Hostname",
+            "type": "string"
+          },
+          "local": {
+            "title": "Local",
+            "type": "boolean"
+          },
+          "memory_bytes": {
+            "title": "Memory Bytes",
+            "type": "integer"
+          },
+          "online": {
+            "title": "Online",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "local",
+          "hostname",
+          "version",
+          "device",
+          "device_name",
+          "memory_bytes",
+          "busy",
+          "dtypes",
+          "online"
+        ],
+        "title": "ClusterNode",
+        "type": "object"
+      },
       "ComparePlan": {
         "properties": {
           "base": {
@@ -2865,6 +2931,22 @@
           "dtypes"
         ],
         "title": "Node",
+        "type": "object"
+      },
+      "NodeList": {
+        "properties": {
+          "addresses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Addresses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "addresses"
+        ],
+        "title": "NodeList",
         "type": "object"
       },
       "NotebookJob": {
@@ -8066,6 +8148,72 @@
           }
         },
         "summary": "Stop",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/nodes": {
+      "get": {
+        "description": "This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with\nthe reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop.",
+        "operationId": "nodes_cluster_nodes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterNode"
+                  },
+                  "title": "Response Nodes Cluster Nodes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Nodes",
+        "tags": [
+          "cluster"
+        ]
+      },
+      "put": {
+        "description": "Save the list of other machines in the workspace config. Entries are stripped, blank and repeated ones dropped; the saved list\ncomes back. 400 with a sentence for an entry that is not a machine address.",
+        "operationId": "save_nodes_cluster_nodes_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Nodes",
         "tags": [
           "cluster"
         ]

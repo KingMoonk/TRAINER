@@ -1,4 +1,6 @@
 """studio_cluster: the node registry, the requirements each kind of job carries, and placement. No network, no GPU, no window."""
+import json
+import threading
 import time
 import unittest
 from unittest import mock
@@ -6,6 +8,7 @@ from unittest import mock
 import studio_cluster as sc
 import studio_queue
 from studio_cluster import NodeInfo, Requirements
+from studio_peer import PeerError
 
 GB = 2 ** 30
 
@@ -99,7 +102,7 @@ class Registry(unittest.TestCase):
 
         up, mini, refused = sc.poll(["windows-box", "mini", "refused"], fetch=fetch)
         self.assertTrue(up.online)
-        for down, why in ((mini, "TimeoutError"), (refused, "ConnectionRefusedError")):
+        for down, why in ((mini, "mini did not answer within 2 seconds."), (refused, "refused the connection")):
             self.assertFalse(down.online)
             self.assertFalse(down.free)
             self.assertIn(why, down.error)
@@ -109,7 +112,7 @@ class Registry(unittest.TestCase):
         for body in (None, [], "ok", {"hostname": "x"}, {"hostname": "x", "device": "tpu"}, {"device": "cpu"}):
             [info] = sc.poll(["odd"], fetch=lambda url, timeout, body=body: body)
             self.assertFalse(info.online, body)
-            self.assertIn("not a node description", info.error)
+            self.assertIn("not like a node of this app", info.error)
 
     def test_a_real_unreachable_address_is_offline_not_an_exception(self):
         [info] = sc.poll(["http://127.0.0.1:9"], timeout=.5)  # the discard port: nothing listens
@@ -126,11 +129,64 @@ class Registry(unittest.TestCase):
         self.assertEqual(len(infos), 6)
         self.assertLess(time.monotonic() - started, 1.2)  # six in a row would be 1.8 s
 
+    def test_a_peer_that_never_answers_ends_the_poll_at_the_timeout(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def fetch(url, timeout):
+            if "stuck" in url:
+                release.wait(10)  # a slow drip or a name lookup: the socket timeout would not end it
+            return payload()
+
+        started = time.monotonic()
+        up, stuck = sc.poll(["windows-box", "stuck"], fetch=fetch, timeout=.3)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual((up.online, stuck.online, stuck.error), (True, False, "stuck did not answer within 0.3 seconds."))
+
+    def test_more_peers_than_threads_are_all_asked_at_once(self):
+        infos = sc.poll([f"peer{i}" for i in range(20)], fetch=lambda url, timeout: (time.sleep(.2), payload())[1], timeout=1)
+        self.assertTrue(all(i.online for i in infos))
+
+    def test_offline_errors_are_sentences(self):
+        raised = {"a": PeerError("a answered 403 to GET /node: not allowed", status=403), "b": json.JSONDecodeError("x", "", 0),
+                  "c": ValueError("boom")}
+
+        def fetch(url, timeout):
+            raise raised[url.split("//")[1].split(":")[0]]
+
+        a, b, c = sc.poll(["a", "b", "c"], fetch=fetch)
+        self.assertEqual(a.error, "a answered 403 to GET /node: not allowed.")
+        self.assertEqual(b.error, "b answered, but not like a node of this app.")
+        self.assertEqual(c.error, "c could not be asked: ValueError: boom.")
+
     def test_survey_is_this_node_then_the_peers(self):
         own = node("local", "mps")
         found = sc.survey({"studioConfig": {"nodes": ["windows-box"]}}, own, fetch=lambda url, timeout: payload())
         self.assertEqual([n.address for n in found], ["local", "windows-box"])
         self.assertIs(found[0], own)
+
+
+class Addresses(unittest.TestCase):
+    def test_what_node_url_reaches_is_accepted(self):
+        for good in ("windows-box", "windows-box:9000", "mini.tail1234.ts.net", "100.64.0.7:8787", "[fd7a::1]:8787", "[fd7a::1]",
+                     "http://100.64.0.7:8787", "https://windows-box.tail1234.ts.net", "https://box.ts.net/anything", " box "):
+            self.assertEqual(sc.check_address(good), good.strip())
+            sc.node_url(good)
+
+    def test_anything_else_is_refused_with_a_sentence(self):
+        for bad, why in (("ftp://box", "http://"), ("http://", "no machine name"), ("box:abc", "port"), ("box:0", "port"), ("box:99999", "port"),
+                         ("box:", "port"), ("a b", "spaces"), ("me@box", "login"), ("box?x=1", "query"), ("fd7a::1", "brackets"),
+                         ("[fd7a::1", "do not match"), (":8787", "no machine name")):
+            with self.assertRaisesRegex(ValueError, why):
+                sc.check_address(bad)
+
+    def test_a_list_is_stripped_and_deduplicated_and_blanks_dropped(self):
+        self.assertEqual(sc.clean_nodes([" a ", "", "b", "a", "   "]), ["a", "b"])
+        self.assertEqual(sc.clean_nodes([]), [])
+
+    def test_a_list_has_a_limit(self):
+        with self.assertRaisesRegex(ValueError, "up to 32"):
+            sc.clean_nodes([f"box{i}" for i in range(sc.MAX_NODES + 1)])
 
 
 class Defaults(unittest.TestCase):

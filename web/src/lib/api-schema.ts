@@ -292,6 +292,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cluster/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Nodes
+         * @description This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with
+         *     the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop.
+         */
+        get: operations["nodes_cluster_nodes_get"];
+        /**
+         * Save Nodes
+         * @description Save the list of other machines in the workspace config. Entries are stripped, blank and repeated ones dropped; the saved list
+         *     comes back. 400 with a sentence for an entry that is not a machine address.
+         */
+        put: operations["save_nodes_cluster_nodes_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -2913,6 +2939,34 @@ export interface components {
              */
             waiting_reason: string;
         };
+        /** ClusterNode */
+        ClusterNode: {
+            /** Address */
+            address: string;
+            /** Busy */
+            busy: boolean;
+            /** Device */
+            device: string;
+            /** Device Name */
+            device_name: string;
+            /** Dtypes */
+            dtypes: string[];
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Hostname */
+            hostname: string;
+            /** Local */
+            local: boolean;
+            /** Memory Bytes */
+            memory_bytes: number;
+            /** Online */
+            online: boolean;
+            /** Version */
+            version: string;
+        };
         /** ComparePlan */
         ComparePlan: {
             /** Base */
@@ -3821,6 +3875,11 @@ export interface components {
             memory_bytes: number;
             /** Version */
             version: string;
+        };
+        /** NodeList */
+        NodeList: {
+            /** Addresses */
+            addresses: string[];
         };
         /** NotebookJob */
         NotebookJob: {
@@ -6178,6 +6237,59 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nodes_cluster_nodes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterNode"][];
+                };
+            };
+        };
+    };
+    save_nodes_cluster_nodes_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeList"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeList"];
+                };
             };
             /** @description Validation Error */
             422: {

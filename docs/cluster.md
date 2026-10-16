@@ -83,6 +83,12 @@ Each machine asks the others for `GET /node` with a two-second timeout and shows
 computer's memory. A machine that does not answer is shown offline with the reason, and is never given a job; the next poll
 brings it back.
 
+The API serves the same survey: `GET /cluster/nodes` lists this machine first and then each listed peer (`local` marks this machine;
+a peer that does not answer has `online: false` and an `error` sentence), and `PUT /cluster/nodes` with `{"addresses": [...]}` saves
+the list in `studioConfig.nodes` for you. Each entry is checked first: a name or IP, with an optional `:port`, or an `http://` or
+`https://` URL; anything else is refused with a sentence, up to 32 entries. Peers are asked at the same time and the survey ends at
+the two-second timeout, so one dead machine never holds up the rest.
+
 ## Where a job runs
 
 Every job kind carries requirements, and the cluster picks the best free node that fits them (`studio_cluster.py`):

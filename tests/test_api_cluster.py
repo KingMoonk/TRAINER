@@ -1,16 +1,60 @@
 """studio_api.routers.cluster: the node-to-node calls and the cluster views, over a Runner whose peers are fakes."""
+import inspect
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import studio_cluster
 import studio_scheduler as sched
-from studio_ia.services import FakeServices
+from fastapi.testclient import TestClient
+from studio_api.app import create_app
+from studio_api.routers import cluster as cluster_routes
+from studio_api.version import app_version
+from studio_core import Workspace
+from studio_ia.services import FakeServices, WorkspaceServices
+from studio_peer import PeerError
 from studio_queue import Job, Plan, Runner
 from studio_remote import Cluster
 from tests.fake_cluster import Clock, Net
 from tests.sse_harness import ApiCase
 from tests.test_queue_cluster import FakeStore, Peer, own_node, trainish, wait
+
+
+GPU = {"available": True, "kind": "cuda", "name": "Test GPU", "memory_bytes": 8 * 2 ** 30, "reason": ""}
+real_own_info = studio_cluster.own_info
+
+
+def probed(**kwargs):
+    """own_info with the GPU and memory probes answered, so the test never imports torch."""
+    return real_own_info(**kwargs, status=GPU, memory=16 * 2 ** 30)
+
+
+def node_payload(hostname, **changes):
+    return {"hostname": hostname, "version": "1.2.3", "device": "mps", "device_name": "Apple GPU", "memory_bytes": 32 * 2 ** 30,
+            "busy": False, "dtypes": ["float32", "float16"], **changes}
+
+
+class FakePeers:
+    """Stands in for studio_cluster.fetch_json: peers by the host in the /node URL. A name maps to a payload (online), an exception
+    to raise (offline) or a threading.Event to wait on (a peer that never answers)."""
+
+    def __init__(self, **peers):
+        self.peers, self.calls, self.release = peers, [], threading.Event()
+
+    def __call__(self, url, timeout):
+        host = url.split("//")[1].split(":")[0].split("/")[0]
+        self.calls.append((host, timeout))
+        peer = self.peers[host]
+        if peer == "stuck":
+            self.release.wait(10)
+            return node_payload(host)
+        if isinstance(peer, Exception):
+            raise peer
+        return peer
 
 
 class ClusterServices(FakeServices):
@@ -29,6 +73,7 @@ class ClusterRoutes(ApiCase):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        self.enterContext(mock.patch.object(studio_cluster, "own_info", probed))
         (self.root / "data").mkdir()
         (self.root / "data" / "workspace.json").write_text(json.dumps({"studioConfig": {"nodes": ["gpu-box"]}}), encoding="utf-8")
         self.net, self.clock, self.store = Net(), Clock(), FakeStore(self.root / "store")
@@ -81,6 +126,11 @@ class ClusterRoutes(ApiCase):
         self.assertEqual(self.dispatch("theirs"), {"job_id": "theirs", "epoch": 1})
         self.call("POST", "/cluster/jobs/{job_id}/stop", 409, path={"job_id": "theirs"}, json={"epoch": 7})
         self.call("POST", "/cluster/jobs/{job_id}/stop", 204, path={"job_id": "theirs"}, json={"epoch": 1})
+
+        self.peers = FakePeers(**{"gpu-box": node_payload("gpu-box")})
+        with mock.patch.object(studio_cluster, "fetch_json", self.peers):
+            self.assertEqual(self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu-box"]}), {"addresses": ["gpu-box"]})
+            self.assertEqual([n["address"] for n in self.call("GET", "/cluster/nodes")], ["local", "gpu-box"])
         self.assertAllRoutesHit()
 
     def test_a_job_another_node_owns_runs_here_and_shows_as_a_runner_job(self):
@@ -129,6 +179,117 @@ class NoQueue(ApiCase):
 
     def test_a_node_without_a_job_queue_says_so(self):
         self.assertIn("no job queue", self.call("GET", "/cluster/jobs", 409)["detail"])
+
+
+class NodeList(ApiCase):
+    """GET and PUT /cluster/nodes over FakeServices (no queue) and fake peers: one online, one offline, one that never answers."""
+    prefix = "/cluster/nodes"
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(studio_cluster, "own_info", probed))
+        self.peers = FakePeers(up=node_payload("up-box", busy=True), down=PeerError("down did not answer GET /node: Connection refused"),
+                               slow="stuck")
+        self.addCleanup(self.peers.release.set)
+        self.enterContext(mock.patch.object(studio_cluster, "fetch_json", self.peers))
+
+    def save(self, *addresses, expect=200):
+        return self.call("PUT", "/cluster/nodes", expect, json={"addresses": list(addresses)})
+
+    def test_this_node_alone_is_a_cluster_of_one(self):
+        [me] = self.call("GET", "/cluster/nodes")
+        self.assertEqual((me["address"], me["local"], me["online"], me["error"], me["busy"]), ("local", True, True, "", False))
+        self.assertEqual((me["device"], me["device_name"], me["memory_bytes"], me["version"]), ("cuda", "Test GPU", 8 * 2 ** 30, app_version()))
+        self.assertEqual(self.peers.calls, [])
+
+    def test_all_three_peers_are_listed_and_the_slow_one_holds_up_nobody(self):
+        self.save("up", "down", "slow")
+        with mock.patch.object(studio_cluster, "POLL_TIMEOUT", .4):
+            started = time.monotonic()
+            rows = self.call("GET", "/cluster/nodes")
+            took = time.monotonic() - started
+        self.assertEqual([(r["address"], r["local"], r["online"]) for r in rows],
+                         [("local", True, True), ("up", False, True), ("down", False, False), ("slow", False, False)])
+        up, down, slow = rows[1:]
+        self.assertEqual((up["hostname"], up["device"], up["memory_bytes"], up["busy"], up["version"], up["error"]),
+                         ("up-box", "mps", 32 * 2 ** 30, True, "1.2.3", ""))
+        self.assertEqual(down["error"], "down did not answer GET /node: Connection refused.")
+        self.assertEqual(slow["error"], "slow did not answer within 0.4 seconds.")
+        self.assertEqual(slow["hostname"], "")
+        self.assertEqual(sorted(h for h, _ in self.peers.calls), ["down", "slow", "up"])  # all asked, none waiting for another
+        self.assertEqual({t for _, t in self.peers.calls}, {.4})
+        self.assertLess(took, 1.5)  # the stuck peer costs one timeout, not ten seconds
+
+    def test_peers_are_asked_at_the_same_time(self):
+        self.peers.peers = {f"p{i}": node_payload(f"p{i}") for i in range(4)}
+        slow = self.peers.__call__
+        self.enterContext(mock.patch.object(studio_cluster, "fetch_json", lambda url, timeout: (time.sleep(.3), slow(url, timeout))[1]))
+        self.save(*self.peers.peers)
+        started = time.monotonic()
+        rows = self.call("GET", "/cluster/nodes")
+        self.assertEqual([r["online"] for r in rows], [True] * 5)
+        self.assertLess(time.monotonic() - started, .9)  # four in a row would be 1.2 s
+
+    def test_the_routes_are_sync_so_the_event_loop_is_never_blocked(self):
+        self.assertFalse(inspect.iscoroutinefunction(cluster_routes.nodes))
+        self.assertFalse(inspect.iscoroutinefunction(cluster_routes.save_nodes))
+
+    def test_a_saved_list_is_cleaned_and_read_back_in_order(self):
+        self.assertEqual(self.save(" up ", "", "down", "up"), {"addresses": ["up", "down"]})
+        self.assertEqual([r["address"] for r in self.call("GET", "/cluster/nodes")], ["local", "up", "down"])
+        self.assertEqual(self.services.setting("nodes"), ["up", "down"])
+        self.assertEqual(self.save(), {"addresses": []})
+        self.assertEqual(len(self.call("GET", "/cluster/nodes")), 1)
+
+    def test_a_bad_entry_is_refused_with_a_sentence_and_nothing_is_saved(self):
+        self.save("up")
+        for entry, why in (("ftp://box", "http://"), ("box:abc", "port"), ("a b", "spaces"), ("http://", "no machine name")):
+            detail = self.save("up", entry, expect=400)["detail"]
+            self.assertIn(f'"{entry}" is not a machine address', detail)
+            self.assertIn(why, detail)
+        self.assertEqual(self.services.setting("nodes"), ["up"])
+        self.assertIn("up to 32", self.save(*[f"box{i}" for i in range(33)], expect=400)["detail"])
+
+    def test_a_body_that_is_not_a_list_of_text_is_refused(self):
+        self.call("PUT", "/cluster/nodes", 422, json={"addresses": "up"})
+        self.call("PUT", "/cluster/nodes", 422, json={"addresses": [1]})
+
+    def test_a_list_that_was_hand_edited_into_nonsense_says_what_to_fix(self):
+        self.services.set_setting("nodes", "up")
+        self.assertIn("studioConfig.nodes", self.call("GET", "/cluster/nodes", 400)["detail"])
+        self.assertEqual(self.save("up"), {"addresses": ["up"]})  # saving over it repairs it
+        self.assertEqual(len(self.call("GET", "/cluster/nodes")), 2)
+
+
+class SavedList(unittest.TestCase):
+    """The list lives in the workspace config: a new launch over the same folder reads it back."""
+
+    def launch(self):
+        svc = WorkspaceServices(Workspace(self.root))
+        self.addCleanup(svc.close)
+        app = create_app(svc, open=True)
+        self.addCleanup(app.state.jobs.close)
+        self.addCleanup(app.state.broadcaster.close)
+        return TestClient(app)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.enterContext(mock.patch.object(studio_cluster, "own_info", probed))
+        self.enterContext(mock.patch.object(studio_cluster, "fetch_json", FakePeers(**{"gpu-box": node_payload("gpu-box")})))
+
+    def test_it_survives_a_restart_and_is_the_list_the_cluster_reads(self):
+        before = self.launch()
+        self.assertEqual(len(before.get("/cluster/nodes").json()), 1)
+        self.assertEqual(before.put("/cluster/nodes", json={"addresses": ["gpu-box", "http://100.64.0.7:8787"]}).status_code, 200)
+
+        after = self.launch()  # a new process: a new Workspace read from disk
+        rows = after.get("/cluster/nodes").json()
+        self.assertEqual([r["address"] for r in rows[1:]], ["gpu-box", "http://100.64.0.7:8787"])
+        self.assertEqual((rows[1]["online"], rows[1]["hostname"]), (True, "gpu-box"))
+        state = json.loads((self.root / "data" / "workspace.json").read_text(encoding="utf-8"))
+        self.assertEqual(studio_cluster.configured_nodes(state), ["gpu-box", "http://100.64.0.7:8787"])  # what the job scheduler polls
 
 
 if __name__ == "__main__":
