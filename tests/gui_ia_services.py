@@ -1,6 +1,7 @@
 """The shell on FixtureServices visits all 19 routes without error (skips without a display)."""
 from tests import windows  # noqa: F401  (CI-only: skips this module locally)
 import tempfile
+import time
 import tkinter as tk
 import unittest
 
@@ -22,6 +23,11 @@ class ShellOnFixtureTest(unittest.TestCase):
         for route in ROUTES:
             app.show(route)
             app.update()
+        for _ in range(3000):  # the "versions" snapshot is weighed on a worker, which scores the held-back text first
+            if "Chat uses version" in app.strip_text:
+                break
+            app.update()
+            time.sleep(.02)
         self.assertIn("Chat uses version", app.strip_text)
 
 

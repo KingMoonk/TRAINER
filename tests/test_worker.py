@@ -63,6 +63,11 @@ def killed(job, context, emit, stop, pause):
     time.sleep(10)
 
 
+def returns_at_once(job, context, emit, stop, pause):
+    """Ends as soon as it starts: the worker's exit follows its last send with nothing in between."""
+    job.params["result"] = job.id
+
+
 def prints(job, context, emit, stop, pause):
     print("stray output from a library")
     print("more", file=sys.stderr)
@@ -102,6 +107,46 @@ class WorkerTests(unittest.TestCase):
         kinds = [p["status"] for k, p in events if k == "job"]
         self.assertEqual(kinds, ["running", "done"])
         self.assertEqual(list((self.root / "data" / "workers").glob("*.json")), [])  # the spec goes when the job ends
+
+    def test_a_handler_that_returns_at_once_ends_done_every_time(self):
+        """#118: the result is the worker's last send before it exits. Many runs, so a worker that exits with its socket open,
+        which can end the connection with a reset that loses the result, shows up."""
+        runner = Runner(self.root / "data" / "queue.json", {"quicktest": returns_at_once}, tick=.01)
+        runner.set_plan(ANY)
+        self.addCleanup(runner.shutdown)
+        jobs = [runner.enqueue(Job("quicktest", f"t{n}")) for n in range(60)]
+        runner.start()
+        self.assertTrue(wait(lambda: all(j.status not in ("waiting", "running") for j in jobs), timeout=120))
+        self.assertEqual([(j.status, j.error) for j in jobs], [("done", "")] * 60)
+        self.assertEqual([j.params["result"] for j in jobs], [j.id for j in jobs])
+        self.assertEqual(list((self.root / "data" / "workers").glob("*.json")), [])
+
+    def test_a_done_already_read_stands_when_the_connection_then_breaks(self):
+        """The app's side of #118: a reset (or EOF) after the done line does not turn exit code 0 into a crash."""
+        class Proc:
+            returncode = None
+
+            def wait(self):
+                self.returncode = 0
+                return 0
+
+        def lines():
+            yield json.dumps({"params": {"result": 1}}) + "\n"
+            yield json.dumps({"done": True}) + "\n"
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+        events, ended = [], threading.Event()
+        handle = studio_worker.Handle.__new__(studio_worker.Handle)
+        handle.emit, handle.on_end, handle.proc = events.append, ended.set, Proc()
+        handle.params, handle.error, handle.done = {}, "", threading.Event()
+        handle._finished, handle._conn, handle._lock = False, None, threading.Lock()
+        handle._want, handle._sent = {"stop": False, "pause": False}, {"stop": False, "pause": False}
+        handle._server = socket.create_server(("127.0.0.1", 0))
+        handle.spec = self.root / "spec.json"
+        handle._accept = lambda: (socket.socket(), lines())
+        handle._read()
+        self.assertTrue(ended.is_set())
+        self.assertEqual((handle.error, handle.params, handle.done.is_set(), handle.proc.returncode), ("", {"result": 1}, True, 0))
 
     def test_stray_prints_never_reach_the_events(self):
         job, events, _ = self.run_job(prints)
