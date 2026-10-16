@@ -1,6 +1,44 @@
 {
   "components": {
     "schemas": {
+      "CleanRequest": {
+        "properties": {
+          "data": {
+            "default": false,
+            "description": "also delete your data (only with days null)",
+            "title": "Data",
+            "type": "boolean"
+          },
+          "days": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "delete runs older than this many days; null = all history",
+            "title": "Days"
+          }
+        },
+        "title": "CleanRequest",
+        "type": "object"
+      },
+      "FreeSpace": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bytes"
+        ],
+        "title": "FreeSpace",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -12,6 +50,286 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "JobOut": {
+        "description": "A studio_api.jobs.JobRecord; the result arrives on /events and GET /jobs/{id}.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "JobOut",
+        "type": "object"
+      },
+      "NewVersion": {
+        "properties": {
+          "change": {
+            "default": "",
+            "title": "Change",
+            "type": "string"
+          },
+          "prediction": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the guess made on saving, e.g. {\"error\": \"lower\"}",
+            "title": "Prediction"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "title": "NewVersion",
+        "type": "object"
+      },
+      "Node": {
+        "properties": {
+          "busy": {
+            "title": "Busy",
+            "type": "boolean"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "dtypes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dtypes",
+            "type": "array"
+          },
+          "hostname": {
+            "title": "Hostname",
+            "type": "string"
+          },
+          "memory_bytes": {
+            "title": "Memory Bytes",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname",
+          "version",
+          "device",
+          "device_name",
+          "memory_bytes",
+          "busy",
+          "dtypes"
+        ],
+        "title": "Node",
+        "type": "object"
+      },
+      "Passive": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/PassiveSession"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "signin": {
+            "title": "Signin",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sessions",
+          "signin"
+        ],
+        "title": "Passive",
+        "type": "object"
+      },
+      "PassiveSession": {
+        "additionalProperties": true,
+        "properties": {
+          "created": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created"
+          },
+          "error": {
+            "title": "Error"
+          },
+          "heard": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heard"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "restarts": {
+            "default": 0,
+            "title": "Restarts",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stop": {
+            "title": "Stop"
+          },
+          "trainer": {
+            "default": "",
+            "title": "Trainer",
+            "type": "string"
+          },
+          "watchdog": {
+            "default": "",
+            "title": "Watchdog",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "PassiveSession",
+        "type": "object"
+      },
+      "PassiveStatus": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "PassiveStatus",
+        "type": "object"
+      },
+      "PretrainedImport": {
+        "properties": {
+          "name": {
+            "default": "gpt2",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "title": "PretrainedImport",
+        "type": "object"
+      },
+      "StorageUse": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "items": {
+            "title": "Items",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "bytes"
+        ],
+        "title": "StorageUse",
         "type": "object"
       },
       "ValidationError": {
@@ -52,6 +370,76 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "Version": {
+        "properties": {
+          "best_checkpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Checkpoint"
+          },
+          "change": {
+            "default": "",
+            "title": "Change",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "prediction": {
+            "additionalProperties": true,
+            "title": "Prediction",
+            "type": "object"
+          },
+          "scorecard": {
+            "additionalProperties": true,
+            "title": "Scorecard",
+            "type": "object"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "status": {
+            "default": "draft",
+            "title": "Status",
+            "type": "string"
+          },
+          "verdict": {
+            "default": "",
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number"
+        ],
+        "title": "Version",
         "type": "object"
       }
     }
@@ -175,6 +563,562 @@
         "summary": "Get Job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/node": {
+      "get": {
+        "description": "Sync, so the GPU probe (cached after the first call) runs off the event loop.",
+        "operationId": "node_node_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Node",
+        "tags": [
+          "node"
+        ]
+      }
+    },
+    "/passive": {
+      "get": {
+        "operationId": "passive_passive_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Passive"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Passive",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/signin": {
+      "delete": {
+        "operationId": "remove_passive_signin_passive_signin_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Remove Passive Signin",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/stop": {
+      "post": {
+        "operationId": "stop_passive_passive__session_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Passive",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/storage": {
+      "get": {
+        "description": "What a clean-up with the same arguments would delete.",
+        "operationId": "storage_storage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Days"
+            }
+          },
+          {
+            "in": "query",
+            "name": "data",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Data",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Storage",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/clean": {
+      "post": {
+        "description": "Delete it. Returns what was deleted. 409 while a job is running.",
+        "operationId": "clean_storage_storage_clean_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clean Storage",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/free": {
+      "get": {
+        "operationId": "free_space_storage_free_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeSpace"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Free Space",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/versions": {
+      "get": {
+        "operationId": "list_versions_versions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Version"
+                  },
+                  "title": "Response List Versions Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Versions",
+        "tags": [
+          "versions"
+        ]
+      },
+      "post": {
+        "operationId": "save_version_versions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewVersion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Version",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/best": {
+      "post": {
+        "description": "The version Chat follows. Weighing versions scores their checkpoints on the held-back text, so it is a job.",
+        "operationId": "best_version_versions_best_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Best Version",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/current": {
+      "get": {
+        "operationId": "current_version_versions_current_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Version"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Current Version Versions Current Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Current Version",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/import-pretrained": {
+      "post": {
+        "description": "Saves the pretrained model's design as a new version; the download and conversion are queued (GET /queue).",
+        "operationId": "import_pretrained_versions_import_pretrained_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PretrainedImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Pretrained",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/checkpoint-step": {
+      "post": {
+        "operationId": "checkpoint_step_versions__number__checkpoint_step_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Checkpoint Step",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/export": {
+      "get": {
+        "description": "Download the trained version's best checkpoint: \"hf\" is a zip of the Hugging Face folder, \"gguf\" the .gguf file.",
+        "operationId": "export_version_versions__number__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "hf",
+                "gguf"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Version",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/run-facts": {
+      "post": {
+        "description": "What the version's run did ({data, steps, tokens, start, lr, extra}). The first read hashes the data file.",
+        "operationId": "run_facts_versions__number__run_facts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Facts",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/run-speed": {
+      "post": {
+        "operationId": "run_speed_versions__number__run_speed_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Speed",
+        "tags": [
+          "versions"
         ]
       }
     }
