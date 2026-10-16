@@ -189,6 +189,8 @@ DEFAULTS = {
     "pretrain": Requirements(device="cuda"),
     "post_round": Requirements(device="cuda"),  # RLHF
     "restore_answers": Requirements(device="cuda"),  # RLHF
+    "pretrain_distributed": Requirements(device="cuda"),  # the owner: the coordinator plus one local member (studio_diloco)
+    "diloco_member": ANY,
     "lora": ANY,
     "passive": ANY,
     "eval": ANY,
