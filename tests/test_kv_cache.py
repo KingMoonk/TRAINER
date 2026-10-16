@@ -166,7 +166,7 @@ class Chat(unittest.TestCase):
         if reduced is not None:
             model.reduced_kv_cache = reduced
         real = studio_model.last_logits
-        with mock.patch.object(studio_model, "last_logits", lambda m, window, sliding, cache: seen.append(cache) or real(m, window, sliding, cache)):
+        with mock.patch.object(studio_model, "last_logits", lambda m, window, sliding, cache, *rest: seen.append(cache) or real(m, window, sliding, cache, *rest)):
             model.generate([{"role": "user", "content": "Count from 4 to 9."}], temperature=0, max_tokens=8)
         return seen
 

@@ -25,20 +25,24 @@ INSPECTED = ("attn.scores", "attn.logits", "attn.pattern")  # the intermediates 
 def fused_attention(ctx, q, k, v, scale, position, heads):
     """PyTorch's fused kernel, or None when this call must take the exact path (see causal_softmax_attention)."""
     length, keys = q.shape[-2], k.shape[-2]
-    decode = keys != length   # with a KV cache: one new query, which may read every cached key, so nothing is masked
-    if (decode and length != 1) or any(ctx.wants(name) for name in INSPECTED):
-        return None   # several queries after a KV-cache offset, or an inspection page is listening for the scores, logits or pattern
+    decode = keys != length   # with a KV cache: the queries start after the cached keys, so a one-token query may read every key and a chunk is masked from its own offset
+    if any(ctx.wants(name) for name in INSPECTED):
+        return None   # an inspection page is listening for the scores, logits or pattern
     p = ctx.dropout if ctx.training else 0.
     if p and ctx.device not in ("cpu", "cuda"):
         return None   # the fused kernel has no dropout on Apple GPUs
     if decode:
-        bias = position.score_bias_rows(ctx.offset, ctx.offset + 1, keys, heads) if hasattr(position, "score_bias_rows") else position.score_bias(keys, heads)
+        bias = position.score_bias_rows(ctx.offset, ctx.offset + length, keys, heads) if hasattr(position, "score_bias_rows") else position.score_bias(keys, heads)
     else:
         bias = position.score_bias(length, heads)
+    if bias is not None and (q.dtype in HALF or torch.is_autocast_enabled(q.device.type)):
+        return None   # a bias such as ALiBi's reaches hundreds and loses its meaning in half precision; the exact path adds it in float32
     mask = None
-    if bias is not None:
-        if q.dtype in HALF or torch.is_autocast_enabled(q.device.type) or (decode and bias.shape[-2] != 1):
-            return None   # a bias such as ALiBi's reaches hundreds and loses its meaning in half precision; the exact path adds it in float32
+    if decode and length > 1:   # a prefill chunk after the first: row i reads the keys up to its own absolute index
+        future = torch.triu(torch.ones((length, keys), dtype=torch.bool, device=q.device), ctx.offset + 1)
+        hidden = torch.zeros((length, keys), dtype=q.dtype, device=q.device).masked_fill(future, -torch.inf)
+        mask = hidden if bias is None else (bias + hidden)[None]   # [L, K] without a bias: PyTorch's CPU flash kernel declines a [1, L, K] mask
+    elif bias is not None:
         mask = (bias if decode else bias + torch.zeros_like(bias).masked_fill(ctx.mask(length), -torch.inf))[None]
     seed = ctx.attention_seed(q.device) if p else 0
     cuda = [q.device.index if q.device.index is not None else torch.cuda.current_device()] if q.device.type == "cuda" else []

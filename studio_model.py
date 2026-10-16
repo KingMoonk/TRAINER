@@ -71,6 +71,7 @@ DEFAULT_CONFIG = {
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
 EVAL_WINDOWS = 400  # evaluation reads at most this many windows, spread evenly over the set
+PREFILL_CHUNK = 256  # a reply's first KV-cached prefill runs this many tokens per forward pass, and checks `stop` between passes
 STREAM_CHARS = 16_000_000  # training text from this many characters on is tokenized into on-disk shards (about 48 MB of windows)
 
 
@@ -943,20 +944,32 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise
 
 
-def batch_logits(model, windows, sliding, cache):
-    """Logits [rows, V] of the position after each window (all the same length). With a KV cache only the tokens it has not seen
-    are run; once the text outgrows the context (`sliding`) every position shifts, so the cache is dropped and the windows re-prefilled."""
+def batch_logits(model, windows, sliding, cache, stop=None, chunk=PREFILL_CHUNK):
+    """Logits [rows, V] of the position after each window (all the same length), or None when `stop` was set between prefill chunks.
+    With a KV cache only the tokens it has not seen are run, `chunk` tokens per pass through the same cache (a long prompt does not
+    hold the thread for one long pass, and `stop` is checked between passes); chunk=None runs them in one pass. Once the text outgrows
+    the context (`sliding`) every position shifts, so the cache is dropped and the windows re-prefilled. Without a cache the whole
+    window is run. Callers pass `chunk` explicitly, as PREFILL_CHUNK read at call time."""
     if cache is None:
         return model.forward(np.array(windows, dtype=np.int64))[:, -1]
     if sliding:
         cache.clear()
         cache["n"] = 0
-    return model.forward(np.array([window[cache["n"]:] for window in windows], dtype=np.int64), cache=cache)[:, -1]
+    new = np.array([window[cache["n"]:] for window in windows], dtype=np.int64)
+    size = chunk or new.shape[1]
+    for start in range(0, new.shape[1], size):
+        if start and stop and stop.is_set():
+            return None
+        logits = model.forward(new[:, start:start + size], cache=cache)
+        if start + size < new.shape[1]:
+            logits[0, -1, 0].item()   # a GPU runs ahead of this thread: wait for the chunk, or a stop would find every later chunk already queued
+    return logits[:, -1]
 
 
-def last_logits(model, window, sliding, cache):
-    """Logits of the position after `window`; see batch_logits."""
-    return batch_logits(model, [window], sliding, cache)[0]
+def last_logits(model, window, sliding, cache, stop=None, chunk=PREFILL_CHUNK):
+    """Logits of the position after `window`, or None when `stop` was set during the prefill; see batch_logits."""
+    logits = batch_logits(model, [window], sliding, cache, stop, chunk)
+    return None if logits is None else logits[0]
 
 
 def expand_cache(cache, rows):
@@ -991,8 +1004,8 @@ def complete(model, tokenizer, prompt, max_tokens=48, reduced_cache=False):
     cache = new_cache(model.device, reduced_cache) if model.can_cache else None
     blocked = unsayable(tokenizer)
     with torch.no_grad():
-        for _ in range(max_tokens):
-            logits = last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)
+        for i in range(max_tokens):
+            logits = last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache, None, PREFILL_CHUNK if i == 0 else None)
             logits[blocked] = -torch.inf
             token = int(logits.argmax())  # only the chosen id leaves the device
             if token == EOS:
@@ -1074,7 +1087,9 @@ class LocalModel:
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
-            logits = last_logits(self.model, self._window(tokens, starts), len(tokens) > context, cache)
+            logits = last_logits(self.model, self._window(tokens, starts), len(tokens) > context, cache, stop, PREFILL_CHUNK if i == 0 else None)
+            if logits is None:   # stopped during the prefill
+                break
             logits[blocked] = -torch.inf
             if temperature <= 0:
                 token = int(logits.argmax())
@@ -1125,12 +1140,15 @@ class LocalModel:
                 break
             sliding = len(rows[active[0]]) > context
             if i == 0:   # one prompt for everyone: run it once
-                logits = batch_logits(self.model, [self._window(tokens, starts)], sliding, cache)
-                if not sliding:
-                    expand_cache(cache, n)
-                logits = logits.expand(n, -1).clone()
+                logits = batch_logits(self.model, [self._window(tokens, starts)], sliding, cache, stop, PREFILL_CHUNK)
+                if logits is not None:
+                    if not sliding:
+                        expand_cache(cache, n)
+                    logits = logits.expand(n, -1).clone()
             else:
-                logits = batch_logits(self.model, [self._window(rows[r], starts) for r in active], sliding, cache)
+                logits = batch_logits(self.model, [self._window(rows[r], starts) for r in active], sliding, cache, stop, None)
+            if logits is None:   # stopped during the prefill
+                break
             logits[:, blocked] = -torch.inf
             top, keep = torch.topk(logits / scale[active], k, dim=-1)
             probabilities = torch.softmax(top, dim=-1)
