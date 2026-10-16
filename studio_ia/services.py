@@ -660,8 +660,7 @@ class FakeServices(Services):
             job = self._take_job()
             if job is None:
                 return
-            self._worker = threading.Thread(target=self._run_jobs, args=(job,), daemon=True)
-            self._worker.start()
+            self._worker = threads.start(self._run_jobs, job)
 
     def wait_idle(self, timeout=10.0):
         """Test hook: block until the worker has run every waiting job; True when it has."""
