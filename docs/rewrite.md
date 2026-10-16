@@ -68,7 +68,7 @@ Done: `python tasks.py web:build` passes in CI; `pnpm dev` shows an empty shell 
 - [x] Files cross the wire, not paths: `import_data`, `import_source`, `import_pretrained` accept uploads (and a server-side
       folder picker for corpora already on the box); `export_version` is a download.
 - [x] Per-client state leaves the server: `stage_draft`/`draft_spec` (the Builder's unsaved design) lives in the browser.
-- [x] `node` router: capabilities (`studio_compute.gpu_status()`: device kind, memory), busy/free, version, hostname.
+- [x] `node` router: capabilities (`studio_backend.gpu_status()`: device kind, memory), busy/free, version, hostname.
 - [x] Serve `web/out` (static export) from the API so the app is one URL; `--bind` defaults to `127.0.0.1` (open only on
       loopback or with `--fake`; `docs/node.md` says how to bind the tailnet address), and `--fake` serves `FakeServices` for
       frontend work without a workspace.
