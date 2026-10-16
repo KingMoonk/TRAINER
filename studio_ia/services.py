@@ -398,7 +398,7 @@ class Services:
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
         reached; cursor None = the first page, a next cursor of None = nothing follows. Rows are shaped like DataSummary.rows."""
         raise NotImplementedError
@@ -775,8 +775,10 @@ class FakeServices(Services):
         out.rows = [dict(r) for r in rows if needle in f"{r['a']} {r['b']}".casefold()]
         return out
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         rows, start = self.data(kind, query).rows, cursor or 0
+        if review_only:
+            rows = [row for row in rows if row.get("draft") and row["status"] == "Review"]
         return rows[start:start + limit], start + limit if start + limit < len(rows) else None
 
     def _add_row(self, kind, a, b, status="Good", dataset="Your data", draft=False):
@@ -1952,8 +1954,11 @@ class WorkspaceServices(Services):
         names = {d["id"]: d["name"] for d in self.workspace.state["datasets"]}
         return replace(full, rows=self._summary_cache().search(kind, query, summaries["takes"][kind], names))
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         import studio_data_kinds as dk
+        if review_only:
+            sets = [(d["id"], d["name"]) for d in self.workspace.state["datasets"] if d["name"] in self._DRAFT_SETS.values()]
+            return dk.page(self.workspace, kind, query, sets, cursor, limit, review_only=True)
         summary = self.data(kind)  # the sets and the near-duplicates; the rows come from storage
         dups = {r["id"] for r in summary.rows if r["status"] == "Near-duplicate"}
         return dk.page(self.workspace, kind, query, [(x["id"], x["name"]) for x in summary.sets], cursor, limit, dups)

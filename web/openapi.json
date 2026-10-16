@@ -3304,6 +3304,50 @@
         "title": "ProbeRequest",
         "type": "object"
       },
+      "ProblemRule": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ProblemRule",
+        "type": "object"
+      },
+      "ProblemRules": {
+        "properties": {
+          "max_drafts": {
+            "default": 200,
+            "title": "Max Drafts",
+            "type": "integer"
+          },
+          "max_problems": {
+            "default": 5000,
+            "title": "Max Problems",
+            "type": "integer"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProblemRule"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "ProblemRules",
+        "type": "object"
+      },
       "QueueStateModel": {
         "description": "studio_ia.services.QueueState.",
         "properties": {
@@ -6882,6 +6926,28 @@
         ]
       }
     },
+    "/data/problems/rules": {
+      "get": {
+        "description": "Generatable rules in desktop picker order; imported answer keys cannot generate examples.",
+        "operationId": "problem_rules_data_problems_rules_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Problem Rules",
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/data/refresh_downloads": {
       "post": {
         "description": "Services.refresh_downloads as a job: rebuild downloads converted by an older app version. Result: the ids rebuilt.",
@@ -7175,6 +7241,16 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "review_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Review Only",
+              "type": "boolean"
             }
           }
         ],
