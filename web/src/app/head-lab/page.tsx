@@ -1,6 +1,5 @@
-import { PagePlaceholder } from "@/components/page-placeholder";
-import { routeFor } from "@/lib/routes";
+import { HeadLab } from "@/app/head-lab/head-lab";
 
 export default function Page() {
-  return <PagePlaceholder route={routeFor("head_lab")} />;
+  return <HeadLab />;
 }
