@@ -317,9 +317,10 @@ def expectations(body: ExpectBody, services: Services) -> Expectations:
     """design_expectation for the draft, and expectations for its changes. "Last time blocks changed" reads the history
     (Services.versions, run_facts, compare_runs), only when the block count differs, as the page does."""
     cur, draft = choices_in(body.cur), choices_in(body.draft)
-    spec = maths(validate_spec, body.draft_spec or body.base)
+    base = maths(validate_spec, body.base)  # the page sends {} before the first version: the default design
+    spec = maths(validate_spec, body.draft_spec) if body.draft_spec else base
     headline, details = design.design_expectation(draft, spec)
-    issues = design.new_issues(body.base, body.draft_spec) if body.draft_spec else ()
+    issues = design.new_issues(base, spec) if body.draft_spec else ()
     versions = services.versions()
     facts, compares = (services.run_facts, services.compare_runs) if draft["L"] != cur["L"] else (None, None)
     lines = design.expectations(cur, draft, versions, issues, facts, compares)

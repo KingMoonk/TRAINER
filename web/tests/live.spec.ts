@@ -22,3 +22,24 @@ test("the API serves the schema the client types come from", async ({ request })
   expect(schema.paths).toHaveProperty("/events");
   expect(schema.paths).toHaveProperty("/jobs/{job_id}");
 });
+
+test("the Builder edits a part and saves a version against the API", async ({ page }) => {
+  await page.goto("/builder/");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Build your model");
+  const tray = page.getByTestId("tray");
+  await expect(tray).toContainText("Not saved yet");
+  await expect(tray).toContainText("Save as version 1");
+
+  // Pick a different position module: the picker's menu comes from /design/part-options.
+  const picker = page.getByTestId("picker-position");
+  const before = await picker.textContent();
+  await picker.click();
+  const other = page.getByRole("option", { disabled: false }).filter({ hasNotText: before ?? "" }).first();
+  await other.click();
+  await expect(picker).not.toHaveText(before ?? "");
+  await expect(tray).toContainText("Not saved · only this page sees these");
+
+  await page.getByTestId("save").click();
+  await expect(page.getByTestId("version-1")).toBeVisible();
+  await expect(tray).toContainText("No changes");
+});

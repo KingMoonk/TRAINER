@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { subscribe, type ApiEvent } from "@/lib/api";
 import { PLACEHOLDER_STATUS, type Connection, type ProblemReport, type StudioEvent, type StudioStatus } from "@/lib/types";
@@ -14,6 +14,29 @@ const ShellContext = createContext<Shell>({ status: PLACEHOLDER_STATUS, connecti
 /** The shell's view of the server: the latest status and whether the event stream is up. */
 export function useShell(): Shell {
   return useContext(ShellContext);
+}
+
+/** Every page listener the shell forwards raw events to (useEvent). A module-level set: the stream is opened once. */
+const listeners = new Set<(event: ApiEvent) => void>();
+
+/**
+ * Call `handler` for every `kind` event on the shell's stream while the component is mounted. The handler may change
+ * between renders; the latest one is called. Pages use this to update a keyed list in place instead of polling.
+ */
+export function useEvent(kind: string, handler: (payload: unknown) => void): void {
+  const latest = useRef(handler);
+  useEffect(() => {
+    latest.current = handler;
+  });
+  useEffect(() => {
+    const listener = (event: ApiEvent) => {
+      if (event.kind === kind) latest.current(event.payload);
+    };
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, [kind]);
 }
 
 /** Narrow a raw stream event to one the shell handles; any other kind is for the page that owns it. */
@@ -43,6 +66,7 @@ export function ShellEvents({ children }: { children: React.ReactNode }) {
     const connect = () => {
       close = subscribe(
         (raw) => {
+          for (const listener of listeners) listener(raw);
           const event = asStudioEvent(raw);
           if (event?.kind === "status") setShell((s) => ({ ...s, status: event.payload }));
           if (event?.kind === "problem_report") {
