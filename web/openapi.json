@@ -3733,6 +3733,122 @@
         "title": "RowsRequest",
         "type": "object"
       },
+      "RunPageModel": {
+        "properties": {
+          "change": {
+            "default": "",
+            "title": "Change",
+            "type": "string"
+          },
+          "chat_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Version"
+          },
+          "curve": {
+            "$ref": "#/components/schemas/CurveModel"
+          },
+          "gate_vs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Vs"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "phase": {
+            "default": "",
+            "title": "Phase",
+            "type": "string"
+          },
+          "references": {
+            "$ref": "#/components/schemas/ReferencesModel"
+          },
+          "running": {
+            "default": false,
+            "title": "Running",
+            "type": "boolean"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "learning",
+                  "flat",
+                  "memorising"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "switch": {
+            "$ref": "#/components/schemas/SwitchNote"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "curve",
+          "references",
+          "switch"
+        ],
+        "title": "RunPageModel",
+        "type": "object"
+      },
       "RunRequest": {
         "properties": {
           "version": {
@@ -4168,6 +4284,62 @@
           }
         },
         "title": "SummaryRequest",
+        "type": "object"
+      },
+      "SwitchNote": {
+        "description": "Which line the page says about Chat switching (studio_ia.pages.training_run.switch_note): the key is the copy's, gap is\nin bits per character, docs and need are set for gate_few_docs.",
+        "properties": {
+          "docs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docs"
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap"
+          },
+          "key": {
+            "enum": [
+              "gate_few_docs",
+              "gate_better",
+              "gate_not_sure",
+              "gate_not_better",
+              "no_band_yet",
+              "held_back_below",
+              "held_back_inside"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "need": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Need"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "SwitchNote",
         "type": "object"
       },
       "TeacherOut": {
@@ -8910,6 +9082,28 @@
         "summary": "Free Space",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/training-run": {
+      "get": {
+        "description": "The run the page shows: a running job's live run, else the newest version's latest run.",
+        "operationId": "training_run_training_run_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPageModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Training Run",
+        "tags": [
+          "training-run"
         ]
       }
     },
