@@ -82,3 +82,26 @@ test("Loss renders trained and random predictions from the real fake API", async
   await expect(page.getByTestId("loss-nats")).toHaveText("2.48 nats");
   await expect(page.getByTestId("loss-bpc")).toHaveText("1.79 bits per character");
 });
+
+test("the Builder edits a part and saves a version against the API", async ({ page, request }) => {
+  // The live specs share one workspace, so other specs may already have saved versions: the new one is the next number.
+  const existing: { number: number }[] = await (await request.get("/versions")).json();
+  const next = Math.max(0, ...existing.map((item) => item.number)) + 1;
+  await page.goto("/builder/");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Build your model");
+  const tray = page.getByTestId("tray");
+  await expect(tray).toContainText(existing.length ? "No changes" : "Not saved yet");
+
+  // Pick a different position module: the picker's menu comes from /design/part-options.
+  const picker = page.getByTestId("picker-position");
+  const before = await picker.textContent();
+  await picker.click();
+  const other = page.getByRole("option", { disabled: false }).filter({ hasNotText: before ?? "" }).first();
+  await other.click();
+  await expect(picker).not.toHaveText(before ?? "");
+  await expect(tray).toContainText("Not saved · only this page sees these");
+
+  await page.getByTestId("save").click();
+  await expect(page.getByTestId(`version-${next}`)).toBeVisible();
+  await expect(tray).toContainText("No changes");
+});

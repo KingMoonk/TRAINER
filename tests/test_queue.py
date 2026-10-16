@@ -49,7 +49,7 @@ def cooldown(job, context, emit, stop, pause):
 
 
 def note_cap(job, context, emit, stop, pause):
-    _note(context, f"cap {job.params['max_batch_size']}")
+    _note(context, f"share {job.params['memory_share']}")
 
 
 def boom(job, context, emit, stop, pause):
@@ -395,7 +395,7 @@ class QueueTests(unittest.TestCase):
         r.start()
         self.assertTrue(wait(lambda: "Restore how it answers" in self.fake.ran))
         done = [j for j in r.jobs if j.kind == "restore_answers"][0]
-        self.assertEqual(done.params, {"round": 3, "teacher": "best.npz", "max_batch_size": done.params["max_batch_size"]})
+        self.assertEqual(done.params, {"round": 3, "teacher": "best.npz", "memory_share": .75})
 
     def test_memory_cap_is_handed_to_jobs(self):
         self.handlers["quicktest"] = note_cap
@@ -403,7 +403,7 @@ class QueueTests(unittest.TestCase):
         r.enqueue(self.job("a"))
         r.start()
         self.assertTrue(wait(lambda: self.fake.ran))
-        self.assertEqual(self.fake.ran, [f"cap {studio_queue.batch_cap(r.plan)}"])
+        self.assertEqual(self.fake.ran, ["share 0.5"])
 
     def test_failed_job_does_not_block_queue(self):
         self.handlers["compare"] = boom

@@ -4,4 +4,7 @@
 - Only run `tasks.py test:ci` or `test:ci:e2e`, `tests/gui_*.py`, or `tests.e2e_train` if trying to debug CI issues. 
 - A new test that opens a window goes in `gui_*.py` with that import as its first import; `test_*.py` must stay window-free.
 - While iterating, run just the affected tests (see `.claude/rules/affected-tests.md`).
-- Work from GitHub issues: every feature, bug and open question is an issue with acceptance criteria. Format and labels: `.claude/rules/github-issues.md`.
+- Git: every task in its own worktree, cut from origin/master; the sync-master hook keeps master current. Details: `.claude/rules/git-workflow.md`.
+- No placeholders, fake features or dead ends: leave unfinished work out and open a GitHub issue for it, and for any bug you cannot fix. Details: `.claude/rules/no-placeholders.md`.
+- Work from GitHub issues: features, bug fixes and open questions are issues (small fixes and tweaks need none), whether the main session or a subagent does the work, with acceptance criteria. Format and labels: `.claude/rules/github-issues.md`.
+- Delegate significant, well-defined work to a subagent when briefing and review cost less than doing it here; small work stays on the main thread (`implementer` on Sonnet for moderate or difficult work, `grunt` on Haiku for repetitive or read-heavy work). Each one claims a GitHub issue, works on its own branch and worktree, opens a PR that closes the issue, and reports back limitations and risks honestly. Details: `.claude/rules/subagents.md`.

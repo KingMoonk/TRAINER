@@ -163,3 +163,14 @@ class DesignRouterTests(ApiCase):
         self.assertEqual(answer["detail"], "Unknown token mixer module: 'nope'.")
         self.call("POST", "/design/choose", 422, json={"choices": cur, "slot": "tokenizer", "short": "byte"})
         self.call("POST", "/design/read", 422, json={})
+
+    def test_expectations_before_the_first_version(self):
+        """The page's base is {} until a version is saved: the default design, validated like every other spec."""
+        cur = self.call("POST", "/design/read", json={"spec": {}})
+        draft = self.call("POST", "/design/resize", json={"choices": cur, "n": 3})
+        written = self.call("POST", "/design/write", json={"base": {}, "choices": draft, "was": cur})
+        expect = self.call("POST", "/design/expectations", json={"cur": cur, "draft": draft, "base": {}, "draft_spec": written})
+        self.assertTrue(expect["headline"])
+        self.assertIn(D.EXPECT["more"], expect["lines"])
+        blank = self.call("POST", "/design/expectations", json={"cur": cur, "draft": cur, "base": {}})
+        self.assertTrue(blank["headline"])

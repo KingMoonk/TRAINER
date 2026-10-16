@@ -98,8 +98,17 @@ export function useQueueActions() {
       const plan = await unwrap(api.GET("/queue/plan"));
       return unwrap(api.PUT("/queue/plan", { body: { ...plan, ...patch } }));
     },
+    // Show the choice at once; the reply (or the next queue event) is what the server kept.
+    onMutate: (patch) => {
+      const before = client.getQueryData<Queue>(QUEUE);
+      if (before) client.setQueryData(QUEUE, { ...before, plan: { ...before.plan, ...patch } });
+      return { before };
+    },
     onSuccess: (plan) => client.setQueryData<Queue>(QUEUE, (q) => (q ? { ...q, plan } : q)),
-    onError: failed,
+    onError: (error, _patch, context) => {
+      if (context?.before) client.setQueryData(QUEUE, context.before);
+      failed(error);
+    },
   });
   return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, hold, move, savePlan };
 }

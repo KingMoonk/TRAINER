@@ -2,7 +2,6 @@
 // its last Tk user is removed; core editor copy is owned by #148.
 export const T = {
   lead: "Review saved designs, follow training, and inspect what changed.",
-  desktopEditor: "Model editing is currently available in the desktop app.",
   versions: "Versions",
   versionsDescription: "Follow each saved design from the queue through training.",
   empty: "No saved versions yet. Save a model design to start its training history.",

@@ -134,7 +134,19 @@ def sizes(spec, v):
     d, t = spec["dims"]["d_model"], spec["dims"]["n_ctx"]
     # the estimate leaves the vocabulary matrices out of compute (Kaplan et al.); a step still pays for the output scores
     return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * VS[v] * d) * t,
-                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t)
+                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t, parts=param_parts(e["rows"]))
+
+
+PARAM_PARTS = (("table", "violet"), ("position", "dim"), ("blocks", "blue"), ("head", "pink"))  # bar order and colour
+
+
+def param_parts(rows):
+    """{table, position, blocks, head}: parameters per part, from studio_estimate's rows. head is the final norm and the word scores."""
+    out = dict.fromkeys((key for key, _ in PARAM_PARTS), 0)
+    for r in rows:
+        key = "blocks" if r["block"] is not None else {"embedding": "table", "position": "position"}.get(r["slot"], "head")
+        out[key] += r["params"]
+    return out
 
 
 def read_spec(spec):
@@ -630,7 +642,9 @@ def check_text(old, new, speeds=None):
     if check is None:
         return None
     said = page_said(old, new)
-    text = " ".join(check["lines"] + ([T["guess_page_said"].format(text=said)] if said and said != T["change_something"] else []))
+    question = (getattr(new, "prediction", None) or {}).get("question")
+    text = " ".join(([T["check_question"].format(question=question)] if question else []) + check["lines"]
+                    + ([T["guess_page_said"].format(text=said)] if said and said != T["change_something"] else []))
     return check["state"], T["guess_kicker"].format(n=new.number), text
 
 
@@ -705,14 +719,15 @@ def split_jobs(start, plan, mode, parent_checkpoint, datasets, run_dir, new_id=l
 
 
 def notebook(versions, speeds=None, facts=None):
-    """One row per version, oldest first: {number, change, effects, guesses, note, state}. effects says what the version did to
+    """One row per version, oldest first: {number, change, effects, guesses, note, state, question}. effects says what the version did to
     held-back error, step time and memory against the version before it; guesses is the stored guess with ✓ or ✗; note says
     when the comparison is not about one change (several changes at once, or the runs also differed in data, steps, learning
     rate or extra training: studio_ia.attribution.run_changes on Services.run_facts). Reads no files: `speeds` and `facts`
     ({number: …}) are what a worker read."""
     speeds, facts, rows, old = speeds or {}, facts or {}, [], None
     for v in versions:
-        row = dict(number=v.number, change=v.change or "", effects="", guesses="", note="", state="neutral")
+        row = dict(number=v.number, change=v.change or "", effects="", guesses="", note="", state="neutral",
+                   question=(getattr(v, "prediction", None) or {}).get("question") or "")
         done = trained(v)
         if old is None or not (old.spec and v.spec):
             row["effects"] = T["notebook_error_only"].format(b=scored(v)) if scored(v) is not None else \
@@ -769,9 +784,10 @@ def notebook_lines(rows):
 
 
 def notebook_line(row):
-    """'Version 3 · more blocks (2 → 4) → error 2.31 → 2.18, steps about 1.4× slower · you guessed lower error ✓'."""
+    """'Version 3 · more blocks (2 → 4) → error 2.31 → 2.18, steps about 1.4× slower · asked “…” · you guessed lower error ✓'."""
     head = f"{T['notebook_version'].format(n=row['number'])} · {row['change']}" if row["change"] else T["notebook_version"].format(n=row["number"])
-    return " · ".join(filter(None, (f"{head} → {row['effects']}", row["guesses"], row["note"])))
+    asked = T["notebook_asked"].format(question=row["question"]) if row.get("question") else ""
+    return " · ".join(filter(None, (f"{head} → {row['effects']}", asked, row["guesses"], row["note"])))
 
 
 MISSING = {1: "Built from your text: add some in Your data to see these pieces.",

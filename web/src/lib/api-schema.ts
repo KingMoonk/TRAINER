@@ -206,6 +206,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cluster/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jobs
+         * @description Jobs queued here that run or wait to run on a peer (with the reason for a wait), and jobs this node runs for another.
+         */
+        get: operations["jobs_cluster_jobs_get"];
+        put?: never;
+        /**
+         * Dispatch
+         * @description Take a job another node owns. 409 when this node cannot run it (no version store, a kind that does not leave its owner) or the
+         *     lease is older than one it holds.
+         */
+        post: operations["dispatch_cluster_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cluster/jobs/{job_id}/finished": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finished
+         * @description A runner's job ended; the finished version is in the store. 409 for any epoch but the current one.
+         */
+        post: operations["finished_cluster_jobs__job_id__finished_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cluster/jobs/{job_id}/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Renew
+         * @description A runner extends its lease and reports progress; its events are re-emitted here as if the job ran here. 409 for any epoch but
+         *     the current one: the job has been placed again, and the runner must stop its copy.
+         */
+        post: operations["renew_cluster_jobs__job_id__renew_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cluster/jobs/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop
+         * @description The owner no longer wants this copy of the job. 409 when the epoch is not the one this node holds.
+         */
+        post: operations["stop_cluster_jobs__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -1658,7 +1744,7 @@ export interface paths {
         };
         /**
          * List Jobs
-         * @description The running job first, then Up next in order.
+         * @description The running job first, then the jobs running on a peer, then Up next in order.
          */
         get: operations["list_jobs_queue_jobs_get"];
         put?: never;
@@ -2487,6 +2573,13 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** Accepted */
+        Accepted: {
+            /** Epoch */
+            epoch: number;
+            /** Job Id */
+            job_id: string;
+        };
         /** ActionOut */
         ActionOut: {
             /** Answer */
@@ -2743,6 +2836,45 @@ export interface components {
              */
             days?: number | null;
         };
+        /** ClusterJob */
+        ClusterJob: {
+            /**
+             * Epoch
+             * @default 0
+             */
+            epoch: number;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /**
+             * Lease
+             * @default
+             */
+            lease: string;
+            /**
+             * Node
+             * @default
+             */
+            node: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "runner";
+            /** Status */
+            status: string;
+            /**
+             * Waiting Reason
+             * @default
+             */
+            waiting_reason: string;
+        };
         /** ComparePlan */
         ComparePlan: {
             /** Base */
@@ -2908,6 +3040,20 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** Dispatch */
+        Dispatch: {
+            /**
+             * Fetch
+             * @default {}
+             */
+            fetch: {
+                [key: string]: string;
+            };
+            job: components["schemas"]["JobSpec"];
+            lease: components["schemas"]["LeaseModel"];
+            /** Owner Address */
+            owner_address?: string | null;
+        };
         /** DownloadRequest */
         DownloadRequest: {
             /** Ids */
@@ -3024,6 +3170,28 @@ export interface components {
             fields: {
                 [key: string]: string;
             };
+        };
+        /** Finished */
+        Finished: {
+            /** Epoch */
+            epoch: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Key */
+            key?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "done" | "failed" | "stopped";
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
         };
         /** ForwardRequest */
         ForwardRequest: {
@@ -3302,10 +3470,61 @@ export interface components {
              */
             created_at: number;
             /**
+             * Epoch
+             * @default 0
+             */
+            epoch: number;
+            /**
              * Error
              * @default
              */
             error: string;
+            /** Eta S */
+            eta_s?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /**
+             * Node
+             * @default
+             */
+            node: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Owner
+             * @default
+             */
+            owner: string;
+            /**
+             * Params
+             * @default {}
+             */
+            params: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @default waiting
+             */
+            status: string;
+        };
+        /** JobSpec */
+        JobSpec: {
+            /**
+             * Created At
+             * @default 0
+             */
+            created_at: number;
             /** Eta S */
             eta_s?: number | null;
             /** Id */
@@ -3329,11 +3548,6 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
-            /**
-             * Status
-             * @default waiting
-             */
-            status: string;
         };
         /** Knobs */
         Knobs: {
@@ -3364,6 +3578,17 @@ export interface components {
             lines: string[];
             /** Rows */
             rows: components["schemas"]["NotebookRow"][];
+        };
+        /** LeaseModel */
+        LeaseModel: {
+            /** Duration S */
+            duration_s: number;
+            /** Epoch */
+            epoch: number;
+            /** Job Id */
+            job_id: string;
+            /** Node */
+            node: string;
         };
         /** LeashOut */
         LeashOut: {
@@ -3469,7 +3694,10 @@ export interface components {
             /** Index */
             index: number;
         };
-        /** NewJob */
+        /**
+         * NewJob
+         * @description `params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.
+         */
         NewJob: {
             /** Eta S */
             eta_s?: number | null;
@@ -4523,6 +4751,45 @@ export interface components {
             /** Words */
             words: string[];
         };
+        /** Renewal */
+        Renewal: {
+            /** Epoch */
+            epoch: number;
+            /**
+             * Events
+             * @default []
+             */
+            events: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * State
+             * @default running
+             */
+            state: string;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Waiting
+             * @default false
+             */
+            waiting: boolean;
+        };
+        /** Renewed */
+        Renewed: {
+            /** Duration S */
+            duration_s: number;
+            /** Epoch */
+            epoch: number;
+        };
         /** Reply */
         Reply: {
             /** Reply */
@@ -4675,6 +4942,10 @@ export interface components {
             memory: number;
             /** Params */
             params: number;
+            /** Parts */
+            parts: {
+                [key: string]: number;
+            };
             /** Table */
             table: number;
             /** Time */
@@ -4795,6 +5066,11 @@ export interface components {
         StatusRequest: {
             /** Version */
             version?: number | null;
+        };
+        /** Stop */
+        Stop: {
+            /** Epoch */
+            epoch: number;
         };
         /** StorageUse */
         StorageUse: {
@@ -5688,6 +5964,160 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jobs_cluster_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterJob"][];
+                };
+            };
+        };
+    };
+    dispatch_cluster_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Dispatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Accepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finished_cluster_jobs__job_id__finished_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Finished"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    renew_cluster_jobs__job_id__renew_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Renewal"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Renewed"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_cluster_jobs__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Stop"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

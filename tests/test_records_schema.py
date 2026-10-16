@@ -3,6 +3,7 @@ import json
 import random
 import sqlite3
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -84,6 +85,18 @@ class Migration(unittest.TestCase):
         self.assertTrue({"records_pick", "records_dataset", "records_stats"} <= indexes)
         self.assertEqual(list(self.ws.iter_examples(self.ds)), self.rows)  # nothing about a row changes for its readers
         self.assertEqual(self.ws.get_example(self.rows[3]["id"]), self.rows[3])
+
+    def test_closing_the_services_waits_for_the_background_schema_update(self):
+        real = Workspace.ensure_schema
+
+        def late(workspace):  # the thread starts late, as on a busy Windows runner: its connection would outlive the test
+            time.sleep(.3)
+            real(workspace)
+        with patch.object(Workspace, "ensure_schema", late):
+            svc = WorkspaceServices(self.ws)
+        svc.close()
+        self.assertFalse(svc._schema.is_alive())  # so records.sqlite is closed before the temp folder goes
+        self.assertEqual(stored(self.ws.db_path, "PRAGMA user_version"), [(studio_core.SCHEMA_VERSION,)])
 
     def test_migrating_again_changes_nothing(self):
         self.ws.ensure_schema()
