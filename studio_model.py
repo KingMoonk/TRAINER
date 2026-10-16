@@ -645,12 +645,20 @@ def _initialize_from(model, tokenizer, path):
 @slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
-          schedule_window=None, offload_optimizer=False):
+          schedule_window=None, offload_optimizer=False, distributed=None):
     """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
     step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
     Left None (the default) the schedule spans this run alone.
     offload_optimizer keeps the optimizer state in host memory and streams it through the device for each update: slower,
-    the same result, and a model whose state does not fit the GPU can train (studio_memory.offload_wanted says when)."""
+    the same result, and a model whose state does not fit the GPU can train (studio_memory.offload_wanted says when).
+
+    distributed is the hook studio_diloco's members train through (DiLoCo, docs/distributed.md); every other caller leaves it None.
+    It is any object with: `tokenizer`; `train` and `val`, window sequences read at every batch, so it may swap what they
+    hold; `sampler`, the random.Random that picks the windows; `total_steps`, the length of the whole schedule;
+    `rate_step(n)`, the schedule position of this run's step n; `due(step, trained_tokens)`, asked after every optimizer step;
+    and `sync(step, trained_tokens, model)`, called once before the first step and then whenever due() says so. sync may
+    replace the weights in model.p in place (model.load_weights); the optimizer state is kept. With it, examples, resume,
+    init_from and LoRA are not used: the data is the hook's."""
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
@@ -668,60 +676,67 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     if any((directory / name).exists() for name in ("config.json", "dataset.jsonl", "last.npz", "best.npz")):
         raise ValueError("Choose a new output folder to preserve the existing run.")
     directory.mkdir(parents=True, exist_ok=True)
-    unique = {}
-    for example in examples:
-        if stop.is_set():
-            raise InterruptedError("Training preparation cancelled.")
-        content_hash = fingerprint(example)
-        if content_hash in unique:
-            merge_duplicate_lineage(unique[content_hash], example)
+    if distributed is not None:
+        if resume or init_from or cfg["lora"]:
+            raise ValueError("A distributed member neither resumes, initializes from a checkpoint, nor trains LoRA adapters.")
+        tokenizer, train_samples, val_samples, sampler, checkpoint = distributed.tokenizer, distributed.train, distributed.val, distributed.sampler, None
+        examples, training, validation, digest, split_hash = [], [], [], "", ""
+        split, streamed, reused = {"strategy": "federated", "note": ""}, False, False
+    else:
+        unique = {}
+        for example in examples:
+            if stop.is_set():
+                raise InterruptedError("Training preparation cancelled.")
+            content_hash = fingerprint(example)
+            if content_hash in unique:
+                merge_duplicate_lineage(unique[content_hash], example)
+            else:
+                unique[content_hash] = dict(example)
+        examples = list(unique.values())
+        if not examples:
+            raise ValueError("The dataset is empty.")
+        digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
+        sampler = random.Random(cfg["seed"])
+        checkpoint = load_checkpoint(resume) if resume else None
+        if checkpoint and checkpoint["config"].get("lora"):  # a LoRA run resumes from the frozen base plus its adapters, not the merged weights
+            checkpoint["model"] = load_checkpoint(resume, weights_only=True, merged=False)["model"]
+        # Older checkpoints must resume with their original row-based partition.
+        grouped = not checkpoint or checkpoint.get("split_strategy") == "lineage-v1"
+        training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
+        split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" +
+                                     "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
+        if checkpoint:
+            if checkpoint["data_hash"] != digest:
+                raise ValueError("Resume requires the original dataset snapshot.")
+            if checkpoint.get("split_hash") and checkpoint["split_hash"] != split_hash:
+                raise ValueError("Resume requires the original source lineage and validation split.")
+            # Old checkpoints have no "architecture": validate_config derives the equivalent uniform spec.
+            previous = validate_config(checkpoint["config"])
+            if "windowing" not in checkpoint["config"]:
+                # Checkpoints from before windowing existed were trained with independent sequential chunks.
+                previous["windowing"] = cfg["windowing"] = "sequential"
+            keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + (
+                "seed", "validation", "objective", "windowing", "batch_size", "accumulation",
+                "learning_rate", "weight_decay", "warmup", "lora",
+            )
+            current_spec, previous_spec = effective_spec(cfg), effective_spec(previous)
+            recipe = ("objective", "optimizer", "schedule")
+            if (any(cfg[k] != previous[k] for k in keys)
+                    or structure_key(current_spec) != structure_key(previous_spec)
+                    or any(current_spec["train"][key] != previous_spec["train"][key] for key in recipe)):
+                raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective, optimizer, schedule and batch settings.")
+            tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
         else:
-            unique[content_hash] = dict(example)
-    examples = list(unique.values())
-    if not examples:
-        raise ValueError("The dataset is empty.")
-    digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
-    sampler = random.Random(cfg["seed"])
-    checkpoint = load_checkpoint(resume) if resume else None
-    if checkpoint and checkpoint["config"].get("lora"):  # a LoRA run resumes from the frozen base plus its adapters, not the merged weights
-        checkpoint["model"] = load_checkpoint(resume, weights_only=True, merged=False)["model"]
-    # Older checkpoints must resume with their original row-based partition.
-    grouped = not checkpoint or checkpoint.get("split_strategy") == "lineage-v1"
-    training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
-    split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" +
-                                 "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
-    if checkpoint:
-        if checkpoint["data_hash"] != digest:
-            raise ValueError("Resume requires the original dataset snapshot.")
-        if checkpoint.get("split_hash") and checkpoint["split_hash"] != split_hash:
-            raise ValueError("Resume requires the original source lineage and validation split.")
-        # Old checkpoints have no "architecture": validate_config derives the equivalent uniform spec.
-        previous = validate_config(checkpoint["config"])
-        if "windowing" not in checkpoint["config"]:
-            # Checkpoints from before windowing existed were trained with independent sequential chunks.
-            previous["windowing"] = cfg["windowing"] = "sequential"
-        keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + (
-            "seed", "validation", "objective", "windowing", "batch_size", "accumulation",
-            "learning_rate", "weight_decay", "warmup", "lora",
-        )
-        current_spec, previous_spec = effective_spec(cfg), effective_spec(previous)
-        recipe = ("objective", "optimizer", "schedule")
-        if (any(cfg[k] != previous[k] for k in keys)
-                or structure_key(current_spec) != structure_key(previous_spec)
-                or any(current_spec["train"][key] != previous_spec["train"][key] for key in recipe)):
-            raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective, optimizer, schedule and batch settings.")
-        tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
-    else:
-        module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
-        tokenizer = module.fit(module_cfg, training)
-    streamed = reused = False
-    if characters_in(training) + characters_in(validation) >= stream_chars:
-        # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
-        # on the same data and tokenizer starts at once. Under the threshold the windows are built in memory as always.
-        train_samples, val_samples, reused = shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or ROOT / "data" / "shards")
-        streamed = True
-    else:
-        train_samples, val_samples = samples_from(training, tokenizer, cfg), samples_from(validation, tokenizer, cfg)
+            module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
+            tokenizer = module.fit(module_cfg, training)
+        streamed = reused = False
+        if characters_in(training) + characters_in(validation) >= stream_chars:
+            # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
+            # on the same data and tokenizer starts at once. Under the threshold the windows are built in memory as always.
+            train_samples, val_samples, reused = shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or ROOT / "data" / "shards")
+            streamed = True
+        else:
+            train_samples, val_samples = samples_from(training, tokenizer, cfg), samples_from(validation, tokenizer, cfg)
     if not train_samples:
         raise ValueError("No trainable target tokens were found.")
     model = ScratchTransformer(cfg, tokenizer.vocab_size)
@@ -834,6 +849,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     prefetcher = BatchPrefetcher(sampler, lambda: batch_arrays([train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]),
                                  batch_stage(model.device))  # reads `shape` below, so it sees an OOM's shrink
     try:
+        if distributed is not None:
+            distributed.sync(step, 0, model)  # the global weights of the first round go in before any step
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
             if loss is not None:
@@ -861,8 +878,11 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     left.append((token_budget - trained_tokens) * (step - first_step) / max(1, trained_tokens))
                 planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
-            rate = (schedule.rate(schedule_window[0] + next_step, schedule_window[1], cfg["learning_rate"]) if schedule_window
-                    else schedule.rate(next_step, planned, cfg["learning_rate"]))
+            if distributed is not None:
+                rate = schedule.rate(distributed.rate_step(next_step), distributed.total_steps, cfg["learning_rate"])
+            else:
+                rate = (schedule.rate(schedule_window[0] + next_step, schedule_window[1], cfg["learning_rate"]) if schedule_window
+                        else schedule.rate(next_step, planned, cfg["learning_rate"]))
             sample_telemetry = bool(telemetry_every) and (next_step == 1 or next_step % telemetry_every == 0)
             while True:
                 model.zero_grad()
@@ -926,6 +946,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     with (directory / "samples.jsonl").open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps({"step": step, "text": text, "prompt": cfg["sample_prompt"]}) + "\n")
                     emit({"type": "sample", "step": step, "text": text, "prompt": cfg["sample_prompt"]})
+            if distributed is not None and distributed.due(step, trained_tokens):
+                prefetcher.discard()  # a batch drawn ahead (CUDA) came from this round's windows; sync swaps them and reseeds the sampler
+                distributed.sync(step, trained_tokens, model)
         if step < cfg["steps"] and not (budget_reason or stop.is_set()):
             budget_reason = "wall-clock" if wall_seconds is not None else "tokens"  # the re-planned cool-down finished
         if budget_reason and not stop.is_set():

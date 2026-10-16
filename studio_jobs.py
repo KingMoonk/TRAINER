@@ -29,6 +29,11 @@ def prepare(job, services):
     p.pop("result", None)  # a run cut short by a restart starts afresh; an old result must not be recorded again
     if job.kind in ("pretrain", "compare", "import_pretrained") + ROUNDS:
         p["output_dir"] = str(output_dir(job, run_dir))
+    if job.kind == "pretrain_distributed":
+        import studio_cluster
+        import studio_diloco
+        p["output_dir"] = str(output_dir(job, run_dir))
+        studio_diloco.prepare(job, services, p["output_dir"], p.get("api_port", studio_cluster.DEFAULT_PORT))
     if job.kind in ROUNDS:
         import studio_rl
         studio_rl.resolve(3 if job.kind == "restore_answers" else int(p.get("round", 1)), job, services)
@@ -59,6 +64,28 @@ def pretrain(job, context, emit, stop, pause):
                               wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
                               snapshot_every=p.get("snapshot_every", 50),  # feeds the 3D page's scrubber; newest 20 kept
                               offload_optimizer=offload)
+
+
+def _member(job, context, emit, stop, name):
+    """Run a DiLoCo member (studio_diloco) against params["coordinator_url"]; it keeps its own training folder next to the job's."""
+    import socket
+    import studio_diloco
+    from studio_peer import PeerClient
+    p = job.params
+    folder = Path(p["output_dir"]) / "member" if p.get("output_dir") else Path(context.run_dir) / f"{name}_{job.id}"
+    studio_diloco.run_member(PeerClient(p["coordinator_url"]), p["run"], p.get("node") or socket.gethostname(), int(p.get("epoch", 0)),
+                             context.root, folder, emit, stop, **p.get("member_options", {}))
+
+
+def pretrain_distributed(job, context, emit, stop, pause):
+    """The owner's job: the coordinator already runs in the app (prepare); this process is its local member."""
+    _member(job, context, emit, stop, "diloco")
+
+
+def diloco_member(job, context, emit, stop, pause):
+    """A member for a run whose coordinator is on another node: params coordinator_url, run, node and epoch."""
+    job.params.setdefault("output_dir", str(Path(context.run_dir) / f"diloco_member_{job.id}"))
+    _member(job, context, emit, stop, "diloco_member")
 
 
 def import_pretrained(job, context, emit, stop, pause):
@@ -119,4 +146,5 @@ def not_built(job, context, emit, stop, pause):
 
 
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
-            "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained}
+            "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained,
+            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member}
