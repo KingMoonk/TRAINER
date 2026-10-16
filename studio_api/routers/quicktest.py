@@ -104,12 +104,12 @@ def _specs(services):
 
 
 def _describe(spec):
-    from studio_ia.pages.quicktest import describe  # the Tk page owns the wording until it is retired
+    from studio_ia.quicktest_logic import describe
     return describe(spec)
 
 
 def _cost(current, draft):
-    from studio_ia.pages.quicktest import cost_sentence
+    from studio_ia.quicktest_logic import cost_sentence
     return cost_sentence(current, draft)
 
 

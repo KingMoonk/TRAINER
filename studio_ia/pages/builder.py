@@ -26,19 +26,12 @@ from studio_ia.design import (HEADS, PART_SLOTS, ROWS, STEPS, WIDTHS, WORDS, WOR
                               blocks_change_pair, change_chips, choose, compute_lines, design_expectation,
                               expectations, fields_of, fits, gpt2_words_ready, gpu_kind, knob_applies, lr_text,
                               module_name, module_tip, new_issues, own_slots, part_options, part_tip, preset_cost,
-                              preset_specs, preset_term, read_spec, recipe_text, resize, sizes, warm_kind,
+                              preset_specs, preset_term, read_spec, recipe_text, resize, say, sizes, warm_kind,
                               warm_outlook, write_spec)
 from studio_ia.pages.base import Page
 from studio_ia.services import Job, if_added, plain_error, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import BpcPlot, Card, Chip, GuessChips, Kicker, Progress, Segmented, StateTray, _activate, button, info_icon, tip
-
-
-def say(x, y, more, less):
-    r = y / x
-    if abs(r - 1) < 0.05:
-        return T["about_same"]
-    return T["about_multiplier"].format(mult=f"{r if r > 1 else 1 / r:.1f}") + " " + (more if r > 1 else less)
 
 
 def bar(x, y):
