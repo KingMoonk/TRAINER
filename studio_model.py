@@ -41,9 +41,11 @@ from studio_ui_guard import slow
 import studio_shards
 from studio_arch import parameter_breakdown, validate_spec
 from studio_backend import DEVICES
+from studio_memory import StateHome
 from studio_core import ROOT, atomic_json, fingerprint, jsonl_rows, messages_of, now, replace_file
 from studio_compile import CompiledModel, transplant
 from studio_estimate import estimate
+from studio_modules.mixer.attention import new_cache
 from studio_modules.objective.ce import cross_entropy  # noqa: F401  (part of this module's API)
 from studio_modules.ops import softmax as _softmax
 from studio_modules.optimizer.adamw import AdamW as _AdamW, AdamWConfig
@@ -70,6 +72,7 @@ DEFAULT_CONFIG = {
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
 EVAL_WINDOWS = 400  # evaluation reads at most this many windows, spread evenly over the set
+PREFILL_CHUNK = 256  # a reply's first KV-cached prefill runs this many tokens per forward pass, and checks `stop` between passes
 STREAM_CHARS = 16_000_000  # training text from this many characters on is tokenized into on-disk shards (about 48 MB of windows)
 
 
@@ -160,12 +163,14 @@ class AdamW(_AdamW):
         self.attach(model)
 
 
-def build_optimizer(model):
-    """The optimizer and schedule the model's spec names, ready to step it. `model` may be a studio_lora.Trainable view."""
+def build_optimizer(model, offload=False):
+    """The optimizer and schedule the model's spec names, ready to step it. `model` may be a studio_lora.Trainable view.
+    `offload` keeps the optimizer state in host memory (pinned on CUDA) and streams it through the device for each update."""
     train = model.spec["train"]
     optimizer, optimizer_cfg = module_of("optimizer", train["optimizer"])
     schedule, schedule_cfg = module_of("schedule", train["schedule"])
-    return optimizer.build(optimizer_cfg, model.dims, None).attach(model), schedule.build(schedule_cfg, model.dims, None)
+    home = StateHome.for_device(model.backend.device) if offload else None
+    return optimizer.build(optimizer_cfg, model.dims, None).attach(model, home), schedule.build(schedule_cfg, model.dims, None)
 
 
 def vocabulary_guess(cfg, vocab=263):
@@ -409,6 +414,70 @@ def batch_arrays(samples):
     return x, y
 
 
+def cuda_stage():
+    """stage() for BatchPrefetcher on CUDA: copy each batch from pinned host memory on a side stream, without blocking the host.
+
+    Returns (x, y, ready); ready() makes the compute stream wait for this batch's copy only (an event, so a later batch's copy
+    is not waited on) and tells the allocator the tensors are used there."""
+    stream = torch.cuda.Stream()
+
+    def stage(x, y):
+        with torch.cuda.stream(stream):
+            x, y = (torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True) for a in (x, y))
+            copied = torch.cuda.Event()
+            copied.record(stream)
+
+        def ready():
+            compute = torch.cuda.current_stream()
+            compute.wait_event(copied)
+            x.record_stream(compute)
+            y.record_stream(compute)
+        return x, y, ready
+    return stage
+
+
+def batch_stage(device):
+    """The stage BatchPrefetcher gets: only CUDA stages and prefetches; CPU and MPS (unified memory, nothing to pin) take the plain path."""
+    return cuda_stage() if device == "cuda" else None
+
+
+class BatchPrefetcher:
+    """Training batches from `draw()`, which reads `rng`; next() returns (x, y, target_tokens).
+
+    Without `stage` (CPU and MPS) next() just draws and returns the arrays. With `stage(x, y) -> (x, y, ready)` the next batch is
+    drawn and staged (on CUDA: a pinned, non-blocking copy) before the current one is returned, so its copy overlaps the step.
+    The draws come in the same order either way, so a seed gives the same batches. A batch drawn ahead has moved `rng`, so:
+    discard() puts those draws back (an OOM changes the shape the next draw reads) and state() is the rng as the consumed
+    batches left it, which is what a checkpoint must store."""
+
+    def __init__(self, rng, draw, stage=None):
+        self.rng, self.draw, self.stage, self.ahead = rng, draw, stage, None  # ahead: (rng state before the draw, staged batch)
+
+    def _make(self):
+        before = self.rng.getstate()
+        x, y = self.draw()
+        tokens = int((y != -100).sum())
+        return before, (*self.stage(x, y), tokens)
+
+    def next(self):
+        if self.stage is None:
+            x, y = self.draw()
+            return x, y, int((y != -100).sum())
+        x, y, ready, tokens = (self.ahead or self._make())[1]
+        self.ahead = self._make()
+        if ready is not None:
+            ready()
+        return x, y, tokens
+
+    def discard(self):
+        if self.ahead:
+            self.rng.setstate(self.ahead[0])
+            self.ahead = None
+
+    def state(self):
+        return self.ahead[0] if self.ahead else self.rng.getstate()
+
+
 @slow("load a checkpoint")
 def load_checkpoint(path, weights_only=False, merged=True):
     """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads.
@@ -576,10 +645,12 @@ def _initialize_from(model, tokenizer, path):
 @slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
-          schedule_window=None):
+          schedule_window=None, offload_optimizer=False):
     """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
     step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
-    Left None (the default) the schedule spans this run alone."""
+    Left None (the default) the schedule spans this run alone.
+    offload_optimizer keeps the optimizer state in host memory and streams it through the device for each update: slower,
+    the same result, and a model whose state does not fit the GPU can train (studio_memory.offload_wanted says when)."""
     emit = emit or (lambda event: None)
     stop, pause = stop or threading.Event(), pause or threading.Event()
     cfg = validate_config(config)
@@ -656,7 +727,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     model = ScratchTransformer(cfg, tokenizer.vocab_size)
     transplanted = _initialize_from(model, tokenizer, init_from) if init_from else None
     trainable = attach_lora(model, cfg["lora"]) if cfg["lora"] else model  # LoRA: the base is frozen; the optimizer sees only the adapters
-    optimizer, schedule = build_optimizer(trainable)
+    optimizer, schedule = build_optimizer(trainable, offload=offload_optimizer)
     step, best, history = 0, float("inf"), []
     if checkpoint:
         model.load_weights(checkpoint["model"])
@@ -698,6 +769,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         emit({"type": "info", "text": model.precision_note})
     if split["note"]:
         emit({"type": "info", "text": split["note"]})
+    if offload_optimizer:
+        emit({"type": "info", "text": "Keeping the optimizer state in host memory and streaming it to the device for each update: "
+                                      "slower steps, but the state no longer has to fit the device."})
     emit({"type": "info", "text": f"{model.backend.name} · {model.parameter_count:,} parameters · {tokenizer.vocab_size} tokens · {len(train_samples)} training windows ({cfg['windowing']}, "
                                   f"{train_samples.describe()['from_start']:.0%} start at the prompt, {train_samples.nbytes / 1024 ** 2:.1f} MB"
                                   f"{(' on disk, reused' if reused else ' on disk') if streamed else ''})"})
@@ -710,7 +784,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
                     "tokenizer": tokenizer.serialize(), "step": step, "best": best if math.isfinite(best) else None,
                     "optimizer_steps": optimizer.steps, "history": [], "data_hash": digest,  # history lives in metrics.jsonl
-                    "sampler_state": sampler.getstate(), "model_rng": model.rng.bit_generator.state,
+                    "sampler_state": prefetcher.state(), "model_rng": model.rng.bit_generator.state,
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
         arrays.update({(FILE_PREFIX + key[len(PREFIX):] if key in model.adapter_names else "weight::" + key): model.backend.to_cpu(value)
@@ -757,6 +831,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     first_step, planned = step, cfg["steps"]
     last_report = 0.
     shape = [cfg["batch_size"], cfg["accumulation"]]  # runtime batch/accumulation: cfg keeps the declared values (resume checks those); an OOM shrinks this
+    prefetcher = BatchPrefetcher(sampler, lambda: batch_arrays([train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]),
+                                 batch_stage(model.device))  # reads `shape` below, so it sees an OOM's shrink
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
@@ -794,10 +870,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 model.keep_tape, model.last_tape = sample_telemetry, None
                 try:
                     for _ in range(shape[1]):
-                        batch = [train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]
-                        x, y = batch_arrays(batch)
+                        x, y, tokens = prefetcher.next()
                         loss += model.loss_and_backward(x, y, 1 / shape[1]) / shape[1]
-                        token_count += int((y != -100).sum())
+                        token_count += tokens
                     break
                 except RuntimeError as exc:  # torch.cuda.OutOfMemoryError is one; MPS raises a plain RuntimeError
                     if shape[0] == 1 or not (isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()):
@@ -808,6 +883,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     torch.cuda.empty_cache()
                 elif model.device == "mps":
                     torch.mps.empty_cache()
+                prefetcher.discard()  # a batch drawn ahead has the old size
                 shape[:] = [shape[0] // 2, shape[1] * 2]  # ponytail: an odd batch loses a sample per halving; pad instead if it matters
                 emit({"type": "info", "text": f"Out of memory at step {next_step}: batch size now {shape[0]}, accumulation {shape[1]}."})
             if not math.isfinite(loss):
@@ -866,19 +942,57 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         return record
     except BaseException as exc:
         record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
+        if step:  # keep what the run learned since its last checkpoint, so it can resume; a failing save must not hide `exc`
+            try:
+                save("last.npz")
+                record["checkpoint"] = "last.npz"
+            except Exception:
+                pass
         atomic_json(directory / "run.json", record)
         raise
 
 
-def last_logits(model, window, sliding, cache):
-    """Logits of the position after `window`. With a KV cache only the tokens it has not seen are run;
-    once the text outgrows the context (`sliding`) every position shifts, so the cache is dropped and the window re-prefilled."""
+def batch_logits(model, windows, sliding, cache, stop=None, chunk=PREFILL_CHUNK):
+    """Logits [rows, V] of the position after each window (all the same length), or None when `stop` was set between prefill chunks.
+    With a KV cache only the tokens it has not seen are run, `chunk` tokens per pass through the same cache (a long prompt does not
+    hold the thread for one long pass, and `stop` is checked between passes); chunk=None runs them in one pass. Once the text outgrows
+    the context (`sliding`) every position shifts, so the cache is dropped and the windows re-prefilled. Without a cache the whole
+    window is run. Callers pass `chunk` explicitly, as PREFILL_CHUNK read at call time."""
     if cache is None:
-        return model.forward(np.array([window], dtype=np.int64))[0, -1]
+        return model.forward(np.array(windows, dtype=np.int64))[:, -1]
     if sliding:
         cache.clear()
         cache["n"] = 0
-    return model.forward(np.array([window[cache["n"]:]], dtype=np.int64), cache=cache)[0, -1]
+    new = np.array([window[cache["n"]:] for window in windows], dtype=np.int64)
+    size = chunk or new.shape[1]
+    for start in range(0, new.shape[1], size):
+        if start and stop and stop.is_set():
+            return None
+        logits = model.forward(new[:, start:start + size], cache=cache)
+        if start + size < new.shape[1]:
+            logits[0, -1, 0].item()   # a GPU runs ahead of this thread: wait for the chunk, or a stop would find every later chunk already queued
+    return logits[:, -1]
+
+
+def last_logits(model, window, sliding, cache, stop=None, chunk=PREFILL_CHUNK):
+    """Logits of the position after `window`, or None when `stop` was set during the prefill; see batch_logits."""
+    logits = batch_logits(model, [window], sliding, cache, stop, chunk)
+    return None if logits is None else logits[0]
+
+
+def expand_cache(cache, rows):
+    """Copy a batch-1 KV cache to `rows` independent rows (every cached tensor leads with the batch axis)."""
+    for key, value in cache.items():
+        if key != "n":
+            cache[key] = tuple(part.expand(rows, *part.shape[1:]).contiguous() for part in value)
+
+
+def keep_cache_rows(cache, rows):
+    """Drop every row of a batched KV cache except `rows` (indices into the current batch), so a finished answer stops costing compute."""
+    for key, value in cache.items():
+        if key != "n":
+            index = torch.as_tensor(rows, dtype=torch.long, device=value[0].device)
+            cache[key] = tuple(part.index_select(0, index) for part in value)
 
 
 def unsayable(tokenizer):
@@ -891,14 +1005,15 @@ def unsayable(tokenizer):
 
 
 @slow("run a model forward")
-def complete(model, tokenizer, prompt, max_tokens=48):
-    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces."""
+def complete(model, tokenizer, prompt, max_tokens=48, reduced_cache=False):
+    """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces.
+    reduced_cache: keep the KV cache in half precision (see new_cache); the default float32 cache reproduces the uncached maths."""
     tokens, result = [BOS] + tokenizer.encode(prompt), []
-    cache = {"n": 0} if model.can_cache else None
+    cache = new_cache(model.device, reduced_cache) if model.can_cache else None
     blocked = unsayable(tokenizer)
     with torch.no_grad():
-        for _ in range(max_tokens):
-            logits = last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache)
+        for i in range(max_tokens):
+            logits = last_logits(model, tokens[-model.dims.n_ctx:], len(tokens) > model.dims.n_ctx, cache, None, PREFILL_CHUNK if i == 0 else None)
             logits[blocked] = -torch.inf
             token = int(logits.argmax())  # only the chosen id leaves the device
             if token == EOS:
@@ -909,9 +1024,14 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 
 class LocalModel:
+    # Generation's KV cache: True keeps keys and values in bfloat16 (float16 where unsupported), False in float32 (tests, inspection).
+    # None: half precision on CUDA only, where chat shares the GPU's memory with jobs; on the CPU and MPS reading the cache back
+    # up costs about a tenth of the tokens/s for memory those devices have to spare.
+    reduced_kv_cache = None
+
     @slow("build a model from a checkpoint")
-    def __init__(self, path, seed=42, device="auto"):
-        data = load_checkpoint(path, weights_only=True)
+    def __init__(self, path, seed=42, device="auto", data=None):
+        data = data or load_checkpoint(path, weights_only=True)   # `data`: the same checkpoint, already loaded by the caller
         self.config = validate_config(data["config"])
         self.config["device"] = device
         self.tokenizer = Tokenizer.restore(data["tokenizer"])
@@ -920,34 +1040,53 @@ class LocalModel:
         self.rng = np.random.default_rng(seed)
         self.step = data["step"]
 
-    def complete(self, prompt, max_tokens=48):
-        return complete(self.model, self.tokenizer, prompt, max_tokens)
+    @property
+    def device(self):
+        return self.model.device
 
-    @slow("generate with a model")
-    def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
+    def to(self, device):
+        """Move the weights to "cpu", "cuda" or "mps". Not while a reply is being generated: its cache follows the model's device."""
+        self.model.to(device)
+        self.config["device"] = device
+        return self
+
+    def reduced_cache(self):
+        return self.model.device == "cuda" if self.reduced_kv_cache is None else bool(self.reduced_kv_cache)
+
+    def complete(self, prompt, max_tokens=48):
+        return complete(self.model, self.tokenizer, prompt, max_tokens, self.reduced_cache())
+
+    def _chat(self, messages):
+        """The prompt's token ids, and (position of each message's role token, role id) so a cut window starts with the right role."""
         tokens = [BOS]
         roles = {"user": USER, "assistant": ASSISTANT, "system": SYSTEM}
-        starts = []  # (position of each message's role token, role id) so a cut window starts with the right role
+        starts = []
         for message in messages:
             starts.append((len(tokens), roles.get(message["role"], USER)))
             tokens += [roles.get(message["role"], USER)] + self.tokenizer.encode(message["content"]) + [EOS]
         starts.append((len(tokens), ASSISTANT))
         tokens += [ASSISTANT]
+        return tokens, starts
+
+    def _window(self, tokens, starts):
+        """The last `context` tokens, cut mid-message the way training cuts."""
+        context = self.config["context"]
+        if len(tokens) <= context:
+            return tokens
+        cut = tokens[-context:]
+        first = len(tokens) - context
+        owner = [role for position, role in starts if position <= first]
+        if owner and first not in {position for position, _ in starts}:
+            cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
+        return cut
+
+    @slow("generate with a model")
+    def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
+        tokens, starts = self._chat(messages)
         result = []
         context = self.config["context"]
-
-        def window():
-            if len(tokens) <= context:
-                return tokens
-            cut = tokens[-context:]
-            first = len(tokens) - context
-            owner = [role for position, role in starts if position <= first]
-            if owner and first not in {position for position, _ in starts}:
-                cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
-            return cut
-
         blocked = unsayable(self.tokenizer)
-        cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
+        cache = new_cache(self.model.device, self.reduced_cache()) if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         available = self.tokenizer.vocab_size - OFFSET + 1
         k = available if int(top_k) <= 0 else min(int(top_k), available)
         # Sampling runs on the model's device and only the chosen id is copied back. Its stream is seeded from the model's NumPy
@@ -956,7 +1095,9 @@ class LocalModel:
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
-            logits = last_logits(self.model, window(), len(tokens) > context, cache)
+            logits = last_logits(self.model, self._window(tokens, starts), len(tokens) > context, cache, stop, PREFILL_CHUNK if i == 0 else None)
+            if logits is None:   # stopped during the prefill
+                break
             logits[blocked] = -torch.inf
             if temperature <= 0:
                 token = int(logits.argmax())
@@ -973,3 +1114,65 @@ class LocalModel:
         if on_text:
             on_text(text)
         return text
+
+    @slow("generate with a model")
+    def generate_group(self, messages, n, max_tokens=160, temperature=.8, top_k=40, stop=None):
+        """`n` replies to one prompt, as a list of texts: the same replies, for the same seeds, as `n` calls of generate().
+
+        The prompt is run through the model once (batch 1), its KV cache is copied to `n` rows and the rows decode together.
+        Each reply stops at its own end token or at the token budget, and a finished row leaves the batch. Each row is sampled with
+        its own generator, seeded from `self.rng` in the order generate() would draw them. `temperature` is one number or one per
+        reply. A model with no KV cache falls back to calling generate() `n` times. Once the text outgrows the context window every
+        row re-reads its own window each step, as generate() does."""
+        n = int(n)
+        temperatures = list(temperature) if isinstance(temperature, (list, tuple)) else [temperature] * n
+        if len(temperatures) != n:
+            raise ValueError("Give one temperature, or one per reply.")
+        if n < 2 or not self.model.can_cache:
+            return [self.generate(messages, max_tokens=max_tokens, temperature=t, top_k=top_k, stop=stop) for t in temperatures]
+        if all(t <= 0 for t in temperatures):   # greedy rows are identical: decode one
+            return [self.generate(messages, max_tokens=max_tokens, temperature=0, top_k=top_k, stop=stop)] * n
+        tokens, starts = self._chat(messages)
+        context = self.config["context"]
+        blocked = unsayable(self.tokenizer)
+        available = self.tokenizer.vocab_size - OFFSET + 1
+        k = available if int(top_k) <= 0 else min(int(top_k), available)
+        generators = [torch.Generator(self.model.device).manual_seed(int(self.rng.integers(2 ** 62))) if t > 0 else None for t in temperatures]
+        scale = torch.tensor([[max(.05, float(t)) if t > 0 else 1.] for t in temperatures], dtype=torch.float32, device=self.model.device)
+        rows = [list(tokens) for _ in range(n)]   # each reply's prompt + answer so far
+        results = [[] for _ in range(n)]
+        active = list(range(n))                   # reply ids still decoding, in batch order
+        cache = new_cache(self.model.device, self.reduced_cache())
+        for i in range(max(1, min(4096, int(max_tokens)))):
+            if stop and stop.is_set():
+                break
+            sliding = len(rows[active[0]]) > context
+            if i == 0:   # one prompt for everyone: run it once
+                logits = batch_logits(self.model, [self._window(tokens, starts)], sliding, cache, stop, PREFILL_CHUNK)
+                if logits is not None:
+                    if not sliding:
+                        expand_cache(cache, n)
+                    logits = logits.expand(n, -1).clone()
+            else:
+                logits = batch_logits(self.model, [self._window(rows[r], starts) for r in active], sliding, cache, stop, None)
+            if logits is None:   # stopped during the prefill
+                break
+            logits[:, blocked] = -torch.inf
+            top, keep = torch.topk(logits / scale[active], k, dim=-1)
+            probabilities = torch.softmax(top, dim=-1)
+            picks = [keep[j, torch.multinomial(probabilities[j], 1, generator=generators[r])[0]] if generators[r] is not None
+                     else logits[j].argmax() for j, r in enumerate(active)]
+            chosen = torch.stack(picks).tolist()   # the only copy back to the host
+            alive = []
+            for j, (r, token) in enumerate(zip(active, chosen)):
+                if token != EOS:
+                    results[r].append(token)
+                    rows[r].append(token)
+                    alive.append(j)
+            if len(alive) < len(active):
+                active = [active[j] for j in alive]
+                if not active:
+                    break
+                if not sliding:   # a sliding step's cache is rebuilt from the windows on the next one
+                    keep_cache_rows(cache, alive)
+        return [self.tokenizer.decode(result) for result in results]

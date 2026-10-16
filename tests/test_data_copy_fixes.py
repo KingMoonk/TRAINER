@@ -130,12 +130,16 @@ class TokenBudgets(unittest.TestCase):
             train(tiny, [{"user": "Copy: yes", "assistant": "yes"}] * 8, Path(directory) / "base")
             checkpoint = Path(directory) / "base" / "last.npz"
             seen = []
-            real = LocalModel.generate
+            real, real_group = LocalModel.generate, LocalModel.generate_group
 
             def spy(self, messages, max_tokens=32, **kw):
                 seen.append(max_tokens)
                 return real(self, messages, max_tokens=min(max_tokens, 2), **kw)  # the budget is recorded; answers stay short and fast
-            with patch.object(LocalModel, "generate", spy):
+
+            def spy_group(self, messages, n, max_tokens=32, **kw):
+                seen.append(max_tokens)
+                return real_group(self, messages, n, max_tokens=min(max_tokens, 2), **kw)
+            with patch.object(LocalModel, "generate", spy), patch.object(LocalModel, "generate_group", spy_group):
                 for rule, prompt in (("copy", "Copy: yes"), ("ends_cleanly", "Write one sentence about tides.")):
                     seen.clear()
                     studio_rl.practice_with_checks(checkpoint, [{"prompt": prompt, "rule": rule}], Path(directory) / rule,

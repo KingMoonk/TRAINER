@@ -11,13 +11,15 @@ import numpy as np
 import torch
 
 import studio_gate
+import studio_memory
 import studio_rl
 import studio_rules
 from studio_jobs import post_round
-from studio_model import AdamW, ScratchTransformer, Tokenizer, load_checkpoint, train
+from studio_model import AdamW, ScratchTransformer, Tokenizer, load_checkpoint, train, validate_config
 from studio_queue import Job, Plan, Runner
 from studio_rlhf import _encode_pair
 from tests.fixtures.ia_workspace import _generate_problems
+from tests.torchcheck import counting_backward, watched_models
 
 WORDS = ("yes", "no", "cat", "dog", "sun", "red", "sky", "big")
 EXAMPLES = [{"user": f"Copy: {w}", "assistant": w} for w in WORDS] * 3
@@ -148,18 +150,17 @@ class RLChecks(unittest.TestCase):
     def test_reverse_kl(self):
         student, tokenizer = self.model()
         rows = self.rows(tokenizer, ["yes", "no", "cat"])
-        same = studio_rl.Teacher(self.ckpt)
-        kl, _ = studio_rl.reverse_kl(student, same.model, rows, rows)
+        kl, _ = studio_rl.reverse_kl(student, studio_rl.Teacher(self.ckpt).score(rows), rows)
         self.assertGreaterEqual(kl, -1e-5)
         self.assertLess(kl, 1e-5)
         other = train({**TINY, "steps": 5, "seed": 3}, EXAMPLES, self.dir / "other")
         self.assertTrue(other)
-        kl, per_row = studio_rl.reverse_kl(student, studio_rl.Teacher(self.dir / "other" / "last.npz").model, rows, rows)
+        kl, per_row = studio_rl.reverse_kl(student, studio_rl.Teacher(self.dir / "other" / "last.npz").score(rows), rows)
         self.assertTrue(np.isfinite(kl) and all(np.isfinite(s).all() and np.isfinite(t).all() for s, t in per_row))
         # the privileged teacher sees the correction as a system message; the student does not
         teacher = studio_rl.privileged(self.ckpt, "Always answer yes.")
         t_rows = [_encode_pair(tokenizer, teacher.messages(USER), "yes", 32)]
-        kl, _ = studio_rl.reverse_kl(student, teacher.model, self.rows(tokenizer, ["yes"]), t_rows)
+        kl, _ = studio_rl.reverse_kl(student, teacher.score(t_rows), self.rows(tokenizer, ["yes"]))
         self.assertTrue(np.isfinite(kl))
 
     def test_a_teacher_with_another_word_list_is_rejected(self):
@@ -193,7 +194,112 @@ class RLChecks(unittest.TestCase):
         heat = next(e for e in events if e["type"] == "heat")
         self.assertEqual(len(heat["words"]), len(heat["surprise"]))
         self.assertLessEqual(record["moved"], record["words"])
-        self.assertTrue((self.dir / "r3" / "last.npz").exists())
+        self.assertTrue((self.dir / "r3").joinpath("last.npz").exists())
+
+    def privileged_round(self, name, **kw):
+        """A short round 3 with the same model and a hint as teacher: (losses per step, record). Its events are left in self.events."""
+        events = self.events = []
+        record = studio_rl.learn_from_teacher(self.ckpt, [f"Copy: {w}" for w in WORDS[:4]], studio_rl.privileged(self.ckpt, "Copy the word."),
+                                              self.dir / name, steps=4, learning_rate=1e-3, emit=events.append, **kw)
+        return [e["loss"] for e in events if e["type"] == "metric"], record
+
+    def assert_unchanged_round(self, losses, record):
+        """The numbers from before the teacher left the device between phases (it scored next to the student the whole round)."""
+        for got, want in zip(losses, (.044044, .091985, -.053134, -.060713)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+        self.assertAlmostEqual(record["kl_before"], .092134, delta=1e-3)
+        self.assertAlmostEqual(record["kl_after"], -.025152, delta=1e-3)
+        self.assertEqual((record["moved"], record["words"]), (8, 34))
+
+    def test_round_3_losses_do_not_depend_on_where_the_teacher_ran(self):
+        self.assert_unchanged_round(*self.privileged_round("r3cpu"))
+
+    def test_the_teacher_is_off_the_device_while_the_student_goes_backward(self):
+        for kind, reloads in (("cuda", 0), ("mps", 4)):
+            with self.subTest(kind):
+                model, live = watched_models(kind)
+                loads = []
+                load = studio_rl.load_checkpoint
+                with mock.patch.object(studio_rl, "ScratchTransformer", model), mock.patch.object(studio_rl, "empty_cache") as emptied, \
+                        mock.patch.object(studio_rl, "load_checkpoint", lambda *a, **k: loads.append(a[0]) or load(*a, **k)), \
+                        counting_backward(live) as resident:
+                    losses, record = self.privileged_round(f"r3{kind}")
+                self.assertEqual(resident, [0] * 4)   # four steps, and the teacher was not in memory at any of their backward passes
+                self.assertTrue(emptied.called and all(call.args == (kind,) for call in emptied.call_args_list))
+                self.assertEqual(len(loads), 2 + reloads)   # the teacher's and the student's loads (the teacher then borrows the student's), plus on mps one reload per later score
+                self.assert_unchanged_round(losses, record)
+                self.assertEqual(len(live), 0)
+                self.assertEqual([e for e in self.events if e["type"] == "info"], [])   # no share given: nothing was decided
+
+    def residency_round(self, name, kind, share, room):
+        """A round 3 on a fake `kind` GPU whose memory budget is `room(step, weights)` bytes: (teacher builds, the other watched
+        models in memory at each backward pass, info texts, losses, record)."""
+        model, live = watched_models(kind)
+        builds = []   # ids, not models: a list of models would keep them in memory
+
+        class Counted(model):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                builds.append(id(self))
+
+        data = load_checkpoint(self.ckpt)
+        sizes = {}
+        measure = studio_memory.weight_bytes
+
+        def weights_of(built):
+            sizes["weights"] = measure(built)
+            return sizes["weights"]
+
+        def budget(device, got_share):
+            self.assertEqual((device, got_share), (kind, share))
+            fixed, per_sample = studio_memory.training_bytes(validate_config(data["config"]), Tokenizer.restore(data["tokenizer"]).vocab_size)
+            step = fixed + 4 * per_sample if kind == "mps" else 0   # the student is on the CPU: it shares memory with an MPS teacher, not with a CUDA one
+            return room(step, sizes["weights"])
+
+        with mock.patch.object(studio_rl, "ScratchTransformer", Counted), mock.patch.object(studio_rl, "empty_cache"), \
+                mock.patch("studio_memory.weight_bytes", weights_of), mock.patch("studio_memory.budget", budget), counting_backward(live) as resident:
+            losses, record = self.privileged_round(name, memory_share=share)
+        return len(builds), resident, [e["text"] for e in self.events if e["type"] == "info"], losses, record
+
+    def test_the_teacher_stays_built_for_the_run_when_the_share_has_room(self):
+        for kind in ("cuda", "mps"):
+            with self.subTest(kind):
+                builds, resident, infos, losses, record = self.residency_round(f"r3room{kind}", kind, .5, lambda step, weights: step + weights)
+                self.assertEqual(builds, 1)   # built before the first score, never again
+                self.assertEqual(resident, [1] * 4)   # and in memory at all four backward passes
+                self.assert_unchanged_round(losses, record)
+                self.assertEqual(len(infos), 1)
+                self.assertTrue(infos[0].startswith("Keeping the teacher in memory between steps: a training step of "), infos[0])
+                self.assertIn("against the 50% (", infos[0])
+
+    def test_the_teacher_leaves_between_steps_when_the_share_has_no_room(self):
+        for kind in ("cuda", "mps"):
+            with self.subTest(kind):
+                builds, resident, infos, losses, record = self.residency_round(f"r3full{kind}", kind, .5, lambda step, weights: step + weights - 1)
+                self.assertEqual(builds, 5)   # the first score (the heat map's answers) and one per step
+                self.assertEqual(resident, [0] * 4)
+                self.assert_unchanged_round(losses, record)
+                self.assertEqual(len(infos), 1)
+                self.assertTrue(infos[0].startswith("Not keeping the teacher in memory between steps, which makes each step slower: "), infos[0])
+
+    def test_a_cpu_teacher_with_a_share_decides_nothing(self):
+        model, live = watched_models()
+        with mock.patch.object(studio_rl, "ScratchTransformer", model):
+            losses, record = self.privileged_round("r3cpushare", memory_share=.5)
+        self.assertEqual([e for e in self.events if e["type"] == "info"], [])
+        self.assert_unchanged_round(losses, record)
+
+    def test_a_cpu_teacher_stays_built(self):
+        model, live = watched_models()
+        with mock.patch.object(studio_rl, "ScratchTransformer", model):
+            teacher = studio_rl.Teacher(self.ckpt)
+            _, tokenizer = self.model()
+            teacher.score(self.rows(tokenizer, ["yes"]))
+            first = teacher.model
+            teacher.score(self.rows(tokenizer, ["no"]))
+        self.assertIsNotNone(first)
+        self.assertIs(teacher.model, first)
+        self.assertEqual(len(live), 1)
 
     # ------------------------------------------------------------------ gate
     def test_gate_truth_table(self):
@@ -262,6 +368,15 @@ class RLChecks(unittest.TestCase):
         self.assertEqual(recorded, [])
         services._record_job("job", {"job": job.id, "status": "done", "error": ""})
         self.assertEqual(recorded, [(2, 3, True)])
+
+    def test_round_3_gets_the_jobs_memory_share(self):
+        for params, want in (({"memory_share": .6}, .6), ({}, None)):
+            with self.subTest(params), mock.patch.object(studio_rl, "learn_from_teacher", return_value={"moved": 1, "words": 2, "checkpoint": str(self.ckpt)}) as run, \
+                    mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "pass_k": 0, "pass_n": 0}):
+                job = Job("post_round", "Round 3", params={"round": 3, "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "r3share"),
+                                                           "teacher": str(self.ckpt), "prompts": ["Copy: yes"], "heldout_docs": [], "heldout_problems": [], **params})
+                post_round(job, SimpleNamespace(run_dir=self.dir), lambda event: None, threading.Event(), threading.Event())
+            self.assertEqual(run.call_args.kwargs["memory_share"], want)
 
     def test_post_round_handler_completes_through_a_runner(self):
         problems = _generate_problems(10, __import__("random").Random(42))

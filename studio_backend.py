@@ -55,6 +55,14 @@ def _probe_gpu():
         return {"available": False, "kind": "", "name": "", "reason": f"{type(exc).__name__}: {exc}", "memory_bytes": 0}
 
 
+def empty_cache(device):
+    """Hand the GPU allocator's cached blocks back after a model on `device` was dropped."""
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif device == "mps" and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
 @dataclass(frozen=True)
 class Backend:
     xp: object

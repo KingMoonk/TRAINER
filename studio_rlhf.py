@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from studio_backend import empty_cache
 from studio_core import atomic_json, messages_of, now, replace_file, uid
 from studio_model import (ASSISTANT, BOS, EOS, SYSTEM, USER, AdamW, LocalModel, ScratchTransformer, Tokenizer,
                           batch_arrays, load_checkpoint, samples_from)
@@ -385,16 +386,23 @@ def preference_terms(policy_logp, reference_logp, lengths, count, cfg):
     return metrics, g
 
 
-def preference_batch(policy, reference, rows, count, cfg, backward=False):
-    """Score `rows` (count chosen then count rejected, encoded) and optionally accumulate gradients into `policy`."""
+def reference_logps(reference, rows):
+    """Summed answer log-prob of each encoded row under the frozen reference model, as NumPy: the reference's whole contribution to
+    the loss, so it can be dropped from the device once every row is scored."""
+    x, y = batch_arrays(rows)
+    with torch.no_grad():
+        logps, _ = _sequence_logps(reference, x, y)
+    return reference.backend.to_cpu(logps).astype(np.float64)
+
+
+def preference_batch(policy, reference_logp, rows, count, cfg, backward=False):
+    """Score `rows` (count chosen then count rejected, encoded) and optionally accumulate gradients into `policy`.
+    reference_logp: the reference model's reference_logps for the same rows."""
     x, y = batch_arrays(rows)
     policy_logp, (_, _, valid, cache) = _sequence_logps(policy, x, y, tape=backward)
-    with torch.no_grad():
-        reference_logp, _ = _sequence_logps(reference, x, y)
     pl = policy.backend.to_cpu(policy_logp).astype(np.float64)
-    rl = reference.backend.to_cpu(reference_logp).astype(np.float64)
     lengths = policy.backend.to_cpu(valid.sum(dim=1)).astype(np.float64)
-    result, g = preference_terms(pl, rl, lengths, count, cfg)
+    result, g = preference_terms(pl, reference_logp, lengths, count, cfg)
     if backward:
         # d(loss)/d(policy_logp) per sequence is g; autograd carries it back through the log-softmax and the model.
         weights = torch.as_tensor(g, dtype=policy_logp.dtype, device=policy_logp.device)
@@ -438,14 +446,20 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
     data = load_checkpoint(base_checkpoint)
     model_cfg = dict(data["config"], device=cfg["device"], dropout=0)
     tokenizer = Tokenizer.restore(data["tokenizer"])
-    policy = ScratchTransformer(model_cfg, tokenizer.vocab_size)
-    policy.load_weights(data["model"])
-    reference = ScratchTransformer(model_cfg, tokenizer.vocab_size)
-    reference.load_weights(data["model"])
-    optimizer = AdamW(policy, cfg["weight_decay"])
     rng = random.Random(cfg["seed"])
     encoded = [(_encode_pair(tokenizer, p["messages"], p["chosen"], model_cfg["context"]),
                 _encode_pair(tokenizer, p["messages"], p["rejected"], model_cfg["context"])) for p in pairs]
+    # The reference never changes, so it scores every pair once, in a phase of its own, and is gone before the policy exists.
+    reference = ScratchTransformer(model_cfg, tokenizer.vocab_size)
+    reference.load_weights(data["model"])
+    flat, step_rows = [row for pair in encoded for row in pair], 2 * cfg["batch_size"]
+    reference_logp = np.concatenate([reference_logps(reference, flat[i:i + step_rows]) for i in range(0, len(flat), step_rows)]).reshape(-1, 2)
+    device = reference.backend.device
+    del reference
+    empty_cache(device)
+    policy = ScratchTransformer(model_cfg, tokenizer.vocab_size)
+    policy.load_weights(data["model"])
+    optimizer = AdamW(policy, cfg["weight_decay"])
     order = list(range(len(encoded)))
     rng.shuffle(order)
     held = int(len(order) * cfg["validation"]) if len(order) >= 10 else 0
@@ -471,7 +485,7 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
 
     def stats(ids, backward=False):
         rows = [encoded[i][0] for i in ids] + [encoded[i][1] for i in ids]
-        return preference_batch(policy, reference, rows, len(ids), cfg, backward)
+        return preference_batch(policy, np.concatenate([reference_logp[ids, 0], reference_logp[ids, 1]]), rows, len(ids), cfg, backward)
 
     def evaluate():
         if not val_ids:
@@ -783,11 +797,9 @@ def temperature_spread(n, requested=None, low=.5, high=1.2):
 def sample_candidates(model, messages, cfg, stop):
     """N distinct replies at a temperature spread (duplicates are re-sampled hotter)."""
     n = max(2, min(8, int(cfg["candidates"])))
-    answers = []
-    for temperature in temperature_spread(n, cfg.get("temperatures")):
-        if stop.is_set():
-            return answers
-        answers.append(model.generate(messages, max_tokens=cfg["max_tokens"], temperature=temperature, top_k=40, stop=stop))
+    answers = model.generate_group(messages, n, max_tokens=cfg["max_tokens"], temperature=temperature_spread(n, cfg.get("temperatures")), top_k=40, stop=stop)
+    if stop.is_set():
+        return []
     seen, unique = set(), []
     for answer in answers:
         if answer.strip() not in seen:
@@ -887,16 +899,18 @@ def compare_checkpoints(a, b, prompts, judge, samples=2, max_tokens=120, tempera
     wins = ties = losses = errors = 0
     shown, total, done = [], len(prompts) * max(1, int(samples)), 0
     failures = 0
+    count = max(1, int(samples))
     for prompt in prompts:
-        for _ in range(max(1, int(samples))):
+        if stop.is_set():
+            break
+        messages = prompt["messages"]
+        # each model reads the prompt once and writes all its `samples` replies together
+        replies_a = model_a.generate_group(messages, count, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
+        replies_b = model_b.generate_group(messages, count, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
+        for reply_a, reply_b in zip(replies_a, replies_b):
             if stop.is_set():
                 break
             done += 1
-            messages = prompt["messages"]
-            reply_a = model_a.generate(messages, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
-            reply_b = model_b.generate(messages, max_tokens=max_tokens, temperature=temperature, top_k=20, stop=stop)
-            if stop.is_set():
-                break
             scores, reason = None, ""
             if reply_a.strip() == reply_b.strip():
                 outcome = "tie"
