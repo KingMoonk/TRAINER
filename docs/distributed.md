@@ -152,7 +152,7 @@ All routes are on the coordinator's API, behind node-to-node auth, under `/colle
 | `GET /params?round=r` | | the round's `θ`, fp32 `.npz` (downloads are the fast direction on Starlink) |
 | `GET /shards/{s}` | | one training shard |
 | `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16 `.npz` | `202`, or `409` when stale |
-| `GET /rounds/{r}` | | `open` or `closed` with the next round; long-polls up to 30 s |
+| `GET /rounds/{r}` | | `open` or `closed` with the next round; a `pending` round long-polls up to 30 s |
 | `POST /leave` | generation, epoch | `204` |
 
 Bytes per member per round for a 25M-parameter model: 100 MB down (fp32) and 50 MB up (fp16). At 20 Mbps up, the upload is
