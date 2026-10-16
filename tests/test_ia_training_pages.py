@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import studio_gate
 from studio_core import Workspace
@@ -395,6 +396,20 @@ class WorkspaceRows(unittest.TestCase):
         self.assertEqual(again.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
         self.ws.add(self.text, [{"text": "a new story changes the stored data"}])
         self.assertIsNone(self.svc.cached_preview([self.text], rows=6))
+
+    def test_preview_normalizes_legacy_specs_without_changing_the_version(self):
+        version = self.svc.save_version(default_spec(), "first design")
+        for sparse, context in (({"tokenizer": BYTE}, 256), ({"dims": {"n_ctx": 128}}, 128)):
+            with self.subTest(spec=sparse):
+                version.spec = sparse
+                with mock.patch.object(self.svc, "current_version", return_value=version):
+                    preview = self.svc.pretrain_preview([self.text], rows=6)
+                    self.assertEqual(preview["context"], context)
+                    self.assertGreater(preview["pieces"], 0)
+                    self.assertGreater(preview["params"], 0)
+                    self.assertEqual(self.svc.cached_preview([self.text], rows=6)["context"], context)
+                self.assertEqual(version.spec, sparse)
+                self.assertNotIn("d_model", sparse.get("dims", {}))
 
     def test_held_back_text_is_fixed_and_never_trained_on(self):
         train = self.svc.examples({"datasets": [self.text], "heldout_fraction": .2})
