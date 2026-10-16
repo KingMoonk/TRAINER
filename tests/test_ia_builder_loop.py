@@ -9,20 +9,21 @@ from unittest import mock
 
 import studio_registry as registry
 from studio_core import Workspace
+from studio_ia import design as D
 from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices, Version, WorkspaceServices
 from studio_spec import default_spec
 from studio_versions import VersionStore
 
-CUR = B.read_spec(default_spec())
+CUR = D.read_spec(default_spec())
 
 
 def spec(**choices):
-    return B.write_spec(default_spec(), dict(CUR, **choices), CUR)
+    return D.write_spec(default_spec(), dict(CUR, **choices), CUR)
 
 
 def deeper(n):
-    return spec(**B.resize(CUR, n))
+    return spec(**D.resize(CUR, n))
 
 
 def version(number, s, bpc=None, prediction=None, parent=None, method=None, trained=True):
@@ -114,20 +115,20 @@ class Check(unittest.TestCase):
 
 def heads_free_mixer():
     """A look-back module without heads, so a heads change means nothing to it."""
-    return next(m.short for m in registry.for_slot("mixer") if "heads" not in B.fields_of("mixer", m.short)
-                and not B.why_not(default_spec(), CUR, CUR, "mixer", m.short))
+    return next(m.short for m in registry.for_slot("mixer") if "heads" not in D.fields_of("mixer", m.short)
+                and not D.why_not(default_spec(), CUR, CUR, "mixer", m.short))
 
 
 class Split(unittest.TestCase):
     def test_each_version_has_one_change_and_the_last_is_the_draft(self):
-        draft = dict(B.resize(CUR, 4), W=2)
+        draft = dict(D.resize(CUR, 4), W=2)
         plan = B.split_plan(default_spec(), CUR, CUR, draft)
         self.assertEqual([chips for _, _, chips in plan], [["more blocks (2 → 4)"], ["wide thinking room"]])
-        self.assertEqual(plan[-1][1], B.write_spec(default_spec(), draft, CUR))
+        self.assertEqual(plan[-1][1], D.write_spec(default_spec(), draft, CUR))
         self.assertEqual(plan[0][1], deeper(4))
 
     def test_one_change_is_not_split(self):
-        self.assertEqual(B.split_plan(default_spec(), CUR, CUR, B.resize(CUR, 4)), [])
+        self.assertEqual(B.split_plan(default_spec(), CUR, CUR, D.resize(CUR, 4)), [])
         self.assertEqual(B.split_plan(default_spec(), CUR, CUR, CUR), [])
 
     def test_heads_the_new_look_back_has_no_use_for_are_no_version(self):
@@ -136,17 +137,17 @@ class Split(unittest.TestCase):
         self.assertEqual(len(B.split_steps(CUR, draft)), 2)  # blocks, look-back
         plan = B.split_plan(default_spec(), CUR, CUR, draft)
         self.assertEqual(len(plan), 2)
-        self.assertEqual(plan[-1][1], B.write_spec(default_spec(), draft, CUR))
+        self.assertEqual(plan[-1][1], D.write_spec(default_spec(), draft, CUR))
         self.assertFalse(any("head" in chip for _, _, chips in plan for chip in chips if "look-back" not in chip))
 
     def test_a_step_that_changes_nothing_is_folded_away(self):
         mixer = heads_free_mixer()
-        base = B.write_spec(default_spec(), dict(CUR, M=dict(CUR["M"], mixer=mixer)), CUR)
-        cur = B.read_spec(base)
-        draft = dict(B.resize(cur, 4), W=2, H=8)  # heads mean nothing to this look-back
+        base = D.write_spec(default_spec(), dict(CUR, M=dict(CUR["M"], mixer=mixer)), CUR)
+        cur = D.read_spec(base)
+        draft = dict(D.resize(cur, 4), W=2, H=8)  # heads mean nothing to this look-back
         plan = B.split_plan(base, cur, cur, draft)
         self.assertEqual([chips for _, _, chips in plan], [["more blocks (2 → 4)"], ["wide thinking room"]])
-        self.assertEqual(plan[-1][1], B.write_spec(base, draft, cur))
+        self.assertEqual(plan[-1][1], D.write_spec(base, draft, cur))
         specs = [s for _, s, _ in plan]
         self.assertEqual(len(specs), len({json.dumps(s, sort_keys=True) for s in specs}))
 
@@ -155,10 +156,10 @@ class Split(unittest.TestCase):
         draft = dict(CUR, O={(0, "mixer"): mixer, (1, "mixer"): mixer})
         plan = B.split_plan(default_spec(), CUR, CUR, draft)
         self.assertEqual(len(plan), 2)
-        self.assertEqual(plan[-1][1], B.write_spec(default_spec(), draft, CUR))
+        self.assertEqual(plan[-1][1], D.write_spec(default_spec(), draft, CUR))
 
     def test_the_jobs_chain_each_from_the_one_before(self):
-        draft = dict(B.resize(CUR, 4), W=2)
+        draft = dict(D.resize(CUR, 4), W=2)
         plan = B.split_plan(default_spec(), CUR, CUR, draft)
         ids = iter(("a1", "b2"))
         jobs = B.split_jobs(5, plan, "catch_up", "/runs/v4/best.npz", ["t"], "/runs", new_id=lambda: next(ids))
@@ -171,7 +172,7 @@ class Split(unittest.TestCase):
         self.assertEqual(p[1]["output_dir"], str(Path("/runs") / "queue_b2"))
 
     def test_a_word_list_step_trains_from_scratch(self):
-        draft = dict(B.resize(CUR, 4), V=(CUR["V"] + 1) % 4)
+        draft = dict(D.resize(CUR, 4), V=(CUR["V"] + 1) % 4)
         plan = B.split_plan(default_spec(), CUR, CUR, draft)
         self.assertEqual(plan[0][0]["V"], draft["V"])  # the word list goes first
         jobs = B.split_jobs(2, plan, "from_scratch", None, ["t"], "/runs")
@@ -183,7 +184,7 @@ class Notebook(unittest.TestCase):
     def test_one_line_per_version_with_effects_guesses_and_fairness(self):
         vs = [version(1, deeper(2), 2.40),
               version(2, deeper(4), 2.31, {"error": "lower", "step": "faster"}, parent=1),
-              version(3, spec(**dict(B.resize(CUR, 4), W=2)), 2.35, parent=2)]
+              version(3, spec(**dict(D.resize(CUR, 4), W=2)), 2.35, parent=2)]
         vs[0].change, vs[1].change, vs[2].change = "first design", "more blocks (2 → 4)", "wide thinking room"
         facts = {1: dict(data="d", steps=300, tokens=1, lr=.001, start=None, extra=False),
                  2: dict(data="d", steps=300, tokens=1, lr=.001, start="/runs/1/best.npz", extra=False),
@@ -205,7 +206,7 @@ class Notebook(unittest.TestCase):
         self.assertIn(" · you guessed lower error ✓", line)
 
     def test_several_changes_at_once_are_flagged_and_untrained_said(self):
-        vs = [version(1, deeper(2), 2.4), version(2, spec(**dict(B.resize(CUR, 4), W=2)), trained=False)]
+        vs = [version(1, deeper(2), 2.4), version(2, spec(**dict(D.resize(CUR, 4), W=2)), trained=False)]
         rows = B.notebook(vs)
         self.assertTrue(rows[1]["effects"].startswith("not trained yet"))
         self.assertEqual(rows[1]["note"], "2 changes at once")

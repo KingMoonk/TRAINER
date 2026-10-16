@@ -11,6 +11,7 @@ import studio_rules
 from studio_catalog import CATALOG, FORMAT_VERSION, convert_record, download_dataset, file_sha256, list_downloads, refresh_downloads, register_download
 from studio_core import Workspace
 from studio_ia.copy import BUILDER
+from studio_ia import design as D
 from studio_ia.pages import builder as B
 from studio_ia.services import Job
 from studio_model import LocalModel, train
@@ -31,7 +32,7 @@ class BuilderCopy(unittest.TestCase):
         self.assertNotIn("[", verdict)
         self.assertIn("unknown", verdict)
         with patch("os.sysconf", side_effect=OSError, create=True):  # the case the text covers: this computer does not report its memory
-            self.assertIsNone(B.fits({}))
+            self.assertIsNone(D.fits({}))
 
     def test_7_no_version_yet_is_not_version_0(self):
         self.assertEqual(B.version_name(0), "no version yet")
