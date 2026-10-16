@@ -278,11 +278,12 @@ class StoreErrors(PublishCase):
         self.a.train()
         client = StubS3()
         client.objects["versions", "elsewhere/big.bin"] = b"x"
-        client.sizes["elsewhere/big.bin"] = 10 * 10**9 - 100  # 100 bytes of room: no version fits
+        client.sizes["elsewhere/big.bin"] = 9_500_000_000 - 100  # 100 bytes of room under the cap: no version fits
         with self.bucket(client):
             job = self.a.publish(expect="failed")
-            self.assertRegex(job["error"], r"^Not uploaded: this upload needs [\d.]+ KB and the bucket already holds 10\.00 GB, which would "
-                                           r"make 10\.00 GB, over the 10\.00 GB limit \(the R2 free tier\)\. Delete versions")
+            self.assertRegex(job["error"], r"^Not uploaded: this upload needs [\d.]+ KB and the bucket already holds 9\.50 GB, which would "
+                                           r"make 9\.50 GB, over the 9\.50 GB limit \(the default cap, 0\.5 GB under the R2 free tier\)\. "
+                                           r"Delete versions")
             self.assertNotIn("StoreLimitError", job["error"])  # the sentence as it is, without the exception's name
             self.assertEqual(self.a.client.get(f"/jobs/{job['id']}").json()["error"], job["error"])
             self.assertEqual([c for c in client.log if c[0] in ("upload_file", "put_object")], [])
@@ -290,6 +291,20 @@ class StoreErrors(PublishCase):
             client.sizes.clear()  # versions deleted from the bucket
             self.a.publish()
         self.assertEqual(len([c for c in client.log if c[0] in ("upload_file", "put_object")]), 2)
+
+    def test_a_bucket_whose_usage_cannot_be_read_ends_the_job_saying_so_and_not_that_the_limit_was_hit(self):
+        self.a.train()
+
+        class Unreadable(StubS3):
+            def list_multipart_uploads(self, **kwargs):
+                raise ConnectionError("no route to host")
+
+        client = Unreadable()
+        with self.bucket(client):
+            said = self.a.publish(expect="failed")["error"]
+        self.assertIn("the bucket's usage could not be read", said)
+        self.assertNotIn("Not uploaded", said)
+        self.assertEqual([c for c in client.log if c[0] in ("upload_file", "put_object")], [])
 
     def test_a_limit_setting_above_the_free_tier_ends_the_job_naming_the_setting(self):
         self.a.train()

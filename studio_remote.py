@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import studio_cluster
+import studio_publish
 import studio_scheduler as sched
 from studio_peer import PeerClient
 
@@ -33,6 +35,8 @@ TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
 LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result")  # not for the runner
 TERMINAL = ("done", "failed", "stopped")
+USAGE_RETRY_S = 30.  # seconds before a checkpoint the store could not check (its size would not read) is offered again
+_log = logging.getLogger(__name__)
 
 
 def client_for(address, **options):
@@ -60,6 +64,8 @@ class GuestRun:
         self.events, self.sent = [], 0  # events not yet acknowledged by the owner
         self.checkpoint, self.published_mtime, self.publishing = None, 0., False
         self.refused_mtime, self.refusal = 0., ""  # the newest checkpoint the store refused (over its limit), and why: it is not offered again
+        self.retry_at = 0.  # the clock time a checkpoint the store could not check may be offered again
+        self.stored = []  # the keys of the checkpoints this run put in the store (not ones already there), oldest first: the only ones it deletes
         self.enqueued = self.cancelled = self.ended = self.reported = False
         self.stopped_by = None  # "stale" | "fenced" | "cancelled" | "replaced": the owner no longer wants this copy
         self.problem = ""
@@ -114,12 +120,10 @@ class Cluster:
 
     def workspace_store(self):
         """The version store the workspace names (`studioConfig.store.folder`), else the one the environment describes."""
-        import studio_publish
         return studio_publish.configured_store(self._studio_config(), self.environ)
 
     def store(self):
         """The version store, or None (see `store_problem`). It is looked up again when the workspace file changes, as the peers are."""
-        import studio_publish
         mtime = self._workspace_mtime()
         if mtime != self._store_mtime:
             self._store_mtime, self._store_problem = mtime, ""
@@ -237,6 +241,10 @@ class Cluster:
             result = self.owner.dispatch(job.id, address, body)
         except sched.Refused as exc:
             return self._refused(job, address, str(exc))
+        except studio_publish.StoreLimitError as exc:  # the store would not take the job's input: not the peer's doing, so no cooldown for it
+            self.waiting[job.id] = str(exc)
+            runner._emit("cluster", {"job": job.id, "state": "store_refused", "node": address, "detail": str(exc)})
+            return False
         except Exception as exc:  # noqa: BLE001 - reading the data or publishing the input failed: the sentence is the reason
             self.owner._refused[(job.id, address)] = self.clock() + sched.REFUSAL_COOLDOWN
             return self._refused(job, address, str(exc) or type(exc).__name__)
@@ -465,10 +473,13 @@ class Cluster:
         with run.lock:
             count = len(run.events)
 
+        sent = []  # the checkpoint key this renewal tells the owner about
+
         def progress():
             job = next((j for j in self.runner.jobs if j.id == run.local_id), None)
             with run.lock:
                 events = list(run.events[:count])
+            sent[:] = [(run.checkpoint or {}).get("key")]
             step = max((e["step"] for e in events if isinstance(e.get("step"), int)), default=0)
             total = max((e["total"] for e in events if isinstance(e.get("total"), int)), default=0)
             return {"state": self._guest_state(run), "step": step, "total": total, "events": events, "checkpoint": run.checkpoint,
@@ -477,6 +488,8 @@ class Cluster:
         def acked():
             with run.lock:
                 del run.events[:count]
+            if sent and sent[0]:  # the owner has this checkpoint now: the ones before it are no use to anyone
+                threading.Thread(target=self._prune, args=(run, sent[0]), daemon=True, name=f"prune {run.id}").start()
 
         verdict = run.guest.renew(progress, acked)
         if verdict:
@@ -493,16 +506,21 @@ class Cluster:
             mtime = path.stat().st_mtime
         except OSError:
             return
-        if mtime <= max(run.published_mtime, run.refused_mtime):
+        if mtime <= max(run.published_mtime, run.refused_mtime) or self.clock() < run.retry_at:
             return
         run.publishing = True
 
         def work():
-            import studio_publish
+            step = 0
             try:
                 step = checkpoint_step(path)
-                key = store.publish({"number": 0, "name": f"job:{run.id}", "change": f"checkpoint at step {step}"}, path)
-                run.checkpoint, run.published_mtime, run.refusal = {"key": key, "step": step}, mtime, ""
+                key, created = self._publish(store, {"number": 0, "name": f"job:{run.id}", "change": f"checkpoint at step {step}"}, path)
+                with run.lock:
+                    run.checkpoint, run.published_mtime, run.refusal = {"key": key, "step": step}, mtime, ""
+                    if created:
+                        run.stored.append(key)
+            except studio_publish.StoreUsageError as exc:  # not the limit: the store could not be checked, so this one is offered again soon
+                run.refusal, run.retry_at = f"Checkpoint at step {step} not shared: {exc}", self.clock() + USAGE_RETRY_S
             except studio_publish.StoreLimitError as exc:  # the job keeps training; the owner is told through the next renewal (`problem`)
                 run.refused_mtime, run.refusal = mtime, f"Checkpoint at step {step} not shared: {exc}"
             except Exception as exc:  # noqa: BLE001 - the next checkpoint tries again; the owner resumes from the last one that made it
@@ -510,6 +528,49 @@ class Cluster:
             finally:
                 run.publishing = False
         threading.Thread(target=work, daemon=True, name=f"publish {run.id}").start()
+
+    @staticmethod
+    def _publish(store, version, path):
+        """(key, created): `store.publish`, and whether this call put the objects up. A store that cannot say counts as not having, so
+        nothing it holds is ever deleted on its word."""
+        report = getattr(store, "publish_reporting", None)
+        if report is not None:
+            return report(version, path)
+        return store.publish(version, path), False
+
+    def _prune(self, run, upto):
+        """Delete the checkpoints this run stored before `upto` (the one the owner has now)."""
+        with run.lock:
+            if upto not in run.stored:
+                return
+            doomed = run.stored[:run.stored.index(upto)]
+            del run.stored[:len(doomed)]
+        self._delete_all(run, doomed)
+
+    def _forget_checkpoints(self, run, keep=None):
+        """Delete every checkpoint this run stored except `keep` (the result, when it is the same bytes); returns how many went."""
+        with run.lock:
+            doomed = [key for key in run.stored if key != keep]
+            run.stored[:] = [key for key in run.stored if key == keep]
+        return self._delete_all(run, doomed)
+
+    def _delete_all(self, run, keys):
+        """Delete `keys` from the store. One that will not go is logged and kept in the run's list for the next time; it is never fatal."""
+        delete = getattr(self.store(), "delete", None)
+        gone, failed = 0, []
+        for key in keys:
+            try:
+                if delete is None:
+                    raise AttributeError("this store cannot delete")
+                delete(key)
+                gone += 1
+            except Exception as exc:  # noqa: BLE001 - a checkpoint left behind costs space, not the job
+                failed.append(key)
+                _log.warning("Could not delete checkpoint %s of job %s from the store: %s", key, run.id, exc)
+        if failed:
+            with run.lock:
+                run.stored[:0] = failed
+        return gone
 
     # ---- runner: the end of a job -----------------------------------------------------------------------------------
     def _on_event(self, kind, payload):
@@ -523,7 +584,8 @@ class Cluster:
                              name=f"finish {run.id}").start()
 
     def _conclude(self, run, status, error):
-        """Publish what the job made, then tell the owner. The lease keeps being renewed meanwhile, by `tick`."""
+        """Publish what the job made, then tell the owner. The lease keeps being renewed meanwhile, by `tick`. Once the owner has the
+        result, the job's checkpoints are of no use and are deleted."""
         key, step = None, 0
         job = next((j for j in self.runner.jobs if j.id == run.local_id), None)
         out = Path((job.params.get("output_dir") if job else "") or "")
@@ -531,13 +593,31 @@ class Cluster:
         if path is not None:
             try:
                 step = checkpoint_step(path)
-                key = self.store().publish({"number": 0, "name": f"job:{run.id}", "change": f"result at step {step}"}, path)
+                key = self._publish_result(run, {"number": 0, "name": f"job:{run.id}", "change": f"result at step {step}"}, path)
             except Exception as exc:  # noqa: BLE001 - the owner gets the reason instead of a result it could not use
-                status, error = "failed", str(exc) or type(exc).__name__
-        self._report(run, status, error, key, step)
+                where = self.address or "the machine that ran it"
+                status = "failed"
+                error = f"{str(exc) or type(exc).__name__} The finished weights are kept on {where}, at {path}."
+        if self._report(run, status, error, key, step) and key:
+            self._forget_checkpoints(run, keep=key)
+
+    def _publish_result(self, run, version, path):
+        """Publish the finished weights. A store at its limit gets one more try after the job's own checkpoints are deleted, which are
+        the one thing here that can free room; a store that could not be checked, or has nothing of this job's to delete, does not."""
+        store = self.store()
+        try:
+            return store.publish(version, path)
+        except studio_publish.StoreUsageError:
+            raise
+        except studio_publish.StoreLimitError:
+            if not self._forget_checkpoints(run):
+                raise
+            return store.publish(version, path)
 
     def _report(self, run, status, error, key=None, step=0):
+        """Tell the owner how the job ended; True when it took the report (a "stale" or undelivered report is False)."""
         body = {"status": status, "error": error, "key": key, "step": step}
+        delivered = False
         while not run.stopped_by and not run.guest.fence.expired():
             outcome = run.guest.finish(body)
             if outcome == "retry":
@@ -546,8 +626,10 @@ class Cluster:
                 continue
             if outcome == "stale":
                 self._stop_guest(run, "stale")
+            delivered = outcome == "ok"
             break
         run.ended = True
+        return delivered
 
 
 def _version():

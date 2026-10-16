@@ -2,15 +2,17 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { AwayCard } from "./away-card";
 import { T } from "./copy";
 import { NowCard } from "./now-card";
 import { PlanCard } from "./plan-card";
 import { UpNextCard } from "./up-next-card";
-import { useQueue, useQueueActions } from "./use-queue";
+import { useAwayJobs, useQueue, useQueueActions } from "./use-queue";
 
 export default function QueuePage() {
   const queue = useQueue();
   const actions = useQueueActions();
+  const { away } = useAwayJobs();
   useEffect(() => {
     if (queue.isError) toast.error(T.couldNotLoad, { id: "queue-load" });
   }, [queue.isError]);
@@ -22,6 +24,7 @@ export default function QueuePage() {
         <p className="max-w-prose text-muted-foreground">{T.lead}</p>
       </div>
       <NowCard queue={queue.data} actions={actions} />
+      <AwayCard jobs={away} />
       <UpNextCard queue={queue.data} actions={actions} />
       <PlanCard queue={queue.data} actions={actions} />
     </main>

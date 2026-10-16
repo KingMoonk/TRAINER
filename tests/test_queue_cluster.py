@@ -13,9 +13,10 @@ from unittest import mock
 
 import numpy as np
 import studio_cluster as sc
+import studio_remote
 import studio_scheduler as sched
 from studio_peer import PeerError
-from studio_publish import NO_STORE, FolderStore, StoreLimitError, _Store
+from studio_publish import NO_STORE, FolderStore, StoreLimitError, StoreUsageError, _Store
 from studio_queue import Job, Plan, Runner
 from studio_remote import Cluster
 from tests.fake_cluster import Clock, Net, refuse
@@ -36,7 +37,7 @@ def wait(condition, timeout=30):
 def write_checkpoint(path, step):
     """The smallest file studio_publish accepts as a checkpoint."""
     meta = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "step": step}
-    np.savez(path, metadata=np.array(json.dumps(meta)), **{"weight::w": np.arange(4, dtype=np.float32)})
+    np.savez(path, metadata=np.array(json.dumps(meta)), **{"weight::w": np.arange(4, dtype=np.float32)})  # (the step is in the bytes, so the key)
 
 
 def trainish(job, context, emit, stop, pause):
@@ -620,6 +621,175 @@ class TwoNodes(unittest.TestCase):
         self.beat()
         self.assertNotIn("problem", job.params["cluster"])
         (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+
+    # ---- what the runner leaves in the store ------------------------------------------------------------------------
+    def hold_at_checkpoint(self, steps=1000):
+        """Start a job on the runner and wait at its first checkpoint (step 3, held there). Returns (job, run, the store)."""
+        (self.b_root).mkdir(parents=True, exist_ok=True)
+        (self.b_root / "hold").touch()
+        job = self.a.enqueue(self.job(steps))
+        self.a.cluster.poll_once()
+        self.a._place_waiting()
+        self.assertTrue(wait(lambda: self.checkpointed()))
+        return job, self.b.cluster.guests[job.id], FolderStore(self.shared, origin="gpu-box")
+
+    def publish_checkpoint(self, run, step=None):
+        """Let the runner publish the newest last.npz (a newer one, at `step`, when given); returns its key."""
+        last = Path(self.b_job().params["output_dir"]) / "last.npz"
+        if step is not None:
+            write_checkpoint(last, step)
+            os.utime(last, (time.time() + 100 * step, time.time() + 100 * step))
+        before = run.checkpoint
+        self.b.cluster.tick()
+        self.assertTrue(wait(lambda: run.checkpoint is not before and not run.publishing), "the checkpoint was not published")
+        return run.checkpoint["key"]
+
+    def test_a_new_checkpoint_replaces_the_previous_one_once_the_owner_has_the_new_one(self):
+        job, run, store = self.hold_at_checkpoint()
+        first = self.publish_checkpoint(run)
+        self.beat()
+        self.assertEqual(job.params["cluster"]["checkpoint"]["key"], first)
+        second = self.publish_checkpoint(run, step=4)
+        self.assertNotEqual(first, second)
+        self.assertTrue(store.exists(first) and store.exists(second))  # the owner could still be about to resume from the first
+        self.beat()  # the renewal that tells the owner about the second
+        self.assertEqual(job.params["cluster"]["checkpoint"]["key"], second)
+        self.assertTrue(wait(lambda: not store.exists(first)), "the previous checkpoint was not deleted")
+        self.assertTrue(store.exists(second))
+        self.assertEqual(run.stored, [second])
+        self.assertEqual(sorted(e["key"] for e in store.list()), [second])  # the weights and the listing both went
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+
+    def test_the_result_deletes_every_checkpoint_of_the_job_and_stays_itself(self):
+        job, run, store = self.hold_at_checkpoint(steps=8)
+        first = self.publish_checkpoint(run)
+        self.beat()
+        second = self.publish_checkpoint(run, step=4)
+        self.assertTrue(store.exists(first) and store.exists(second))  # (nothing acknowledged the second yet)
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"), "the owner was not told")
+        result = job.params["remote_result"]["key"]
+        self.assertTrue(wait(lambda: not store.exists(first) and not store.exists(second)), "the checkpoints were not deleted")
+        self.assertTrue(store.exists(result))
+        self.assertEqual([e["key"] for e in store.list()], [result])
+
+    def test_a_result_with_the_bytes_of_a_checkpoint_is_not_deleted_with_it(self):
+        job, run, store = self.hold_at_checkpoint(steps=3)  # best.npz at step 3 is last.npz at step 3
+        checkpoint = self.publish_checkpoint(run)
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+        self.assertEqual(job.params["remote_result"]["key"], checkpoint)
+        self.assertTrue(wait(lambda: run.ended))
+        time.sleep(.2)
+        self.assertTrue(store.exists(checkpoint))
+
+    def test_only_what_the_run_put_in_the_store_is_ever_deleted(self):
+        job, run, store = self.hold_at_checkpoint(steps=8)
+        last = Path(self.b_job().params["output_dir"]) / "last.npz"
+        theirs = store.publish({"number": 0, "name": "someone else's"}, last)  # the same bytes were in the store before the run got there
+        key = self.publish_checkpoint(run)
+        self.assertEqual(key, theirs)
+        self.assertEqual(run.stored, [])  # not created by this run: not its to delete
+        self.beat()
+        later = self.publish_checkpoint(run, step=4)
+        self.beat()
+        self.assertEqual(run.stored, [later])
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+        self.assertTrue(wait(lambda: not store.exists(later)))
+        self.assertTrue(store.exists(theirs))
+
+    def test_a_delete_that_fails_is_logged_and_the_job_still_finishes(self):
+        job, run, store = self.hold_at_checkpoint(steps=8)
+        first = self.publish_checkpoint(run)
+        self.beat()
+        with mock.patch.object(_Store, "delete", side_effect=OSError("share went away")), self.assertLogs("studio_remote", "WARNING") as logged:
+            second = self.publish_checkpoint(run, step=4)
+            self.beat()
+            self.assertTrue(wait(lambda: any("Could not delete" in line for line in logged.output)))
+            self.assertTrue(wait(lambda: run.stored == [first, second]), run.stored)  # kept, to be tried again
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+        self.assertTrue(wait(lambda: not store.exists(first) and not store.exists(second)))  # the result's cleanup took them
+
+    def test_a_result_the_store_refuses_is_retried_once_after_the_jobs_checkpoints_are_deleted(self):
+        job, run, store = self.hold_at_checkpoint(steps=8)
+        checkpoint = self.publish_checkpoint(run)
+        real = _Store.publish
+
+        def full_until_room(self_, version, path):
+            if store.exists(checkpoint):
+                raise StoreLimitError("Not uploaded: this upload needs 1.00 MB and the bucket already holds 9.50 GB.")
+            return real(self_, version, path)
+
+        with mock.patch.object(_Store, "publish", autospec=True, side_effect=full_until_room):
+            (self.b_root / "hold").unlink()
+            self.assertTrue(wait(lambda: job.status == "done"), job.error)
+        self.assertFalse(store.exists(checkpoint))
+        self.assertIn(job.params["remote_result"]["key"], [e["key"] for e in store.list()])
+
+    def test_a_result_the_store_still_refuses_fails_the_job_but_the_weights_stay_and_the_message_says_where(self):
+        job, run, store = self.hold_at_checkpoint(steps=8)
+        self.publish_checkpoint(run)
+        sentence = "Not uploaded: this upload needs 1.00 MB and the bucket already holds 9.50 GB, which would make 9.50 GB."
+        with mock.patch.object(_Store, "publish", side_effect=StoreLimitError(sentence)):
+            (self.b_root / "hold").unlink()
+            self.assertTrue(wait(lambda: job.status == "failed"), job.status)
+        best = Path(self.b_job().params["output_dir"]) / "best.npz"
+        self.assertTrue(best.is_file())  # the finished weights are still on the runner
+        self.assertTrue(job.error.startswith(sentence), job.error)
+        self.assertIn(f"The finished weights are kept on the machine that ran it, at {best}.", job.error)
+        self.assertNotIn("remote_result", job.params)
+
+    def test_a_result_refused_because_the_size_could_not_be_read_is_not_retried_and_keeps_the_checkpoints(self):
+        job, run, store = self.hold_at_checkpoint(steps=8)
+        checkpoint = self.publish_checkpoint(run)
+        failure = StoreUsageError("Nothing was uploaded: the bucket's usage could not be read.")
+        with mock.patch.object(_Store, "publish", side_effect=failure) as publish:
+            (self.b_root / "hold").unlink()
+            self.assertTrue(wait(lambda: job.status == "failed"))
+        self.assertEqual(publish.call_count, 1)
+        self.assertTrue(store.exists(checkpoint))  # deleting them would not have helped
+        self.assertIn("kept on", job.error)
+
+    def test_a_checkpoint_whose_size_check_failed_is_offered_again_later_and_the_owner_is_told_meanwhile(self):
+        job, run, store = self.hold_at_checkpoint()
+        unreadable = StoreUsageError("Nothing was uploaded: the bucket's usage could not be read.")
+        with mock.patch.object(studio_remote, "USAGE_RETRY_S", 5.), mock.patch.object(_Store, "_admit", side_effect=unreadable) as admit:
+            self.b.cluster.tick()
+            self.assertTrue(wait(lambda: run.refusal and not run.publishing))
+            self.b.cluster.tick()
+            self.assertEqual(admit.call_count, 1)  # not straight away
+            self.b_clock.advance(6.)
+            self.b.cluster.tick()
+            self.assertTrue(wait(lambda: admit.call_count == 2 and not run.publishing), "it was not offered again")
+            self.assertEqual(run.refused_mtime, 0.)  # a failed read is not a refusal of this checkpoint
+            self.assertIn("not shared", run.refusal)
+            self.beat(6.)  # the owner hears of it on the renewal
+            self.assertIn(run.refusal, job.note)
+            self.b_clock.advance(6.)
+        self.b.cluster.tick()
+        self.assertTrue(wait(lambda: run.checkpoint is not None), "it was not published once the store could be read")
+        self.assertEqual(run.refusal, "")
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+
+    def test_an_input_the_store_refuses_leaves_the_job_waiting_with_the_sentence_and_does_not_blame_the_peer(self):
+        start = self.a_root / "start.npz"
+        write_checkpoint(start, 50)
+        job = self.a.enqueue(self.job(8, mode="catch_up", init_from=str(start)))
+        self.a.cluster.poll_once()
+        sentence = "Not uploaded: this upload needs 1.00 MB and the bucket already holds 9.50 GB, which would make 9.50 GB."
+        with mock.patch.object(_Store, "publish", side_effect=StoreLimitError(sentence)):
+            self.a._place_waiting()
+        self.assertEqual(job.status, "waiting")
+        self.assertEqual(self.a.cluster.waiting[job.id], sentence)  # as it is: no "gpu-box would not take it"
+        self.assertEqual(self.a.cluster.owner.refused_by(job.id), set())  # no cooldown: the peer did nothing wrong
+        self.assertIn(("cluster", {"job": job.id, "state": "store_refused", "node": "gpu-box", "detail": sentence}), self.a_events)
+        self.a._place_waiting()  # room again: the same peer takes it at once
+        self.assertEqual((job.status, job.node), ("running", "gpu-box"))
         self.assertTrue(wait(lambda: job.status == "done"))
 
     def test_when_the_owner_cannot_be_reached_the_runner_stops_its_job_by_itself_within_one_lease(self):

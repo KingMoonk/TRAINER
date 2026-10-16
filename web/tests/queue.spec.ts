@@ -24,6 +24,7 @@ async function mockApi(page: Page, start: { running?: boolean; reason?: string |
     supported: start.supported ?? true,
     up_next: [job("a", "First waiting"), job("b", "Second waiting", { note: "A note" }), job("c", "Third waiting")],
     connections: 0,
+    away: [] as Job[],
   };
   const view = () => ({
     job: state.job,
@@ -48,6 +49,7 @@ async function mockApi(page: Page, start: { running?: boolean; reason?: string |
   const jobIndex = (url: string) => state.up_next.findIndex((j) => j.id === url.split("/queue/jobs/")[1].split("/")[0]);
 
   await page.route("**/queue", (route) => route.fulfill(json(view())));
+  await page.route("**/queue/jobs", (route) => route.fulfill(json([...(state.job ? [state.job] : []), ...state.away, ...state.up_next])));
   await page.route("**/queue/jobs/*/outlook", (route) => route.fulfill(json({ outlook: "after about 30 min" })));
   await page.route("**/queue/jobs/*/hold", (route) => {
     const body = record(route) as { held: boolean };
@@ -132,6 +134,15 @@ test("shows the running job, the jobs up next in order and the plan", async ({ p
   await expect(page.getByRole("radio", { name: "Any time" })).toBeChecked();
   await expect(page.getByRole("radio", { name: "Most" })).toBeChecked();
   await expect(page.getByRole("switch", { name: /Only when I.m not using the computer/ })).toBeChecked();
+});
+
+test("a job running on another machine shows where, and the note about its checkpoint", async ({ page }) => {
+  const { state } = await mockApi(page);
+  const note = "The checkpoint was not stored: the bucket is full.";
+  state.away = [{ ...job("far1", "Version 4 pretraining", { status: "running", note }), node: "gpu-box", owner: "", } as Job];
+  await page.goto("/queue/");
+  await expect(page.getByTestId("away")).toContainText("Version 4 pretraining · on gpu-box");
+  await expect(page.getByTestId("away")).toContainText(note);
 });
 
 test("hold, release, move, run next and remove a waiting job", async ({ page }) => {
