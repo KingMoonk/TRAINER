@@ -91,8 +91,12 @@ async function mockApi(page: Page, start: { running?: boolean; reason?: string |
     record(route);
     return route.fulfill(json({ started: true }));
   });
-  await page.route("**/queue/plan", (route) => {
+  await page.route("**/queue/plan", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill(json(state.plan));
     const body = record(route) as Record<string, unknown>;
+    // Make overlapping user edits deterministic: an older render must never
+    // send a whole stale plan while the preceding save is still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 150));
     state.plan = body;
     if (body.idle_only === false) state.reason = null;
     return route.fulfill(json(state.plan));
