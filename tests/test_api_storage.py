@@ -54,6 +54,22 @@ class StorageApiTest(unittest.TestCase):
         refused = self.client.post("/storage/clean", json={})
         self.assertEqual((refused.status_code, refused.json()["detail"]), (409, "Stop the running job first."))
 
+    def test_exports_list_trained_versions_with_the_reason_gguf_is_unavailable(self):
+        import studio_spec
+        word = studio_spec.default_spec()
+        word["tokenizer"] = {"id": "word"}
+        for spec in (studio_spec.default_spec(), word, studio_spec.default_spec()):
+            self.services.save_version({"architecture": spec}, "")
+        for v in self.services._versions[:2]:
+            v.best_checkpoint = "best.npz"
+        rows = self.client.get("/storage/exports").json()
+        self.assertEqual([r["number"] for r in rows], [1, 2])
+        self.assertEqual(rows[0]["gguf_problem"], "")
+        self.assertTrue(rows[1]["gguf_problem"].startswith("The"))
+
+    def test_exports_are_empty_before_anything_trains(self):
+        self.assertEqual(self.client.get("/storage/exports").json(), [])
+
     def test_negative_days_are_refused(self):
         self.assertEqual(self.client.get("/storage", params={"days": -1}).status_code, 422)
         self.assertEqual(self.client.post("/storage/clean", json={"days": -1}).status_code, 422)
