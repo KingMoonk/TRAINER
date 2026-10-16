@@ -18,6 +18,13 @@ class LinearConfig:
     eps: float = field(default=1e-6, metadata=dict(min=1e-12, max=1e-2))
 
 
+def prefix_sums(x):
+    """Running sums over the time axis (dim 2) of [B, H, T, ...]. A single token has nothing to add up, so it is returned as is:
+    on Apple MPS, torch.cumsum over a length-1 axis whose stride is odd (k[..., :, None] * v[..., None, :] produces one) writes
+    outside its output and corrupts neighbouring tensors, which showed up as NaN or garbage logits while generating."""
+    return x if x.shape[2] == 1 else torch.cumsum(x, dim=2)
+
+
 class LinearAttention(Layer):
     cacheable = True
 
@@ -37,8 +44,8 @@ class LinearAttention(Layer):
         k = ctx.emit("linear.k", F.elu(raw_k) + 1)
         v = ctx.emit("linear.v", v)
         # Causal prefix sums of k_i v_j and of k; each position reads only earlier positions. Memory: T × h² per head.
-        kv = torch.cumsum(k.unsqueeze(-1) * v.unsqueeze(-2), dim=2)
-        ks = torch.cumsum(k, dim=2)
+        kv = prefix_sums(k.unsqueeze(-1) * v.unsqueeze(-2))
+        ks = prefix_sums(k)
         if ctx.cache is not None:
             # Generation: the sums so far are the whole state ([B, H, h, h] and [B, H, h]), so a new token costs the same at any length.
             if ctx.block in ctx.cache:
