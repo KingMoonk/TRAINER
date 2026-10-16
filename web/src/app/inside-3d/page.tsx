@@ -1,6 +1,5 @@
-import { PagePlaceholder } from "@/components/page-placeholder";
-import { routeFor } from "@/lib/routes";
+import { Inside3d } from "@/components/inside-3d/inside-3d";
 
 export default function Page() {
-  return <PagePlaceholder route={routeFor("inside3d")} />;
+  return <Inside3d />;
 }
