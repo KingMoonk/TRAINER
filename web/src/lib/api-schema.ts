@@ -1374,6 +1374,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/quicktest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Quicktest State
+         * @description The current version, the staged change (if any) and the newest finished result that finished after `since` (epoch seconds).
+         */
+        get: operations["quicktest_state_quicktest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quicktest/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Stage Draft
+         * @description Stage an unsaved design change for Quick test and Compare (the designer's draft).
+         */
+        put: operations["stage_draft_quicktest_draft_put"];
+        post?: never;
+        /** Discard Draft */
+        delete: operations["discard_draft_quicktest_draft_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quicktest/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run
+         * @description Queue a quick test of the staged change against the current version. 400 without a staged change or, for "slice", without text.
+         */
+        post: operations["run_quicktest_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quicktest/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Idea
+         * @description Save the staged change as the next version and clear the stage; the designer then shows it as saved and needing training.
+         */
+        post: operations["save_idea_quicktest_save_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storage": {
         parameters: {
             query?: never;
@@ -2788,6 +2869,157 @@ export interface components {
              * @default []
              */
             up_next: components["schemas"]["JobModel"][];
+        };
+        /** QuickTestCheck */
+        QuickTestCheck: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Id */
+            id: string;
+            /** Ok */
+            ok?: boolean | null;
+        };
+        /** QuickTestDesign */
+        QuickTestDesign: {
+            /** Description */
+            description: string;
+            /** Title */
+            title: string;
+        };
+        /** QuickTestDraft */
+        QuickTestDraft: {
+            /** Changes */
+            changes: string[];
+            /** Cost */
+            cost: string;
+            /** Description */
+            description: string;
+        };
+        /** QuickTestReferences */
+        QuickTestReferences: {
+            /** Uniform */
+            uniform: number;
+            /** Unigram */
+            unigram: number;
+        };
+        /**
+         * QuickTestResult
+         * @description studio_quicktest.run's result, as stored.
+         */
+        QuickTestResult: {
+            /** Broken */
+            broken?: string | null;
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["QuickTestCheck"][];
+            current?: components["schemas"]["QuickTestRun"] | null;
+            /**
+             * Dataset
+             * @default
+             */
+            dataset: string;
+            /** Delta */
+            delta?: number | null;
+            draft?: components["schemas"]["QuickTestRun"] | null;
+            /** Finished At */
+            finished_at?: number | null;
+            /**
+             * Learned Context
+             * @default false
+             */
+            learned_context: boolean;
+            /** Minutes */
+            minutes: number;
+            references?: components["schemas"]["QuickTestReferences"] | null;
+            /**
+             * Shrink
+             * @default false
+             */
+            shrink: boolean;
+            /**
+             * Stopped
+             * @default false
+             */
+            stopped: boolean;
+            /** Threshold */
+            threshold?: number | null;
+            /** Verdict */
+            verdict?: ("lower" | "about the same" | "higher") | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** QuickTestRun */
+        QuickTestRun: {
+            /** Bpc */
+            bpc?: number | null;
+            /**
+             * Curve
+             * @default []
+             */
+            curve: number[][];
+            /**
+             * Sample
+             * @default
+             */
+            sample: string;
+            /** Steps */
+            steps: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** QuickTestRunRequest */
+        QuickTestRunRequest: {
+            /**
+             * Dataset
+             * @default stories
+             * @enum {string}
+             */
+            dataset: "stories" | "slice" | "problems";
+            /**
+             * Guess
+             * @enum {string}
+             */
+            guess: "Lower" | "Same" | "Higher";
+            /**
+             * Minutes
+             * @default 3
+             * @enum {integer}
+             */
+            minutes: 1 | 3 | 10;
+            /**
+             * Shrink
+             * @default false
+             */
+            shrink: boolean;
+        };
+        /** QuickTestStageDraft */
+        QuickTestStageDraft: {
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        /** QuickTestStarted */
+        QuickTestStarted: {
+            /** Job Id */
+            job_id: string;
+            /** Outlook */
+            outlook: string;
+            /** Started At */
+            started_at: number;
+        };
+        /** QuickTestState */
+        QuickTestState: {
+            current: components["schemas"]["QuickTestDesign"];
+            draft: components["schemas"]["QuickTestDraft"] | null;
+            last: components["schemas"]["QuickTestResult"] | null;
+            /** Next Number */
+            next_number: number;
         };
         /** RangeJob */
         RangeJob: {
@@ -5683,6 +5915,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueStateModel"];
+                };
+            };
+        };
+    };
+    quicktest_state_quicktest_get: {
+        parameters: {
+            query?: {
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuickTestState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stage_draft_quicktest_draft_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuickTestStageDraft"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_draft_quicktest_draft_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    run_quicktest_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuickTestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuickTestStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_idea_quicktest_save_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Version"];
                 };
             };
         };
