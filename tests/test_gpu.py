@@ -44,6 +44,26 @@ class BackendSelectionChecks(unittest.TestCase):
             np.testing.assert_array_equal(backend.to_cpu(torch.as_tensor(values)), values)
             backend.synchronize()
 
+    def test_concurrent_first_calls_probe_one_at_a_time(self):
+        import studio_backend
+        inside, most, gate = [0], [0], threading.Event()
+
+        def probe():
+            inside[0] += 1
+            most[0] = max(most[0], inside[0])
+            gate.wait(.05)  # long enough for every other thread to arrive while this one probes
+            inside[0] -= 1
+            return {"available": False, "kind": "", "name": "", "reason": "probe for this test", "memory_bytes": 0}
+
+        studio_backend.gpu_status.cache_clear()
+        try:
+            with patch("studio_backend._probe_gpu", side_effect=probe), ThreadPoolExecutor(8) as pool:
+                results = list(pool.map(lambda _: studio_backend.gpu_status(), range(8)))
+        finally:
+            studio_backend.gpu_status.cache_clear()
+        self.assertEqual(most[0], 1)
+        self.assertTrue(all(result["reason"] == "probe for this test" for result in results))
+
 
 class GpuIntegrationChecks(unittest.TestCase):
     @classmethod

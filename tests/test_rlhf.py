@@ -11,11 +11,11 @@ import numpy as np
 import torch
 
 import studio_rlhf
-from tests.torchcheck import to_np
+from tests.torchcheck import counting_backward, to_np, watched_models
 from studio_model import train
 from studio_rlhf import (DEFAULT_RUBRIC, OllamaTeacher, PreferenceStore, TeacherError, _encode_pair, _sequence_logps,
                          auto_rlhf, compare_checkpoints, dpo_train, evaluate_checkpoint, load_settings, preference_batch,
-                         preference_terms, prompts_from, save_settings, teacher_pairs, temperature_spread)
+                         preference_terms, prompts_from, reference_logps, save_settings, teacher_pairs, temperature_spread)
 
 EXAMPLES = [{"user": f"say {w}", "assistant": w} for w in ("yes", "no", "cat", "dog", "sun", "red", "sky", "big")] * 3
 TINY = dict(device="cpu", width=32, layers=1, heads=2, context=32, expansion=2, dropout=0, batch_size=4,
@@ -39,6 +39,9 @@ class ScriptedModel:
         reply = self.replies[self.calls % len(self.replies)] if self.calls < len(self.replies) else f"extra{self.calls}"
         self.calls += 1
         return reply
+
+    def generate_group(self, messages, n, **kwargs):
+        return [self.generate(messages) for _ in range(n)]
 
 
 class ScriptedTeacher(OllamaTeacher):
@@ -154,19 +157,20 @@ class RLHFChecks(unittest.TestCase):
             messages = [{"role": "user", "content": "say yes"}]
             rows = [_encode_pair(tokenizer, messages, "yes", 32), _encode_pair(tokenizer, messages, "yes yes", 32),
                     _encode_pair(tokenizer, messages, "no", 32), _encode_pair(tokenizer, messages, "no no no", 32)]
+            reference_logp = reference_logps(reference, rows)
             for loss_type, normalize in (("dpo", True), ("ipo", False), ("ipo", True)):
                 config = {"beta": .3, "loss_type": loss_type, "length_normalize": normalize, "sft_weight": .2}
                 policy.zero_grad()
-                preference_batch(policy, reference, rows, 2, config, backward=True)
+                preference_batch(policy, reference_logp, rows, 2, config, backward=True)
                 for key in ("block0.f1.w", "token", "final.g"):
                     index = tuple(np.unravel_index(np.argmax(np.abs(to_np(policy.g[key]))), policy.g[key].shape))
                     original = float(policy.p[key][index])
                     with torch.no_grad():
                         policy.p[key][index] = original + 1e-2
-                    plus = preference_batch(policy, reference, rows, 2, config)["loss"]
+                    plus = preference_batch(policy, reference_logp, rows, 2, config)["loss"]
                     with torch.no_grad():
                         policy.p[key][index] = original - 1e-2
-                    minus = preference_batch(policy, reference, rows, 2, config)["loss"]
+                    minus = preference_batch(policy, reference_logp, rows, 2, config)["loss"]
                     with torch.no_grad():
                         policy.p[key][index] = original
                     numeric = (plus - minus) / 2e-2
@@ -190,6 +194,33 @@ class RLHFChecks(unittest.TestCase):
             self.assertIn("chosen_len", history[-1])
             from studio_model import LocalModel
             LocalModel(result["checkpoint"], device="cpu")  # loads as an ordinary checkpoint
+
+    def dpo_losses(self, directory, base, **settings):
+        """(training losses, validation losses) of a short run on 12 pairs; the numbers below come from the reference model scoring
+        every batch next to the policy, before it was scored once up front."""
+        store = PreferenceStore(directory)
+        for word in ("yes", "no", "cat", "dog", "sun", "red", "sky", "big", "yes", "no", "cat", "dog"):
+            store.add([{"role": "user", "content": f"say {word}"}], word, word + " " + word + " " + word, "human", note=word)
+        result = dpo_train(base, store.all(), Path(directory) / "dpo",
+                           {"steps": 6, "eval_every": 3, "learning_rate": 2e-3, "device": "cpu", "validation": .2, "beta": .5, **settings})
+        rows = [json.loads(line) for line in (Path(result["directory"]) / "metrics.jsonl").read_text().splitlines()]
+        return [r["loss"] for r in rows], [r["val_loss"] for r in rows if r["val_loss"] is not None]
+
+    def test_dpo_losses_do_not_depend_on_where_the_reference_ran(self):
+        with tempfile.TemporaryDirectory() as directory:
+            losses, validation = self.dpo_losses(directory, pretrained(directory))
+        for got, want in zip(losses, (1.27481, 1.30112, .67983, .67175, .64724, .58553, .58737)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+        for got, want in zip(validation, (1.27481, .66271, .56367)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+
+    def test_the_reference_is_gone_before_the_policy_goes_backward(self):
+        model, live = watched_models()
+        with tempfile.TemporaryDirectory() as directory:
+            base = pretrained(directory)
+            with patch.object(studio_rlhf, "ScratchTransformer", model), counting_backward(live) as resident:
+                self.dpo_losses(directory, base)
+        self.assertEqual(resident, [0] * 6)
 
     def test_ipo_and_length_normalized_training_run(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -338,6 +369,9 @@ class RLHFChecks(unittest.TestCase):
         class Constant:
             def generate(self, *args, **kwargs):
                 return "same"
+
+            def generate_group(self, messages, n, **kwargs):
+                return [self.generate(messages) for _ in range(n)]
         pairs, info = teacher_pairs(teacher, Constant(), PROMPT, CFG, random.Random(1), threading.Event())
         self.assertEqual((pairs, info["skip"]), ([], "model gave identical replies"))
 

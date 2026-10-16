@@ -52,7 +52,8 @@ def pretrain(job, context, emit, stop, pause):
     cfg = dict(p["config"])
     share = p.get("memory_share", 1.)
     declared = cfg.get("batch_size", studio_model.DEFAULT_CONFIG["batch_size"])
-    cfg["batch_size"] = studio_memory.batch_cap(cfg, share)  # the plan's share of the device's memory
+    offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), share)  # CUDA only, and only when the state cannot fit
+    cfg["batch_size"] = studio_memory.batch_cap(cfg, share, offload=offload)  # the plan's share of the device's memory
     if cfg["batch_size"] < declared:
         emit({"type": "info", "text": f"A batch of {declared} does not fit the {share:.0%} of memory the plan allows this job: "
                                       f"training with batch size {cfg['batch_size']}."})
@@ -61,7 +62,8 @@ def pretrain(job, context, emit, stop, pause):
     job.params["output_dir"] = str(out)
     return studio_model.train(cfg, _examples(job, context), out, emit=emit, stop=stop, pause=pause, init_from=init,
                               wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
-                              snapshot_every=p.get("snapshot_every", 50))  # feeds the 3D page's scrubber; newest 20 kept
+                              snapshot_every=p.get("snapshot_every", 50),  # feeds the 3D page's scrubber; newest 20 kept
+                              offload_optimizer=offload)
 
 
 def _member(job, context, emit, stop, name):

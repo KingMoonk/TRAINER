@@ -1163,7 +1163,7 @@ RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference n
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
 RANGE_CHARS = 400_000  # characters of the chosen text the learning-rate test trains on: a hundred small steps never read more
 PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
-CHAT_MODELS = 3  # ponytail: a count cap on loaded chat models; P1 of issue #13 replaces it with a byte budget
+CHAT_MODELS = 3  # most chat models kept loaded; their bytes are also in the ledger, which the queue takes off a job's share
 FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
 
 LN2 = math.log(2)
@@ -1236,7 +1236,9 @@ class WorkspaceServices(Services):
         super().__init__()
         self._reads(workspace)
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
-                                          prepare=lambda job: studio_jobs.prepare(job, self))
+                                          prepare=lambda job: studio_jobs.prepare(job, self),
+                                          ledger=self.ledger, make_room=self.evict_oldest_chat,
+                                          on_start=self.chat_job_started, on_end=self.chat_job_ended)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
         workspace.progress = self.note
@@ -1249,7 +1251,11 @@ class WorkspaceServices(Services):
         self.root = Path(workspace.root)
         self.store = studio_versions.VersionStore(self.root)
         self.store.versions = lambda: self._rows()  # tolerant of the simpler list schema
+        import studio_memory
         self._models, self._cache = {}, {}
+        self.ledger = studio_memory.Ledger()  # the bytes of the chat models in _models
+        self._chat_lock = threading.RLock()  # _models, _using, _job_running and where each model is; no Tk-thread read takes it
+        self._using, self._job_running = {}, False  # per model, the lock a reply holds so the model is not moved under it
         self._lock = threading.RLock()
         self._made = {}  # cache key -> the lock held while it is being made
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
@@ -2611,13 +2617,72 @@ class WorkspaceServices(Services):
 
     def chat(self, version, messages, on_text, stop, ablate=None):
         from studio_model import LocalModel
+        import studio_memory
         ckpt = self._checkpoint(version)
-        with self._lock:
-            model = self._models.pop(ckpt, None) or LocalModel(ckpt, device="cpu")
+        with self._chat_lock:
+            model = self._models.pop(ckpt, None)
+            if model is None:
+                device = self._chat_device()
+                model = LocalModel(ckpt, device=device)
+                self.ledger.register(ckpt, studio_memory.weight_bytes(model.model), device)
+                self._using[ckpt] = threading.RLock()
             self._models[ckpt] = model  # most recently used last; the dict is the LRU order
             while len(self._models) > CHAT_MODELS:
-                del self._models[next(iter(self._models))]
-        return model.generate(messages, on_text=on_text, stop=stop, ablate=[tuple(h) for h in ablate] if ablate else None)
+                self._evict_chat()
+            using = self._using[ckpt]
+        with using:  # a move to another device waits for the reply: its cache lives on the device it started on
+            return model.generate(messages, on_text=on_text, stop=stop, ablate=[tuple(h) for h in ablate] if ablate else None)
+
+    def _chat_device(self):
+        """Where a chat model should live now (the chat lock is held): the CUDA GPU while no job runs, the CPU otherwise, and on
+        a Mac (MPS shares the CPU's memory) or a machine without a GPU always the CPU."""
+        import studio_backend
+        if self._job_running:
+            return "cpu"
+        status = studio_backend.gpu_status()
+        return "cuda" if status["available"] and status["kind"] == "cuda" else "cpu"
+
+    def _evict_chat(self):
+        """Drop the least recently used chat model (the chat lock is held). A reply still running on it keeps it alive until it ends."""
+        ckpt = next(iter(self._models))
+        del self._models[ckpt]
+        self._using.pop(ckpt, None)
+        self.ledger.release(ckpt)
+
+    def evict_oldest_chat(self):
+        """The queue's call when a job is about to start with no room to spare. Runs on the runner thread. False when none is loaded."""
+        with self._chat_lock:
+            if not self._models:
+                return False
+            self._evict_chat()
+            return True
+
+    def _move_chat(self, device):
+        """Put every loaded chat model on `device` (the chat lock is held), waiting for the reply each is giving. A model that
+        cannot move (the GPU is out of memory) stays where it is, and the ledger says where that is."""
+        import studio_memory
+        import torch
+        for ckpt, model in list(self._models.items()):
+            try:
+                with self._using[ckpt]:
+                    model.to(device)
+            except RuntimeError:  # no room on the GPU: the model keeps answering from where it is
+                logging.getLogger("groundwork.chat").warning("could not move a chat model to %s", device, exc_info=True)
+            self.ledger.register(ckpt, studio_memory.weight_bytes(model.model), model.device)
+        if device == "cpu" and torch.cuda.is_available():
+            torch.cuda.empty_cache()  # hand the GPU's memory back to the job
+
+    def chat_job_started(self, job):
+        """The queue's call as a job is about to start, on the runner thread: chat leaves the GPU for it."""
+        with self._chat_lock:
+            self._job_running = True
+            self._move_chat("cpu")
+
+    def chat_job_ended(self, job):
+        """The queue's call after a job ended, on the runner thread: chat may use the CUDA GPU again."""
+        with self._chat_lock:
+            self._job_running = False
+            self._move_chat(self._chat_device())
 
     def inspect_forward(self, version, text, hooks=True):
         import studio_inspect
