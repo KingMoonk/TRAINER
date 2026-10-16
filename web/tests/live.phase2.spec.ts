@@ -14,6 +14,7 @@ test("import text, queue pretraining, watch progress and see the trained version
   const source = `phase2-flow-${testInfo.retry}`;
   const text = `A small boat crossed the quiet lake for browser check ${testInfo.retry}.`;
   await page.goto("/your-data/");
+  await page.getByRole("tab", { name: /^Text it reads/ }).click();
   await page.getByRole("button", { name: "Import files", exact: true }).click();
   await page.getByLabel("Choose files").setInputFiles({ name: `${source}.txt`, mimeType: "text/plain", buffer: Buffer.from(text) });
   await page.getByRole("button", { name: "Import 1 file", exact: true }).click();
