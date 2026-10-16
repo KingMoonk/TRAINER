@@ -274,7 +274,15 @@ class Services:
 
     def pull_version(self, number, origin=None):
         """Download published version `number` (from the machine `origin` when more than one published a version with that number)
-        and add it here as a trained version. Pulling what is already here returns that version. Returns the Version."""
+        and add it here as a trained version. Pulling what is already here returns that version. The node that published it is asked
+        first (when the workspace lists it and it answers; given `origin`, the store is not read at all); otherwise, or when it
+        cannot send it, the store is used. `note` says which, and why. Returns the Version."""
+        raise NotImplementedError
+
+    def share_version(self, number):
+        """(path, metadata) of version `number`'s weights-only half-precision copy, as `publish_version` would upload it, for a peer
+        that pulls it from this machine. Made on the first call, then reused until the version changes. Raises NoCheckpoint when the
+        version has no weights, studio_publish.StoreError when its checkpoint cannot be read."""
         raise NotImplementedError
 
     def setting(self, key, default=None):
@@ -728,6 +736,9 @@ class FakeServices(Services):
 
     def pull_version(self, number, origin=None):
         return self.version_store()
+
+    def share_version(self, number):
+        raise NoCheckpoint(number)  # nothing here has weights
 
     def queue(self):
         return self._queue
@@ -1565,10 +1576,7 @@ class WorkspaceServices(Services):
     def version_store(self):
         """The store `studioConfig.store.folder` names in the workspace, else the one the TRAINER_STORE_* variables describe."""
         import studio_publish
-        import studio_remote
-        config = self.setting("store")
-        folder = str(config.get("folder") or "").strip() if isinstance(config, dict) else ""
-        store = studio_publish.FolderStore(folder) if folder else studio_remote.default_store()
+        store = studio_publish.configured_store(self.workspace.state["studioConfig"])
         if store is None:
             raise RuntimeError(studio_publish.NO_STORE)
         return store
@@ -1602,27 +1610,84 @@ class WorkspaceServices(Services):
                  "scorecard": entry.get("scorecard") or {}, "mine": entry.get("origin") == own,
                  "local": entry["key"] in here, "local_number": here.get(entry["key"])} for entry in reversed(entries)]
 
+    def share_version(self, number):
+        import studio_publish
+        try:
+            row = self.store.get(number)
+        except KeyError:
+            raise ValueError(f"No version {number}.") from None
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard")}
+        return self._through(None, lambda: studio_publish.shared_copy(
+            version, self._abs(row.get("best_checkpoint")), self.root / "data" / "shared", studio_publish.own_origin()))
+
     def pull_version(self, number, origin=None):
+        found, said = self._from_peer(number, origin) if origin else (None, "")
+        if found is not None:
+            return found
         store = self.version_store()
         from studio_publish import StoreError
         entry = self._published(self._through(store, store.list), number, origin)
         key = entry["key"]
         if not entry.get("spec"):
             raise StoreError(f"The published version {key} carries no design, so it cannot be added here. Publish it again from {entry.get('origin')}.")
-        row = next((r for r in self._rows() if key in (r.get("published") or ())), None)
-        if row is not None and row.get("best_checkpoint") and Path(self._abs(row["best_checkpoint"])).is_file():
-            return self._version(row)  # already here
+        row = self._held(key)
+        if self._here(row):
+            self.note(f"Version {number} from {entry.get('origin')} is already here, so nothing was downloaded.")
+            return self._version(row)
+        if not origin:  # the store has said who published it
+            found, said = self._from_peer(number, entry.get("origin"))
+            if found is not None:
+                return found
         path = self._through(store, lambda: store.pull(key, self.root / "data" / "pulled"))
-        if row is not None:  # the file was cleaned away: put it back under the same version
+        v = self._land(entry, path, row, store)
+        self.note(said or f"Downloaded version {number} from the version store.")
+        return v
+
+    def _held(self, key):
+        """The row of the version here that came from, or was published as, store key `key`."""
+        return next((r for r in self._rows() if key in (r.get("published") or ())), None)
+
+    def _here(self, row):
+        return row is not None and bool(row.get("best_checkpoint")) and Path(self._abs(row["best_checkpoint"])).is_file()
+
+    def _land(self, entry, path, row, store):
+        """The pulled file `path` as a version here: under `row` when this workspace had the version and lost the file, else as a new one."""
+        if row is not None:
             self.store.set_best_checkpoint(row["number"], path)
             row = self.store.get(row["number"])
         else:
-            name = f"{entry.get('name') or 'Version ' + str(number)} from {entry.get('origin')}"
+            name = f"{entry.get('name') or 'Version ' + str(entry.get('number'))} from {entry.get('origin')}"
             change = f"pulled from {entry.get('origin')}: {entry.get('change') or 'no description'}"
-            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, key))
+            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, entry["key"]))
         v = self._version(row)
         self.emit("versions", v)
         return v
+
+    def _from_peer(self, number, origin):
+        """(version, "") when version `number` was copied straight from the node that `origin` names, which is asked only if the
+        workspace lists it. (None, sentence for the note) when the store has to do it: that node did not answer or could not send it."""
+        import studio_cluster
+        import studio_peer_pull as peer
+        from studio_peer import PeerError
+        try:
+            addresses = studio_cluster.configured_nodes(self.workspace.state)
+        except ValueError:
+            return None, ""  # the cluster page says what is wrong with the list
+        client, off = peer.find_owner(addresses, origin, self.runner.cluster.client_for)
+        if client is None:
+            return None, f"{origin} did not answer, so version {number} came from the version store." if off else ""
+        try:
+            meta, path = peer.fetch(client, number, self.root / "data" / "pulled", lambda meta: self._here(self._held(meta["key"])))
+        except (PeerError, ValueError) as error:
+            why = (error.detail or "It did not answer.") if isinstance(error, PeerError) else "What it sent did not check out."
+            return None, f"{origin} could not send version {number}. {why.rstrip('.')}. It came from the version store instead."
+        row = self._held(meta["key"])
+        if path is None:
+            self.note(f"Version {number} from {origin} is already here, so nothing was downloaded.")
+            return self._version(row), ""
+        v = self._land(meta, path, row, None)
+        self.note(f"Copied version {number} straight from {origin}.")
+        return v, ""
 
     @staticmethod
     def _published(entries, number, origin):

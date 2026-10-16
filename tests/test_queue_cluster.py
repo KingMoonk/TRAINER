@@ -4,6 +4,7 @@ peer self-fences. Peers are fakes; the two-nodes-in-one-process tests run real w
 (a folder), with each node's own clock so one can be "asleep" while the other moves on.
 """
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -13,7 +14,7 @@ import numpy as np
 import studio_cluster as sc
 import studio_scheduler as sched
 from studio_peer import PeerError
-from studio_publish import FolderStore
+from studio_publish import NO_STORE, FolderStore
 from studio_queue import Job, Plan, Runner
 from studio_remote import Cluster
 from tests.fake_cluster import Clock, Net, refuse
@@ -360,6 +361,39 @@ class OwnerSide(unittest.TestCase):
         self.assertEqual(self.runner._next_local(), free)
         self.assertIn("TRAINER_STORE_FOLDER", self.runner.cluster.store_problem)
 
+    def use_workspace_store(self, environ=None):
+        """The cluster finds its store the way the routes do: the workspace's folder, then the environment (no store is handed in)."""
+        self.runner.cluster._store_factory = self.runner.cluster.workspace_store
+        self.runner.cluster.environ = environ or {}
+
+    def write_store_folder(self, folder):
+        (self.root / "data" / "workspace.json").write_text(
+            json.dumps({"studioConfig": {"nodes": self.nodes, "store": {"folder": str(folder)}}}), encoding="utf-8")
+
+    def test_with_neither_the_workspace_folder_nor_the_environment_the_refusal_is_the_routes_sentence(self):
+        self.use_workspace_store()
+        job = self.runner.enqueue(self.job())
+        self.runner.cluster.poll_once()
+        self.assertFalse(self.runner.cluster.dispatch(job, "gpu-box"))  # placement would not send it here; dispatch refuses regardless
+        self.assertEqual(self.peer.dispatched, [])
+        self.assertEqual(self.runner.cluster.store_problem, NO_STORE)
+        self.assertIn(NO_STORE, self.runner.cluster.waiting[job.id])
+        self.assertEqual(job.status, "waiting")
+
+    def test_the_workspace_folder_is_the_store_before_the_environment_one(self):
+        self.write_store_folder(self.root / "workspace-store")
+        self.use_workspace_store({"TRAINER_STORE_FOLDER": str(self.root / "env-store")})
+        self.assertEqual(self.runner.cluster.store().root, self.root / "workspace-store")
+
+    def test_a_folder_set_in_the_workspace_while_the_app_runs_is_used_without_a_restart(self):
+        self.use_workspace_store()
+        self.assertIsNone(self.runner.cluster.store())
+        self.assertEqual(self.runner.cluster.store_problem, NO_STORE)
+        self.write_store_folder(self.root / "shared")
+        os.utime(self.root / "data" / "workspace.json", ns=(2 * 10 ** 9, 2 * 10 ** 9))  # the file changed: a coarse clock may not show it
+        self.assertEqual(self.runner.cluster.store().root, self.root / "shared")
+        self.assertEqual(self.runner.cluster.store_problem, "")
+
     def test_a_peer_that_refuses_leaves_the_job_waiting_with_its_sentence_and_is_not_asked_again_at_once(self):
         self.peer.refuse = "This machine has no version store."
         job = self.runner.enqueue(self.job())
@@ -631,6 +665,28 @@ class TwoNodes(unittest.TestCase):
         self.a.remove(job.id)
         self.assertTrue(wait(lambda: self.b_job().status == "stopped"))
         self.assertEqual(job.status, "stopped")
+
+    def test_a_workspace_that_names_only_the_folder_dispatches_and_publishes_and_pulls_through_it(self):
+        for root, studio_config in ((self.a_root, {"nodes": ["gpu-box"]}), (self.b_root, {})):
+            (root / "data").mkdir(parents=True, exist_ok=True)
+            studio_config["store"] = {"folder": str(self.shared)}
+            (root / "data" / "workspace.json").write_text(json.dumps({"studioConfig": studio_config}), encoding="utf-8")
+        for runner in (self.a, self.b):  # no store handed in and no environment: each node finds the folder in its workspace
+            runner.cluster._store_factory = runner.cluster.workspace_store
+            runner.cluster.environ = {}
+        start = self.a_root / "start.npz"
+        write_checkpoint(start, 50)
+        job = self.a.enqueue(self.job(8, mode="catch_up", init_from=str(start)))
+        self.a.cluster.poll_once()
+        self.a._place_waiting()
+        self.assertEqual((job.status, job.node, job.epoch), ("running", "gpu-box", 1))
+        self.assertTrue(wait(lambda: self.b_job() and self.b_job().status == "done"), "the job did not finish on the peer")
+        self.assertTrue(wait(lambda: job.status == "done"), "the owner was not told")
+        ran = self.ran()
+        self.assertTrue(Path(ran["init_from"]).is_file())  # pulled from the folder the workspace names
+        self.assertNotIn(str(self.a_root), ran["init_from"])
+        key = job.params["remote_result"]["key"]
+        self.assertIn(key, [e["key"] for e in FolderStore(self.shared).list()])  # published there
 
     def test_a_runner_without_the_store_refuses_the_job_in_a_sentence(self):
         self.b.cluster._store_factory = lambda: None

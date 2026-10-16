@@ -28,6 +28,9 @@ A published artifact is two objects under one key, `<origin>/v<number>-<sha256[:
 The .json goes up last, so a version is listed only once its weights are complete, and an interrupted upload is simply redone.
 `pull` checks the sha256 before it widens anything.
 
+A node can also hand a version straight to a peer, without the store (`shared_copy`): the same two things, the same bytes, the
+same key, cached under `data/shared/` so a peer's metadata call and its weights call build the copy once.
+
 Everything here is slow (disk and network): call it from a worker, never the Tk thread.
 """
 from __future__ import annotations
@@ -40,6 +43,7 @@ import os
 import re
 import socket
 import tempfile
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -220,6 +224,50 @@ def restore_checkpoint(artifact, target):
     return target
 
 
+def finish_pull(artifact, meta, dest_dir):
+    """Check the downloaded `artifact` against `meta`'s sha256, then widen it into `dest_dir` as an ordinary checkpoint with `meta`
+    beside it; returns the checkpoint's path. Whatever the artifact came from (a store, a peer), a bad download stops here."""
+    if sha256_of(artifact) != meta["sha256"]:
+        raise ValueError(f"The download of {meta['key']} does not match what was published. Try the pull again.")
+    target = restore_checkpoint(artifact, Path(dest_dir) / (meta["key"].replace("/", "-") + ".npz"))
+    target.with_suffix(".json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+    return target
+
+
+_ROW = ("number", "name", "change", "parent", "spec", "scorecard")  # the parts of a version row that end up in the metadata
+_shared = threading.Lock()
+
+
+@slow("copy a version for a peer")
+def shared_copy(version, checkpoint_path, folder, origin=None):
+    """The weights-only copy of a version a peer fetches, as (path, metadata): what `publish` would upload, kept as `v<n>.npz` and
+    `v<n>.json` in `folder`. It is built once and reused until the checkpoint or the version's row changes."""
+    if not checkpoint_path:
+        raise NoCheckpoint(version.get("number"))
+    source, folder = Path(checkpoint_path), Path(folder)
+    if not source.is_file():
+        raise FileNotFoundError(f"Version {version.get('number')}'s checkpoint is not at {source}.")
+    stat = source.stat()
+    wanted = hashlib.sha256(json.dumps([str(source), stat.st_size, stat.st_mtime_ns, _origin_name(origin), [version.get(k) for k in _ROW]],
+                                       sort_keys=True, default=str).encode()).hexdigest()
+    artifact, index = folder / f"v{version['number']}.npz", folder / f"v{version['number']}.json"
+    with _shared:
+        try:
+            held = json.loads(index.read_text(encoding="utf-8"))
+            if held["stamp"] == wanted and artifact.stat().st_size == held["meta"]["size"]:
+                return artifact, held["meta"]
+        except (OSError, ValueError, KeyError):
+            pass  # nothing cached, or not readable: build it
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=folder, prefix=".build-") as scratch:
+            built, meta = build_artifact(version, source, scratch, origin)
+            replace_file(built, artifact)
+            marked = Path(scratch) / "index.json"
+            marked.write_text(json.dumps({"stamp": wanted, "meta": meta}, indent=1), encoding="utf-8")
+            replace_file(marked, index)  # last: the artifact it describes is complete
+        return artifact, meta
+
+
 # ---- the stores ---------------------------------------------------------------------------------------------------
 
 class _Store:
@@ -249,11 +297,7 @@ class _Store:
         with tempfile.TemporaryDirectory(dir=destination, prefix=".pull-") as scratch:
             artifact = Path(scratch) / "artifact.npz"
             self._get_file(key + ".npz", artifact)
-            if sha256_of(artifact) != meta["sha256"]:
-                raise ValueError(f"The download of {key} does not match what was published. Try the pull again.")
-            target = restore_checkpoint(artifact, destination / (key.replace("/", "-") + ".npz"))
-        target.with_suffix(".json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
-        return target
+            return finish_pull(artifact, {**meta, "key": key}, destination)
 
     @slow("list published versions")
     def list(self):
@@ -407,3 +451,15 @@ class S3Store(_Store):
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None
             if not token:
                 return sorted(names)
+
+
+def configured_store(studio_config=None, environ=None):
+    """The version store a workspace uses: the shared folder `studioConfig.store.folder` names, else the one the TRAINER_STORE_* variables
+    describe (a shared folder, else a bucket), else None (a cluster of one). The routes and the queue's dispatch both use this."""
+    environ = os.environ if environ is None else environ
+    store = (studio_config or {}).get("store")
+    folder = str(store.get("folder") or "").strip() if isinstance(store, dict) else ""
+    folder = folder or (environ.get("TRAINER_STORE_FOLDER") or "").strip()
+    if folder:
+        return FolderStore(folder)
+    return S3Store.from_env(environ)

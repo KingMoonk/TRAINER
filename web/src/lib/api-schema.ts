@@ -292,6 +292,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cluster/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Nodes
+         * @description This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with
+         *     the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop.
+         */
+        get: operations["nodes_cluster_nodes_get"];
+        /**
+         * Save Nodes
+         * @description Save the list of other machines in the workspace config. Entries are stripped, blank and repeated ones dropped; the saved list
+         *     comes back. 400 with a sentence for an entry that is not a machine address.
+         */
+        put: operations["save_nodes_cluster_nodes_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collective/{run}/join": {
         parameters: {
             query?: never;
@@ -2447,7 +2473,10 @@ export interface paths {
         /**
          * Pull Version
          * @description Download a published version and add it here as a trained version (`number` is its number on the machine that published it;
-         *     `origin` says which machine when several published one). The job's result is the new version. 409 when no store is configured.
+         *     `origin` says which machine when several published one). The job's result is the new version, and its progress says where the
+         *     weights came from. The machine that published it is asked first (`/weights`), when the workspace lists it among its nodes and it
+         *     answers; with `origin` given the store is not read then. Otherwise, or when it cannot send it, they come from the store. 409 when
+         *     no store is configured.
          */
         post: operations["pull_version_versions__number__pull_post"];
         delete?: never;
@@ -2487,6 +2516,48 @@ export interface paths {
         put?: never;
         /** Run Speed */
         post: operations["run_speed_versions__number__run_speed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/versions/{number}/weights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version Weights
+         * @description Stream version `number`'s weights to a peer: half precision, no optimizer state, as `publish` would upload them. Describe
+         *     them first with `/weights/meta`; the sha256 there is what the download must hash to.
+         */
+        get: operations["version_weights_versions__number__weights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/versions/{number}/weights/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version Weights Meta
+         * @description The description of version `number`'s weights file (`GET /versions/{number}/weights`), for a peer that pulls it from this
+         *     machine. The first call makes the half-precision copy and may take a while. 409 when the version has not trained.
+         */
+        get: operations["version_weights_meta_versions__number__weights_meta_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3088,6 +3159,34 @@ export interface components {
              * @default
              */
             waiting_reason: string;
+        };
+        /** ClusterNode */
+        ClusterNode: {
+            /** Address */
+            address: string;
+            /** Busy */
+            busy: boolean;
+            /** Device */
+            device: string;
+            /** Device Name */
+            device_name: string;
+            /** Dtypes */
+            dtypes: string[];
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Hostname */
+            hostname: string;
+            /** Local */
+            local: boolean;
+            /** Memory Bytes */
+            memory_bytes: number;
+            /** Online */
+            online: boolean;
+            /** Version */
+            version: string;
         };
         /** ComparePlan */
         ComparePlan: {
@@ -4050,6 +4149,11 @@ export interface components {
             memory_bytes: number;
             /** Version */
             version: string;
+        };
+        /** NodeList */
+        NodeList: {
+            /** Addresses */
+            addresses: string[];
         };
         /** NotebookJob */
         NotebookJob: {
@@ -5280,6 +5384,67 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * SharedVersion
+         * @description What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights.
+         */
+        SharedVersion: {
+            /** Change */
+            change?: string | null;
+            /** Device */
+            device?: string | null;
+            /**
+             * Format
+             * @default 1
+             */
+            format: number;
+            /** Key */
+            key: string;
+            /** Name */
+            name?: string | null;
+            /** Number */
+            number: number;
+            /**
+             * Origin
+             * @description this machine's name in the version store
+             */
+            origin: string;
+            /** Parent */
+            parent?: number | null;
+            /**
+             * Published At
+             * @description when this copy of the weights was made
+             */
+            published_at: string;
+            /**
+             * Scorecard
+             * @description as measured on this machine
+             */
+            scorecard?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Sha256
+             * @description of the weights file
+             */
+            sha256: string;
+            /**
+             * Size
+             * @description bytes of the weights file
+             */
+            size: number;
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+            /** Step */
+            step?: number | null;
+            /**
+             * Weights Dtype
+             * @default float16
+             */
+            weights_dtype: string;
+        };
         /** Sizes */
         Sizes: {
             /** Activations */
@@ -6502,6 +6667,59 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nodes_cluster_nodes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterNode"][];
+                };
+            };
+        };
+    };
+    save_nodes_cluster_nodes_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeList"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeList"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -9909,6 +10127,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_weights_versions__number__weights_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_weights_meta_versions__number__weights_meta_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedVersion"];
                 };
             };
             /** @description Validation Error */
