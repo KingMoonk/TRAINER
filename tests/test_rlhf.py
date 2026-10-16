@@ -40,6 +40,9 @@ class ScriptedModel:
         self.calls += 1
         return reply
 
+    def generate_group(self, messages, n, **kwargs):
+        return [self.generate(messages) for _ in range(n)]
+
 
 class ScriptedTeacher(OllamaTeacher):
     """Grades by lookup: batch/single scoring from `grades`, pairwise judging by the same table."""
@@ -366,6 +369,9 @@ class RLHFChecks(unittest.TestCase):
         class Constant:
             def generate(self, *args, **kwargs):
                 return "same"
+
+            def generate_group(self, messages, n, **kwargs):
+                return [self.generate(messages) for _ in range(n)]
         pairs, info = teacher_pairs(teacher, Constant(), PROMPT, CFG, random.Random(1), threading.Event())
         self.assertEqual((pairs, info["skip"]), ([], "model gave identical replies"))
 
