@@ -1,7 +1,14 @@
 """Test helpers for the PyTorch engine: autograd stand-ins for the old hand-written Layer.backward."""
+import contextlib
+import dataclasses
+import gc
+import weakref
+from unittest import mock
+
 import numpy as np
 import torch
 
+from studio_model import ScratchTransformer
 from studio_slots import Ctx
 
 
@@ -58,3 +65,32 @@ def layer_backward(layer, x, dy, ctx=None, embedding=None):
                     owner.grads[name].add_(grads[index])
                 index += 1
     return grads[-1].detach() if xt.requires_grad else None
+
+
+def watched_models(kind=None):
+    """(model class, live): a ScratchTransformer that computes on the CPU, reports `kind` as its device when given (a fake GPU,
+    for code that frees memory by device), and adds itself to `live`, a WeakSet of the models still in memory."""
+    live = weakref.WeakSet()
+
+    class Watched(ScratchTransformer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if kind:
+                self.backend = dataclasses.replace(self.backend, device=kind)
+            live.add(self)
+
+    return Watched, live
+
+
+@contextlib.contextmanager
+def counting_backward(live):
+    """Yields a list that gets, at each backward pass, how many watched models other than the one going backward are in memory."""
+    resident, original = [], ScratchTransformer.backward_loss
+
+    def backward_loss(model, *args, **kwargs):
+        gc.collect()
+        resident.append(len([m for m in live if m is not model]))
+        return original(model, *args, **kwargs)
+
+    with mock.patch.object(ScratchTransformer, "backward_loss", backward_loss):
+        yield resident

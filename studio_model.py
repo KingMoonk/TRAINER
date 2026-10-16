@@ -916,8 +916,8 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 class LocalModel:
     @slow("build a model from a checkpoint")
-    def __init__(self, path, seed=42, device="auto"):
-        data = load_checkpoint(path, weights_only=True)
+    def __init__(self, path, seed=42, device="auto", data=None):
+        data = data or load_checkpoint(path, weights_only=True)   # `data`: the same checkpoint, already loaded by the caller
         self.config = validate_config(data["config"])
         self.config["device"] = device
         self.tokenizer = Tokenizer.restore(data["tokenizer"])
