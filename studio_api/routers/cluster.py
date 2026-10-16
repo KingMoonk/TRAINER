@@ -1,18 +1,24 @@
-"""The cluster: the jobs placed on or taken from other nodes, and the node-to-node calls of the scheduler
+"""The cluster: the machines in it, the jobs placed on or taken from other nodes, and the node-to-node calls of the scheduler
 (docs/distributed.md, "Scheduler"). The rules are studio_scheduler's, the I/O studio_remote's; these routes only carry them.
+
+The machines: `GET /cluster/nodes` surveys this node and the peers listed in the workspace config (`studioConfig.nodes`), and
+`PUT /cluster/nodes` saves that list (docs/cluster.md). Neither needs a job queue.
 
 Calls between nodes: `POST /cluster/jobs` (owner to runner: here is a job and its lease), `POST /cluster/jobs/{id}/stop`, and, to the
 owner, `POST /cluster/jobs/{id}/renew` and `.../finished`. Every write to the owner carries the lease's epoch; any epoch but the
 current one is answered 409, and the runner then stops its copy.
 """
 
+from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+import studio_cluster
 import studio_scheduler as sched
 from studio_api.app import get_services
+from studio_api.version import app_version
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
 
@@ -25,6 +31,24 @@ def get_cluster(services: Annotated[Any, Depends(get_services)]):
 
 
 Cluster = Annotated[Any, Depends(get_cluster)]
+
+
+class ClusterNode(BaseModel):
+    address: str  # the entry in the list, or "local" for this machine
+    local: bool
+    hostname: str  # "" for a machine that did not answer
+    version: str
+    device: str  # cuda | mps | cpu
+    device_name: str
+    memory_bytes: int  # video memory on CUDA, the computer's memory otherwise; 0 when unknown
+    busy: bool
+    dtypes: list[str]
+    online: bool
+    error: str = ""  # why a machine is offline, in plain words
+
+
+class NodeList(BaseModel):
+    addresses: list[str]  # the other machines: names ("windows-box", "box:9000") or URLs; this machine is always a node
 
 
 class ClusterJob(BaseModel):
@@ -99,6 +123,25 @@ class Finished(BaseModel):
 
 class Stop(BaseModel):
     epoch: int
+
+
+@router.get("/nodes")
+def nodes(services=Depends(get_services)) -> list[ClusterNode]:
+    """This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with
+    the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop."""
+    own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
+    state = {"studioConfig": {"nodes": services.setting("nodes", [])}}
+    return [ClusterNode(**asdict(info), local=info.address == studio_cluster.LOCAL)
+            for info in studio_cluster.survey(state, own, timeout=studio_cluster.POLL_TIMEOUT)]
+
+
+@router.put("/nodes")
+def save_nodes(body: NodeList, services=Depends(get_services)) -> NodeList:
+    """Save the list of other machines in the workspace config. Entries are stripped, blank and repeated ones dropped; the saved list
+    comes back. 400 with a sentence for an entry that is not a machine address."""
+    addresses = studio_cluster.clean_nodes(body.addresses)
+    services.set_setting("nodes", addresses)
+    return NodeList(addresses=addresses)
 
 
 @router.get("/jobs")

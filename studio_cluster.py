@@ -12,16 +12,19 @@ Polling and the local probe are slow (network, a GPU check): call them from a wo
 """
 from __future__ import annotations
 
+import json
 import socket
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
+from urllib.parse import urlsplit
 
-from studio_peer import PeerClient, base_url
+from studio_peer import PeerClient, PeerError, base_url
 
 DEFAULT_PORT = 8787  # the API's port when a node is listed as a bare name; studio_api (Phase 1) must serve on the same one
 POLL_TIMEOUT = 2.  # seconds: a peer that does not answer this fast is offline for now
 DEFAULT_TAG = "tag:trainer"  # the tag a node carries to call its peers (docs/cluster.md)
 LOCAL = "local"  # the address of this machine's own NodeInfo
+MAX_NODES = 32  # peers in the list: each is polled on its own thread
 
 # dtypes a device kind trains in. Conservative: bfloat16 on Apple's GPU is not listed, because torch's Metal kernels cover it unevenly.
 DTYPES = {"cuda": ("float32", "bfloat16", "float16"), "mps": ("float32", "float16"), "cpu": ("float32", "bfloat16")}
@@ -89,6 +92,53 @@ def configured_nodes(state):
     return out
 
 
+def check_address(address):
+    """A node address as typed, stripped, or a ValueError saying in plain words what is wrong. Accepts what `node_url` reaches: a
+    machine name or IP ("windows-box", "100.64.0.7"), with a port ("windows-box:8787", "[fd7a::1]:8787") or an http(s) URL."""
+    text = address.strip()
+
+    def bad(why):
+        return ValueError(f'"{text}" is not a machine address: {why}.')
+
+    scheme, sep, rest = text.partition("://")
+    if sep and scheme not in ("http", "https"):
+        raise bad("a URL must start with http:// or https://")
+    netloc = (rest if sep else text).split("/", 1)[0]
+    if not netloc:
+        raise bad("it has no machine name")
+    if any(c.isspace() for c in text) or "@" in netloc or "?" in text or "#" in text:
+        raise bad("write a name or a URL, without spaces, a login, a query or a fragment")
+    if netloc.count(":") > 1 and not netloc.startswith("["):
+        raise bad("put an IPv6 address in brackets, like [fd7a::1]:8787")
+    try:
+        parts = urlsplit(f"//{netloc}")
+    except ValueError:
+        raise bad("the brackets around the IPv6 address do not match") from None
+    if not parts.hostname:
+        raise bad("it has no machine name")
+    try:
+        port = parts.port
+    except ValueError:
+        port = 0
+    if port == 0 or (port is None and netloc.rsplit("]", 1)[-1].endswith(":")):
+        raise bad("the port must be a number from 1 to 65535")
+    return text
+
+
+def clean_nodes(addresses):
+    """The list as `studioConfig.nodes` keeps it: each entry checked and stripped, blank and repeated ones dropped, in order. Raises
+    ValueError with a sentence for a bad entry or for more than MAX_NODES."""
+    out = []
+    for address in addresses:
+        if address.strip():
+            address = check_address(address)
+            if address not in out:
+                out.append(address)
+    if len(out) > MAX_NODES:
+        raise ValueError(f"A cluster can list up to {MAX_NODES} other machines; this list has {len(out)}.")
+    return out
+
+
 def node_url(address):
     """The `GET /node` URL of a configured entry: a URL as given (any path is replaced by /node, so https://box.ts.net stays on
     443 where `tailscale serve` listens), a bare name on DEFAULT_PORT."""
@@ -149,20 +199,39 @@ def fetch_json(url, timeout=POLL_TIMEOUT):
 def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
     """Ask each address for its `GET /node`; one NodeInfo per address, in order. Never raises: a peer that is unreachable, slow,
     or answers nonsense is reported offline with the reason. `fetch(url, timeout)` returns the parsed JSON (default: urllib).
-    Peers are asked at the same time, so a dead one costs one timeout, not one each."""
+    Peers are asked at the same time, and the whole poll ends `timeout` seconds in: a peer that has not answered by then (a socket
+    timeout covers one read, not a slow drip or a name lookup) is offline, and its thread is left to finish on its own."""
     fetch = fetch or fetch_json
 
     def ask(address):
         try:
             return info_from_payload(address, fetch(node_url(address), timeout))
         except Exception as exc:
-            return offline(address, f"{type(exc).__name__}: {exc}")
+            return offline(address, failure(address, exc, timeout))
 
     addresses = list(addresses)
     if not addresses:
         return []
-    with ThreadPoolExecutor(max_workers=min(8, len(addresses))) as pool:
-        return list(pool.map(ask, addresses))
+    pool = ThreadPoolExecutor(max_workers=len(addresses))
+    try:
+        futures = [pool.submit(ask, a) for a in addresses]
+        wait(futures, timeout=timeout)
+        return [f.result() if f.done() else offline(a, failure(a, TimeoutError(), timeout)) for a, f in zip(addresses, futures)]
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def failure(address, exc, timeout=POLL_TIMEOUT):
+    """Why a peer is offline, as a sentence for the person looking at the node list."""
+    if isinstance(exc, PeerError):
+        return f"{str(exc).rstrip('.')}."
+    if isinstance(exc, TimeoutError):
+        return f"{address} did not answer within {timeout:g} seconds."
+    if isinstance(exc, ConnectionRefusedError):
+        return f"{address} refused the connection: the app is not running there, or listens on another port."
+    if isinstance(exc, json.JSONDecodeError) or "not a node description" in str(exc):
+        return f"{address} answered, but not like a node of this app."
+    return f"{address} could not be asked: {type(exc).__name__}: {exc}."
 
 
 def survey(state, own, fetch=None, timeout=POLL_TIMEOUT):
