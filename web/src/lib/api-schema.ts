@@ -1767,26 +1767,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/versions/import-pretrained": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import Pretrained
-         * @description Saves the pretrained model's design as a new version; the download and conversion are queued (GET /queue).
-         */
-        post: operations["import_pretrained_versions_import_pretrained_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/versions/{number}/checkpoint-step": {
         parameters: {
             query?: never;
@@ -3152,14 +3132,6 @@ export interface components {
             slow: boolean;
             /** Step */
             step: number;
-        };
-        /** PretrainedImport */
-        PretrainedImport: {
-            /**
-             * Name
-             * @default gpt2
-             */
-            name: string;
         };
         /** PreviewJob */
         PreviewJob: {
@@ -6907,39 +6879,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Version"] | null;
-                };
-            };
-        };
-    };
-    import_pretrained_versions_import_pretrained_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PretrainedImport"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Version"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

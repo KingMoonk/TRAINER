@@ -20,7 +20,8 @@ Goals: a UI that cannot freeze (it is another process, usually another machine);
 in place); one URL for the whole app; the same server code on macOS/Apple Silicon and Windows/NVIDIA; pooled compute
 between a handful of laptops over WAN.
 
-Non-goals: splitting one training run across machines (DDP over WAN is slower than the fastest single box); a public
+Non-goals: per-step gradient sync across machines (DDP over WAN is slower than the fastest single box; one run spans
+machines with DiLoCo instead, see `docs/distributed.md`); a public
 deployment (the tailnet is the perimeter until Phase 7); keeping the desktop packaging (`packaging/`, frozen builds) alive.
 
 ## Repository layout (monorepo)
@@ -137,6 +138,8 @@ Done: no `tkinter` import anywhere; CI is faster than today.
       pull on demand or when a job needs it. LAN peers copy directly.
 - [ ] Checkpoints are `.npz` NumPy archives (`studio_model.load_checkpoint`), so they already load on any device; a version
       records the device that trained and scored it, and a resume on the other device kind is a test.
+- [ ] Distributed pretraining: one run on several nodes with DiLoCo (local AdamW steps, an outer Nesterov step on the
+      averaged pseudo-gradients every H steps), elastic membership and round checkpoints (`docs/distributed.md`, #132, #133).
 - [ ] The web UI shows the merged queue and merged versions across nodes, with the node on each row.
 - [ ] `docs/cluster.md`: the tailnet, inviting a second user, ACL, bucket setup.
 
