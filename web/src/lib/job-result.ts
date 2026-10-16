@@ -1,4 +1,4 @@
-import { api, ApiError, unwrap } from "@/lib/api";
+import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 
 export type JobOut = components["schemas"]["studio_api__models_work__JobOut"];
@@ -25,15 +25,19 @@ function abortError() {
   return new DOMException("The job wait was aborted.", "AbortError");
 }
 
-function pause(signal: AbortSignal): Promise<void> {
+/** Wait one poll interval, or less when `onWake` is given a function that ends the wait early. */
+function pause(signal: AbortSignal, onWake?: (wake: () => void) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(abortError()); return; }
     const abort = () => { clearTimeout(timer); reject(abortError()); };
-    const timer = setTimeout(() => {
+    const done = () => {
+      clearTimeout(timer);
       signal.removeEventListener("abort", abort);
       resolve();
-    }, POLL_MS);
+    };
+    const timer = setTimeout(done, POLL_MS);
     signal.addEventListener("abort", abort, { once: true });
+    onWake?.(done);
   });
 }
 
@@ -49,10 +53,11 @@ function jobRecord(value: unknown, id: string): JobOut {
 /**
  * Follow a submitted job, including jobs that finish before the first poll or whose SSE event was missed.
  * T describes the route's documented result; consumers should validate unknown result shapes when needed.
+ * With `events`, the job's "job" events on /events end the wait as they arrive; polling stays as the fallback for a dropped stream.
  * Abort rejects promptly with AbortError and requests server cancellation (best effort if disconnected).
  * Transient read failures retry without resubmitting work; a missing job or repeated failure is reported.
  */
-export async function awaitJob<T>(initial: JobOut, signal: AbortSignal): Promise<T> {
+export async function awaitJob<T>(initial: JobOut, signal: AbortSignal, options: { events?: boolean } = {}): Promise<T> {
   let job = jobRecord(initial, initial.id);
   let failures = 0;
   const cancel = () => {
@@ -61,11 +66,19 @@ export async function awaitJob<T>(initial: JobOut, signal: AbortSignal): Promise
       params: { path: { job_id: initial.id } }, signal: AbortSignal.timeout(5_000),
     }).catch(() => { /* An unavailable server cannot acknowledge cancellation. */ });
   };
+  let pushed: JobOut | undefined;
+  let wake = () => {};
+  const closeEvents = options.events ? subscribe((event) => {
+    if (event.kind !== "job") return;
+    try { pushed = jobRecord(event.payload, initial.id); } catch { return; } // Another job's event, or one that is not a job record.
+    wake();
+  }) : () => {};
   signal.addEventListener("abort", cancel, { once: true });
   try {
     if (signal.aborted) { cancel(); throw abortError(); }
     for (;;) {
       if (signal.aborted) throw abortError();
+      if (pushed) [job, pushed] = [pushed, undefined];
       if (job.status === "done") return job.result as T;
       if (job.status === "failed") throw new JobFailedError(job.id, job.error || "The job failed.");
       if (job.status === "cancelled") throw new JobCancelledError(job.id);
@@ -81,9 +94,13 @@ export async function awaitJob<T>(initial: JobOut, signal: AbortSignal): Promise
       }
       if (signal.aborted) throw abortError();
       job = jobRecord(value, initial.id);
-      if (job.status === "queued" || job.status === "running") await pause(signal);
+      if (!pushed && (job.status === "queued" || job.status === "running")) {
+        await pause(signal, (end) => { wake = end; });
+        wake = () => {};
+      }
     }
   } finally {
+    closeEvents();
     signal.removeEventListener("abort", cancel);
   }
 }
