@@ -1223,6 +1223,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pretrain Plan
+         * @description What the Pretraining page shows for these answers: whether Continue is allowed, the steps, the size verdict, the
+         *     expectation, the engine config and the job to post to /queue/jobs. Reads the size preview only if it is already known
+         *     (`estimating` otherwise); it never computes it.
+         */
+        post: operations["pretrain_plan_pretraining_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/preview": {
         parameters: {
             query?: never;
@@ -1241,6 +1263,26 @@ export interface paths {
          * @description Services.pretrain_preview as a job.
          */
         post: operations["pretrain_preview_pretraining_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pretraining/text_sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Text Sets
+         * @description The sets of text to choose from, as the Pretraining page's tiles.
+         */
+        get: operations["text_sets_pretraining_text_sets_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2465,6 +2507,20 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** EnoughText */
+        EnoughText: {
+            /** Headline */
+            headline: string;
+            /** Ratio */
+            ratio: number;
+            /** Ratio Text */
+            ratio_text: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "little" | "about_right" | "plenty";
+        };
         /** Entry */
         Entry: {
             /** Is Dir */
@@ -2488,6 +2544,13 @@ export interface components {
             draft_spec?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** Expectation */
+        Expectation: {
+            /** Details */
+            details: string;
+            /** Headline */
+            headline: string;
         };
         /** Expectations */
         Expectations: {
@@ -2857,6 +2920,24 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * NewPretrainJob
+         * @description The body for POST /queue/jobs.
+         */
+        NewPretrainJob: {
+            /**
+             * Kind
+             * @default pretrain
+             * @constant
+             */
+            kind: "pretrain";
+            /** Label */
+            label: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+        };
         /** NewVersion */
         NewVersion: {
             /**
@@ -3101,6 +3182,45 @@ export interface components {
              */
             start_hour: number;
         };
+        /**
+         * PlanRequest
+         * @description The answers on the Pretraining page. The browser keeps them (the draft choices); every call sends them whole.
+         */
+        PlanRequest: {
+            /**
+             * Dataset Ids
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Mode
+             * @default catch_up
+             * @enum {string}
+             */
+            mode: "catch_up" | "from_scratch";
+            /**
+             * Passes
+             * @default 2
+             */
+            passes: number;
+            /**
+             * Preview Rows
+             * @default 6
+             */
+            preview_rows: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
+            /** Version */
+            version?: number | null;
+        };
         /** Preset */
         Preset: {
             /** Key */
@@ -3132,6 +3252,67 @@ export interface components {
             slow: boolean;
             /** Step */
             step: number;
+        };
+        /** PretrainPlan */
+        PretrainPlan: {
+            /** Can Add */
+            can_add: boolean;
+            /** Can Continue */
+            can_continue: boolean;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Context
+             * @default 256
+             */
+            context: number;
+            /** Continue Blocked */
+            continue_blocked?: ("word_list_changed" | "no_trained_parent") | null;
+            enough?: components["schemas"]["EnoughText"] | null;
+            /**
+             * Estimated
+             * @default false
+             */
+            estimated: boolean;
+            /** Estimating */
+            estimating: boolean;
+            expectation?: components["schemas"]["Expectation"] | null;
+            job?: components["schemas"]["NewPretrainJob"] | null;
+            /** Lr */
+            lr?: number | null;
+            /** Minutes */
+            minutes?: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "catch_up" | "from_scratch";
+            /**
+             * Outlook
+             * @default
+             */
+            outlook: string;
+            /** Params */
+            params?: number | null;
+            /** Parent */
+            parent?: number | null;
+            /** Passes Over Text */
+            passes_over_text?: number | null;
+            /** Pieces */
+            pieces?: number | null;
+            /** Pieces Per Step */
+            pieces_per_step: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Steps */
+            steps?: number | null;
+            /** Version */
+            version?: number | null;
         };
         /** PreviewJob */
         PreviewJob: {
@@ -3706,6 +3887,27 @@ export interface components {
         Text: {
             /** Text */
             text: string;
+        };
+        /**
+         * TextSet
+         * @description One set of text the run may read. `on` is the page's starting tick: every set but a held-out (validation or test) one.
+         */
+        TextSet: {
+            /** Count */
+            count: number;
+            /** Held */
+            held: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Library
+             * @default false
+             */
+            library: boolean;
+            /** Name */
+            name: string;
+            /** On */
+            on: boolean;
         };
         /** Tower */
         Tower: {
@@ -6067,6 +6269,39 @@ export interface operations {
             };
         };
     };
+    pretrain_plan_pretraining_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PretrainPlan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cached_preview_pretraining_preview_get: {
         parameters: {
             query?: {
@@ -6128,6 +6363,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    text_sets_pretraining_text_sets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TextSet"][];
                 };
             };
         };

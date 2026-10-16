@@ -894,6 +894,39 @@
         "title": "DraftsJob",
         "type": "object"
       },
+      "EnoughText": {
+        "properties": {
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "number"
+          },
+          "ratio_text": {
+            "title": "Ratio Text",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "little",
+              "about_right",
+              "plenty"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ratio",
+          "ratio_text",
+          "headline",
+          "verdict"
+        ],
+        "title": "EnoughText",
+        "type": "object"
+      },
       "Entry": {
         "properties": {
           "is_dir": {
@@ -960,6 +993,24 @@
           "base"
         ],
         "title": "ExpectBody",
+        "type": "object"
+      },
+      "Expectation": {
+        "properties": {
+          "details": {
+            "title": "Details",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "details"
+        ],
+        "title": "Expectation",
         "type": "object"
       },
       "Expectations": {
@@ -1795,6 +1846,32 @@
         "title": "NewJob",
         "type": "object"
       },
+      "NewPretrainJob": {
+        "description": "The body for POST /queue/jobs.",
+        "properties": {
+          "kind": {
+            "const": "pretrain",
+            "default": "pretrain",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "label",
+          "params"
+        ],
+        "title": "NewPretrainJob",
+        "type": "object"
+      },
       "NewVersion": {
         "properties": {
           "change": {
@@ -2365,6 +2442,69 @@
         "title": "PlanModel",
         "type": "object"
       },
+      "PlanRequest": {
+        "description": "The answers on the Pretraining page. The browser keeps them (the draft choices); every call sends them whole.",
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "hold": {
+            "default": 0.05,
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
+            "type": "number"
+          },
+          "mode": {
+            "default": "catch_up",
+            "enum": [
+              "catch_up",
+              "from_scratch"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "passes": {
+            "default": 2,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Passes",
+            "type": "integer"
+          },
+          "preview_rows": {
+            "default": 6,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Preview Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "PlanRequest",
+        "type": "object"
+      },
       "Preset": {
         "properties": {
           "key": {
@@ -2450,6 +2590,208 @@
           "recipe"
         ],
         "title": "PresetCost",
+        "type": "object"
+      },
+      "PretrainPlan": {
+        "properties": {
+          "can_add": {
+            "title": "Can Add",
+            "type": "boolean"
+          },
+          "can_continue": {
+            "title": "Can Continue",
+            "type": "boolean"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "context": {
+            "default": 256,
+            "title": "Context",
+            "type": "integer"
+          },
+          "continue_blocked": {
+            "anyOf": [
+              {
+                "enum": [
+                  "word_list_changed",
+                  "no_trained_parent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continue Blocked"
+          },
+          "enough": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnoughText"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimated": {
+            "default": false,
+            "title": "Estimated",
+            "type": "boolean"
+          },
+          "estimating": {
+            "title": "Estimating",
+            "type": "boolean"
+          },
+          "expectation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expectation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NewPretrainJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lr"
+          },
+          "minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minutes"
+          },
+          "mode": {
+            "enum": [
+              "catch_up",
+              "from_scratch"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "outlook": {
+            "default": "",
+            "title": "Outlook",
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "passes_over_text": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passes Over Text"
+          },
+          "pieces": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pieces"
+          },
+          "pieces_per_step": {
+            "title": "Pieces Per Step",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "mode",
+          "can_continue",
+          "estimating",
+          "pieces_per_step",
+          "can_add"
+        ],
+        "title": "PretrainPlan",
         "type": "object"
       },
       "PreviewJob": {
@@ -3815,6 +4157,45 @@
           "text"
         ],
         "title": "Text",
+        "type": "object"
+      },
+      "TextSet": {
+        "description": "One set of text the run may read. `on` is the page's starting tick: every set but a held-out (validation or test) one.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "held": {
+            "title": "Held",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "library": {
+            "default": false,
+            "title": "Library",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "on": {
+            "title": "On",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count",
+          "held",
+          "on"
+        ],
+        "title": "TextSet",
         "type": "object"
       },
       "Tower": {
@@ -7396,6 +7777,48 @@
         ]
       }
     },
+    "/pretraining/plan": {
+      "post": {
+        "description": "What the Pretraining page shows for these answers: whether Continue is allowed, the steps, the size verdict, the\nexpectation, the engine config and the job to post to /queue/jobs. Reads the size preview only if it is already known\n(`estimating` otherwise); it never computes it.",
+        "operationId": "pretrain_plan_pretraining_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PretrainPlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Plan",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
     "/pretraining/preview": {
       "get": {
         "description": "Services.cached_preview: the preview when it is already known, else null. Never computes; POST /pretraining/preview does.",
@@ -7498,6 +7921,32 @@
           }
         },
         "summary": "Pretrain Preview",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/text_sets": {
+      "get": {
+        "description": "The sets of text to choose from, as the Pretraining page's tiles.",
+        "operationId": "text_sets_pretraining_text_sets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TextSet"
+                  },
+                  "title": "Response Text Sets Pretraining Text Sets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Text Sets",
         "tags": [
           "pretraining"
         ]

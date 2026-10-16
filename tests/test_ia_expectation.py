@@ -4,7 +4,7 @@ import unittest
 from studio_ia.copy import EXPECTATION as T
 from studio_ia.expectation import expectation as both, table_params
 from studio_ia import design as D
-from studio_ia.pages.pretraining import version_expectation
+from studio_ia.pretraining_plan import version_expectation
 from studio_spec import default_spec, validate_spec
 from studio_estimate import estimate
 
