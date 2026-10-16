@@ -98,7 +98,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(job.params["result"]["root"], str(self.root))
         self.assertEqual(job.params["result"]["run_dir"], str(self.root / "runs"))
         self.assertEqual(job.params["output_dir"], "elsewhere")
-        self.assertIn("max_batch_size", job.params)  # what the handler did not change is kept
+        self.assertIn("memory_share", job.params)  # what the handler did not change is kept
         kinds = [p["status"] for k, p in events if k == "job"]
         self.assertEqual(kinds, ["running", "done"])
         self.assertEqual(list((self.root / "data" / "workers").glob("*.json")), [])  # the spec goes when the job ends
