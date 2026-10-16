@@ -2,7 +2,7 @@
 // server will, and answers anything else (including /events) with 404, so the shell sees the API as unreachable.
 import { createServer } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("../out", import.meta.url)));
@@ -28,6 +28,15 @@ createServer((req, res) => {
   let file = normalize(join(root, path));
   if (!file.startsWith(root)) file = "";
   if (file && existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
+  if (file && !existsSync(file)) {
+    // The client prefetches <route>/__next.<segment>.__PAGE__.txt; the export writes <route>/__next.<segment>/__PAGE__.txt
+    // (studio_api/static.py does the same mapping).
+    const name = file.slice(file.lastIndexOf(sep) + 1);
+    const parts = name.startsWith("__next.") && name.endsWith(".txt") ? name.slice(7, -4).split(".") : [];
+    if (parts.length >= 2 && parts.every(Boolean)) {
+      file = join(file.slice(0, file.lastIndexOf(sep)), `__next.${parts[0]}`, ...parts.slice(1, -1), `${parts.at(-1)}.txt`);
+    }
+  }
   if (!file || !existsSync(file)) {
     res.writeHead(404).end("not found");
     return;
