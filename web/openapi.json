@@ -519,6 +519,24 @@
         "title": "CheckJob",
         "type": "object"
       },
+      "Checkpoint": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "Checkpoint",
+        "type": "object"
+      },
       "Chip": {
         "properties": {
           "known": {
@@ -676,6 +694,17 @@
       },
       "ClusterJob": {
         "properties": {
+          "checkpoint_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Step"
+          },
           "epoch": {
             "default": 0,
             "title": "Epoch",
@@ -5251,6 +5280,16 @@
       },
       "Renewal": {
         "properties": {
+          "checkpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Checkpoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "epoch": {
             "title": "Epoch",
             "type": "integer"
