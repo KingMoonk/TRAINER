@@ -1,4 +1,5 @@
 """studio_api.routers.cluster: the node-to-node calls and the cluster views, over a Runner whose peers are fakes."""
+import dataclasses
 import inspect
 import json
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import studio_cluster
+import studio_cluster_queue
 import studio_scheduler as sched
 from fastapi.testclient import TestClient
 from studio_api.app import create_app
@@ -64,6 +66,10 @@ class ClusterServices(FakeServices):
         super().__init__()
         self.runner = runner
         runner.subscribe(self.emit)  # as WorkspaceServices does: the queue's events are the app's events
+
+    def queue(self):
+        """Up next is the Runner's waiting jobs, as WorkspaceServices reports them."""
+        return dataclasses.replace(super().queue(), up_next=[j for j in self.runner.jobs if j.status in ("waiting", "held")])
 
 
 class ClusterRoutes(ApiCase):
@@ -131,7 +137,42 @@ class ClusterRoutes(ApiCase):
         with mock.patch.object(studio_cluster, "fetch_json", self.peers):
             self.assertEqual(self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu-box"]}), {"addresses": ["gpu-box"]})
             self.assertEqual([n["address"] for n in self.call("GET", "/cluster/nodes")], ["local", "gpu-box"])
+        self.services.set_setting("nodes", ["gpu-box"])
+        with mock.patch.object(studio_cluster_queue, "fetch", lambda address, path, timeout: {"node": node_payload("gpu-box"), "queue/jobs": []}[path]):
+            self.assertEqual([n["hostname"] for n in self.call("GET", "/cluster/merged")["nodes"]], ["laptop", "gpu-box"])
         self.assertAllRoutesHit()
+
+    def test_a_pin_decides_where_a_waiting_job_goes_and_the_merged_queue_says_so(self):
+        job = self.runner.enqueue(Job("pretrain", "Mine", params={"config": {"steps": 100}, "examples": [{"text": "a"}]}))
+        self.runner.cluster.poll_once()
+        self.services.set_setting("nodes", ["gpu-box"])  # WorkspaceServices reads the same list from the workspace file
+        peer_jobs = []
+        asked = lambda address, path, timeout: {"node": node_payload("gpu-box"), "queue/jobs": peer_jobs}[path]  # noqa: E731
+
+        def row():
+            with mock.patch.object(studio_cluster_queue, "fetch", asked):
+                return next(r for r in self.call("GET", "/cluster/merged")["jobs"] if r["id"] == job.id)
+
+        def pin(pinned):
+            self.call("POST", "/queue/jobs/{job_id}/pin", path={"job_id": job.id}, json={"pinned": pinned})
+            self.runner._place_waiting()
+
+        pin("ghost")  # nobody answers to it: it waits, and the row says why
+        self.assertEqual((job.status, job.params["pinned"], row()["hostname"]), ("waiting", "ghost", "ghost"))
+        self.assertIn("not one of this cluster's machines", row()["waiting_reason"])
+        pin("gpu-box")  # the other machine: the job goes there
+        self.assertEqual((job.status, job.node), ("running", "gpu-box"))
+        self.assertEqual((row()["status"], row()["node"], row()["hostname"], row()["waiting_reason"]), ("running", "gpu-box", "gpu-box", ""))
+        self.assertEqual(self.peer.dispatched[0]["job"]["id"], job.id)
+        self.assertNotIn("pinned", self.peer.dispatched[0]["job"]["params"])  # a pin is this node's to keep
+
+    def test_pinning_a_job_to_this_machine_keeps_it_here(self):
+        job = self.runner.enqueue(Job("pretrain", "Mine", params={"config": {"steps": 100}, "examples": [{"text": "a"}]}))
+        self.runner.cluster.poll_once()
+        self.call("POST", "/queue/jobs/{job_id}/pin", path={"job_id": job.id}, json={"pinned": "laptop"})
+        self.assertEqual(self.runner.cluster.place(job).where, "local")
+        self.call("POST", "/queue/jobs/{job_id}/pin", path={"job_id": job.id}, json={"pinned": None})
+        self.assertNotIn("pinned", job.params)
 
     def test_a_job_another_node_owns_runs_here_and_shows_as_a_runner_job(self):
         self.assertEqual(self.dispatch("theirs"), {"job_id": "theirs", "epoch": 1})

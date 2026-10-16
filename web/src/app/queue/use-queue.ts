@@ -103,6 +103,15 @@ export function useQueueActions() {
     onSuccess: keep,
     onError: failed,
   });
+  const pin = useMutation({
+    mutationFn: (v: { id: string; pinned: string | null }) =>
+      unwrap(api.POST("/queue/jobs/{job_id}/pin", { ...job(v.id), body: { pinned: v.pinned } })),
+    onSuccess: (state) => {
+      keep(state);
+      client.invalidateQueries({ queryKey: ["cluster", "queue"] });
+    },
+    onError: failed,
+  });
   const savePlan = useMutation({
     scope: { id: "queue-plan" },
     // Each edit carries only its changed fields. Read the last saved plan when
@@ -124,7 +133,7 @@ export function useQueueActions() {
       failed(error);
     },
   });
-  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, hold, move, savePlan };
+  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, hold, move, pin, savePlan };
 }
 
 export type QueueActions = ReturnType<typeof useQueueActions>;

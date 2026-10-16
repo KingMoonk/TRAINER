@@ -6,9 +6,11 @@ import { useEffect, useState } from "react";
 import { SeriesChart, type Series } from "@/components/series-chart";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AvailableVersions } from "@/components/available-versions";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
+import { cameFrom, isCluster, useCluster, usePublished } from "@/lib/cluster";
 import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { T } from "./copy";
@@ -69,6 +71,9 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
   useVersionEvents();
   const versions = useQuery({ queryKey: ["versions"], queryFn: ({ signal }) => unwrap(api.GET("/versions", { signal })), refetchInterval: 15_000 });
   const queue = useQuery({ queryKey: ["queue"], queryFn: ({ signal }) => unwrap(api.GET("/queue", { signal })), refetchInterval: 15_000 });
+  const cluster = useCluster().data;
+  const published = usePublished(cluster).data;
+  const multi = isCluster(cluster); // a cluster of one shows nothing about machines
   const [picked, setPicked] = useState<number>();
   const rows = versions.data ?? [];
   const selected = rows.find((version) => version.number === picked) ?? rows.at(-1);
@@ -100,9 +105,15 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
                 <span className="flex w-full flex-wrap items-center justify-between gap-2"><span className="font-medium">Version {version.number}</span>
                   <Badge variant="outline">{versionState(version, queue.data, editingVersion)}</Badge></span>
                 <span className="text-sm text-muted-foreground">{version.change || version.name || "Saved design"}</span>
+                {multi && <span className="text-xs text-muted-foreground" data-testid={`where-${version.number}`}>
+                  On this machine{cameFrom(published, version.number) ? ` · pulled from ${cameFrom(published, version.number)}` : ""}</span>}
               </button>
             </li>)}
           </ol>}
+        {multi && !!published?.some((entry) => !entry.local) && <div className="mt-4 flex flex-col gap-2">
+          <h3 className="text-sm font-medium">Available on other machines</h3>
+          <AvailableVersions published={published} />
+        </div>}
         {queue.isError && <p role="alert" className="mt-3 text-sm">{T.queueUnavailable}</p>}
       </CardContent>
     </Card>

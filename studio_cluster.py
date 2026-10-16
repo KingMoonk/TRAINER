@@ -196,29 +196,30 @@ def fetch_json(url, timeout=POLL_TIMEOUT):
     return PeerClient(base, timeout=timeout, retries=0).get_json(path)
 
 
+def run_together(items, work, timeout=POLL_TIMEOUT):
+    """`work(item)` for every item at the same time, one result per item in order, the whole call ending `timeout` seconds in.
+    Never raises: a result is the return value, the exception `work` raised, or a TimeoutError for a call still running at the
+    deadline (a socket timeout covers one read, not a slow drip or a name lookup; that thread is left to finish on its own)."""
+    items = list(items)
+    if not items:
+        return []
+    pool = ThreadPoolExecutor(max_workers=len(items))
+    try:
+        futures = [pool.submit(work, item) for item in items]
+        wait(futures, timeout=timeout)
+        return [(f.exception() or f.result()) if f.done() else TimeoutError() for f in futures]
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
     """Ask each address for its `GET /node`; one NodeInfo per address, in order. Never raises: a peer that is unreachable, slow,
     or answers nonsense is reported offline with the reason. `fetch(url, timeout)` returns the parsed JSON (default: urllib).
-    Peers are asked at the same time, and the whole poll ends `timeout` seconds in: a peer that has not answered by then (a socket
-    timeout covers one read, not a slow drip or a name lookup) is offline, and its thread is left to finish on its own."""
+    Peers are asked at the same time, and the whole poll ends `timeout` seconds in: a peer that has not answered by then is offline."""
     fetch = fetch or fetch_json
-
-    def ask(address):
-        try:
-            return info_from_payload(address, fetch(node_url(address), timeout))
-        except Exception as exc:
-            return offline(address, failure(address, exc, timeout))
-
     addresses = list(addresses)
-    if not addresses:
-        return []
-    pool = ThreadPoolExecutor(max_workers=len(addresses))
-    try:
-        futures = [pool.submit(ask, a) for a in addresses]
-        wait(futures, timeout=timeout)
-        return [f.result() if f.done() else offline(a, failure(a, TimeoutError(), timeout)) for a, f in zip(addresses, futures)]
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+    answers = run_together(addresses, lambda a: info_from_payload(a, fetch(node_url(a), timeout)), timeout)
+    return [offline(a, failure(a, answer, timeout)) if isinstance(answer, BaseException) else answer for a, answer in zip(addresses, answers)]
 
 
 def failure(address, exc, timeout=POLL_TIMEOUT):

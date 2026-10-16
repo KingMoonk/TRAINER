@@ -9,6 +9,7 @@ import studio_model
 from studio_compile import CompiledModel
 from studio_estimate import estimate
 from studio_modules.mixer.attention import KVCache, new_cache, reduced_dtype
+from studio_modules.precision import policy
 from studio_spec import validate_spec
 from tests.test_memory_p0 import local
 
@@ -97,6 +98,8 @@ class ReducedCache(unittest.TestCase):
     def test_works_under_autocast(self):
         """Under bfloat16 autocast the projections come out float32 (the bias add promotes them) and the matrix multiplies round their inputs
         to bfloat16 anyway, so a bfloat16 cache gives the same logits bit for bit, in half the bytes."""
+        if not policy.autocast_works("cpu", torch.bfloat16):   # the check never multiplies on a CPU whose bfloat16 multiplies crash
+            self.skipTest("this CPU cannot run bfloat16 matrix multiplies safely or fast")
         model = model_of("gqa", "rope")
         model.compute = torch.bfloat16   # as the bf16 precision module sets it; forced because plan() drops it on a CPU without fast bfloat16
         plain, reduced = {"n": 0}, new_cache("cpu")

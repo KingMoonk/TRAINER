@@ -2,8 +2,10 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { isCluster, useCluster } from "@/lib/cluster";
 import { AwayCard } from "./away-card";
 import { T } from "./copy";
+import { OtherMachinesCard } from "./nodes";
 import { NowCard } from "./now-card";
 import { PlanCard } from "./plan-card";
 import { UpNextCard } from "./up-next-card";
@@ -13,6 +15,8 @@ export default function QueuePage() {
   const queue = useQueue();
   const actions = useQueueActions();
   const { away } = useAwayJobs();
+  const merged = useCluster().data;
+  const cluster = isCluster(merged) ? merged : undefined; // a cluster of one shows nothing about machines
   useEffect(() => {
     if (queue.isError) toast.error(T.couldNotLoad, { id: "queue-load" });
   }, [queue.isError]);
@@ -23,9 +27,10 @@ export default function QueuePage() {
         <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
         <p className="max-w-prose text-muted-foreground">{T.lead}</p>
       </div>
-      <NowCard queue={queue.data} actions={actions} />
+      <NowCard queue={queue.data} actions={actions} cluster={cluster} />
       <AwayCard jobs={away} />
-      <UpNextCard queue={queue.data} actions={actions} />
+      <UpNextCard queue={queue.data} actions={actions} cluster={cluster} />
+      {cluster && <OtherMachinesCard cluster={cluster} />}
       <PlanCard queue={queue.data} actions={actions} />
     </main>
   );
