@@ -80,6 +80,7 @@ class FakeJobTests(ApiCase):
         self.call("POST", "/queue/resume")
         self.assertTrue(self.services.wait_idle())
         self.assertEqual(len(self.call("GET", "/versions")), 2)
+        self.events.wait(lambda events: sum(kind == "job" for kind, _ in events) == 4)
         self.assertEqual([p["job"] for p in self.events.of("job")], [first["id"], first["id"], second["id"], second["id"]])
 
     def test_a_held_job_is_skipped(self):
