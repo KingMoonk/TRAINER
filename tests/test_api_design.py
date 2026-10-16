@@ -2,6 +2,11 @@
 maths cannot read is a 422 with a plain sentence, not a 500."""
 
 from studio_ia import design as D
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest import mock
+
 from tests.api_work import small_spec
 from tests.sse_harness import ApiCase
 
@@ -78,7 +83,73 @@ class DesignRouterTests(ApiCase):
         changed = self.call("POST", "/design/changes", json={"base": base, "draft_spec": written, "cur": cur, "draft": own})
         self.assertEqual(changed["chips"], D.change_chips(base, written, s, D.read_spec(written)))
         self.assertEqual((changed["parts_changed"], changed["warm"]["kind"]), (True, "other"))
+        self.learning_routes()
         self.assertAllRoutesHit()
+
+    def learning_routes(self):
+        base = small_spec()
+        cur = self.call("POST", "/design/read", json={"spec": base})
+        draft = {**cur, "L": 4, "W": 2}
+        new_spec = D.write_spec(base, {**D.read_spec(base), "L": 4, "W": 2})
+        questions = self.call("POST", "/design/questions", json={"old_spec": base, "new_spec": new_spec})
+        self.assertEqual([q["key"] for q in questions], D.prediction_questions(base, new_spec))
+        self.assertEqual(questions[0]["options"], [{"value": "lower", "label": "Lower"}, {"value": "higher", "label": "Higher"}])
+
+        self.services._versions.clear()
+        old = self.services.save_version(base, "base")
+        old.best_checkpoint = "parent/best.npz"
+        old.scorecard = {"bpc": 2.4}
+        body = {"base": base, "was": cur, "cur": cur, "draft": draft, "parent_version": old.number,
+                "datasets": ["text"], "predictions": [{"error": "lower"}, {}]}
+        with tempfile.TemporaryDirectory() as root:
+            self.services.workspace = SimpleNamespace(run_dir=root)
+            try:
+                preview = self.call("POST", "/design/split-plan", json=body)
+            finally:
+                del self.services.workspace
+        steps, jobs = preview["steps"], preview["jobs"]
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual([j["params"]["version"] for j in jobs], [2, 3])
+        self.assertEqual(jobs[0]["params"]["init_from"], old.best_checkpoint)
+        self.assertEqual(jobs[1]["params"]["init_from"], str(Path(jobs[0]["params"]["output_dir"]) / "best.npz"))
+        self.assertEqual(jobs[1]["params"]["datasets"], ["text"])
+        self.assertEqual([s["prediction"] for s in steps], [{"error": "lower"}, {}])
+        self.assertEqual(len(self.services.versions()), 1)  # preview never saves or queues
+        self.assertEqual(len(self.services.queue().up_next), 0)
+        self.assertEqual(steps[-1]["spec"], new_spec)
+
+        new = self.services.save_version(new_spec, "more blocks, wider", {"error": "lower"})
+        new.scorecard = {"bpc": 2.2}
+        speeds = {old.number: .2, new.number: .3}
+        with mock.patch.object(self.services, "run_speed", side_effect=lambda number: speeds[number]):
+            check = self.job("POST", "/design/guess-check", json={"old_version": old.number, "new_version": new.number})
+            self.assertEqual(check["status"], "done", check)
+            result = check["result"]
+            self.assertEqual(result["check"], D.guess_check(old, new, speeds))
+            self.assertEqual(result["check"]["hits"], 1)
+            self.assertEqual(result["tray"], list(D.check_text(old, new, speeds)))
+            self.assertTrue(result["results"]["step"]["measured"])
+            notebook = self.job("POST", "/design/notebook")
+            self.assertEqual(notebook["status"], "done", notebook)
+            rows = D.notebook([old, new], speeds)
+            self.assertEqual(notebook["result"], {"rows": rows, "lines": D.notebook_lines(rows)})
+
+    def test_learning_routes_reject_bad_inputs_and_handle_empty_history(self):
+        self.services._versions.clear()
+        self.call("POST", "/design/questions", 422, json={"old_spec": {"dims": {"n_layer": "no"}}, "new_spec": {}})
+        self.call("POST", "/design/guess-check", 404, json={"old_version": 1, "new_version": 2})
+        self.call("POST", "/design/guess-check", 422, json={"old_version": 0, "new_version": 2})
+        base = small_spec()
+        cur = self.call("POST", "/design/read", json={"spec": base})
+        body = {"base": base, "was": cur, "cur": cur, "draft": cur}
+        self.assertEqual(self.call("POST", "/design/split-plan", json=body), {"steps": [], "jobs": []})
+        self.call("POST", "/design/split-plan", 404, json={**body, "parent_version": 20})
+        self.call("POST", "/design/split-plan", 422, json={**body, "predictions": [{"error": "maybe"}]})
+        self.call("POST", "/design/split-plan", 422, json={**body, "predictions": [{"error": "lower"}]})
+        result = self.job("POST", "/design/notebook")
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["result"], {"rows": [], "lines": D.notebook_lines([])})
 
     def test_bad_requests(self):
         bad = {"dims": {"n_layer": "no"}}

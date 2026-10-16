@@ -7,8 +7,8 @@ import uuid
 
 import studio_quicktest
 from studio_ia.copy import QUICKTEST as T
-from studio_ia.design import WIDTHS, read_spec, sizes
-from studio_ia.pages.builder import say, text_sets
+from studio_ia.quicktest_logic import cost_sentence, describe
+from studio_ia.pages.builder import text_sets
 from studio_ia.pages.base import Page
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label
@@ -31,20 +31,6 @@ LOOK_AT = {  # a failed check names the part to look at
     "error_falls": "Look at the learning rate and schedule: the error did not fall by more than its wobble."}
 GUARD = "A design that never gets below counting word frequencies hasn't learned to use context."
 NO_TEXT = "Your data has no plain text yet. Add some in Your data, or pick another tiny dataset."
-
-
-def describe(spec):
-    """'4 blocks · 4 look-back heads · normal thinking room' for a ModelSpec."""
-    s = read_spec(spec)
-    return f"{s['L']} blocks · {s['H']} look-back heads · {WIDTHS[s['W']].lower()} thinking room"
-
-
-def cost_sentence(current, draft):
-    """'same size · same work per step', or how much bigger/slower, from the Builder's cost estimates."""
-    a, b = (sizes(spec, read_spec(spec)["V"]) for spec in (current, draft))
-    size, work = say(a["params"], b["params"], "bigger", "smaller"), say(a["time"], b["time"], "slower", "faster")
-    same = "about the same"
-    return f"{'same size' if size == same else size} · {'same work per step' if work == same else work}"
 
 
 def seconds_left(started, step, total, now):

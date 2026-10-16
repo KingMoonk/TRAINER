@@ -26,7 +26,7 @@ function useEventStream(handler: (event: ApiEvent) => void) {
  */
 export function useQueue() {
   const client = useQueryClient();
-  const query = useQuery({ queryKey: QUEUE, queryFn: () => unwrap(api.GET("/queue")) });
+  const query = useQuery({ queryKey: QUEUE, queryFn: ({ signal }) => unwrap(api.GET("/queue", { signal })) });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   useEventStream((event) => {
@@ -90,15 +90,22 @@ export function useQueueActions() {
     onError: failed,
   });
   const savePlan = useMutation({
-    mutationFn: (plan: Plan) => unwrap(api.PUT("/queue/plan", { body: plan })),
+    scope: { id: "queue-plan" },
+    // Each edit carries only its changed fields. Read the last saved plan when
+    // this edit reaches the front of the queue, not from its render's closure.
+    mutationFn: async (patch: Partial<Plan>) => {
+      await client.cancelQueries({ queryKey: QUEUE });
+      const plan = await unwrap(api.GET("/queue/plan"));
+      return unwrap(api.PUT("/queue/plan", { body: { ...plan, ...patch } }));
+    },
     // Show the choice at once; the reply (or the next queue event) is what the server kept.
-    onMutate: (plan) => {
+    onMutate: (patch) => {
       const before = client.getQueryData<Queue>(QUEUE);
-      if (before) client.setQueryData(QUEUE, { ...before, plan });
+      if (before) client.setQueryData(QUEUE, { ...before, plan: { ...before.plan, ...patch } });
       return { before };
     },
     onSuccess: (plan) => client.setQueryData<Queue>(QUEUE, (q) => (q ? { ...q, plan } : q)),
-    onError: (error, _plan, context) => {
+    onError: (error, _patch, context) => {
       if (context?.before) client.setQueryData(QUEUE, context.before);
       failed(error);
     },

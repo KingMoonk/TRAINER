@@ -8,6 +8,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Controls, Costs, Expect, StartFrom, Tray, VersionList } from "@/components/builder/side";
 import { Tower } from "@/components/builder/tower";
@@ -247,6 +248,7 @@ export function Builder() {
           />
         </>
       )}
+      <VersionTray />
     </main>
   );
 }

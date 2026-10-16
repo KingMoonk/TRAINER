@@ -1,7 +1,8 @@
 "use client";
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useVersionParameter } from "@/lib/version-param";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -32,6 +33,15 @@ function rankOf(singular: number[], tol = 1e-6): number {
 }
 
 export default function Page() {
+  return <Suspense fallback={<Skeleton className="m-8 h-64" />}><VersionedMap /></Suspense>;
+}
+
+function VersionedMap() {
+  const version = useVersionParameter();
+  return <ValueMapPage key={version ?? "best"} version={version} />;
+}
+
+function ValueMapPage({ version }: { version?: number }) {
   const route = routeFor("value_map");
   const [heads, setHeads] = useState(4);
   const [block, setBlock] = useState(0);
@@ -39,8 +49,8 @@ export default function Page() {
 
   // version null is the best trained version.
   const map = useQuery({
-    queryKey: ["inspect", "value-map", heads, block, head],
-    queryFn: ({ signal }) => runJob<ValueMap>(() => unwrap(api.POST("/inspect/value-map", { body: { heads, block, head } })), signal),
+    queryKey: ["inspect", "value-map", version, heads, block, head],
+    queryFn: ({ signal }) => runJob<ValueMap>(() => unwrap(api.POST("/inspect/value-map", { body: { version, heads, block, head } })), signal),
     placeholderData: keepPreviousData,
     retry: false,
     staleTime: Infinity,
@@ -54,6 +64,7 @@ export default function Page() {
     <main className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-4 p-4 md:p-8">
       <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
       <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
+    {version !== undefined && <p className="text-sm text-muted-foreground">Version {version}</p>}
       <p className="max-w-prose text-muted-foreground">{route.lead}</p>
 
       <div className="flex flex-wrap items-center gap-2">

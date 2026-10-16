@@ -75,6 +75,7 @@ class UpNextTest(unittest.TestCase):
     def setUp(self):
         from studio_ia.services import Job
         self.fake = FakeServices()
+        self.fake.pause()  # Exercise waiting-row controls without the fake runner consuming them.
         for n in "abc":
             self.fake.enqueue(Job(n, "quicktest", f"job {n}"))
         try:

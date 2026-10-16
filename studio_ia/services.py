@@ -6,6 +6,7 @@ import logging
 import queue
 import socket
 import threading
+import time
 import urllib.error
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -409,7 +410,7 @@ class Services:
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
         reached; cursor None = the first page, a next cursor of None = nothing follows. Rows are shaped like DataSummary.rows."""
         raise NotImplementedError
@@ -488,6 +489,18 @@ class Services:
     # inspect (S7): thin wrappers over studio_inspect, numpy out; version is a Version or number -----------------
     def inspect_forward(self, version, text, hooks=True):
         """{'ids' [1,T], 'tokens' [[str]], 'logits' [1,T,V], 'hooks' {name: array}} (studio_inspect.forward)."""
+        raise NotImplementedError
+
+    def inspect_logit_lens(self, version, text, top_k=5):
+        """studio_inspect.logit_lens: one row per stage ('embed', 'blockN.resid.post'): {'hook', 'probabilities' [1,T,V], 'top_ids' [1,T,k], 'top_probabilities' [1,T,k]}."""
+        raise NotImplementedError
+
+    def inspect_ablate(self, version, text, targets=None, mode="zero", heads=None):
+        """studio_inspect.ablate: {'baseline', 'mode', 'heads': [{'block','head','loss','delta', + head_stats}]}, one head ablated at a time (all of them when `heads` is None)."""
+        raise NotImplementedError
+
+    def inspect_head_stats(self, pattern):
+        """studio_inspect.head_stats of an attention pattern [B,H,T,T]: {'entropy','mean_distance','first_token_mass','previous_token_mass'}, each [H]."""
         raise NotImplementedError
 
     def inspect_trace(self, version, text, pos=-1):
@@ -576,21 +589,28 @@ class Services:
         """Messages the viewer sent back since the last call."""
         raise NotImplementedError
 
-    def viewer_snapshots(self) -> list:
-        """The current version's training snapshots (absolute paths of <run>/viz/step_*.npz), oldest first."""
+    def viewer_snapshots(self, number=None) -> list:
+        """A version's training snapshots, oldest first; omit number for the current version."""
         raise NotImplementedError
 
-    def viewer_probe_step(self, text):
-        """Run one real training step of the current version's checkpoint on `text` without touching training, save it
+    def viewer_probe_step(self, text, number=None):
+        """Run one real training step of the chosen (default current) version's checkpoint without touching training, save it
         as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
 
 class FakeServices(Services):
-    """Empty, in-memory placeholder data so pages render before real services exist."""
+    """Empty, in-memory placeholder data so pages render before real services exist. A test fixture and `studio_api --fake`
+    only, never the real app. start_queue() runs the queued pretrain jobs one after another in a worker thread: `job_steps`
+    steps of `step_seconds` each (`sleep` is injectable, so a test needs no real wait), then the job's version is trained or,
+    for a job with no version of its own, a new one is added. The events match studio_queue.Runner's."""
 
-    def __init__(self):
+    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep):
         super().__init__()
+        self.job_steps, self.step_seconds, self._sleep = job_steps, step_seconds, sleep
+        self._worker: threading.Thread | None = None
+        self._started = False  # start_queue() was called: from then on a resume carries on, as the real runner's thread does
+        self._worker_lock = threading.Lock()
         self._versions: list[Version] = []
         self._queue = QueueState()
         self.viewer_log: list = []  # (action, payload): the fake viewer records calls and spawns nothing
@@ -617,10 +637,10 @@ class FakeServices(Services):
     def viewer_poll(self):
         return []
 
-    def viewer_snapshots(self):
+    def viewer_snapshots(self, number=None):
         return list(self.snapshot_paths)
 
-    def viewer_probe_step(self, text):
+    def viewer_probe_step(self, text, number=None):
         self.viewer_log.append(("probe", text))
         return self.probe_path
 
@@ -652,6 +672,67 @@ class FakeServices(Services):
     def enqueue(self, job):
         self._queue.up_next.append(job)
         self.emit("queue", self._queue)
+
+    def start_queue(self):
+        """Run the waiting jobs in a worker thread, unless one is already running or the queue is paused. The first job is
+        already the running job when this returns."""
+        with self._worker_lock:
+            self._started = True
+            if self._worker is not None and self._worker.is_alive():
+                return
+            job = self._take_job()
+            if job is None:
+                return
+            self._worker = threads.start(self._run_jobs, job)
+
+    def wait_idle(self, timeout=10.0):
+        """Test hook: block until the worker has run every waiting job; True when it has."""
+        worker = self._worker
+        if worker is not None:
+            worker.join(timeout)
+        return worker is None or not worker.is_alive()
+
+    def _take_job(self):
+        """The next waiting job, now the running one; None when paused or nothing waits. Hold _worker_lock."""
+        job = next((j for j in self._queue.up_next if j.status == "waiting"), None)
+        if job is None or self._queue.paused:
+            return None
+        self._queue.up_next.remove(job)
+        job.status = "running"
+        self._queue.job, self._queue.step, self._queue.total, self._queue.phase = job, 0, self.job_steps, "warm-up"
+        return job
+
+    def _run_jobs(self, job):
+        while job is not None:
+            self._run_job(job)
+            with self._worker_lock:
+                job = self._take_job()
+                if job is None:
+                    self._worker = None
+
+    def _run_job(self, job):
+        total, q = self.job_steps, self._queue
+        self.emit("job", {"job": job.id, "status": "running"})
+        self.emit("queue", q)
+        for step in range(1, total + 1):
+            self._sleep(self.step_seconds)
+            phase = "warm-up" if step * 4 <= total else "cool-down" if step * 4 > total * 3 else "steady"
+            q.step, q.phase, q.lr = step, phase, 3e-4
+            q.eta_s = (total - step) * self.step_seconds
+            self.emit("train", {"job": job.id, "type": "stats", "step": step, "total": total, "phase": phase, "lr": q.lr,
+                                "loss": round(5.0 - 3.0 * step / total, 4), "tokens_per_second": 1000.0})
+        job.status = "done"
+        q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
+        self.emit("job", {"job": job.id, "status": "done", "error": ""})
+        number = job.params.get("version")
+        known = next((v for v in self._versions if v.number == number), None)
+        if known is not None:
+            known.status = "trained"
+        else:
+            self._versions.append(Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", job.label or "Trained",
+                                          spec=dict(job.params.get("spec") or {}), status="trained"))
+        self.emit("versions", None)
+        self.emit("queue", q)
 
     def move_up(self, job_id):
         q = self._queue.up_next
@@ -717,6 +798,8 @@ class FakeServices(Services):
     def resume(self):
         self._queue.paused = False
         self.emit("queue", self._queue)
+        if self._started:
+            self.start_queue()  # the worker stopped on the pause: carry on
 
     def checkpoint_now(self):
         self.emit("queue", self._queue)
@@ -774,8 +857,10 @@ class FakeServices(Services):
         out.rows = [dict(r) for r in rows if needle in f"{r['a']} {r['b']}".casefold()]
         return out
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         rows, start = self.data(kind, query).rows, cursor or 0
+        if review_only:
+            rows = [row for row in rows if row.get("draft") and row["status"] == "Review"]
         return rows[start:start + limit], start + limit if start + limit < len(rows) else None
 
     def _add_row(self, kind, a, b, status="Good", dataset="Your data", draft=False):
@@ -793,7 +878,30 @@ class FakeServices(Services):
         return added
 
     def import_data(self, kind, paths):
-        return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
+        from studio_core import normalize, parse_file
+        from studio_data_kinds import classify, rule_of
+        report = []
+        for source in paths:
+            path = Path(source)
+            try:
+                added = duplicate = invalid = 0
+                for item in parse_file(path):
+                    row = normalize(item)
+                    if row is None or classify(row) != kind:
+                        invalid += 1
+                        continue
+                    a, b = (path.stem, row["text"]) if kind == "text" else \
+                        (row["user"], rule_of(row)) if kind == "problems" else (row["user"], row["assistant"])
+                    status = "In use" if kind == "text" else "Ready" if kind == "problems" else "Good"
+                    if self._add_row(kind, a, b, status, dataset=path.stem):
+                        added += 1
+                    else:
+                        duplicate += 1
+                report.append(f"{path.name}: {added} added, {duplicate} duplicates, {invalid} invalid")
+            except (OSError, ValueError) as exc:
+                report.append(f"{path.name}: {plain_error(exc)}")
+        self.emit("data", {"kind": kind})
+        return report
 
     def collection(self, kind="text"):
         return getattr(self, "_collection", []) if kind == "text" else getattr(self, "_collections", {}).get(kind, [])
@@ -912,6 +1020,33 @@ class FakeServices(Services):
                           f"block{b}.attn.pattern": pattern / pattern.sum(-1, keepdims=True)})
         ids = np.arange(T)[None] % V
         return {"ids": ids, "tokens": [[f"t{i}" for i in ids[0]]], "logits": rng.normal(size=(1, T, V)), "hooks": hooks}
+
+    def inspect_logit_lens(self, version, text, top_k=5):
+        rng, T, V = np.random.default_rng(1), 9, 12
+        k = max(1, min(int(top_k), V))
+        rows = []
+        for name in ("embed", "block0.resid.post", "block1.resid.post"):
+            raw = np.exp(rng.normal(size=(1, T, V)))
+            probabilities = raw / raw.sum(-1, keepdims=True)
+            top = np.argsort(probabilities, axis=-1)[..., -k:][..., ::-1]
+            rows.append({"hook": name, "probabilities": probabilities, "top_ids": top,
+                         "top_probabilities": np.take_along_axis(probabilities, top, axis=-1)})
+        return rows
+
+    def inspect_ablate(self, version, text, targets=None, mode="zero", heads=None):
+        if mode not in ("zero", "mean"):
+            raise ValueError("Ablation must be zero or mean.")
+        selected = [(b, h) for b in range(2) for h in range(4)] if heads is None else [tuple(h) for h in heads]
+        if any(not (0 <= b < 2 and 0 <= h < 4) for b, h in selected):
+            raise ValueError("Selected block/head has no attention output hook.")
+        stats = self.inspect_head_stats(self.inspect_forward(version, text)["hooks"]["block0.attn.pattern"])
+        rows = [{"block": b, "head": h, "loss": 2.0 + .1 * (4 * b + h), "delta": .1 * (4 * b + h),
+                 **{key: float(value[h]) for key, value in stats.items()}} for b, h in selected]
+        return {"baseline": 2.0, "mode": mode, "heads": rows}
+
+    def inspect_head_stats(self, pattern):
+        import studio_inspect
+        return studio_inspect.head_stats(pattern)
 
     def inspect_trace(self, version, text, pos=-1):
         names = ["embedding", "block 1 mixer", "block 1 channel", "output"]
@@ -1115,19 +1250,19 @@ class WorkspaceServices(Services):
     def viewer_poll(self):
         return self._viz.poll() if self._viz is not None else []
 
-    def viewer_snapshots(self):
-        version = self.current_version()
+    def viewer_snapshots(self, number=None):
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
         if version is None:
             return []
         return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
 
-    def viewer_probe_step(self, text):
+    def viewer_probe_step(self, text, number=None):
         import numpy as np
 
         from studio_core import uid
         from studio_model import Tokenizer, load_checkpoint
         from studio_snapshot import one_step, save
-        version = self.current_version()
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
         source = version.best_checkpoint if version is not None else None
         if not source or not Path(source).exists():
             return None
@@ -1940,8 +2075,11 @@ class WorkspaceServices(Services):
         names = {d["id"]: d["name"] for d in self.workspace.state["datasets"]}
         return replace(full, rows=self._summary_cache().search(kind, query, summaries["takes"][kind], names))
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         import studio_data_kinds as dk
+        if review_only:
+            sets = [(d["id"], d["name"]) for d in self.workspace.state["datasets"] if d["name"] in self._DRAFT_SETS.values()]
+            return dk.page(self.workspace, kind, query, sets, cursor, limit, review_only=True)
         summary = self.data(kind)  # the sets and the near-duplicates; the rows come from storage
         dups = {r["id"] for r in summary.rows if r["status"] == "Near-duplicate"}
         return dk.page(self.workspace, kind, query, [(x["id"], x["name"]) for x in summary.sets], cursor, limit, dups)
@@ -2333,7 +2471,7 @@ class WorkspaceServices(Services):
             raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
         return v.best_checkpoint
 
-    def chat(self, version, messages, on_text, stop):
+    def chat(self, version, messages, on_text, stop, ablate=None):
         from studio_model import LocalModel
         import studio_memory
         ckpt = self._checkpoint(version)
@@ -2349,7 +2487,7 @@ class WorkspaceServices(Services):
                 self._evict_chat()
             using = self._using[ckpt]
         with using:  # a move to another device waits for the reply: its cache lives on the device it started on
-            return model.generate(messages, on_text=on_text, stop=stop)
+            return model.generate(messages, on_text=on_text, stop=stop, ablate=[tuple(h) for h in ablate] if ablate else None)
 
     def _chat_device(self):
         """Where a chat model should live now (the chat lock is held): the CUDA GPU while no job runs, the CPU otherwise, and on

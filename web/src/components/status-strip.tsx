@@ -35,7 +35,7 @@ export function StatusStrip() {
       role="status"
       aria-label="Status"
       data-connection={connection}
-      className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b px-4 py-2 md:px-8"
+      className="studio-glass flex min-h-14 min-w-0 flex-wrap items-center gap-x-6 gap-y-2 border-b px-4 py-3 md:px-8"
     >
       <div className={cn("flex min-w-0 flex-wrap items-center gap-x-6 gap-y-1", connection === "offline" && "opacity-60")}>
         <Item label="Version">{value(version ?? "None yet")}</Item>

@@ -128,9 +128,6 @@ export const ROUNDS: RoundSpec[] = [
 
 export const STATUS_TEXT: Record<string, string> = { done: "done", running: "running", queued: "in the queue", idle: "not started" };
 
-/** The pretrained models the server can import. The API has no listing route; studio_import.MODELS has this one. */
-export const PRETRAINED = { name: "gpt2", title: "GPT-2 (124M)", note: "OpenAI's 124M model, about 548 MB to download once." };
-
 export const ROW_KINDS = [
   { value: "conversations", label: "Conversations" },
   { value: "problems", label: "Problems" },
