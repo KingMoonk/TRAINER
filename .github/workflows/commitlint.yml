@@ -1,6 +1,6 @@
 name: PR title lint
 
-# Squash-merging makes the PR title the commit on master, so only the title must be a Conventional Commit.
+# Squash-merging makes the PR title the commit on the base branch, so only the title must be a Conventional Commit.
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
