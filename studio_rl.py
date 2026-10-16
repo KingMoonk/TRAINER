@@ -203,9 +203,10 @@ class Teacher:
     """A frozen model that shares the student's word list. With `correction`, the same weights see it as a system
     message in front of the conversation (the student does not).
 
-    It holds the student's device only while score() runs. On a CUDA GPU its weights wait in host memory between scores; on an
-    Apple GPU (unified memory, so a host copy would free nothing) they are dropped and read from the checkpoint again; on the
-    CPU the model just stays."""
+    It holds the student's device only while score() runs, unless `resident` is set (learn_from_teacher sets it when the job's
+    memory share has room for both). Released: on a CUDA GPU its weights wait in host memory between scores; on an Apple GPU
+    (unified memory, so a host copy would free nothing) they are dropped and read from the checkpoint again; on the CPU the
+    model just stays."""
 
     def __init__(self, checkpoint, correction=None, device="auto"):
         data = load_checkpoint(checkpoint, weights_only=True)
@@ -214,21 +215,33 @@ class Teacher:
         self.context = data["config"]["context"]
         self.correction = correction
         self.path, self.weights, self.model = str(checkpoint), data["model"], None
+        self.resident = False
 
-    def score(self, rows):
-        """One 1-D CPU tensor per encoded row: the teacher's log-probs of that row's answer tokens."""
+    def build(self):
+        """The model on its device: the one already built, or a new one from the weights held (or read from the checkpoint again)."""
         if self.model is None:
             if self.weights is None:
                 self.weights = load_checkpoint(self.path, weights_only=True)["model"]
             self.model = ScratchTransformer(self.config, self.tokenizer.vocab_size)
             self.model.load_weights(self.weights)
-        with torch.no_grad():
-            logps = [v.cpu() for v in _answer_logps(self.model, rows)]
-        device = self.model.backend.device
+        return self.model
+
+    def release(self):
+        """Off the device (a model on the CPU just stays)."""
+        device = self.model.backend.device if self.model is not None else "cpu"
         if device != "cpu":
             self.model = None
             self.weights = self.weights if device == "cuda" else None
+            self.resident = False
             empty_cache(device)
+
+    def score(self, rows):
+        """One 1-D CPU tensor per encoded row: the teacher's log-probs of that row's answer tokens."""
+        model = self.build()
+        with torch.no_grad():
+            logps = [v.cpu() for v in _answer_logps(model, rows)]
+        if not self.resident:
+            self.release()
         return logps
 
     def messages(self, messages, correction=None):
@@ -279,14 +292,41 @@ def reverse_kl(student, teacher_logps, student_rows, backward=False):
     return mean, [(s.detach().cpu().numpy(), t.cpu().numpy()) for s, t in zip(s_rows, teacher_logps)]
 
 
+def _decide_residency(teacher, student, tokenizer, batch, share, emit):
+    """Once per run, before the first step: keep a teacher on a GPU in memory between steps when the student's training step plus
+    the teacher's weights fit `share` of the device's memory, else let it leave after each score (a rebuild every step, which
+    costs more than the scoring itself on an Apple GPU). A teacher on the CPU stays anyway, so there is nothing to decide."""
+    import studio_memory
+    model = teacher.build()   # the first score would build it too; its weights are what is measured
+    device = model.backend.device
+    if device == "cpu":
+        return
+    fixed, per_sample = studio_memory.training_bytes(student.config, tokenizer.vocab_size)
+    same_memory = studio_memory.pool(student.model.backend.device) == studio_memory.pool(device)
+    step, weights = (fixed + per_sample * batch) if same_memory else 0, studio_memory.weight_bytes(model)
+    room = studio_memory.budget(device, share)
+    teacher.resident = step + weights <= room
+    sizes = f"a training step of {_mb(step)} plus the teacher's weights of {_mb(weights)}, against the {share:.0%} ({_mb(room)}) of memory the plan allows this job"
+    emit({"type": "info", "text": f"Keeping the teacher in memory between steps: {sizes}." if teacher.resident else
+          f"Not keeping the teacher in memory between steps, which makes each step slower: {sizes}."})
+
+
+def _mb(nbytes):
+    return f"{nbytes / 2 ** 20:,.0f} MB"
+
+
 def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learning_rate=1e-4, prompts_per_step=4,
-                       max_tokens=None, temperature=.8, probe=8, seed=7, device="auto", emit=None, stop=None, pause=None):
+                       max_tokens=None, temperature=.8, probe=8, seed=7, device="auto", emit=None, stop=None, pause=None, memory_share=None):
     """Round 3. teacher: a checkpoint path (any trained version with the same word list and context; check_teacher
     raises otherwise) or privileged(checkpoint, correction), the same model shown a hint.
 
     Before training it samples `probe` answers and keeps them; the heat map shows the teacher's surprise at each word,
     and the verdict counts the words where the student's log-prob moved closer to the teacher's after the round
-    (|student - teacher| shrank), measured teacher-forced on those same answers."""
+    (|student - teacher| shrank), measured teacher-forced on those same answers.
+
+    memory_share: the fraction of the device's memory the plan lets this job use (the queue passes it to every job). Given, a
+    teacher on a GPU stays in memory between steps when it fits next to the student's training step, and the choice is emitted
+    as an info event. None (a direct call, no plan to measure against) keeps the teacher leaving the device after each score."""
     emit, stop, pause = emit or (lambda event: None), stop or threading.Event(), pause or threading.Event()
     prompts = [(_messages(p), p.get("correction") if isinstance(p, dict) else None) for p in prompts]  # (messages, its own correction)
     if not prompts:
@@ -303,6 +343,8 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     check_teacher(tokenizer, local.config["context"], teacher)
     directory, cfg, extra = _begin(output_dir, local, checkpoint, "teacher")
     base_step, rng = local.step, random.Random(seed)
+    if memory_share is not None:
+        _decide_residency(teacher, local, tokenizer, min(prompts_per_step, len(prompts)), memory_share, emit)
 
     def encode(item, answer):
         messages, correction = item
@@ -338,6 +380,8 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
         if kl < best:
             best = kl
             _save(directory / "best.npz", student, optimizer, cfg, tokenizer, base_step + step, best, history, extra)
+    if teacher.resident:
+        teacher.release()
     after = probe_gaps()
     gaps = [(abs(float(a) - float(b)), abs(float(c) - float(d))) for (sa, ta), (sb, tb) in zip(before, after)
             for a, b, c, d in zip(sa, ta, sb, tb)]
@@ -438,7 +482,7 @@ def run_round(number, job, context, emit, stop, pause):
         else:
             teacher = privileged(checkpoint, p["correction"]) if p.get("correction") else p.get("teacher")
             prompts = p["prompts"] if "prompts" in p else studio_rlhf.prompts_from(_rows(job, context, "conversations", "conversations"))
-        record = learn_from_teacher(checkpoint, prompts, teacher, out, emit=emit, stop=stop, pause=pause, **kw)
+        record = learn_from_teacher(checkpoint, prompts, teacher, out, emit=emit, stop=stop, pause=pause, memory_share=p.get("memory_share"), **kw)
         verdict = f"Its answers moved toward the teacher's at {record['moved']} of {record['words']} words."
     elif number == 4:
         pairs = [r for r in _rows(job, context, "pairs", "pairs") if r.get("source") == "human"]  # the judge model's picks never count
