@@ -354,10 +354,10 @@ class Services:
         has not trained, and ValueError (already in plain words) for a design or tokenizer that format cannot hold."""
         raise NotImplementedError
 
-    def import_pretrained(self, name="gpt2"):
+    def import_pretrained(self, name="gpt2", lora=None):
         """Start from a pretrained open model ("gpt2": OpenAI's 124M, about 548 MB to download once). Saves its design as a new version
         and queues the download and conversion in the background; the version becomes trained (with a checkpoint) when the job ends.
-        Returns the new Version."""
+        lora: settings dict ({} for the defaults) to fine-tune small adapters instead of every weight. Returns the new Version."""
         raise NotImplementedError
 
     def passive(self):
@@ -677,10 +677,10 @@ class FakeServices(Services):
         self.exports = [*getattr(self, "exports", []), (version, kind, path)]
         return {"path": str(path), "files": [], "note": ""}
 
-    def import_pretrained(self, name="gpt2"):
+    def import_pretrained(self, name="gpt2", lora=None):
         import studio_import
         self.imports = [*getattr(self, "imports", []), name]
-        return self.save_version(studio_import.gpt2_spec(), f"Started from {studio_import.MODELS[name]['title']}")
+        return self.save_version(studio_import.gpt2_spec(lora=lora), f"Started from {studio_import.MODELS[name]['title']}")
 
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
@@ -1379,7 +1379,7 @@ class WorkspaceServices(Services):
             raise NoCheckpoint(v.number if v else None)
         return studio_export.export(v.best_checkpoint, kind, path)
 
-    def import_pretrained(self, name="gpt2"):
+    def import_pretrained(self, name="gpt2", lora=None):
         import studio_import
         if name not in studio_import.MODELS:
             raise ValueError(f"Unknown pretrained model {name!r}.")
@@ -1388,7 +1388,7 @@ class WorkspaceServices(Services):
             if any(j.kind == "import_pretrained" and j.params.get("model") == name and j.status in ("waiting", "held", "running")
                    for j in self.runner.jobs):
                 raise ValueError(f"{title} is already being imported. Wait for it in the queue before starting another.")
-        v = self.save_version(studio_import.gpt2_spec(), f"Started from {title}")
+        v = self.save_version(studio_import.gpt2_spec(lora=lora), f"Started from {title}")
         out = studio_import.new_output_dir(self.workspace.run_dir, name)
         self.enqueue(Job(uuid.uuid4().hex[:8], "import_pretrained", f"Start from {title}",
                          "downloads the model once and turns it into a version that continues text and that you can fine-tune",
