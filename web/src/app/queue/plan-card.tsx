@@ -15,7 +15,7 @@ const MEMORY = Object.entries(T.memoryOptions) as [Plan["memory"], string][];
 
 export function PlanCard({ queue, actions }: { queue: Queue | undefined; actions: QueueActions }) {
   const plan = queue?.plan;
-  const save = (patch: Partial<Plan>) => plan && actions.savePlan.mutate({ ...plan, ...patch });
+  const save = (patch: Partial<Plan>) => plan && actions.savePlan.mutate(patch);
   return (
     <Card>
       <CardHeader>

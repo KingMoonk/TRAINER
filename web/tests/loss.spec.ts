@@ -14,7 +14,7 @@ test("a version link uses that checkpoint without choosing the best", async ({ p
 test("an unavailable version needs an explicit choice before falling back", async ({ page }) => {
   const state = await mockLoss(page);
   await page.goto("/loss/?version=999");
-  await expect(page.getByRole("alert")).toContainText("Version 999 has no available trained checkpoint.");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("Version 999 has no available trained checkpoint.");
   expect(state.requests).toHaveLength(0);
   expect(state.bestRequests).toBe(0);
   await page.getByRole("button", { name: "Choose another version" }).click();
