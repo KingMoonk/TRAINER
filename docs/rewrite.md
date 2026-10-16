@@ -59,22 +59,25 @@ Done: `python tasks.py web:build` passes in CI; `pnpm dev` shows an empty shell 
 - [ ] `studio_api/`: FastAPI + uvicorn. One router per `Services` scope: `versions`, `queue`, `storage`, `passive`, `data`,
       `pretraining`, `post_training`, `chat`, `inspect`, `benchmark`, `viewer`, `node`. One route per public `Services`
       method; Pydantic models derived from the dataclasses (`Version`, `Job`, `QueueState`, `Plan`, `Gate`).
-- [ ] Events: `GET /events` is an SSE stream of every `Services.emit(kind, payload)`; broadcast to every subscriber.
+- [x] Events: `GET /events` is an SSE stream of every `Services.emit(kind, payload)`; broadcast to every subscriber.
       `Services` gets a thread-safe subscriber path that does not go through Tk (`bind_ui`/`pump` stay for the Tk app until
       Phase 5).
 - [ ] Long reads become jobs: `lr_range_test`, `pretrain_preview`, `inspect_*`, `run_benchmark`, `compare_runs`, scoring.
       `POST` returns a job id; progress and result arrive on `/events`; `GET /jobs/{id}` for late joiners. The #82 snapshot
       store, if it lands on `master`, is the read model these `GET`s serve. `ready()`/`_Slow`/`_Cold` are not used by the API.
-- [ ] Files cross the wire, not paths: `import_data`, `import_source`, `import_pretrained` accept uploads (and a server-side
+- [x] Files cross the wire, not paths: `import_data`, `import_source`, `import_pretrained` accept uploads (and a server-side
       folder picker for corpora already on the box); `export_version` is a download.
-- [ ] Per-client state leaves the server: `stage_draft`/`draft_spec` (the Builder's unsaved design) lives in the browser.
-- [ ] `node` router: capabilities (`studio_compute.gpu_status()`: device kind, memory), busy/free, version, hostname.
-- [ ] Serve `web/out` (static export) from the API so the app is one URL; `--bind` defaults to the tailnet address, with
-      `--fake` serving `FakeServices` for frontend work without a workspace.
-- [ ] Auth: trust `Tailscale-User-Login` from `tailscale serve`; refuse requests without it unless `--bind 127.0.0.1`.
-- [ ] Tests: `tests/test_api_*.py` with FastAPI's `TestClient` over `FakeServices`; one test per router that every route
+- [x] Per-client state leaves the server: `stage_draft`/`draft_spec` (the Builder's unsaved design) lives in the browser.
+- [x] `node` router: capabilities (`studio_backend.gpu_status()`: device kind, memory), busy/free, version, hostname.
+- [x] Serve `web/out` (static export) from the API so the app is one URL; `--bind` defaults to `127.0.0.1` (open only on
+      loopback or with `--fake`; `docs/node.md` says how to bind the tailnet address), and `--fake` serves `FakeServices` for
+      frontend work without a workspace.
+- [x] Auth: trust `Tailscale-User-Login` from `tailscale serve`; refuse requests without it unless `--bind 127.0.0.1`.
+- [x] Tests: `tests/test_api_*.py` with FastAPI's `TestClient` over `FakeServices`; one test per router that every route
       answers and every emitted event reaches `/events`.
-- [ ] `docs/node.md`: run the API as a service (launchd on macOS, a scheduled task on Windows), tailnet setup, ACL.
+- [x] `web/src/lib/api.ts` is typed from the API's OpenAPI schema (`pnpm gen:api`; the CI `web` job checks it is current),
+      replacing the hand-written client from #91.
+- [x] `docs/node.md`: run the API as a service (launchd on macOS, a scheduled task on Windows), tailnet setup, ACL.
 
 Done: the Tk app still passes CI; `python -m studio_api --fake` serves a schema with every `Services` method; the
 generated TypeScript client compiles against it.
