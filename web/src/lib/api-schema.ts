@@ -303,7 +303,8 @@ export interface paths {
          * Merged Queue
          * @description The jobs of every machine, each with the machine it runs on or is pinned to. The peers are asked at the same time, for their
          *     node and their queue, and answer within two seconds or not at all; a peer that does not keeps its last known rows, marked stale.
-         *     Sync, so the peers are asked off the event loop. Empty when no other machine is listed.
+         *     Sync, so the peers are asked off the event loop. Empty when no other machine is listed, except that a job still running on a machine
+         *     that was removed from the list keeps its row, so its note (for example, a refused checkpoint) is still said.
          */
         get: operations["merged_queue_cluster_merged_get"];
         put?: never;
@@ -4905,6 +4906,11 @@ export interface components {
             label: string;
             /** Node */
             node: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
             /**
              * Pinned
              * @default

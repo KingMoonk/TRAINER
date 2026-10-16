@@ -88,11 +88,12 @@ class QueueRow(BaseModel):
     pinned: str = ""
     waiting_reason: str = ""
     stale: bool = False  # the machine is not answering: this is its last known queue
+    note: str = ""  # the job's note, such as a checkpoint a peer could not store because its bucket is full
 
 
 class ClusterQueue(BaseModel):
     nodes: list[QueueNode]  # this machine first, then the listed peers; empty for a cluster of one (nothing to show about machines)
-    jobs: list[QueueRow]  # every machine's running and waiting jobs; empty for a cluster of one
+    jobs: list[QueueRow]  # every machine's running and waiting jobs; empty for a cluster of one, unless a job still runs on a removed peer
 
 
 class LeaseModel(BaseModel):
@@ -180,9 +181,11 @@ def save_nodes(body: NodeList, services=Depends(get_services)) -> NodeList:
 def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQueue:
     """The jobs of every machine, each with the machine it runs on or is pinned to. The peers are asked at the same time, for their
     node and their queue, and answer within two seconds or not at all; a peer that does not keeps its last known rows, marked stale.
-    Sync, so the peers are asked off the event loop. Empty when no other machine is listed."""
+    Sync, so the peers are asked off the event loop. Empty when no other machine is listed, except that a job still running on a machine
+    that was removed from the list keeps its row, so its note (for example, a refused checkpoint) is still said."""
     addresses = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
-    if not addresses:
+    jobs = local_jobs(services)
+    if not addresses and not any(getattr(j, "node", "") and j.status == "running" for j in jobs):
         return ClusterQueue(nodes=[], jobs=[])
     state = request.app.state
     if not hasattr(state, "peer_queues"):
@@ -190,7 +193,7 @@ def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQue
     cluster = getattr(getattr(services, "runner", None), "cluster", None)
     own = studio_cluster_queue.own_node(cluster)
     peers = state.peer_queues.survey(addresses)
-    rows = studio_cluster_queue.merge(own, peers, local_jobs(services), getattr(cluster, "waiting", None))
+    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None))
     nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own.hostname or own.address, local=True, online=True),
              *(QueueNode(address=p.info.address, hostname=p.info.hostname, pin=p.info.address, local=False,
                          online=p.info.online, error=p.info.error, seen_at=p.seen_at) for p in peers)]

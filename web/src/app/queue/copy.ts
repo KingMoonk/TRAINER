@@ -19,8 +19,6 @@ export const T = {
     "“Make a checkpoint now” branches off a short cool-down and keeps the main run going. Pausing keeps everything; the run resumes exactly where it stopped.",
   checkpointStarted: "Making a checkpoint from the last one.",
   checkpointNothing: "Nothing is running, so there is no checkpoint to make.",
-  away: "RUNNING ON OTHER MACHINES",
-  awayOn: "on {node}",
   upNext: "UP NEXT · IN ORDER",
   allDoneIn: "all done in about {hours} h at the current plan",
   finishNeedsEstimates: "the finish time shows once each waiting job has a time estimate",

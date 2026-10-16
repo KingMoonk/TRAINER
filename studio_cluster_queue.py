@@ -47,6 +47,7 @@ class Row:
     pinned: str
     waiting_reason: str
     stale: bool  # the machine is not answering: this is its last known queue
+    note: str  # the job's note: where a checkpoint a peer could not store is said (for example, that the bucket is full); "" when none
 
 
 class Peers:
@@ -121,16 +122,17 @@ def merge(own, peers, jobs, waiting=None):
     nodes = [own, *(p.info for p in peers)]
     names = _names(nodes)
 
-    def row(job_id, kind, label, status, params, ref, queued_on, here, why, peer=None):
+    def row(job_id, kind, label, status, params, ref, queued_on, here, why, note, peer=None):
         node = _find(nodes, ref) if ref else None
         return Row(job_id, kind, label, status, node.address if node else "", names[node.address] if node else ref, queued_on, here,
-                   _pinned(params), why, bool(peer and peer.stale))
+                   _pinned(params), why, bool(peer and peer.stale), note)
 
     rows = []
     for job in jobs:
         if job.status in STATES:
             ref = (getattr(job, "node", "") or studio_cluster.LOCAL) if job.status == "running" else _pinned(job.params)
-            rows.append(row(job.id, job.kind, job.label or "", job.status, job.params, ref, names[own.address], True, waiting.get(job.id, "")))
+            rows.append(row(job.id, job.kind, job.label or "", job.status, job.params, ref, names[own.address], True, waiting.get(job.id, ""),
+                            job.note or ""))
     for peer in peers:
         for job in peer.jobs:
             status, params = job.get("status"), job.get("params")
@@ -140,5 +142,5 @@ def merge(own, peers, jobs, waiting=None):
             if status == "running" and _find(nodes, ref) is own:
                 continue
             rows.append(row(job["id"], str(job.get("kind", "")), str(job.get("label") or ""), status, params, ref, names[peer.info.address],
-                            False, "", peer))
+                            False, "", str(job.get("note") or ""), peer))
     return rows
