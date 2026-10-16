@@ -1,5 +1,98 @@
 # Cluster
 
+Several machines can pool their compute. Each one runs the API as a node; a node alone is a cluster of one. Nodes find each
+other over a Tailscale network (a *tailnet*), hand whole jobs to each other, and exchange trained versions through a bucket.
+Nothing is split across machines: one training run always stays on one machine.
+
+Three things to set up, in this order: the tailnet, the node list in the workspace config, and the bucket.
+
+## The tailnet
+
+Tailscale gives every machine a private address and a name that work through home routers and CGNAT (Starlink) without opening
+a port. The tailnet is the whole perimeter: the API is not exposed to the internet.
+
+1. Make a Tailscale account (the free personal plan is enough) and install Tailscale on every machine that will be a node,
+   then sign in to the same account on each.
+2. Turn on **MagicDNS** in the admin console (**DNS** page). Every machine is then reachable by its name: `windows-box`, or the
+   full `windows-box.tail1234.ts.net`. Both are shown on the **Machines** page.
+3. Check the machines see each other: `tailscale ping windows-box` from the Mac. It says whether the path is direct or goes
+   through a relay (DERP). A relayed path works but is slower; job placement does not depend on it, only the speed of copying
+   files between the two.
+4. Run the API on each node and keep it listening on the tailnet address (see `docs/node.md`). The default port is `8787`.
+
+## Inviting a second user
+
+A friend with their own machine joins in one of two ways.
+
+- **Share one machine** (nothing else is exposed). In the admin console, **Machines**, the machine's menu, **Share...**, and
+  send the link. They accept it from their own Tailscale account and see only that machine. Use this to lend one box.
+- **Invite them to your tailnet** (everyone sees everyone, narrowed by the ACL below). **Users**, **Invite external users**
+  (or **Invite users** for someone on your organization's domain). They install Tailscale, accept, and their machines join.
+  Use this to pool several machines each way.
+
+Either way, tell them the machine names to list in their config, and give them the bucket settings if they should publish
+and pull versions (the keys give read and write on the bucket: only share them with people you would trust with your versions).
+
+## ACL
+
+By default every machine on a personal tailnet can reach every other on every port. Once a second person is in, restrict it to
+the API port on the machines that are nodes. In the admin console, **Access controls**, tag the nodes
+(`sudo tailscale up --advertise-tags=tag:trainer` on each, or tag them in the **Machines** menu) and use something like:
+
+```json
+{
+  "tagOwners": {"tag:trainer": ["autogroup:admin"]},
+  "groups": {"group:trainer": ["you@example.com", "friend@example.com"]},
+  "acls": [
+    // people in the group reach the API on any node
+    {"action": "accept", "src": ["group:trainer"], "dst": ["tag:trainer:8787"]},
+    // nodes reach each other's API (to poll /node and hand over jobs)
+    {"action": "accept", "src": ["tag:trainer"], "dst": ["tag:trainer:8787"]}
+  ]
+}
+```
+
+Replace the emails with the Tailscale logins, and `8787` if the API listens elsewhere. Anything not accepted is denied, so
+this also keeps the people in the group off the machines' other ports (SSH, file sharing). A tagged machine no longer
+belongs to a person: its logins are managed through the tag, so tag the nodes only after you are sure you can still reach
+them from your own devices (the first rule does that).
+
+## Listing nodes in the workspace config
+
+Nodes are listed by hand. Add a `nodes` list to `studioConfig` in the workspace file `data/workspace.json`, on every machine that
+should see the others (the list names the *other* machines; the machine itself is always a node):
+
+```json
+{
+  "studioConfig": {
+    "nodes": ["windows-box", "mini.tail1234.ts.net", "http://100.64.0.7:8787"]
+  }
+}
+```
+
+Each entry is a tailnet name (port `8787` is assumed), or a full URL when the API is on another port or behind
+`tailscale serve` (`https://windows-box.tail1234.ts.net`). Blank and repeated entries are ignored. With no `nodes` (or an empty
+list) the machine works alone.
+
+Each machine asks the others for `GET /node` with a two-second timeout and shows what answered: hostname, version, device
+(`cuda`, `mps` or `cpu`), memory, and whether it is busy. Video memory is reported on CUDA; on Apple Silicon and CPU it is the
+computer's memory. A machine that does not answer is shown offline with the reason, and is never given a job; the next poll
+brings it back.
+
+## Where a job runs
+
+Every job kind carries requirements, and the cluster picks the best free node that fits them (`studio_cluster.py`):
+
+| job | prefers | notes |
+| --- | --- | --- |
+| pretraining, RLHF rounds | a CUDA node | a free node of another kind still runs it if no CUDA node is free |
+| evals, scoring, benchmarks, data generation, LoRA, passive training | any free node | this machine first, on a tie |
+| inspect jobs (memory-bound) | the node with the most memory | |
+
+A job may also ask for a minimum of memory or a dtype (`float32`, `bfloat16`, `float16`); those are not preferences: a node
+below the memory, or that does not train in the dtype, never gets the job. You can pin a job to one node by name instead: it
+runs there or waits, and is never moved to a better one.
+
 ## The version bucket
 
 Machines exchange trained versions through an S3-compatible bucket, because upload bandwidth is the limit on a home
