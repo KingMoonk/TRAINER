@@ -6,6 +6,7 @@ import logging
 import queue
 import socket
 import threading
+import time
 import urllib.error
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -576,10 +577,17 @@ class Services:
 
 
 class FakeServices(Services):
-    """Empty, in-memory placeholder data so pages render before real services exist."""
+    """Empty, in-memory placeholder data so pages render before real services exist. A test fixture and `studio_api --fake`
+    only, never the real app. start_queue() runs the queued pretrain jobs one after another in a worker thread: `job_steps`
+    steps of `step_seconds` each (`sleep` is injectable, so a test needs no real wait), then the job's version is trained or,
+    for a job with no version of its own, a new one is added. The events match studio_queue.Runner's."""
 
-    def __init__(self):
+    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep):
         super().__init__()
+        self.job_steps, self.step_seconds, self._sleep = job_steps, step_seconds, sleep
+        self._worker: threading.Thread | None = None
+        self._started = False  # start_queue() was called: from then on a resume carries on, as the real runner's thread does
+        self._worker_lock = threading.Lock()
         self._versions: list[Version] = []
         self._queue = QueueState()
         self.viewer_log: list = []  # (action, payload): the fake viewer records calls and spawns nothing
@@ -641,6 +649,67 @@ class FakeServices(Services):
     def enqueue(self, job):
         self._queue.up_next.append(job)
         self.emit("queue", self._queue)
+
+    def start_queue(self):
+        """Run the waiting jobs in a worker thread, unless one is already running or the queue is paused. The first job is
+        already the running job when this returns."""
+        with self._worker_lock:
+            self._started = True
+            if self._worker is not None and self._worker.is_alive():
+                return
+            job = self._take_job()
+            if job is None:
+                return
+            self._worker = threads.start(self._run_jobs, job)
+
+    def wait_idle(self, timeout=10.0):
+        """Test hook: block until the worker has run every waiting job; True when it has."""
+        worker = self._worker
+        if worker is not None:
+            worker.join(timeout)
+        return worker is None or not worker.is_alive()
+
+    def _take_job(self):
+        """The next waiting job, now the running one; None when paused or nothing waits. Hold _worker_lock."""
+        job = next((j for j in self._queue.up_next if j.status == "waiting"), None)
+        if job is None or self._queue.paused:
+            return None
+        self._queue.up_next.remove(job)
+        job.status = "running"
+        self._queue.job, self._queue.step, self._queue.total, self._queue.phase = job, 0, self.job_steps, "warm-up"
+        return job
+
+    def _run_jobs(self, job):
+        while job is not None:
+            self._run_job(job)
+            with self._worker_lock:
+                job = self._take_job()
+                if job is None:
+                    self._worker = None
+
+    def _run_job(self, job):
+        total, q = self.job_steps, self._queue
+        self.emit("job", {"job": job.id, "status": "running"})
+        self.emit("queue", q)
+        for step in range(1, total + 1):
+            self._sleep(self.step_seconds)
+            phase = "warm-up" if step * 4 <= total else "cool-down" if step * 4 > total * 3 else "steady"
+            q.step, q.phase, q.lr = step, phase, 3e-4
+            q.eta_s = (total - step) * self.step_seconds
+            self.emit("train", {"job": job.id, "type": "stats", "step": step, "total": total, "phase": phase, "lr": q.lr,
+                                "loss": round(5.0 - 3.0 * step / total, 4), "tokens_per_second": 1000.0})
+        job.status = "done"
+        q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
+        self.emit("job", {"job": job.id, "status": "done", "error": ""})
+        number = job.params.get("version")
+        known = next((v for v in self._versions if v.number == number), None)
+        if known is not None:
+            known.status = "trained"
+        else:
+            self._versions.append(Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", job.label or "Trained",
+                                          spec=dict(job.params.get("spec") or {}), status="trained"))
+        self.emit("versions", None)
+        self.emit("queue", q)
 
     def move_up(self, job_id):
         q = self._queue.up_next
@@ -706,6 +775,8 @@ class FakeServices(Services):
     def resume(self):
         self._queue.paused = False
         self.emit("queue", self._queue)
+        if self._started:
+            self.start_queue()  # the worker stopped on the pause: carry on
 
     def checkpoint_now(self):
         self.emit("queue", self._queue)

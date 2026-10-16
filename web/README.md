@@ -56,7 +56,8 @@ TypeScript, so a hand-edited `api-schema.ts` fails there. Do not edit either fil
 ## Tests against the live API
 
 `tests/live.spec.ts` runs against `python -m studio_api --fake` serving `out/` (the `live` Playwright project), and checks that
-the status strip goes from Connecting to Connected. It needs the Python requirements, so it is skipped unless `API_LIVE=1`:
+the status strip goes from Connecting to Connected. Any `tests/live.<page>.spec.ts` runs in the same project, against a
+`--fake` API that runs a queued job when `POST /queue/start` is called: `step` rises on `train` events, then a version is added. It needs the Python requirements, so it is skipped unless `API_LIVE=1`:
 
 ```bash
 API_LIVE=1 API_PYTHON=$PWD/../.venv/bin/python pnpm test   # API_PYTHON defaults to `python`
