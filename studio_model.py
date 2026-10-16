@@ -410,6 +410,70 @@ def batch_arrays(samples):
     return x, y
 
 
+def cuda_stage():
+    """stage() for BatchPrefetcher on CUDA: copy each batch from pinned host memory on a side stream, without blocking the host.
+
+    Returns (x, y, ready); ready() makes the compute stream wait for this batch's copy only (an event, so a later batch's copy
+    is not waited on) and tells the allocator the tensors are used there."""
+    stream = torch.cuda.Stream()
+
+    def stage(x, y):
+        with torch.cuda.stream(stream):
+            x, y = (torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True) for a in (x, y))
+            copied = torch.cuda.Event()
+            copied.record(stream)
+
+        def ready():
+            compute = torch.cuda.current_stream()
+            compute.wait_event(copied)
+            x.record_stream(compute)
+            y.record_stream(compute)
+        return x, y, ready
+    return stage
+
+
+def batch_stage(device):
+    """The stage BatchPrefetcher gets: only CUDA stages and prefetches; CPU and MPS (unified memory, nothing to pin) take the plain path."""
+    return cuda_stage() if device == "cuda" else None
+
+
+class BatchPrefetcher:
+    """Training batches from `draw()`, which reads `rng`; next() returns (x, y, target_tokens).
+
+    Without `stage` (CPU and MPS) next() just draws and returns the arrays. With `stage(x, y) -> (x, y, ready)` the next batch is
+    drawn and staged (on CUDA: a pinned, non-blocking copy) before the current one is returned, so its copy overlaps the step.
+    The draws come in the same order either way, so a seed gives the same batches. A batch drawn ahead has moved `rng`, so:
+    discard() puts those draws back (an OOM changes the shape the next draw reads) and state() is the rng as the consumed
+    batches left it, which is what a checkpoint must store."""
+
+    def __init__(self, rng, draw, stage=None):
+        self.rng, self.draw, self.stage, self.ahead = rng, draw, stage, None  # ahead: (rng state before the draw, staged batch)
+
+    def _make(self):
+        before = self.rng.getstate()
+        x, y = self.draw()
+        tokens = int((y != -100).sum())
+        return before, (*self.stage(x, y), tokens)
+
+    def next(self):
+        if self.stage is None:
+            x, y = self.draw()
+            return x, y, int((y != -100).sum())
+        x, y, ready, tokens = (self.ahead or self._make())[1]
+        self.ahead = self._make()
+        if ready is not None:
+            ready()
+        return x, y, tokens
+
+    def discard(self):
+        if self.ahead:
+            self.rng.setstate(self.ahead[0])
+            self.ahead = None
+
+    def state(self):
+        return self.ahead[0] if self.ahead else self.rng.getstate()
+
+
 @slow("load a checkpoint")
 def load_checkpoint(path, weights_only=False, merged=True):
     """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads.
@@ -711,7 +775,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
                     "tokenizer": tokenizer.serialize(), "step": step, "best": best if math.isfinite(best) else None,
                     "optimizer_steps": optimizer.steps, "history": [], "data_hash": digest,  # history lives in metrics.jsonl
-                    "sampler_state": sampler.getstate(), "model_rng": model.rng.bit_generator.state,
+                    "sampler_state": prefetcher.state(), "model_rng": model.rng.bit_generator.state,
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
         arrays.update({(FILE_PREFIX + key[len(PREFIX):] if key in model.adapter_names else "weight::" + key): model.backend.to_cpu(value)
@@ -758,6 +822,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     first_step, planned = step, cfg["steps"]
     last_report = 0.
     shape = [cfg["batch_size"], cfg["accumulation"]]  # runtime batch/accumulation: cfg keeps the declared values (resume checks those); an OOM shrinks this
+    prefetcher = BatchPrefetcher(sampler, lambda: batch_arrays([train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]),
+                                 batch_stage(model.device))  # reads `shape` below, so it sees an OOM's shrink
     try:
         if not history and not stop.is_set():
             loss, validation_loss = evaluate(train_samples), evaluate(val_samples)
@@ -795,10 +861,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 model.keep_tape, model.last_tape = sample_telemetry, None
                 try:
                     for _ in range(shape[1]):
-                        batch = [train_samples[sampler.randrange(len(train_samples))] for _ in range(shape[0])]
-                        x, y = batch_arrays(batch)
+                        x, y, tokens = prefetcher.next()
                         loss += model.loss_and_backward(x, y, 1 / shape[1]) / shape[1]
-                        token_count += int((y != -100).sum())
+                        token_count += tokens
                     break
                 except RuntimeError as exc:  # torch.cuda.OutOfMemoryError is one; MPS raises a plain RuntimeError
                     if shape[0] == 1 or not (isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()):
@@ -809,6 +874,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     torch.cuda.empty_cache()
                 elif model.device == "mps":
                     torch.mps.empty_cache()
+                prefetcher.discard()  # a batch drawn ahead has the old size
                 shape[:] = [shape[0] // 2, shape[1] * 2]  # ponytail: an odd batch loses a sample per halving; pad instead if it matters
                 emit({"type": "info", "text": f"Out of memory at step {next_step}: batch size now {shape[0]}, accumulation {shape[1]}."})
             if not math.isfinite(loss):
