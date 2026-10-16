@@ -52,7 +52,8 @@ the API port on the machines that are nodes. In the admin console, **Access cont
 }
 ```
 
-Replace the emails with the Tailscale logins, and `8787` if the API listens elsewhere. Anything not accepted is denied, so
+Replace the emails with the Tailscale logins. Behind `tailscale serve` (the recommended setup, `docs/node.md`) the nodes are
+reached on port `443`, so use `tag:trainer:443` in both rules; use `8787` only if the API is reached directly on its own port. Anything not accepted is denied, so
 this also keeps the people in the group off the machines' other ports (SSH, file sharing). A tagged machine no longer
 belongs to a person: its logins are managed through the tag, so tag the nodes only after you are sure you can still reach
 them from your own devices (the first rule does that).
