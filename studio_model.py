@@ -920,6 +920,16 @@ class LocalModel:
         self.rng = np.random.default_rng(seed)
         self.step = data["step"]
 
+    @property
+    def device(self):
+        return self.model.device
+
+    def to(self, device):
+        """Move the weights to "cpu", "cuda" or "mps". Not while a reply is being generated: its cache follows the model's device."""
+        self.model.to(device)
+        self.config["device"] = device
+        return self
+
     def complete(self, prompt, max_tokens=48):
         return complete(self.model, self.tokenizer, prompt, max_tokens)
 

@@ -1,5 +1,6 @@
 """One machine, one queue: a single runner executes one job at a time and persists data/queue.json."""
 import dataclasses
+import logging
 import os
 import shutil
 import sqlite3
@@ -157,11 +158,13 @@ class Runner:
     the handler gets, {"root", "run_dir"}. Without it the context is the folder above data/ and its runs/.
 
     `ledger` (studio_memory.Ledger) is what the app holds outside the job, chat's models: its total is taken off the share a job
-    gets. `make_room()` asks chat to evict its oldest model and says whether it did; it runs on the runner thread, never the Tk one."""
+    gets. `make_room()` asks chat to evict its oldest model and says whether it did. `on_start(job)` is called as a job is about to
+    start, before its share is worked out, and `on_end(job)` once it has ended: chat leaves the GPU for the one and may return for
+    the other. All three run on the runner thread, never the Tk one, and a failing hook never stops the queue."""
 
-    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, ledger=None, make_room=None):
+    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, ledger=None, make_room=None, on_start=None, on_end=None):
         self.path, self.handlers, self.prepare, self.tick, self.clock = Path(path), handlers, prepare, tick, clock
-        self.ledger, self.make_room = ledger, make_room
+        self.ledger, self.make_room, self.on_start, self.on_end = ledger, make_room, on_start, on_end
         self.root = self.path.parent.parent
         self.handles = set()           # live workers: the running job's and any cool-down branched off it
         self.lock = threading.RLock()
@@ -449,6 +452,14 @@ class Runner:
         return (f"Not enough disk space for this run: {size_text(free)} free, about {size_text(need)} needed. "
                 "Free space in Resources › Storage.")
 
+    def _hook(self, hook, job):
+        if hook is None:
+            return
+        try:
+            hook(job)
+        except Exception:  # noqa: BLE001 - chat moving between devices must never stop training
+            logging.getLogger("groundwork.queue").exception("a queue hook failed")
+
     def _share(self, job):
         """The share of the device's memory the job may take: the plan's, less what chat's models hold there. A job with less than
         one chat model's bytes to spare first has chat evict its oldest. Only a pretrain job sizes anything by the share."""
@@ -472,6 +483,7 @@ class Runner:
     def _run(self, job):
         handler = self.handlers.get(job.kind)
         short = self._disk_problem()
+        self._hook(self.on_start, job)  # chat leaves the GPU before the job is given a share of it
         share = self._share(job)  # before the lock: evicting waits on chat's own lock
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
@@ -518,4 +530,6 @@ class Runner:
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start
             self._save()
+        if not self.closed.is_set():
+            self._hook(self.on_end, job)
         self._emit("job", {"job": job.id, "status": job.status, "error": job.error})

@@ -62,6 +62,7 @@ class CompiledModel:
         d = spec["dims"]
         self.backend = get_backend(device, work=batch_size * d["n_ctx"] * d["d_model"] * max(1, d["n_layer"]))
         precision, precision_cfg = module_of("precision", spec["train"]["precision"])
+        self._precision = precision
         dtype = precision.build(precision_cfg, None, None)
         if self.backend.device == "mps" and dtype == torch.float64:
             self.backend = Backend(torch, "cpu", "PyTorch / CPU", "float64 is not available on Apple GPUs; using the CPU")
@@ -129,6 +130,32 @@ class CompiledModel:
             if name in layer.elementwise:
                 self.elementwise.add(full)
         return layer
+
+    @slow("move a model to another device")
+    @torch.no_grad()
+    def to(self, device):
+        """Move the weights, the gradient buffers and every tensor the layers keep to `device` ("cpu", "cuda" or "mps"), in place:
+        `p`, `g` and the layers' own dicts keep their tensors, so everything holding the model sees the new device. All the copies
+        are made before any is swapped in, so a device that runs out of memory leaves the model where it was. Not while a pass
+        through the model is running: its cache and its tensors would be on two devices."""
+        if device == self.device:
+            return self
+        backend = get_backend(device)  # raises before anything moves when that GPU is not there
+        layers = [layer for layer in self.layers if layer is not None]
+        moves = [(table, key, value.to(device)) for table in (self.p, self.g) for key, value in table.items()]
+        moves += [(vars(layer), name, value.to(device)) for layer in layers for name, value in vars(layer).items()
+                  if isinstance(value, torch.Tensor)]
+        self.backend, self.device = backend, backend.device
+        self.dims = dataclasses.replace(self.dims, device=self.device)
+        self.compute, self.precision_note = plan(self._precision, self.device)
+        for table, key, value in moves:
+            if table is self.p or table is self.g:
+                table[key].data = value  # the same tensor object: the layers' dicts alias it
+            else:
+                table[key] = value
+        for layer in layers:
+            layer.dims, layer.device = dataclasses.replace(layer.dims, device=self.device), self.device
+        return self
 
     def _effective(self, get):
         """{weight: the tensor the forward pass uses} for every weight a LoRA adapter changes; `get(name)` gives a parameter.
