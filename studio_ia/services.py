@@ -479,6 +479,18 @@ class Services:
         """{'ids' [1,T], 'tokens' [[str]], 'logits' [1,T,V], 'hooks' {name: array}} (studio_inspect.forward)."""
         raise NotImplementedError
 
+    def inspect_logit_lens(self, version, text, top_k=5):
+        """studio_inspect.logit_lens: one row per stage ('embed', 'blockN.resid.post'): {'hook', 'probabilities' [1,T,V], 'top_ids' [1,T,k], 'top_probabilities' [1,T,k]}."""
+        raise NotImplementedError
+
+    def inspect_ablate(self, version, text, targets=None, mode="zero", heads=None):
+        """studio_inspect.ablate: {'baseline', 'mode', 'heads': [{'block','head','loss','delta', + head_stats}]}, one head ablated at a time (all of them when `heads` is None)."""
+        raise NotImplementedError
+
+    def inspect_head_stats(self, pattern):
+        """studio_inspect.head_stats of an attention pattern [B,H,T,T]: {'entropy','mean_distance','first_token_mass','previous_token_mass'}, each [H]."""
+        raise NotImplementedError
+
     def inspect_trace(self, version, text, pos=-1):
         """studio_inspect.trace: {'tokens', 'pos', 'rows'}."""
         raise NotImplementedError
@@ -901,6 +913,33 @@ class FakeServices(Services):
                           f"block{b}.attn.pattern": pattern / pattern.sum(-1, keepdims=True)})
         ids = np.arange(T)[None] % V
         return {"ids": ids, "tokens": [[f"t{i}" for i in ids[0]]], "logits": rng.normal(size=(1, T, V)), "hooks": hooks}
+
+    def inspect_logit_lens(self, version, text, top_k=5):
+        rng, T, V = np.random.default_rng(1), 9, 12
+        k = max(1, min(int(top_k), V))
+        rows = []
+        for name in ("embed", "block0.resid.post", "block1.resid.post"):
+            raw = np.exp(rng.normal(size=(1, T, V)))
+            probabilities = raw / raw.sum(-1, keepdims=True)
+            top = np.argsort(probabilities, axis=-1)[..., -k:][..., ::-1]
+            rows.append({"hook": name, "probabilities": probabilities, "top_ids": top,
+                         "top_probabilities": np.take_along_axis(probabilities, top, axis=-1)})
+        return rows
+
+    def inspect_ablate(self, version, text, targets=None, mode="zero", heads=None):
+        if mode not in ("zero", "mean"):
+            raise ValueError("Ablation must be zero or mean.")
+        selected = [(b, h) for b in range(2) for h in range(4)] if heads is None else [tuple(h) for h in heads]
+        if any(not (0 <= b < 2 and 0 <= h < 4) for b, h in selected):
+            raise ValueError("Selected block/head has no attention output hook.")
+        stats = self.inspect_head_stats(self.inspect_forward(version, text)["hooks"]["block0.attn.pattern"])
+        rows = [{"block": b, "head": h, "loss": 2.0 + .1 * (4 * b + h), "delta": .1 * (4 * b + h),
+                 **{key: float(value[h]) for key, value in stats.items()}} for b, h in selected]
+        return {"baseline": 2.0, "mode": mode, "heads": rows}
+
+    def inspect_head_stats(self, pattern):
+        import studio_inspect
+        return studio_inspect.head_stats(pattern)
 
     def inspect_trace(self, version, text, pos=-1):
         names = ["embedding", "block 1 mixer", "block 1 channel", "output"]
@@ -2304,7 +2343,7 @@ class WorkspaceServices(Services):
             raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
         return v.best_checkpoint
 
-    def chat(self, version, messages, on_text, stop):
+    def chat(self, version, messages, on_text, stop, ablate=None):
         from studio_model import LocalModel
         ckpt = self._checkpoint(version)
         with self._lock:
@@ -2312,7 +2351,7 @@ class WorkspaceServices(Services):
             self._models[ckpt] = model  # most recently used last; the dict is the LRU order
             while len(self._models) > CHAT_MODELS:
                 del self._models[next(iter(self._models))]
-        return model.generate(messages, on_text=on_text, stop=stop)
+        return model.generate(messages, on_text=on_text, stop=stop, ablate=[tuple(h) for h in ablate] if ablate else None)
 
     def inspect_forward(self, version, text, hooks=True):
         import studio_inspect

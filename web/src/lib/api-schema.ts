@@ -791,6 +791,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/inspect/ablate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ablate
+         * @description {baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.
+         */
+        post: operations["ablate_inspect_ablate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/inspect/forward": {
         parameters: {
             query?: never;
@@ -802,9 +822,30 @@ export interface paths {
         put?: never;
         /**
          * Forward
-         * @description {ids, tokens, logits, hooks}: one forward pass over `text`.
+         * @description {ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.
          */
         post: operations["forward_inspect_forward_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inspect/head-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Head Stats
+         * @description {entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted
+         *     pattern, so it answers at once instead of as a job.
+         */
+        post: operations["head_stats_inspect_head_stats_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -825,6 +866,26 @@ export interface paths {
          * @description {before, after}: held-back bits per character with the (block, head) pairs in `off` switched off.
          */
         post: operations["heads_off_inspect_heads_off_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inspect/logit-lens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logit Lens
+         * @description [{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.
+         */
+        post: operations["logit_lens_inspect_logit_lens_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2086,6 +2147,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AblateRequest */
+        AblateRequest: {
+            /** Heads */
+            heads?: [
+                number,
+                number
+            ][] | null;
+            /**
+             * Mode
+             * @default zero
+             * @enum {string}
+             */
+            mode: "mean" | "zero";
+            /** Text */
+            text: string;
+            /** Version */
+            version?: number | null;
+        };
         /** ActionOut */
         ActionOut: {
             /** Answer */
@@ -2512,10 +2591,12 @@ export interface components {
              * @default true
              */
             hooks: boolean;
+            /** Ids */
+            ids?: number[] | null;
             /** Names */
             names?: string[] | null;
             /** Text */
-            text: string;
+            text?: string | null;
             /** Version */
             version?: number | null;
         };
@@ -2642,6 +2723,11 @@ export interface components {
         HasText: {
             /** Has Text */
             has_text: boolean;
+        };
+        /** HeadStatsRequest */
+        HeadStatsRequest: {
+            /** Pattern */
+            pattern: unknown[];
         };
         /** HeadsOffRequest */
         HeadsOffRequest: {
@@ -2776,6 +2862,18 @@ export interface components {
             parent?: string | null;
             /** Path */
             path?: string | null;
+        };
+        /** LogitLensRequest */
+        LogitLensRequest: {
+            /** Text */
+            text: string;
+            /**
+             * Top K
+             * @default 5
+             */
+            top_k: number;
+            /** Version */
+            version?: number | null;
         };
         /** LossRequest */
         LossRequest: {
@@ -4045,6 +4143,11 @@ export interface components {
         };
         /** ReplyRequest */
         studio_api__routers__chat__ReplyRequest: {
+            /** Ablate */
+            ablate?: [
+                number,
+                number
+            ][] | null;
             /** Messages */
             messages: components["schemas"]["Message"][];
             /** Version */
@@ -5374,6 +5477,39 @@ export interface operations {
             };
         };
     };
+    ablate_inspect_ablate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AblateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forward_inspect_forward_post: {
         parameters: {
             query?: never;
@@ -5407,6 +5543,39 @@ export interface operations {
             };
         };
     };
+    head_stats_inspect_head_stats_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeadStatsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     heads_off_inspect_heads_off_post: {
         parameters: {
             query?: never;
@@ -5417,6 +5586,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["HeadsOffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logit_lens_inspect_logit_lens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogitLensRequest"];
             };
         };
         responses: {

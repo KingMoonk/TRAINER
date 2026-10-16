@@ -142,6 +142,23 @@ class RealServices(unittest.TestCase):
         self.assertTrue(0 < bits["before"] < 20 and math.isfinite(bits["after"]))
         self.assertIsInstance(s.inspect_reply(v, "Hi", off, "zero"), str)
 
+    def test_chat_switches_the_heads_off_for_that_reply_only(self):
+        import threading
+        from unittest.mock import patch
+        from studio_model import LocalModel
+        s, ask = self.svc, [{"role": "user", "content": "Hi"}]
+        off = [(0, 1), (1, 0)]
+        ckpt = s._checkpoint(None)
+        by_hand = LocalModel(ckpt, device="cpu").generate(ask, max_tokens=24, temperature=0, ablate=off)
+        self.assertEqual(by_hand, inspect.greedy_reply(ckpt, "Hi", off, "mean"))  # the same heads, the same replacement, as the Head lab
+        with patch.object(inspect, "_ablated_logits", wraps=inspect._ablated_logits) as patched:
+            self.assertIsInstance(s.chat(None, ask, lambda _t: None, threading.Event(), ablate=off), str)
+            self.assertTrue(patched.called)
+            self.assertEqual(set(map(tuple, (c.args[2] for c in patched.call_args_list))), {tuple(off)})
+            patched.reset_mock()
+            s.chat(None, ask, lambda _t: None, threading.Event())
+            self.assertFalse(patched.called)
+
     def test_no_checkpoint_is_an_honest_error(self):
         class Empty(FixtureServices):
             def __init__(self):
