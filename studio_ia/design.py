@@ -22,6 +22,14 @@ from studio_ia.attribution import attribute, blocks_change_text
 from studio_ia.copy import BUILDER as T
 from studio_ia.expectation import expectation
 
+
+def say(x, y, more, less):
+    """Describe a cost ratio using the same wording in Builder and Quick test."""
+    r = y / x
+    if abs(r - 1) < 0.05:
+        return T["about_same"]
+    return T["about_multiplier"].format(mult=f"{r if r > 1 else 1 / r:.1f}") + " " + (more if r > 1 else less)
+
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
 VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large / whole words (the cap; less on little data)
