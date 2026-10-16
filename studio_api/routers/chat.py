@@ -29,6 +29,7 @@ class Message(BaseModel):
 class ReplyRequest(BaseModel):
     version: int | None = None  # None = the best trained version
     messages: list[Message] = Field(min_length=1)
+    ablate: list[tuple[int, int]] | None = None  # (block, head) pairs mean-ablated for this reply only
 
 
 class CorrectionRequest(BaseModel):
@@ -62,7 +63,7 @@ def run_reply(services, body, put, stop):
         seen.append(text)
         put("text", {"text": text})
     try:
-        final = services.chat(body.version, [m.model_dump() for m in body.messages], on_text, stop)
+        final = services.chat(body.version, [m.model_dump() for m in body.messages], on_text, stop, ablate=body.ablate or None)
         if final and not seen:
             put("text", {"text": final})
         put("done", {"text": final or (seen[-1] if seen else "")})

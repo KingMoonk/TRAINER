@@ -1,6 +1,64 @@
 {
   "components": {
     "schemas": {
+      "AblateRequest": {
+        "properties": {
+          "heads": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heads"
+          },
+          "mode": {
+            "default": "zero",
+            "enum": [
+              "mean",
+              "zero"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "AblateRequest",
+        "type": "object"
+      },
       "ActionOut": {
         "properties": {
           "answer": {
@@ -717,6 +775,21 @@
             "title": "Hooks",
             "type": "boolean"
           },
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          },
           "names": {
             "anyOf": [
               {
@@ -732,9 +805,16 @@
             "title": "Names"
           },
           "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
           },
           "version": {
             "anyOf": [
@@ -748,9 +828,6 @@
             "title": "Version"
           }
         },
-        "required": [
-          "text"
-        ],
         "title": "ForwardRequest",
         "type": "object"
       },
@@ -1004,6 +1081,21 @@
           "has_text"
         ],
         "title": "HasText",
+        "type": "object"
+      },
+      "HeadStatsRequest": {
+        "properties": {
+          "pattern": {
+            "items": {},
+            "minItems": 1,
+            "title": "Pattern",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "HeadStatsRequest",
         "type": "object"
       },
       "HeadsOffRequest": {
@@ -1285,6 +1377,38 @@
           "entries"
         ],
         "title": "Listing",
+        "type": "object"
+      },
+      "LogitLensRequest": {
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "top_k": {
+            "default": 5,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "LogitLensRequest",
         "type": "object"
       },
       "LossRequest": {
@@ -3658,6 +3782,30 @@
       },
       "studio_api__routers__chat__ReplyRequest": {
         "properties": {
+          "ablate": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ablate"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/Message"
@@ -5049,9 +5197,51 @@
         ]
       }
     },
+    "/inspect/ablate": {
+      "post": {
+        "description": "{baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.",
+        "operationId": "ablate_inspect_ablate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AblateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ablate",
+        "tags": [
+          "inspect"
+        ]
+      }
+    },
     "/inspect/forward": {
       "post": {
-        "description": "{ids, tokens, logits, hooks}: one forward pass over `text`.",
+        "description": "{ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.",
         "operationId": "forward_inspect_forward_post",
         "requestBody": {
           "content": {
@@ -5086,6 +5276,46 @@
           }
         },
         "summary": "Forward",
+        "tags": [
+          "inspect"
+        ]
+      }
+    },
+    "/inspect/head-stats": {
+      "post": {
+        "description": "{entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted\npattern, so it answers at once instead of as a job.",
+        "operationId": "head_stats_inspect_head_stats_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeadStatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Head Stats",
         "tags": [
           "inspect"
         ]
@@ -5128,6 +5358,48 @@
           }
         },
         "summary": "Heads Off",
+        "tags": [
+          "inspect"
+        ]
+      }
+    },
+    "/inspect/logit-lens": {
+      "post": {
+        "description": "[{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.",
+        "operationId": "logit_lens_inspect_logit_lens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogitLensRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logit Lens",
         "tags": [
           "inspect"
         ]
