@@ -1,6 +1,5 @@
-import { PagePlaceholder } from "@/components/page-placeholder";
-import { routeFor } from "@/lib/routes";
+import { Builder } from "@/components/builder/builder";
 
 export default function Page() {
-  return <PagePlaceholder route={routeFor("builder")} />;
+  return <Builder />;
 }

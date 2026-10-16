@@ -924,7 +924,9 @@ class LocalModel:
         return complete(self.model, self.tokenizer, prompt, max_tokens)
 
     @slow("generate with a model")
-    def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
+    def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None, ablate=None):
+        """ablate: optional [(block, head), ...] mean-ablated (causal running mean, as the Head lab's) for this reply only.
+        The patched pass needs every position, so an ablated reply runs without the KV cache."""
         tokens = [BOS]
         roles = {"user": USER, "assistant": ASSISTANT, "system": SYSTEM}
         starts = []  # (position of each message's role token, role id) so a cut window starts with the right role
@@ -947,7 +949,8 @@ class LocalModel:
             return cut
 
         blocked = unsayable(self.tokenizer)
-        cache = {"n": 0} if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
+        ablate = [(int(block), int(head)) for block, head in ablate or ()]
+        cache = {"n": 0} if self.model.can_cache and not ablate else None  # prefill once, then one token per step; no support -> the whole window each step
         available = self.tokenizer.vocab_size - OFFSET + 1
         k = available if int(top_k) <= 0 else min(int(top_k), available)
         # Sampling runs on the model's device and only the chosen id is copied back. Its stream is seeded from the model's NumPy
@@ -956,7 +959,12 @@ class LocalModel:
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
-            logits = last_logits(self.model, window(), len(tokens) > context, cache)
+            if ablate:
+                import studio_inspect
+                with torch.no_grad():
+                    logits = studio_inspect._ablated_logits(self.model, np.array([window()], dtype=np.int64), ablate, "mean")[0, -1].detach().clone()
+            else:
+                logits = last_logits(self.model, window(), len(tokens) > context, cache)
             logits[blocked] = -torch.inf
             if temperature <= 0:
                 token = int(logits.argmax())

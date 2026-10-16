@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ApiError, api, apiUrl, unwrap } from "@/lib/api";
-import { PRETRAINED, ROW_KINDS } from "./copy";
+import { ROW_KINDS } from "./copy";
 import { errorText, rowText, type VersionRow } from "./logic";
 import { useJob } from "./use-events";
 
@@ -50,13 +51,18 @@ export function VersionsCard({ versions, startsFrom, loading }: { versions: Vers
 /** Start from a pretrained open model: a new version, with the same LoRA choice as round 1. */
 export function ImportCard({ ranks, onImported }: { ranks: number[]; onImported: (number: number) => void }) {
   const queryClient = useQueryClient();
+  const models = useQuery({ queryKey: ["post-training", "import-models"],
+    queryFn: ({ signal }) => unwrap(api.GET("/post-training/import-models", { signal })), retry: false });
+  const [chosen, setChosen] = useState<string>();
+  const selected = chosen === undefined ? models.data?.[0] : models.data?.find((model) => model.id === chosen);
   const [lora, setLora] = useState(false);
   const [rank, setRank] = useState(8);
   const [file, setFile] = useState<File | null>(null);
   const importModel = useMutation({
     mutationFn: async () => {
+      if (!selected) throw new Error("Choose an available model first.");
       const form = new FormData();
-      form.set("name", PRETRAINED.name);
+      form.set("name", selected.id);
       form.set("lora", String(lora));
       form.set("lora_rank", String(rank));
       if (file) form.set("weights", file);
@@ -65,7 +71,7 @@ export function ImportCard({ ranks, onImported }: { ranks: number[]; onImported:
       return (await res.json()) as VersionRow;
     },
     onSuccess: (version) => {
-      toast.success(`Saved version ${version.number} from ${PRETRAINED.title}. It trains when the conversion job ends.`);
+      toast.success(`Saved version ${version.number}. It trains when the conversion job ends.`);
       queryClient.invalidateQueries({ queryKey: ["versions"] });
       queryClient.invalidateQueries({ queryKey: ["queue"] });
       onImported(version.number);
@@ -77,10 +83,21 @@ export function ImportCard({ ranks, onImported }: { ranks: number[]; onImported:
       <CardHeader>
         <CardTitle>Start from a pretrained model</CardTitle>
         <CardDescription>
-          {PRETRAINED.title}: {PRETRAINED.note} It becomes a new version, and the conversion is queued.
+          Choose a model this server supports. It becomes a new version, and the conversion is queued.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {models.isPending ? <Skeleton className="h-9 w-full" aria-label="Loading importable models" />
+          : models.isError ? <div role="alert" className="space-y-2 text-sm"><p>Could not load importable models: {errorText(models.error)}</p>
+            <Button variant="outline" onClick={() => void models.refetch()}>Retry model list</Button></div>
+          : !models.data?.length ? <p className="text-sm text-muted-foreground">This server has no importable models.</p>
+          : <div className="space-y-2">
+            <Select value={selected?.id ?? ""} onValueChange={setChosen} disabled={importModel.isPending}>
+              <SelectTrigger aria-label="Pretrained model" className="w-full"><SelectValue placeholder="Choose a model" /></SelectTrigger>
+              <SelectContent>{models.data.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}</SelectContent>
+            </Select>
+            {selected && <p className="text-xs text-muted-foreground">About {Math.ceil(selected.size / 1_000_000).toLocaleString("en-US")} MB to download once.</p>}
+          </div>}
         <div className="flex items-center gap-3">
           <Switch id="import-lora" aria-label="Fine-tune LoRA adapters" checked={lora} onCheckedChange={setLora} />
           <label htmlFor="import-lora" className="text-sm">
@@ -110,8 +127,8 @@ export function ImportCard({ ranks, onImported }: { ranks: number[]; onImported:
           <p className="text-xs text-muted-foreground">Leave it out and the server downloads it. Choose it for a server that cannot.</p>
         </div>
         <div>
-          <Button onClick={() => importModel.mutate()} disabled={importModel.isPending}>
-            {importModel.isPending ? "Importing…" : `Import ${PRETRAINED.title}`}
+          <Button onClick={() => importModel.mutate()} disabled={importModel.isPending || !selected || models.isError}>
+            {importModel.isPending ? "Importing…" : selected ? `Import ${selected.name}` : "Import model"}
           </Button>
         </div>
       </CardContent>

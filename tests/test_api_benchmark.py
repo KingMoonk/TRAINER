@@ -79,5 +79,48 @@ class BenchmarkApiTest(unittest.TestCase):
         self.assertEqual(self.client.get("/benchmark/verdict", params={"a": 1}).status_code, 422)
 
 
+class CompareSetupTest(unittest.TestCase):
+    """Planning and queueing a Compare runs experiment from saved versions."""
+
+    def setUp(self):
+        from studio_spec import default_spec
+        self.services = FakeServices()
+        base = default_spec()
+        wide = {**base, "dims": {**base["dims"], "d_model": 96}}
+        self.services.save_version(base, "base")
+        self.services.save_version(wide, "wider")
+        self.client = self.enterContext(TestClient(create_app(self.services, open=True)))
+        self.setup = {"variants": [1], "mode": "params", "seeds": 3, "guess": "better", "question": " Does width help? "}
+
+    def test_plan_counts_runs_and_sweeps_and_matches_the_variant(self):
+        plan = self.client.post("/benchmark/compare-plan", json=self.setup).json()
+        self.assertEqual((plan["n_runs"], plan["n_sweeps"], plan["base"]), (6, 3, 2))  # base defaults to the current version
+        self.assertEqual(plan["variants"][0]["name"], "Base")
+        self.assertTrue(all(row["matched"] for row in plan["variants"]))
+        self.assertTrue(plan["variants"][1]["changes"])
+        no_sweeps = self.client.post("/benchmark/compare-plan", json={**self.setup, "base": 1, "retune_lr": False}).json()
+        self.assertEqual((no_sweeps["n_sweeps"], no_sweeps["base"]), (0, 1))
+
+    def test_plan_names_what_is_wrong(self):
+        self.assertEqual(self.client.post("/benchmark/compare-plan", json={**self.setup, "variants": [9]}).status_code, 404)
+        self.assertEqual(self.client.post("/benchmark/compare-plan", json={**self.setup, "seeds": 2}).status_code, 422)
+
+    def test_queue_adds_a_compare_job_with_the_experiment(self):
+        got = self.client.post("/benchmark/compare-queue", json=self.setup)
+        self.assertEqual(got.status_code, 201, got.text)
+        (job,) = self.services.queue().up_next
+        self.assertEqual((job.kind, got.json()["id"], job.params["guess"], job.params["dataset_kind"]), ("compare", job.id, "better", "text"))
+        self.assertEqual((job.note, job.params["experiment"]["seeds"]), ("Does width help?", 3))
+        self.assertTrue(got.json()["outlook"])
+
+    def test_queue_refuses_without_a_variant_or_a_guess_or_text(self):
+        for change, message in (({"variants": []}, "Add a variant first."), ({"guess": ""}, "Pick your guess first.")):
+            got = self.client.post("/benchmark/compare-queue", json={**self.setup, **change})
+            self.assertEqual((got.status_code, got.json()["detail"]), (422, message))
+        self.services.data = lambda kind, query="": {"sets": []}
+        self.assertIn("no plain text", self.client.post("/benchmark/compare-queue", json=self.setup).json()["detail"])
+        self.assertEqual(self.services.queue().up_next, [])
+
+
 if __name__ == "__main__":
     unittest.main()

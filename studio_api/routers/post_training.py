@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.exceptions import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import studio_registry as registry
 from studio_api.app import get_services
@@ -28,13 +28,37 @@ class RoundState(BaseModel):
     note: str = ""
 
 
+class OverlapOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    checked: int = 0
+    left_out: int = 0
+    note: str | None = None
+
+
 class PostTrainingOut(BaseModel):
     """Services.post_training: missing keys are fine, a client reads them as unknown."""
     rounds: dict[int, RoundState] = Field(default_factory=dict)
     counts: dict[str, int] = Field(default_factory=dict)
     gates: dict[int, dict[str, Any]] = Field(default_factory=dict)
-    overlap: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    overlap: dict[str, OverlapOut] = Field(default_factory=dict)
     example: Any = None
+
+
+class PostTrainingJobOut(JobOut):
+    result: PostTrainingOut | None = None
+
+
+class ImportModelOut(BaseModel):
+    id: str
+    name: str
+    size: int
+
+
+@router.get("/import-models", response_model=list[ImportModelOut])
+def import_models():
+    """Models this server can import; size is the expected download in bytes."""
+    from studio_import import MODELS
+    return [ImportModelOut(id=key, name=model["title"], size=model["size"]) for key, model in MODELS.items()]
 
 
 class LeashOut(BaseModel):
@@ -145,7 +169,7 @@ def round_blocker(round_number, counts, teacher_is_version, has_teacher, checkpo
     return None if (counts.get(key) or 0) >= least else why
 
 
-@router.post("/status", response_model=JobOut, status_code=202)
+@router.post("/status", response_model=PostTrainingJobOut, status_code=202)
 def read_status(request: Request, body: StatusRequest):
     """What each round has done for a version, and what is stored for the rounds to use. A job: it counts the stored data.
     The result is a PostTrainingOut."""

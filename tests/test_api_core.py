@@ -79,8 +79,10 @@ class EventsTest(unittest.TestCase):
                 await asyncio.to_thread(services.emit, "queue", {"state": "running"})
                 await asyncio.to_thread(services.emit, "no_payload")
                 for stream in (first, second):
-                    await stream.until(lambda s=stream: len(s.events()) == 3)
-                return first.events(), second.events()
+                    await stream.until(lambda s=stream: any(e["kind"] == "no_payload" for e in s.events()))
+                def emitted(stream):
+                    return [e for e in stream.events() if not (e["kind"] == "status" and "queue" in e["payload"])]
+                return emitted(first), emitted(second)
             finally:
                 await first.close()
                 await second.close()
@@ -102,8 +104,8 @@ class EventsTest(unittest.TestCase):
             stream = await Stream(app).open()
             try:
                 await asyncio.to_thread(services.save_version, {}, "first change")  # emits "versions" with a Version
-                await stream.until(lambda: stream.events())
-                return stream.events()[0]
+                await stream.until(lambda: any(e["kind"] == "versions" for e in stream.events()))
+                return next(e for e in stream.events() if e["kind"] == "versions")
             finally:
                 await stream.close()
 
@@ -129,6 +131,30 @@ class EventsTest(unittest.TestCase):
         finally:
             shut(app)
         self.assertEqual(app.state.broadcaster._clients, {})
+
+    def test_shell_gets_initial_and_updated_status_without_a_custom_status_emit(self):
+        services = FakeServices()
+        services.save_version({}, "first design")
+        app = create(services)
+
+        async def run():
+            stream = await Stream(app).open()
+            try:
+                await stream.until(lambda: any(e["kind"] == "status" for e in stream.events()))
+                initial = next(e["payload"] for e in stream.events() if e["kind"] == "status")
+                await asyncio.to_thread(services.pause)
+                await stream.until(lambda: any(e["kind"] == "status" and e["payload"]["queue"]["state"] == "paused"
+                                                for e in stream.events()))
+                return initial
+            finally:
+                await stream.close()
+        try:
+            initial = asyncio.run(run())
+        finally:
+            shut(app)
+        self.assertEqual(initial["version"], "version 1 · saved")
+        self.assertEqual(initial["queue"], {"state": "idle", "running": 0, "waiting": 0})
+        self.assertEqual(initial["resources"], {"device": None, "diskFreeGb": 120})
 
 
 class JobsTest(unittest.TestCase):

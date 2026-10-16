@@ -6,60 +6,19 @@ import tkinter as tk
 import uuid
 
 from studio_ia.copy import PRETRAINING as T
-from studio_ia.expectation import expectation, table_params
 from studio_ia.pages.base import Page, Throttle
+from studio_ia.pretraining_plan import (
+    HOLD, LENGTHS, ROWS, can_continue, collection_items, enough_text, forced_mode, held_out, job_params, ratio_text, sets_of,
+    source_action, source_status, steps_for, tile_items, version_expectation, word_list_changed,
+)
+from studio_ia.pretraining_plan import user_text as has_user_text
 from studio_ia.services import Job, if_added, queued_outlook
 from studio_ia.theme import C, GUTTER, font, tk_label
 from studio_ia.widgets import Card, KeyedRows, Kicker, Segmented, button, info_icon, tip
 
-ROWS = ("8", "16", "32")
-HOLD = ("2%", "5%", "10%")
-LENGTHS = {"Short": 1, "Medium": 2, "Long": 4}  # passes over the chosen text
-RULE = 20  # word pieces per parameter, a rule of thumb only
-ABOUT_RIGHT = (0.8 * RULE, 1.5 * RULE)  # ratios in this band read "about right"; below it too little, above it plenty
 PROGRESS_EVERY = 0.5  # seconds between repaints of a download's status line
 PALETTE = ("#3a3560", "#2a4558", "#4a3a2a", "#2f4a36", "#4a2f45")
 END = "#0a0b0e"
-
-
-def word_list_changed(v, parent):
-    """A different word list (tokenizer) makes a warm start invalid."""
-    return parent is not None and v is not None and v.spec.get("tokenizer") != parent.spec.get("tokenizer")
-
-
-def can_continue(v, parent):
-    """Continue needs a parent version with a trained checkpoint and the same word list."""
-    return parent is not None and bool(parent.best_checkpoint) and not word_list_changed(v, parent)
-
-
-def forced_mode(v, parent, requested):
-    """The mode a run may use: catch_up only when continuing is valid, otherwise from_scratch."""
-    return requested if requested == "from_scratch" or can_continue(v, parent) else "from_scratch"
-
-
-def steps_for(pieces, per_step, passes):
-    """Steps for `passes` passes over `pieces` word pieces at `per_step` pieces a step; None when the size is unknown."""
-    return max(1, -(-int(pieces) * passes // per_step)) if pieces and per_step else None
-
-
-def pretrain_config(spec, steps, rows, hold):
-    """Engine config for a plain-text run of `spec`: loss on every piece, `hold` of the text held back for testing."""
-    from studio_spec import config_from_spec
-    return {**config_from_spec(spec), "steps": steps, "batch_size": rows, "validation": hold, "objective": "all"}
-
-
-def source_action(row):
-    """(button label, service to call) for a collection row; (None, None) while it works or once it is in your sources."""
-    return {"not downloaded": (T["download"], "download"), "downloaded": (T["import"], "import")}.get(row["state"], (None, None))
-
-
-def source_status(row, note=""):
-    """The plain-words line under a collection row: a failure first, then live progress, then the state."""
-    if row.get("error"):
-        return T["failed"].format(error=row["error"].rstrip(".") + ".")
-    if row["state"] == "downloading":
-        return note or T["state_downloading"]
-    return T["state_" + row["state"]]
 
 
 def queue_line(services, job_id):
@@ -67,12 +26,6 @@ def queue_line(services, job_id):
     left the queue), what adding one now would do. The same services.queue_outlook text as every other add-to-queue surface."""
     when = queued_outlook(services, job_id) if job_id else ""
     return f"Queued. {when}." if when else f"{if_added(services.queue_outlook())}."
-
-
-def held_out(dataset_id):
-    """True for a catalogue set that is a validation or test split: trained on, it could no longer measure anything."""
-    import studio_catalog as cat
-    return next((e.get("split") for e in cat.CATALOG if f"catalog_{e['id']}" == dataset_id), None) in ("validation", "test")
 
 
 def collection_row(parent, fetch):
@@ -105,53 +58,6 @@ def fill_collection_row(line, row, note=""):
     else:
         line.action.pack_forget()
     line.status.configure(text=source_status(row, note), fg=C["coral" if row.get("error") else "muted"])
-
-
-def collection_items(rows, notes):
-    """(key, data) for KeyedRows: each collection row with its latest progress line."""
-    return [(r["id"], (dict(r), notes.get(r["id"], ""))) for r in rows]  # a copy: the services may change a row in place
-
-
-def tile_items(sets, use):
-    """(key, data) for KeyedRows: one tile per text set, ticked when it is used."""
-    return [(s["id"], {"id": s["id"], "name": s["name"], "count": s["count"], "held": held_out(s["id"]), "on": bool(use.get(s["id"]))})
-            for s in sets]
-
-
-def enough_text(ratio):
-    """(headline, key) for `ratio` word pieces per parameter: too little, about right, or plenty. Plenty means one pass
-    already covers the rule of thumb, so repeating the text is not needed."""
-    low, high = ABOUT_RIGHT
-    if ratio < low:
-        return T["text_estimate"].format(times=f"{RULE / max(ratio, 1e-9):.1f}"), "little"
-    if ratio <= high:
-        return T["text_about_right"], "about_right"
-    return T["text_plenty"].format(times=f"{ratio / RULE:.0f}" if ratio >= 3 * RULE else f"{ratio / RULE:.1f}"), "plenty"
-
-
-def ratio_text(ratio):
-    """A word-pieces-per-parameter ratio in plain words: exact when small, rounded to two digits when large."""
-    if ratio < 10:
-        return f"{ratio:.2f}"
-    if ratio < 100:
-        return f"{ratio:.1f}"
-    digits = len(str(int(ratio))) - 2
-    return f"about {round(ratio, -digits):,.0f}"
-
-
-def version_expectation(spec, preview, passes):
-    """(headline, details) of what to expect from this version after `passes` passes over the chosen text; empty until the size preview is known."""
-    params = (preview or {}).get("params")
-    if not spec or not params:
-        return "", ""
-    tokenizer = spec["tokenizer"]["id"]
-    pieces = preview.get("pieces")
-    return expectation(params, tokenizer, pieces * passes if pieces else None, "text",
-                       table_params(tokenizer, spec["dims"]["d_model"], preview.get("vocab")))
-
-
-def sets_of(summary):
-    return (summary["sets"] if isinstance(summary, dict) else summary.sets) or []
 
 
 class PretrainingPage(Page):
@@ -285,7 +191,7 @@ class PretrainingPage(Page):
 
     def user_text(self):
         """True when a chosen set is the person's own text (not the bundled library): the queue then adds a restore job."""
-        return any(not s.get("library") for s in sets_of(self.services.data("text")) if s["id"] in self.chosen())
+        return has_user_text(sets_of(self.services.data("text")), self.chosen())
 
     def steps(self):
         p = self.preview
@@ -530,14 +436,9 @@ class PretrainingPage(Page):
         steps = self.steps()
         if not steps:
             return
-        cfg = pretrain_config(v.spec, steps, self.rows_n(), int(self.hold.value[:-1]) / 100)
         self.mode = forced_mode(v, self.parent_v, self.mode)
-        init = self.parent_v.best_checkpoint if self.mode == "catch_up" else None
-        label = f"Version {v.number} {'catch-up' if self.mode == 'catch_up' else 'from scratch'}"
+        label, params = job_params(v, self.parent_v, self.chosen(), self.mode, self.rows_n(), int(self.hold.value[:-1]) / 100, steps,
+                                   self.preview.get("pieces"), self.user_text())
         self.job_id = uuid.uuid4().hex[:8]
-        self.services.enqueue(Job(id=self.job_id, kind="pretrain", label=label, params={
-            "config": cfg, "datasets": self.chosen(), "mode": self.mode, "init_from": init, "output_dir": None,
-            "user_text": self.user_text(), "previous_best": self.parent_v.best_checkpoint if self.parent_v else None,
-            "version": v.number, "heldout_fraction": cfg["validation"],
-            "pieces_per_pass": self.preview.get("pieces")}))
+        self.services.enqueue(Job(id=self.job_id, kind="pretrain", label=label, params=params))
         self.paint_queue_line()

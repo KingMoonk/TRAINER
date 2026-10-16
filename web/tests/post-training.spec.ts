@@ -1,5 +1,28 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("new server catalogue entries are selectable and imported by their ID", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/post-training/");
+  await page.getByRole("combobox", { name: "Pretrained model" }).click();
+  await page.getByRole("option", { name: "New server model", exact: true }).click();
+  await expect(page.getByText("About 12 MB to download once.", { exact: true })).toBeVisible();
+  const request = page.waitForRequest((request) => new URL(request.url()).pathname === "/post-training/imports");
+  await page.getByRole("button", { name: "Import New server model", exact: true }).click();
+  expect((await request).postData()).toContain('name="name"\r\n\r\nnew-model');
+});
+
+test("a failed model list cannot fall back to a hardcoded import", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/post-training/import-models", (route) => route.fulfill(json({ detail: "Catalogue unavailable" }, 503)));
+  await page.goto("/post-training/");
+  await expect(page.getByText(/Could not load importable models: Catalogue unavailable/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import model", exact: true })).toBeDisabled();
+  await page.route("**/post-training/import-models", (route) => route.fulfill(json([])));
+  await page.getByRole("button", { name: "Retry model list", exact: true }).click();
+  await expect(page.getByText("This server has no importable models.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import model", exact: true })).toBeDisabled();
+});
+
 // The Post-training page against a mocked API: the page reads /versions, /post-training/options and /queue, runs the status
 // job (its result arrives as a `job` event), queues a round, shows its progress and imports a model as a new version.
 
@@ -57,6 +80,10 @@ const queue = (step: number) => ({
 });
 
 async function mockApi(page: Page) {
+  await page.route("**/post-training/import-models", (route) => route.fulfill(json([
+    { id: "gpt2", name: "GPT-2 (124M)", size: 548_000_000 },
+    { id: "new-model", name: "New server model", size: 12_000_000 },
+  ])));
   const state = { versions: [version(1, true)], statusCalls: 0, rounds: [] as unknown[], imports: 0, queued: false };
   await page.route("**/versions", (route) => route.fulfill(json(state.versions)));
   await page.route("**/post-training/options**", (route) =>

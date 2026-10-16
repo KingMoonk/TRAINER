@@ -1,6 +1,64 @@
 {
   "components": {
     "schemas": {
+      "AblateRequest": {
+        "properties": {
+          "heads": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heads"
+          },
+          "mode": {
+            "default": "zero",
+            "enum": [
+              "mean",
+              "zero"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "AblateRequest",
+        "type": "object"
+      },
       "Accepted": {
         "properties": {
           "epoch": {
@@ -360,6 +418,107 @@
         "title": "ChangesBody",
         "type": "object"
       },
+      "CheckBody": {
+        "properties": {
+          "new_version": {
+            "minimum": 1.0,
+            "title": "New Version",
+            "type": "integer"
+          },
+          "old_version": {
+            "minimum": 1.0,
+            "title": "Old Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "old_version",
+          "new_version"
+        ],
+        "title": "CheckBody",
+        "type": "object"
+      },
+      "CheckJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LearningCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "CheckJob",
+        "type": "object"
+      },
       "Checkpoint": {
         "properties": {
           "key": {
@@ -599,6 +758,109 @@
           "status"
         ],
         "title": "ClusterJob",
+        "type": "object"
+      },
+      "ComparePlan": {
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "n_runs": {
+            "title": "N Runs",
+            "type": "integer"
+          },
+          "n_sweeps": {
+            "title": "N Sweeps",
+            "type": "integer"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/PlanRow"
+            },
+            "title": "Variants",
+            "type": "array"
+          },
+          "wall_seconds": {
+            "title": "Wall Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "variants",
+          "n_runs",
+          "n_sweeps",
+          "wall_seconds"
+        ],
+        "title": "ComparePlan",
+        "type": "object"
+      },
+      "CompareSetup": {
+        "description": "What Compare runs asks: the base version, the variants (other saved versions), and how to hold them equal.",
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "guess": {
+            "default": "",
+            "title": "Guess",
+            "type": "string"
+          },
+          "mode": {
+            "default": "params",
+            "enum": [
+              "params",
+              "compute",
+              "tokens",
+              "wall-clock"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "question": {
+            "default": "",
+            "title": "Question",
+            "type": "string"
+          },
+          "retune_lr": {
+            "default": true,
+            "title": "Retune Lr",
+            "type": "boolean"
+          },
+          "seeds": {
+            "default": 3,
+            "enum": [
+              1,
+              3,
+              5
+            ],
+            "title": "Seeds",
+            "type": "integer"
+          },
+          "variants": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Variants",
+            "type": "array"
+          }
+        },
+        "title": "CompareSetup",
         "type": "object"
       },
       "ComputeBody": {
@@ -1033,6 +1295,39 @@
         "title": "DraftsJob",
         "type": "object"
       },
+      "EnoughText": {
+        "properties": {
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "number"
+          },
+          "ratio_text": {
+            "title": "Ratio Text",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "little",
+              "about_right",
+              "plenty"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ratio",
+          "ratio_text",
+          "headline",
+          "verdict"
+        ],
+        "title": "EnoughText",
+        "type": "object"
+      },
       "Entry": {
         "properties": {
           "is_dir": {
@@ -1101,6 +1396,24 @@
         "title": "ExpectBody",
         "type": "object"
       },
+      "Expectation": {
+        "properties": {
+          "details": {
+            "title": "Details",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "details"
+        ],
+        "title": "Expectation",
+        "type": "object"
+      },
       "Expectations": {
         "properties": {
           "details": {
@@ -1125,6 +1438,30 @@
           "lines"
         ],
         "title": "Expectations",
+        "type": "object"
+      },
+      "ExportRow": {
+        "properties": {
+          "gguf_problem": {
+            "default": "",
+            "description": "why this design cannot be written as GGUF, in plain words; \"\" when it can",
+            "title": "Gguf Problem",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "number",
+          "name"
+        ],
+        "title": "ExportRow",
         "type": "object"
       },
       "FieldsModel": {
@@ -1194,6 +1531,21 @@
             "title": "Hooks",
             "type": "boolean"
           },
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          },
           "names": {
             "anyOf": [
               {
@@ -1209,9 +1561,16 @@
             "title": "Names"
           },
           "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
           },
           "version": {
             "anyOf": [
@@ -1225,9 +1584,6 @@
             "title": "Version"
           }
         },
-        "required": [
-          "text"
-        ],
         "title": "ForwardRequest",
         "type": "object"
       },
@@ -1457,6 +1813,60 @@
         "title": "GenerateRequest",
         "type": "object"
       },
+      "GuessCheck": {
+        "properties": {
+          "hits": {
+            "title": "Hits",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "misses": {
+            "title": "Misses",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "attention",
+              "live",
+              "neutral"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lines",
+          "hits",
+          "misses",
+          "state"
+        ],
+        "title": "GuessCheck",
+        "type": "object"
+      },
+      "GuessOption": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "GuessOption",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1481,6 +1891,21 @@
           "has_text"
         ],
         "title": "HasText",
+        "type": "object"
+      },
+      "HeadStatsRequest": {
+        "properties": {
+          "pattern": {
+            "items": {},
+            "minItems": 1,
+            "title": "Pattern",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "HeadStatsRequest",
         "type": "object"
       },
       "HeadsOffRequest": {
@@ -1625,6 +2050,29 @@
         "title": "ImportJob",
         "type": "object"
       },
+      "ImportModelOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "size"
+        ],
+        "title": "ImportModelOut",
+        "type": "object"
+      },
       "Inspect": {
         "properties": {
           "version": {
@@ -1640,6 +2088,60 @@
           }
         },
         "title": "Inspect",
+        "type": "object"
+      },
+      "Job": {
+        "properties": {
+          "created_at": {
+            "default": 0.0,
+            "title": "Created At",
+            "type": "number"
+          },
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta S"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "status": {
+            "default": "waiting",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "Job",
         "type": "object"
       },
       "JobModel": {
@@ -1786,6 +2288,87 @@
         "title": "Knobs",
         "type": "object"
       },
+      "LearningCheck": {
+        "properties": {
+          "check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GuessCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_said": {
+            "title": "Page Said",
+            "type": "string"
+          },
+          "results": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Measurement"
+            },
+            "title": "Results",
+            "type": "object"
+          },
+          "tray": {
+            "anyOf": [
+              {
+                "maxItems": 3,
+                "minItems": 3,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tray"
+          }
+        },
+        "required": [
+          "results",
+          "check",
+          "tray",
+          "page_said"
+        ],
+        "title": "LearningCheck",
+        "type": "object"
+      },
+      "LearningNotebook": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/NotebookRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "lines"
+        ],
+        "title": "LearningNotebook",
+        "type": "object"
+      },
       "LeaseModel": {
         "properties": {
           "duration_s": {
@@ -1895,6 +2478,38 @@
         "title": "Listing",
         "type": "object"
       },
+      "LogitLensRequest": {
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "top_k": {
+            "default": 5,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "LogitLensRequest",
+        "type": "object"
+      },
       "LossRequest": {
         "properties": {
           "pos": {
@@ -1957,6 +2572,55 @@
           }
         },
         "title": "LrBody",
+        "type": "object"
+      },
+      "Measurement": {
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "boolean"
+          },
+          "way": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Way"
+          }
+        },
+        "required": [
+          "before",
+          "after",
+          "way",
+          "measured"
+        ],
+        "title": "Measurement",
         "type": "object"
       },
       "Message": {
@@ -2074,6 +2738,32 @@
         "title": "NewJob",
         "type": "object"
       },
+      "NewPretrainJob": {
+        "description": "The body for POST /queue/jobs.",
+        "properties": {
+          "kind": {
+            "const": "pretrain",
+            "default": "pretrain",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "label",
+          "params"
+        ],
+        "title": "NewPretrainJob",
+        "type": "object"
+      },
       "NewVersion": {
         "properties": {
           "change": {
@@ -2175,6 +2865,130 @@
           "dtypes"
         ],
         "title": "Node",
+        "type": "object"
+      },
+      "NotebookJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LearningNotebook"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "NotebookJob",
+        "type": "object"
+      },
+      "NotebookRow": {
+        "properties": {
+          "change": {
+            "title": "Change",
+            "type": "string"
+          },
+          "effects": {
+            "title": "Effects",
+            "type": "string"
+          },
+          "guesses": {
+            "title": "Guesses",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "attention",
+              "live",
+              "neutral"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "change",
+          "effects",
+          "guesses",
+          "note",
+          "state"
+        ],
+        "title": "NotebookRow",
         "type": "object"
       },
       "Option": {
@@ -2330,6 +3144,34 @@
           "outlook"
         ],
         "title": "Outlook",
+        "type": "object"
+      },
+      "OverlapOut": {
+        "additionalProperties": true,
+        "properties": {
+          "checked": {
+            "default": 0,
+            "title": "Checked",
+            "type": "integer"
+          },
+          "left_out": {
+            "default": 0,
+            "title": "Left Out",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "title": "OverlapOut",
         "type": "object"
       },
       "Own": {
@@ -2644,6 +3486,307 @@
         "title": "PlanModel",
         "type": "object"
       },
+      "PlanRequest": {
+        "description": "The answers on the Pretraining page. The browser keeps them (the draft choices); every call sends them whole.",
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "hold": {
+            "default": 0.05,
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
+            "type": "number"
+          },
+          "mode": {
+            "default": "catch_up",
+            "enum": [
+              "catch_up",
+              "from_scratch"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "passes": {
+            "default": 2,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Passes",
+            "type": "integer"
+          },
+          "preview_rows": {
+            "default": 6,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Preview Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "PlanRequest",
+        "type": "object"
+      },
+      "PlanRow": {
+        "properties": {
+          "adjustments": {
+            "items": {},
+            "title": "Adjustments",
+            "type": "array"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "relative_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Error"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "variant": {
+            "title": "Variant",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "variant",
+          "name",
+          "matched",
+          "parameters"
+        ],
+        "title": "PlanRow",
+        "type": "object"
+      },
+      "PostTrainingJobOut": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostTrainingOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "PostTrainingJobOut",
+        "type": "object"
+      },
+      "PostTrainingOut": {
+        "description": "Services.post_training: missing keys are fine, a client reads them as unknown.",
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "example": {
+            "title": "Example"
+          },
+          "gates": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Gates",
+            "type": "object"
+          },
+          "overlap": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OverlapOut"
+            },
+            "title": "Overlap",
+            "type": "object"
+          },
+          "rounds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RoundState"
+            },
+            "title": "Rounds",
+            "type": "object"
+          }
+        },
+        "title": "PostTrainingOut",
+        "type": "object"
+      },
+      "Prediction": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "lower",
+                  "higher"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "enum": [
+                  "less",
+                  "more"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "enum": [
+                  "faster",
+                  "slower"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "title": "Prediction",
+        "type": "object"
+      },
       "Preset": {
         "properties": {
           "key": {
@@ -2729,6 +3872,208 @@
           "recipe"
         ],
         "title": "PresetCost",
+        "type": "object"
+      },
+      "PretrainPlan": {
+        "properties": {
+          "can_add": {
+            "title": "Can Add",
+            "type": "boolean"
+          },
+          "can_continue": {
+            "title": "Can Continue",
+            "type": "boolean"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "context": {
+            "default": 256,
+            "title": "Context",
+            "type": "integer"
+          },
+          "continue_blocked": {
+            "anyOf": [
+              {
+                "enum": [
+                  "word_list_changed",
+                  "no_trained_parent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continue Blocked"
+          },
+          "enough": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnoughText"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimated": {
+            "default": false,
+            "title": "Estimated",
+            "type": "boolean"
+          },
+          "estimating": {
+            "title": "Estimating",
+            "type": "boolean"
+          },
+          "expectation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expectation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NewPretrainJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lr"
+          },
+          "minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minutes"
+          },
+          "mode": {
+            "enum": [
+              "catch_up",
+              "from_scratch"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "outlook": {
+            "default": "",
+            "title": "Outlook",
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "passes_over_text": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passes Over Text"
+          },
+          "pieces": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pieces"
+          },
+          "pieces_per_step": {
+            "title": "Pieces Per Step",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "mode",
+          "can_continue",
+          "estimating",
+          "pieces_per_step",
+          "can_add"
+        ],
+        "title": "PretrainPlan",
         "type": "object"
       },
       "PreviewJob": {
@@ -2918,9 +4263,111 @@
             "minLength": 2,
             "title": "Text",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "title": "ProbeRequest",
+        "type": "object"
+      },
+      "ProblemRule": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ProblemRule",
+        "type": "object"
+      },
+      "ProblemRules": {
+        "properties": {
+          "max_drafts": {
+            "default": 200,
+            "title": "Max Drafts",
+            "type": "integer"
+          },
+          "max_problems": {
+            "default": 5000,
+            "title": "Max Problems",
+            "type": "integer"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProblemRule"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "ProblemRules",
+        "type": "object"
+      },
+      "Question": {
+        "properties": {
+          "key": {
+            "enum": [
+              "error",
+              "step",
+              "memory"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/GuessOption"
+            },
+            "title": "Options",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "options"
+        ],
+        "title": "Question",
+        "type": "object"
+      },
+      "QuestionBody": {
+        "properties": {
+          "new_spec": {
+            "additionalProperties": true,
+            "title": "New Spec",
+            "type": "object"
+          },
+          "old_spec": {
+            "additionalProperties": true,
+            "title": "Old Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "old_spec",
+          "new_spec"
+        ],
+        "title": "QuestionBody",
         "type": "object"
       },
       "QueueStateModel": {
@@ -3024,6 +4471,413 @@
           }
         },
         "title": "QueueStateModel",
+        "type": "object"
+      },
+      "Queued": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "outlook": {
+            "title": "Outlook",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "outlook"
+        ],
+        "title": "Queued",
+        "type": "object"
+      },
+      "QuickTestCheck": {
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "QuickTestCheck",
+        "type": "object"
+      },
+      "QuickTestDesign": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "description"
+        ],
+        "title": "QuickTestDesign",
+        "type": "object"
+      },
+      "QuickTestDraft": {
+        "properties": {
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "changes",
+          "description",
+          "cost"
+        ],
+        "title": "QuickTestDraft",
+        "type": "object"
+      },
+      "QuickTestReferences": {
+        "properties": {
+          "uniform": {
+            "title": "Uniform",
+            "type": "number"
+          },
+          "unigram": {
+            "title": "Unigram",
+            "type": "number"
+          }
+        },
+        "required": [
+          "uniform",
+          "unigram"
+        ],
+        "title": "QuickTestReferences",
+        "type": "object"
+      },
+      "QuickTestResult": {
+        "additionalProperties": true,
+        "description": "studio_quicktest.run's result, as stored.",
+        "properties": {
+          "broken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken"
+          },
+          "checks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/QuickTestCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuickTestRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataset": {
+            "default": "",
+            "title": "Dataset",
+            "type": "string"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuickTestRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "learned_context": {
+            "default": false,
+            "title": "Learned Context",
+            "type": "boolean"
+          },
+          "minutes": {
+            "title": "Minutes",
+            "type": "number"
+          },
+          "references": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuickTestReferences"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shrink": {
+            "default": false,
+            "title": "Shrink",
+            "type": "boolean"
+          },
+          "stopped": {
+            "default": false,
+            "title": "Stopped",
+            "type": "boolean"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "lower",
+                  "about the same",
+                  "higher"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "minutes"
+        ],
+        "title": "QuickTestResult",
+        "type": "object"
+      },
+      "QuickTestRun": {
+        "additionalProperties": true,
+        "properties": {
+          "bpc": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bpc"
+          },
+          "curve": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Curve",
+            "type": "array"
+          },
+          "sample": {
+            "default": "",
+            "title": "Sample",
+            "type": "string"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "title": "QuickTestRun",
+        "type": "object"
+      },
+      "QuickTestRunRequest": {
+        "properties": {
+          "dataset": {
+            "default": "stories",
+            "enum": [
+              "stories",
+              "slice",
+              "problems"
+            ],
+            "title": "Dataset",
+            "type": "string"
+          },
+          "guess": {
+            "enum": [
+              "Lower",
+              "Same",
+              "Higher"
+            ],
+            "title": "Guess",
+            "type": "string"
+          },
+          "minutes": {
+            "default": 3,
+            "enum": [
+              1,
+              3,
+              10
+            ],
+            "title": "Minutes",
+            "type": "integer"
+          },
+          "shrink": {
+            "default": false,
+            "title": "Shrink",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "guess"
+        ],
+        "title": "QuickTestRunRequest",
+        "type": "object"
+      },
+      "QuickTestStageDraft": {
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "title": "QuickTestStageDraft",
+        "type": "object"
+      },
+      "QuickTestStarted": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "outlook": {
+            "title": "Outlook",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_id",
+          "outlook",
+          "started_at"
+        ],
+        "title": "QuickTestStarted",
+        "type": "object"
+      },
+      "QuickTestState": {
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/QuickTestDesign"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuickTestDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuickTestResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_number": {
+            "title": "Next Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "current",
+          "draft",
+          "next_number",
+          "last"
+        ],
+        "title": "QuickTestState",
         "type": "object"
       },
       "RangeJob": {
@@ -3650,6 +5504,22 @@
         "title": "RoundRequest",
         "type": "object"
       },
+      "RoundState": {
+        "properties": {
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "default": "idle",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "RoundState",
+        "type": "object"
+      },
       "RowsPage": {
         "properties": {
           "next_cursor": {
@@ -3696,6 +5566,122 @@
           "kind"
         ],
         "title": "RowsRequest",
+        "type": "object"
+      },
+      "RunPageModel": {
+        "properties": {
+          "change": {
+            "default": "",
+            "title": "Change",
+            "type": "string"
+          },
+          "chat_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Version"
+          },
+          "curve": {
+            "$ref": "#/components/schemas/CurveModel"
+          },
+          "gate_vs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Vs"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "phase": {
+            "default": "",
+            "title": "Phase",
+            "type": "string"
+          },
+          "references": {
+            "$ref": "#/components/schemas/ReferencesModel"
+          },
+          "running": {
+            "default": false,
+            "title": "Running",
+            "type": "boolean"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "learning",
+                  "flat",
+                  "memorising"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "switch": {
+            "$ref": "#/components/schemas/SwitchNote"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "curve",
+          "references",
+          "switch"
+        ],
+        "title": "RunPageModel",
         "type": "object"
       },
       "RunRequest": {
@@ -3754,6 +5740,13 @@
             "title": "Params",
             "type": "integer"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Parts",
+            "type": "object"
+          },
           "table": {
             "title": "Table",
             "type": "integer"
@@ -3769,6 +5762,7 @@
           "time",
           "memory",
           "activations",
+          "parts",
           "fits"
         ],
         "title": "Sizes",
@@ -3905,6 +5899,124 @@
           "spec"
         ],
         "title": "SpecBody",
+        "type": "object"
+      },
+      "SplitBody": {
+        "properties": {
+          "base": {
+            "additionalProperties": true,
+            "title": "Base",
+            "type": "object"
+          },
+          "cur": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "datasets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Datasets",
+            "type": "array"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "parent_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version"
+          },
+          "predictions": {
+            "items": {
+              "$ref": "#/components/schemas/Prediction"
+            },
+            "title": "Predictions",
+            "type": "array"
+          },
+          "was": {
+            "$ref": "#/components/schemas/Choices"
+          }
+        },
+        "required": [
+          "base",
+          "was",
+          "cur",
+          "draft"
+        ],
+        "title": "SplitBody",
+        "type": "object"
+      },
+      "SplitPreview": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/SplitStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps",
+          "jobs"
+        ],
+        "title": "SplitPreview",
+        "type": "object"
+      },
+      "SplitStep": {
+        "properties": {
+          "chips": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chips",
+            "type": "array"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "prediction": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Prediction",
+            "type": "object"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "choices",
+          "spec",
+          "chips",
+          "questions",
+          "prediction"
+        ],
+        "title": "SplitStep",
         "type": "object"
       },
       "StartRequest": {
@@ -4148,6 +6260,62 @@
         "title": "SummaryRequest",
         "type": "object"
       },
+      "SwitchNote": {
+        "description": "Which line the page says about Chat switching (studio_ia.training_logic.switch_note): the key is the copy's, gap is\nin bits per character, docs and need are set for gate_few_docs.",
+        "properties": {
+          "docs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docs"
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap"
+          },
+          "key": {
+            "enum": [
+              "gate_few_docs",
+              "gate_better",
+              "gate_not_sure",
+              "gate_not_better",
+              "no_band_yet",
+              "held_back_below",
+              "held_back_inside"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "need": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Need"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "SwitchNote",
+        "type": "object"
+      },
       "TeacherOut": {
         "properties": {
           "name": {
@@ -4177,6 +6345,45 @@
           "text"
         ],
         "title": "Text",
+        "type": "object"
+      },
+      "TextSet": {
+        "description": "One set of text the run may read. `on` is the page's starting tick: every set but a held-out (validation or test) one.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "held": {
+            "title": "Held",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "library": {
+            "default": false,
+            "title": "Library",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "on": {
+            "title": "On",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count",
+          "held",
+          "on"
+        ],
+        "title": "TextSet",
         "type": "object"
       },
       "Tower": {
@@ -4924,6 +7131,30 @@
       },
       "studio_api__routers__chat__ReplyRequest": {
         "properties": {
+          "ablate": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ablate"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/Message"
@@ -5173,6 +7404,90 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/benchmark/compare-plan": {
+      "post": {
+        "description": "The runs a Compare setup would make, and how each variant is matched to the base. Queues nothing. 422 says why a setup cannot run.",
+        "operationId": "compare_plan_benchmark_compare_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparePlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Plan",
+        "tags": [
+          "benchmark"
+        ]
+      }
+    },
+    "/benchmark/compare-queue": {
+      "post": {
+        "description": "Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.",
+        "operationId": "compare_queue_benchmark_compare_queue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Queue",
+        "tags": [
+          "benchmark"
+        ]
+      }
+    },
     "/benchmark/compare-runs": {
       "post": {
         "description": "The finished Compare runs experiments, oldest first. The result is a list of CompareRunOut.",
@@ -6069,6 +8384,28 @@
         ]
       }
     },
+    "/data/problems/rules": {
+      "get": {
+        "description": "Generatable rules in desktop picker order; imported answer keys cannot generate examples.",
+        "operationId": "problem_rules_data_problems_rules_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Problem Rules",
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/data/refresh_downloads": {
       "post": {
         "description": "Services.refresh_downloads as a job: rebuild downloads converted by an older app version. Result: the ids rebuilt.",
@@ -6362,6 +8699,16 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "review_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Review Only",
+              "type": "boolean"
             }
           }
         ],
@@ -6679,6 +9026,48 @@
         ]
       }
     },
+    "/design/guess-check": {
+      "post": {
+        "description": "Check saved guesses using the same measured/estimated results and sentences as Builder.",
+        "operationId": "guess_check_design_guess_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Guess Check",
+        "tags": [
+          "design"
+        ]
+      }
+    },
     "/design/lr-text": {
       "post": {
         "description": "lr_text: the sentence under \"Find a learning rate\".",
@@ -6716,6 +9105,28 @@
           }
         },
         "summary": "Lr Text",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/notebook": {
+      "post": {
+        "description": "Read speeds and run facts off the request thread, then return rows and desktop wording.",
+        "operationId": "notebook_design_notebook_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Notebook",
         "tags": [
           "design"
         ]
@@ -6830,6 +9241,51 @@
           }
         },
         "summary": "Presets",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/questions": {
+      "post": {
+        "operationId": "questions_design_questions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Question"
+                  },
+                  "title": "Response Questions Design Questions Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Questions",
         "tags": [
           "design"
         ]
@@ -6983,6 +9439,48 @@
         ]
       }
     },
+    "/design/split-plan": {
+      "post": {
+        "description": "Preview versions and chained jobs; saving versions and enqueueing use the existing APIs.\n\nNo versions or jobs are persisted here. Empty steps means this draft cannot be split safely.",
+        "operationId": "split_preview_design_split_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Split Preview",
+        "tags": [
+          "design"
+        ]
+      }
+    },
     "/design/tower": {
       "post": {
         "description": "What the tower paints: every block's parts (block_parts, own_slots) and which knobs apply (knob_applies).",
@@ -7088,9 +9586,51 @@
         ]
       }
     },
+    "/inspect/ablate": {
+      "post": {
+        "description": "{baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.",
+        "operationId": "ablate_inspect_ablate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AblateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ablate",
+        "tags": [
+          "inspect"
+        ]
+      }
+    },
     "/inspect/forward": {
       "post": {
-        "description": "{ids, tokens, logits, hooks}: one forward pass over `text`.",
+        "description": "{ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.",
         "operationId": "forward_inspect_forward_post",
         "requestBody": {
           "content": {
@@ -7125,6 +9665,46 @@
           }
         },
         "summary": "Forward",
+        "tags": [
+          "inspect"
+        ]
+      }
+    },
+    "/inspect/head-stats": {
+      "post": {
+        "description": "{entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted\npattern, so it answers at once instead of as a job.",
+        "operationId": "head_stats_inspect_head_stats_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeadStatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Head Stats",
         "tags": [
           "inspect"
         ]
@@ -7167,6 +9747,48 @@
           }
         },
         "summary": "Heads Off",
+        "tags": [
+          "inspect"
+        ]
+      }
+    },
+    "/inspect/logit-lens": {
+      "post": {
+        "description": "[{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.",
+        "operationId": "logit_lens_inspect_logit_lens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogitLensRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logit Lens",
         "tags": [
           "inspect"
         ]
@@ -7620,6 +10242,32 @@
         ]
       }
     },
+    "/post-training/import-models": {
+      "get": {
+        "description": "Models this server can import; size is the expected download in bytes.",
+        "operationId": "import_models_post_training_import_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImportModelOut"
+                  },
+                  "title": "Response Import Models Post Training Import Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Import Models",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
     "/post-training/imports": {
       "post": {
         "description": "Start from a pretrained open model: saves its design as a new version and queues the conversion; the version trains\n(gets a checkpoint) when the job ends. `weights` is the model's published model.safetensors, for a server that cannot\ndownload it. `lora` fine-tunes small adapters instead of every weight.",
@@ -7814,7 +10462,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                  "$ref": "#/components/schemas/PostTrainingJobOut"
                 }
               }
             },
@@ -7969,6 +10617,48 @@
         ]
       }
     },
+    "/pretraining/plan": {
+      "post": {
+        "description": "What the Pretraining page shows for these answers: whether Continue is allowed, the steps, the size verdict, the\nexpectation, the engine config and the job to post to /queue/jobs. Reads the size preview only if it is already known\n(`estimating` otherwise); it never computes it.",
+        "operationId": "pretrain_plan_pretraining_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PretrainPlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Plan",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
     "/pretraining/preview": {
       "get": {
         "description": "Services.cached_preview: the preview when it is already known, else null. Never computes; POST /pretraining/preview does.",
@@ -8071,6 +10761,32 @@
           }
         },
         "summary": "Pretrain Preview",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/text_sets": {
+      "get": {
+        "description": "The sets of text to choose from, as the Pretraining page's tiles.",
+        "operationId": "text_sets_pretraining_text_sets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TextSet"
+                  },
+                  "title": "Response Text Sets Pretraining Text Sets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Text Sets",
         "tags": [
           "pretraining"
         ]
@@ -8823,6 +11539,161 @@
         ]
       }
     },
+    "/quicktest": {
+      "get": {
+        "description": "The current version, the staged change (if any) and the newest finished result that finished after `since` (epoch seconds).",
+        "operationId": "quicktest_state_quicktest_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Since",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickTestState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quicktest State",
+        "tags": [
+          "quicktest"
+        ]
+      }
+    },
+    "/quicktest/draft": {
+      "delete": {
+        "operationId": "discard_draft_quicktest_draft_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Discard Draft",
+        "tags": [
+          "quicktest"
+        ]
+      },
+      "put": {
+        "description": "Stage an unsaved design change for Quick test and Compare (the designer's draft).",
+        "operationId": "stage_draft_quicktest_draft_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickTestStageDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage Draft",
+        "tags": [
+          "quicktest"
+        ]
+      }
+    },
+    "/quicktest/run": {
+      "post": {
+        "description": "Queue a quick test of the staged change against the current version. 400 without a staged change or, for \"slice\", without text.",
+        "operationId": "run_quicktest_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickTestRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickTestStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run",
+        "tags": [
+          "quicktest"
+        ]
+      }
+    },
+    "/quicktest/save": {
+      "post": {
+        "description": "Save the staged change as the next version and clear the stage; the designer then shows it as saved and needing training.",
+        "operationId": "save_idea_quicktest_save_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Save Idea",
+        "tags": [
+          "quicktest"
+        ]
+      }
+    },
     "/storage": {
       "get": {
         "description": "What a clean-up with the same arguments would delete.",
@@ -8926,6 +11797,32 @@
         ]
       }
     },
+    "/storage/exports": {
+      "get": {
+        "description": "The versions that have trained, so can be exported, each with the reason GGUF is unavailable for it (if it is).",
+        "operationId": "exports_storage_exports_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExportRow"
+                  },
+                  "title": "Response Exports Storage Exports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Exports",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
     "/storage/free": {
       "get": {
         "operationId": "free_space_storage_free_get",
@@ -8944,6 +11841,28 @@
         "summary": "Free Space",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/training-run": {
+      "get": {
+        "description": "The run the page shows: a running job's live run, else the newest version's latest run.",
+        "operationId": "training_run_training_run_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPageModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Training Run",
+        "tags": [
+          "training-run"
         ]
       }
     },
@@ -9645,6 +12564,24 @@
       "get": {
         "description": "The snapshots a scene can show, oldest first: a scene's `snapshot` is an index into this list.",
         "operationId": "snapshots_viewer_snapshots_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -9659,6 +12596,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Snapshots",

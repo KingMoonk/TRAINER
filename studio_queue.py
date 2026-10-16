@@ -22,7 +22,6 @@ MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
 PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine
-SAMPLE_MB = 64  # ponytail: flat per-sample memory guess for the batch cap; jobs may override with params["sample_mb"]
 
 
 @dataclass
@@ -114,11 +113,6 @@ def idle_seconds():
     return None
 
 
-def physical_memory():
-    from studio_passive import total_memory  # has the Windows path; os.sysconf is POSIX-only
-    return total_memory()
-
-
 def size_text(n):
     return f"{n / 2 ** 30:.1f} GB" if n >= 2 ** 30 else f"{n / 2 ** 20:.0f} MB"
 
@@ -128,10 +122,6 @@ def disk_need(root):
     checkpoint is the best guide to the next one)."""
     largest = max((p.stat().st_size for p in Path(root).glob("runs/*/*.npz")), default=0)
     return max(MIN_FREE, 3 * largest)
-
-
-def batch_cap(plan, sample_mb=SAMPLE_MB, ram=None):
-    return max(1, int((ram or physical_memory()) * MEMORY[plan.memory] / (sample_mb * 2 ** 20)))
 
 
 def passive_running(root):
@@ -493,7 +483,7 @@ class Runner:
         short = self._disk_problem()
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
-            job.params = {**job.params, "max_batch_size": batch_cap(self.plan, job.params.get("sample_mb", SAMPLE_MB))}
+            job.params = {**job.params, "memory_share": MEMORY[self.plan.memory]}  # studio_memory.batch_cap fits the job's batch to it
             self.stop_event.clear()
             self._save()
         started = time.monotonic()

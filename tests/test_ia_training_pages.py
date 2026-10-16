@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import studio_gate
 from studio_core import Workspace
@@ -9,7 +10,7 @@ from studio_data_kinds import add_problems
 from studio_ia.copy import CHAT
 from studio_ia.pages.chat import against_chance, answering_version, few_shot_note, few_shot_rows, stream_reply, verdict_view
 from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, is_mixed_precision, live_view, lora_blocker, lora_config, lora_default, spread_text, step_line, teacher_options
-from studio_ia.pages.pretraining import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
+from studio_ia.pretraining_plan import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
 from studio_ia.pages.queue import total_hours
 from studio_ia.pages.storage import export_default_name, export_rows, export_run, size_text, storage_state
 from studio_ia.copy import TRAINING as T
@@ -395,6 +396,20 @@ class WorkspaceRows(unittest.TestCase):
         self.assertEqual(again.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
         self.ws.add(self.text, [{"text": "a new story changes the stored data"}])
         self.assertIsNone(self.svc.cached_preview([self.text], rows=6))
+
+    def test_preview_normalizes_legacy_specs_without_changing_the_version(self):
+        version = self.svc.save_version(default_spec(), "first design")
+        for sparse, context in (({"tokenizer": BYTE}, 256), ({"dims": {"n_ctx": 128}}, 128)):
+            with self.subTest(spec=sparse):
+                version.spec = sparse
+                with mock.patch.object(self.svc, "current_version", return_value=version):
+                    preview = self.svc.pretrain_preview([self.text], rows=6)
+                    self.assertEqual(preview["context"], context)
+                    self.assertGreater(preview["pieces"], 0)
+                    self.assertGreater(preview["params"], 0)
+                    self.assertEqual(self.svc.cached_preview([self.text], rows=6)["context"], context)
+                self.assertEqual(version.spec, sparse)
+                self.assertNotIn("d_model", sparse.get("dims", {}))
 
     def test_held_back_text_is_fixed_and_never_trained_on(self):
         train = self.svc.examples({"datasets": [self.text], "heldout_fraction": .2})

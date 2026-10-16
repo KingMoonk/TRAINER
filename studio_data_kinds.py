@@ -263,6 +263,8 @@ def _columns(kind, example, dataset_name):
 
 
 def _status(kind, example, duplicate):
+    if is_draft(example):
+        return "Review"
     quality = example.get("quality")
     if kind == "text":
         return "Review" if is_draft(example) else "Held back" if held_back(example) else "Near-duplicate" if duplicate else "In use"
@@ -333,7 +335,7 @@ def matching(rows, query="", limit=200):
     return [r for r in rows if not needle or needle in f"{r['a']} {r['b']}".casefold()][:limit]
 
 
-def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=()):
+def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=(), review_only=False):
     """(rows, next cursor) of one page of `kind` rows read from storage, not from the summary's sample: every row of
     `sets` ((dataset id, name) in order) whose text holds `query` can be reached. cursor None = the first page; the
     next cursor is None when nothing follows. `dups` = ids to show as near-duplicates. Disk datasets match in SQL, which
@@ -346,9 +348,9 @@ def page(workspace, kind, query="", sets=(), cursor=None, limit=200, dups=()):
         dataset_id, name = sets[index]
         want = limit + 1 - len(found)
         if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
-            examples = workspace.kind_rows(dataset_id, kind, query, after, want, rules)
+            examples = workspace.kind_rows(dataset_id, kind, query, after, want, rules, review_only=review_only)
         else:
-            examples = [(i, e) for i, e in enumerate(workspace.examples(dataset_id), 1) if i > after and classify(e) == kind and (
+            examples = [(i, e) for i, e in enumerate(workspace.examples(dataset_id), 1) if i > after and classify(e) == kind and (not review_only or is_draft(e)) and (
                 not needle or rule_of(e) in rules or needle in " ".join(str(e.get(k) or "") for k in ("user", "assistant", "intent", "text")).casefold())][:want]
         for position, example in examples:
             a, b = _columns(kind, example, name)

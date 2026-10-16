@@ -1,0 +1,40 @@
+import { fetchJson, subscribe } from "@/lib/api";
+import type { components } from "@/lib/api-schema";
+
+export type JobOut = components["schemas"]["studio_api__models_work__JobOut"];
+
+const FINISHED = new Set(["done", "failed", "cancelled"]);
+const POLL_MS = 2_000;
+
+/** A job that ended without a result: failed (the server's message) or cancelled. */
+export class JobFailed extends Error {}
+
+/**
+ * Wait for a job the server started to finish and return its result. The result arrives as a "job" event on /events; the
+ * job is also read once from GET /jobs/{id} in case it finished before the stream was open, and again every few seconds
+ * while the stream stays quiet, so a dropped stream cannot leave the page waiting forever.
+ */
+export function awaitJob<T>(started: JobOut): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let close = () => {};
+    const timer: { id?: ReturnType<typeof setInterval> } = {};
+    const settle = (job: JobOut) => {
+      if (settled || !FINISHED.has(job.status)) return;
+      settled = true;
+      close();
+      clearInterval(timer.id);
+      if (job.status === "done") resolve(job.result as T);
+      else reject(new JobFailed(job.status === "cancelled" ? "The job was cancelled." : job.error || "The job failed."));
+    };
+    settle(started);
+    if (settled) return;
+    close = subscribe((event) => {
+      const job = event.kind === "job" ? (event.payload as JobOut) : null;
+      if (job?.id === started.id) settle(job);
+    });
+    const read = () => fetchJson<JobOut>(`/jobs/${started.id}`).then(settle, () => {});
+    void read();
+    timer.id = setInterval(read, POLL_MS);
+  });
+}
