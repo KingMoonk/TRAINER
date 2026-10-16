@@ -40,6 +40,10 @@ jobs:
         run: |
           sleep 15
           for f in ~/Library/Logs/DiagnosticReports/*.ips; do [ -e "$f" ] && { echo "== $f"; cat "$f"; }; done
+      # Windows: the Application log names the faulting module (torch_cpu.dll, say) and the exception code of a native crash
+      - if: failure() && runner.os == 'Windows'
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error','Windows Error Reporting'; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue | Format-List TimeCreated, ProviderName, Message
 
   web:
     runs-on: ubuntu-latest

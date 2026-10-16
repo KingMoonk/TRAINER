@@ -43,7 +43,7 @@ def _probe_gpu():
             kind, name = "cuda", torch.cuda.get_device_name(0)
             memory = int(torch.cuda.get_device_properties(0).total_memory)
         elif torch.backends.mps.is_available():
-            kind, name, memory = "mps", "Apple GPU (Metal)", 0
+            kind, name, memory = "mps", "Apple GPU (Metal)", int(torch.mps.recommended_max_memory())  # unified memory: what Metal may address
         else:
             raise RuntimeError("No CUDA or Metal GPU was found.")
         sample = torch.ones((4, 4), dtype=torch.float32, device=kind)

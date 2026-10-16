@@ -4,8 +4,10 @@ The app (Handle) starts `python -m studio_worker run <spec.json>` and the two ta
 line. The worker sends {"event": ...} for each event its handler emits, then {"params": the params the handler changed} and
 {"error": sentence} or {"done": true}. The app sends {"cmd": "stop" | "pause" | "resume"}. A socket, not stdin and stdout: a
 frozen windowed build has no usable standard streams. The socket closing means the app has gone, so the worker stops its job
-and exits within EXIT_GRACE. Specs live in data/workers/<job id>.json with the worker's pid until the job ends; one left behind
-by an app that crashed names a process the next launch stops (Runner._reap).
+and exits within EXIT_GRACE. The worker ends its side of the stream with shutdown(SHUT_WR), a FIN, and exits only once the app has
+closed its side (or EXIT_GRACE has passed): a process that exits with the socket open can end the connection with a reset, and on
+Windows a reset discards whatever the app has not read yet, the result included (#118). Specs live in data/workers/<job id>.json
+with the worker's pid until the job ends; one left behind by an app that crashed names a process the next launch stops (Runner._reap).
 """
 import dataclasses
 import functools
@@ -152,16 +154,17 @@ class Handle:
                     elif "done" in message:
                         self._finished = True
         except (OSError, ValueError):
-            pass
+            pass  # the stream broke: a done or error already read still stands
         finally:
+            with self._lock:
+                self._conn = None
+            for part in (lines, conn):
+                if part is not None:
+                    part.close()  # before waiting: the worker waits for this close before it exits
             code = self.proc.wait()
             if not self._finished:
                 self.error = crash_message(code)
-            with self._lock:
-                self._conn = None
-            for part in (lines, conn, self._server):
-                if part is not None:
-                    part.close()
+            self._server.close()
             self.spec.unlink(missing_ok=True)
             self.done.set()
             if self.on_end:
@@ -226,7 +229,7 @@ def run(spec_path):
     spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     conn = socket.create_connection(("127.0.0.1", spec["port"]))
     conn.sendall((spec["token"] + "\n").encode("utf-8"))
-    stop, pause, sending = threading.Event(), threading.Event(), threading.Lock()
+    stop, pause, closed, sending = threading.Event(), threading.Event(), threading.Event(), threading.Lock()
 
     def send(message):
         data = _line(message)
@@ -249,6 +252,7 @@ def run(spec_path):
                         pause.clear()
         except (OSError, ValueError):
             pass
+        closed.set()  # the app has closed its side
         stop.set()   # the app has gone, or the job is over: stop, and exit after EXIT_GRACE even if the handler never notices
         pause.clear()
         timer = threading.Timer(EXIT_GRACE, os._exit, (3,))
@@ -276,7 +280,12 @@ def run(spec_path):
     send({"params": changed})
     send({"error": error} if error else {"done": True})
     with sending:
-        conn.close()
+        try:
+            conn.shutdown(socket.SHUT_WR)  # the stream ends with a FIN after the result, never a reset
+        except OSError:
+            pass  # the app has gone
+    closed.wait(EXIT_GRACE)  # the app has read the result and closed its side; listen still holds the socket, so close() alone would not
+    conn.close()
     return 1 if error else 0
 
 

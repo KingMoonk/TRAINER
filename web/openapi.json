@@ -3405,6 +3405,13 @@
             "title": "Params",
             "type": "integer"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Parts",
+            "type": "object"
+          },
           "table": {
             "title": "Table",
             "type": "integer"
@@ -3420,6 +3427,7 @@
           "time",
           "memory",
           "activations",
+          "parts",
           "fits"
         ],
         "title": "Sizes",

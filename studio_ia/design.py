@@ -121,7 +121,19 @@ def sizes(spec, v):
     d, t = spec["dims"]["d_model"], spec["dims"]["n_ctx"]
     # the estimate leaves the vocabulary matrices out of compute (Kaplan et al.); a step still pays for the output scores
     return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * VS[v] * d) * t,
-                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t)
+                memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t, parts=param_parts(e["rows"]))
+
+
+PARAM_PARTS = (("table", "violet"), ("position", "dim"), ("blocks", "blue"), ("head", "pink"))  # bar order and colour
+
+
+def param_parts(rows):
+    """{table, position, blocks, head}: parameters per part, from studio_estimate's rows. head is the final norm and the word scores."""
+    out = dict.fromkeys((key for key, _ in PARAM_PARTS), 0)
+    for r in rows:
+        key = "blocks" if r["block"] is not None else {"embedding": "table", "position": "position"}.get(r["slot"], "head")
+        out[key] += r["params"]
+    return out
 
 
 def read_spec(spec):

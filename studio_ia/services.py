@@ -143,6 +143,9 @@ class Services:
         self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
         self._raw: list[Callable[[str, Any], None]] = []  # watchers that take events on the emitting thread (the API)
         self._raw_lock = threading.Lock()
+        self._settings = {}
+        from studio_ia.snapshots import Snapshots
+        self.snapshots = Snapshots(self)  # what the Tk thread reads instead of calling slow services; inert until the shell starts it
 
     # events ---------------------------------------------------------------
     def bind_ui(self, widget):
@@ -250,6 +253,14 @@ class Services:
     def save_version(self, spec, change_text, prediction=None):
         """prediction: what the person guessed the change would do ({dimension: direction}), stored with the version."""
         raise NotImplementedError
+
+    def setting(self, key, default=None):
+        """A choice the person made that the app remembers (the Builder's Advanced toggle). Read from memory: safe on Tk."""
+        return self._settings.get(key, default)
+
+    def set_setting(self, key, value):
+        """Remember a choice. WorkspaceServices writes it to disk: call it off the Tk thread."""
+        self._settings[key] = value
 
     # queue (S2) -----------------------------------------------------------
     def queue(self) -> QueueState:
@@ -1026,8 +1037,8 @@ class WorkspaceServices(Services):
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
         workspace.progress = self.note
-        if workspace.schema_pending():  # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-            threads.start(workspace.ensure_schema)
+        # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
+        self._schema = threads.start(workspace.ensure_schema) if workspace.schema_pending() else None
 
     def _reads(self, workspace):
         import studio_versions
@@ -1057,6 +1068,8 @@ class WorkspaceServices(Services):
         if getattr(self, "_viz", None) is not None:
             self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
+        if self._schema is not None:  # its connection holds records.sqlite open, and Windows cannot delete an open file
+            self._schema.join()
 
     # 3D viewer --------------------------------------------------------------
     _viz = None
@@ -1325,6 +1338,13 @@ class WorkspaceServices(Services):
             return None
         held = [r for r in read_metrics(Path(v.best_checkpoint).parent / "metrics.jsonl") if r.get("val_loss") is not None]
         return min(held, key=lambda r: r["val_loss"])["step"] if held else None  # best.npz is saved at the lowest held-back loss
+
+    def setting(self, key, default=None):
+        return self.workspace.state["studioConfig"].get(key, default)
+
+    def set_setting(self, key, value):
+        self.workspace.state["studioConfig"][key] = value
+        self.workspace.save()
 
     def save_version(self, spec, change_text, prediction=None):
         row = self.store.save_version(spec, change_text or None, prediction)
@@ -2172,6 +2192,8 @@ class WorkspaceServices(Services):
             docs = self._heldout()
             if not docs:
                 return None
+            from studio_backend import cap_threads
+            cap_threads()  # a snapshot worker scores here too, not only _score_later: leave cores for Tk and training
             scores = np.array(studio_eval.score_docs(ckpt, docs), dtype=np.float64)
             with self._lock:
                 folder.mkdir(parents=True, exist_ok=True)

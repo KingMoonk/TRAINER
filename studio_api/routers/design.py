@@ -220,6 +220,7 @@ class Sizes(BaseModel):
     time: float
     memory: int
     activations: int
+    parts: dict[str, int]  # param_parts: parameters in the word table, position, blocks and head
     fits: bool | None  # fits: in this machine's memory at ROWS rows; null when the OS does not say
 
 

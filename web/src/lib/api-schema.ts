@@ -3510,6 +3510,10 @@ export interface components {
             memory: number;
             /** Params */
             params: number;
+            /** Parts */
+            parts: {
+                [key: string]: number;
+            };
             /** Table */
             table: number;
             /** Time */
