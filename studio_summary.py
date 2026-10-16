@@ -70,6 +70,82 @@ def binned_attention(source, text, n_bins=16):
             'stream_norms': {key: to_cpu(value) for key, value in summaries.items() if key.endswith('resid.norm')}, 'logits': to_cpu(logits)}
 
 
+SUMMARY_BINS = 32
+SUMMARY_FILE = 'summary.npz'
+SUMMARY_SCHEMA = 'groundwork-summary/1'
+
+
+def summary_path(checkpoint):
+    """Where a checkpoint's whole-context summary lives: beside the run's training snapshots (viz/step_*.npz)."""
+    return Path(checkpoint).parent / 'viz' / SUMMARY_FILE
+
+
+def _stamp(checkpoint):
+    stat = Path(checkpoint).stat()
+    return {'file': Path(checkpoint).name, 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+
+
+def whole_context(checkpoint, documents, n_bins=SUMMARY_BINS):
+    """One inference pass over a full n_ctx window of `documents` (strings, taken in order): per attention block the mean
+    query-bin to key-bin mass [heads, bins, bins], per block the residual-stream size per bin, and the bin edges 0..n_ctx. Blocks
+    without attention have stream sizes only. Records the checkpoint it came from; save_summary stores it."""
+    from studio_inspect import probe_model
+    model, tokenizer = probe_model(checkpoint)
+    n_ctx = model.dims.n_ctx
+    ids = []
+    for text in documents:
+        ids.extend(tokenizer.encode(text[:8 * n_ctx]))  # a long document needs no more than its start; a short one continues in the next
+        if len(ids) >= n_ctx:
+            break
+    if not ids:
+        raise ValueError('This version has no held-back text to read, so its whole-context summary cannot be made yet.')
+    if len(ids) < n_ctx:
+        raise ValueError(f"The held-back text is shorter than the model's {n_ctx} positions, so its whole-context summary cannot be made yet.")
+    bins = min(n_bins, n_ctx)
+    _logits, found = model.forward(np.asarray(ids[:n_ctx], dtype=np.int64)[None, :], attention_summary=bins)
+    to_cpu = model.backend.to_cpu
+    with np.load(checkpoint, allow_pickle=False) as archive:  # the step is in the metadata; the weights are already loaded
+        step = int(json.loads(str(archive['metadata'].item())).get('step', 0))
+    return {'edges': bin_edges(n_ctx, bins).tolist(), 'n_ctx': n_ctx, 'step': step, 'checkpoint': _stamp(checkpoint),
+            'attention': {key: to_cpu(value) for key, value in found.items() if key.endswith('attn.pattern')},
+            'stream_norms': {key: to_cpu(value) for key, value in found.items() if key.endswith('resid.norm')}}
+
+
+def save_summary(checkpoint, summary):
+    path = summary_path(checkpoint)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {'schema': SUMMARY_SCHEMA, 'step': summary['step'], 'n_ctx': summary['n_ctx'], 'edges': summary['edges'],
+                'checkpoint': summary['checkpoint']}  # 'step' too: run_paths reads it from every viz/*.npz
+    arrays = {f'attention::{key}': value for key, value in summary['attention'].items()}
+    arrays.update({f'stream_norms::{key}': value for key, value in summary['stream_norms'].items()})
+    from studio_core import replace_file
+    temporary = path.with_suffix('.tmp')
+    with temporary.open('wb') as handle:
+        np.savez_compressed(handle, metadata=np.array(json.dumps(metadata)), **arrays)
+    replace_file(temporary, path)
+    return path
+
+
+def summary_state(checkpoint):
+    """(state, summary) of a checkpoint's saved summary: no_checkpoint (none given, or the file is gone), none (never made or
+    unreadable), stale (made from another checkpoint file or changed since) or ready."""
+    if not checkpoint or not Path(checkpoint).is_file():
+        return 'no_checkpoint', None
+    try:
+        with np.load(summary_path(checkpoint), allow_pickle=False) as archive:
+            metadata = json.loads(str(archive['metadata']))
+            if metadata.get('schema') != SUMMARY_SCHEMA:
+                return 'none', None
+            summary = dict(metadata, attention={}, stream_norms={})
+            for key in archive.files:
+                kind, _, hook = key.partition('::')
+                if hook and kind in ('attention', 'stream_norms'):
+                    summary[kind][hook] = archive[key].copy()
+    except (OSError, ValueError, KeyError):
+        return 'none', None
+    return ('ready' if summary['checkpoint'] == _stamp(checkpoint) else 'stale'), summary
+
+
 def run_paths(run_ids, max_points=2000):
     if not 1 <= max_points <= 2000:
         raise ValueError('Run paths allow 1 to 2,000 points.')

@@ -945,6 +945,10 @@ INSIDE3D = {
     "probe_done": "One real step of version {n} is loaded. Training itself did not move.",
     "probe_no_checkpoint": "Train this version first: one real step needs its checkpoint.",
     "probe_failed": "The real step failed: {reason}",
+    "summary_none": "No whole-context summary yet. Compute it for this version to see attention between positions and stream sizes here.",
+    "summary_stale": "This version's checkpoint or design changed since its whole-context summary was made, so it is hidden. Compute it again.",
+    "summary_no_checkpoint": "This version has no trained checkpoint yet, so there is no whole-context summary. Train it first.",
+    "summary_done": "The whole-context summary of version {n} is ready.",
 }
 
 PRETRAINING = {

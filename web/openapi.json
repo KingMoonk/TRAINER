@@ -6847,6 +6847,81 @@
         "title": "ViewerStatus",
         "type": "object"
       },
+      "ViewerSummaryRequest": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "ViewerSummaryRequest",
+        "type": "object"
+      },
+      "ViewerSummaryStatus": {
+        "properties": {
+          "bins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bins"
+          },
+          "n_ctx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Ctx"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "stale",
+              "none",
+              "no_checkpoint"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "required": [
+          "state",
+          "note"
+        ],
+        "title": "ViewerSummaryStatus",
+        "type": "object"
+      },
       "Warm": {
         "properties": {
           "carries": {
@@ -12701,6 +12776,103 @@
           }
         },
         "summary": "Stop",
+        "tags": [
+          "viewer"
+        ]
+      }
+    },
+    "/viewer/summary": {
+      "get": {
+        "description": "Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,\nor what is missing. POST /viewer/summary makes it.",
+        "operationId": "summary_viewer_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewerSummaryStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Summary",
+        "tags": [
+          "viewer"
+        ]
+      },
+      "post": {
+        "description": "Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text\n(studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from.",
+        "operationId": "make_summary_viewer_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ViewerSummaryRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Make Summary",
         "tags": [
           "viewer"
         ]

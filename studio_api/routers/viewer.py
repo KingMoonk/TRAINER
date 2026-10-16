@@ -3,7 +3,8 @@
 The scene routes keep nothing between calls. The browser holds the controls (`ViewControls`, the keys of web/src/lib/viewer.ts's
 SceneQuery plus the rest of the viewer's state), and every call rebuilds the SceneModel from the version's design and loads the
 snapshot it names. The snapshots are the ones the server knows (the version's training snapshots and the ones "Run one real
-step" saved): a client names one by index, never by path.
+step" saved): a client names one by index, never by path. At the Model level the scene also carries the version's saved
+whole-context summary (POST /viewer/summary makes it) when it is current; otherwise the note says what to do.
 """
 
 import copy
@@ -97,6 +98,25 @@ class ProbeResult(BaseModel):
     note: str
 
 
+class ViewerSummaryRequest(BaseModel):
+    version: int | None = Field(default=None, ge=1)
+
+
+class ViewerSummaryStatus(BaseModel):
+    state: Literal["ready", "stale", "none", "no_checkpoint"]  # none/stale/no_checkpoint: the Model level draws without attention or stream sizes
+    step: int | None = None  # the training step of the checkpoint the summary came from
+    bins: int | None = None
+    n_ctx: int | None = None
+    note: str
+
+
+class ViewerSummaryResult(BaseModel):
+    step: int
+    bins: int
+    n_ctx: int
+    note: str
+
+
 def snapshot_paths(request: Request, number=None):
     """The snapshots a client may name: the version's training snapshots, then the ones a probe saved (oldest first)."""
     services = request.app.state.services
@@ -136,7 +156,29 @@ def build(request: Request, state: ViewControls):
     scene_json.scrub_to(model, view, state.snapshot, known(paths))  # a snapshot that will not load is said in the note
     if state.spec:
         model.update_spec(copy.deepcopy(state.spec))  # a design the client changed wins over the snapshot's
+    if state.level == "Model":
+        add_summary(services, version.number, model, view)
     return model, view
+
+
+SUMMARY_NOTES = {T[key] for key in ("summary_none", "summary_stale", "summary_no_checkpoint")}
+
+
+def summary_of(services, number, n_ctx):
+    """(state, summary) of the version's saved summary: ready only when it is for a context as long as the design drawn (`n_ctx`)."""
+    state, summary = services.viewer_summary(number)
+    return ("stale" if state == "ready" and summary["n_ctx"] != n_ctx else state), summary
+
+
+def add_summary(services, number, model, view):
+    """Give the Model level the version's whole-context summary. Without a current one (never made, made from another checkpoint,
+    or no checkpoint) nothing is drawn for it and the note says what to do. A note from the controls that was only this advice is
+    replaced, so it does not outlive the summary."""
+    state, summary = summary_of(services, number, model.spec["dims"]["n_ctx"])
+    if state == "ready":
+        scene_json.set_summary(model, {"attention": summary["attention"], "stream_norms": summary["stream_norms"], "edges": summary["edges"]})
+    if not view.note or view.note in SUMMARY_NOTES:
+        view.note = "" if state == "ready" else T[f"summary_{state}"]
 
 
 def known(paths):
@@ -227,8 +269,39 @@ def probe(request: Request, body: ProbeRequest | None = None):
             raise ValueError(T["probe_no_checkpoint"])
         if str(path) not in probes(request, version.number):
             probes(request, version.number).append(str(path))
+        state, _ = summary_of(services, version.number, (version.spec or {}).get("dims", {}).get("n_ctx"))
+        if state in ("none", "stale"):  # the same checkpoint, so the same numbers: only a missing or old summary is made again
+            try:
+                services.viewer_summarize(version.number)
+            except ValueError:
+                pass  # the probe worked; the Model level's note says why there is no summary
         return {"snapshot": snapshot_paths(request, version.number).index(str(path)), "note": T["probe_done"].format(n=version.number)}
     return start_job(request, "viewer.probe", run, ProbeResult)
+
+
+@router.get("/summary", response_model=ViewerSummaryStatus)
+def summary(request: Request, version: int | None = None):
+    """Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,
+    or what is missing. POST /viewer/summary makes it."""
+    services = request.app.state.services
+    picked = pick_version(services, version)
+    state, found = summary_of(services, picked.number, (picked.spec or {}).get("dims", {}).get("n_ctx"))
+    ready = state == "ready"
+    return ViewerSummaryStatus(state=state, step=found["step"] if found else None, bins=len(found["edges"]) - 1 if found else None,
+                         n_ctx=found["n_ctx"] if found else None, note=T["summary_done"].format(n=picked.number) if ready else T[f"summary_{state}"])
+
+
+@router.post("/summary", response_model=JobOut, status_code=202)
+def make_summary(request: Request, body: ViewerSummaryRequest | None = None):
+    """Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text
+    (studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from."""
+    services = request.app.state.services
+    picked = pick_version(services, (body or ViewerSummaryRequest()).version)
+
+    def run(stop):
+        made = services.viewer_summarize(picked.number)
+        return {"step": made["step"], "bins": len(made["edges"]) - 1, "n_ctx": made["n_ctx"], "note": T["summary_done"].format(n=picked.number)}
+    return start_job(request, "viewer.summary", run, ViewerSummaryResult)
 
 
 @router.get("/status", response_model=ViewerStatus)
