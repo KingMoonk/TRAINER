@@ -196,7 +196,14 @@ With a store set up, the API shares versions:
 | --- | --- |
 | `POST /versions/{n}/publish` | A job: uploads version `n`'s weights and metadata. Its result is `{key, number, origin}`. |
 | `GET /versions/published` | What the store holds, newest first: each entry has `origin` (the machine that published it), `mine`, and `local` / `local_number` (whether this workspace has it as a version). |
-| `POST /versions/{n}/pull` | A job: downloads published version `n` and adds it here as a trained version. `?origin=<machine>` picks one when two machines published a version `n`. Pulling what is already here returns that version. |
+| `POST /versions/{n}/pull` | A job: downloads published version `n` and adds it here as a trained version. `?origin=<machine>` picks one when two machines published a version `n`, and asks that machine first (below). Pulling what is already here returns that version. |
+| `GET /versions/{n}/weights/meta`, `GET /versions/{n}/weights` | What a peer calls on the machine that holds version `n`: the description `publish` would upload, and the half-precision weights file, streamed. No optimizer state, no run files. The copy is made on the first call and kept in `data/shared/` until the version changes. |
+
+**Straight from the owner.** With `?origin=<machine>`, a pull asks the machine that published the version before it reads the store, when the
+workspace lists it under `studioConfig.nodes` and it answers `GET /node` within two seconds. The owner is found by hostname, so a listed IP
+address works. The weights then travel over the tailnet and the store is not read. If the owner is off, is not listed, or cannot send the
+version, the pull falls back to the store. The job's progress says which source was used and why (`Copied version 3 straight from mac.`,
+`mac did not answer, so version 3 came from the version store.`). Without `?origin=` the store is listed to learn who published the version (then that machine is asked the same way), so the store is read for the listing but the weights still come from the owner.
 
 `n` in a pull is the number the publishing machine gave the version. A pulled version has no scorecard: the numbers measured on the other
 machine used its held-back text, so they are not comparable here. Its file is kept under `data/pulled/`.

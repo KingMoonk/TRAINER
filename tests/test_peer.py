@@ -1,8 +1,10 @@
 """studio_peer: the node-to-node HTTP client, over a fake opener. No network."""
 import io
 import json
+import tempfile
 import unittest
 import urllib.error
+from pathlib import Path
 
 from studio_peer import PeerClient, PeerError, base_url
 
@@ -64,6 +66,38 @@ class Calls(unittest.TestCase):
         request = opener.requests[1][0]
         self.assertEqual((request.data, request.get_header("Content-type")), (b"\x01", "application/octet-stream"))
         self.assertTrue(request.full_url.endswith("?tokens=5"))
+
+    def test_a_body_goes_to_a_file_a_block_at_a_time(self):
+        class Body(Response):
+            reads = []
+
+            def read(self, size=-1):
+                self.reads.append(size)
+                return super().read(size)
+
+        data = bytes(range(256)) * 9000  # more than one block
+        client = PeerClient("box", opener=lambda request, timeout: Body(data))
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "weights.npz"
+            self.assertIsNone(client.get_file("versions/1/weights", target, {"key": "a"}))
+            self.assertEqual(target.read_bytes(), data)
+        self.assertTrue(all(0 < size <= 1 << 20 for size in Body.reads), Body.reads)  # never the whole body at once
+        self.assertGreater(len(Body.reads), 2)
+
+    def test_a_download_that_drops_is_retried_from_the_start_and_an_error_status_is_not(self):
+        class Drops(Response):
+            def read(self, size=-1):
+                raise ConnectionResetError("reset")
+
+        answers = [Drops(b"half"), Response(b"whole")]
+        opener = lambda request, timeout: answers.pop(0)  # noqa: E731
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "f"
+            PeerClient("box", opener=opener, sleep=lambda s: None).get_file("x", target)
+            self.assertEqual(target.read_bytes(), b"whole")
+            with self.assertRaises(PeerError) as caught:
+                PeerClient("box", opener=Opener(http_error(404, '{"detail": "No version 7"}'))).get_file("x", target)
+            self.assertEqual((caught.exception.status, caught.exception.detail), (404, "No version 7"))
 
     def test_a_connection_failure_is_retried_with_growing_jittered_waits(self):
         waits = []

@@ -170,6 +170,13 @@ class JobsTest(unittest.TestCase):
                 return {"answer": 42}
             return {"id": request.app.state.jobs.submit("slow", work).id}
 
+        @self.app.post("/test-quick")
+        def quick(request: api_app.Request):
+            def work(stop):
+                self.services.note("Copied from the other machine")  # done before the first progress poll could see it
+                return {}
+            return {"id": request.app.state.jobs.submit("quick", work).id}
+
         @self.app.post("/test-fail")
         def fail(request: api_app.Request):
             def work(stop):
@@ -202,6 +209,13 @@ class JobsTest(unittest.TestCase):
         progress = [p for k, p in self.events if k == "job" and p["id"] == job_id and p["progress"]]
         self.assertTrue(progress, "no job event carried the progress text")
         self.assertEqual((progress[0]["progress"], progress[0]["fraction"]), ("halfway", 0.5))
+
+    def test_a_short_jobs_last_note_stays_on_its_record_and_the_next_job_starts_clean(self):
+        with TestClient(self.app) as client:
+            job = self.wait_for(client, client.post("/test-quick").json()["id"], "done")
+            self.assertEqual(job["progress"], "Copied from the other machine")
+            failed = self.wait_for(client, client.post("/test-fail").json()["id"], "failed")
+        self.assertEqual(failed["progress"], "")
 
     def test_a_failing_job_reports_its_error(self):
         with TestClient(self.app) as client:
