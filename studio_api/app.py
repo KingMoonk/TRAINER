@@ -13,7 +13,8 @@ from studio_api.auth import TailscaleAuth
 from studio_api.version import app_version
 from studio_versions import NoCheckpoint
 
-ROUTERS = ("versions", "queue", "storage", "data", "pretraining", "node")  # one module each in studio_api.routers
+ROUTERS = ("versions", "queue", "storage", "passive", "data", "pretraining", "post_training", "chat", "inspect", "benchmark",
+           "viewer", "node")  # one module each in studio_api.routers
 WEB_OUT = Path(__file__).resolve().parent.parent / "web" / "out"
 
 
