@@ -7,7 +7,8 @@ import uuid
 
 import studio_quicktest
 from studio_ia.copy import QUICKTEST as T
-from studio_ia.pages.builder import WIDTHS, read_spec, say, sizes, text_sets
+from studio_ia.design import WIDTHS, read_spec, sizes
+from studio_ia.pages.builder import say, text_sets
 from studio_ia.pages.base import Page
 from studio_ia.services import Job
 from studio_ia.theme import C, GUTTER, font, tk_label

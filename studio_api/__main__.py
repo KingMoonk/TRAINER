@@ -55,7 +55,9 @@ def build(args):
 
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
-    return create_app(services, open=args.fake or args.bind in LOCAL)
+        tags, users = studio_cluster.allowed_callers(workspace.state)
+        return create_app(services, open=args.bind in LOCAL, allow_tags=tags, allow_users=users)
+    return create_app(services, open=True)
 
 
 def make(argv=None):
@@ -80,9 +82,9 @@ def main(argv=None):
     if args.reload:
         os.environ[ARGV] = json.dumps(argv)
         uvicorn.run("studio_api.__main__:reloaded", factory=True, reload=True, reload_dirs=[str(ROOT)],
-                    host=args.bind, port=args.port)
+                    host=args.bind, port=args.port, proxy_headers=False)
     else:
-        uvicorn.run(build(args), host=args.bind, port=args.port)
+        uvicorn.run(build(args), host=args.bind, port=args.port, proxy_headers=False)
 
 
 if __name__ == "__main__":

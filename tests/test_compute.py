@@ -5,6 +5,7 @@ import unittest
 
 import studio_compute as sc
 import studio_quicktest as quicktest
+from studio_ia import design as D
 from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices
 from studio_spec import default_spec, validate_spec
@@ -190,12 +191,12 @@ class RangeTest(unittest.TestCase):
 
 class CostPanel(unittest.TestCase):
     def test_counting_and_no_text(self):
-        self.assertEqual(B.compute_lines(1_000_000, 256, 4, None), [(B.T["compute_counting"], False)])
-        self.assertEqual(B.compute_lines(1_000_000, 256, 4, {}), [(B.T["compute_none"], False)])
-        self.assertEqual(B.compute_lines(1_000_000, 256, 4, {"pieces": None}), [(B.T["compute_none"], False)])
+        self.assertEqual(D.compute_lines(1_000_000, 256, 4, None), [(B.T["compute_counting"], False)])
+        self.assertEqual(D.compute_lines(1_000_000, 256, 4, {}), [(B.T["compute_none"], False)])
+        self.assertEqual(D.compute_lines(1_000_000, 256, 4, {"pieces": None}), [(B.T["compute_none"], False)])
 
     def test_a_design_far_too_big_for_the_text_says_so_and_is_flagged(self):
-        lines = B.compute_lines(10_000_000, 256, 4, {"pieces": 1_000_000, "tokens_per_second": 5000.})
+        lines = D.compute_lines(10_000_000, 256, 4, {"pieces": 1_000_000, "tokens_per_second": 5000.})
         text, bad = lines[0]
         self.assertIn("supports about 50.0K parameters at 20 word pieces each", text)
         self.assertIn("this design has 10.0M", text)
@@ -205,55 +206,55 @@ class CostPanel(unittest.TestCase):
         self.assertIn("200 times", lines[-1][0])
 
     def test_steps_and_time_for_a_design_the_text_fits(self):
-        lines = B.compute_lines(100_000, 256, 2, {"pieces": 100_000_000, "tokens_per_second": 10_000.})
+        lines = D.compute_lines(100_000, 256, 2, {"pieces": 100_000_000, "tokens_per_second": 10_000.})
         self.assertEqual(len(lines), 2)
         self.assertIn("so your text could train a bigger one", lines[0][0])
         self.assertFalse(lines[0][1])
-        self.assertIn(f"about {math.ceil(2_000_000 / (B.ROWS * 256)):,} steps", lines[1][0])
+        self.assertIn(f"about {math.ceil(2_000_000 / (D.ROWS * 256)):,} steps", lines[1][0])
         self.assertIn("under one pass", lines[1][0])
         self.assertIn("3 minutes", lines[1][0])  # 2M tokens at 10K a second is 200 s
 
     def test_repeated_text_is_named_but_not_called_under_trained(self):
-        lines = B.compute_lines(1_000_000, 256, 2, {"pieces": 2_000_000, "tokens_per_second": 10_000., "estimated": True})
+        lines = D.compute_lines(1_000_000, 256, 2, {"pieces": 2_000_000, "tokens_per_second": 10_000., "estimated": True})
         self.assertIn("about 100.0K parameters", lines[0][0])
         self.assertIn("repeated", lines[0][0])
         self.assertNotIn("under-trained", lines[0][0])
         self.assertIn("4.0 passes", lines[1][0])
 
     def test_a_design_between_one_and_four_passes_says_the_text_is_reread(self):
-        lines = B.compute_lines(300_000, 256, 2, {"pieces": 2_000_000, "tokens_per_second": 10_000.})  # one pass supports 100K
+        lines = D.compute_lines(300_000, 256, 2, {"pieces": 2_000_000, "tokens_per_second": 10_000.})  # one pass supports 100K
         self.assertIn("reads your text about 3.0 times", lines[0][0])
         self.assertNotIn("enough text", lines[0][0])
         self.assertFalse(lines[0][1])
         self.assertEqual(len(lines), 2)  # within 4 passes: no repeat warning
 
     def test_without_a_measured_speed_the_time_model_is_used(self):
-        lines = B.compute_lines(100_000, 256, 2, {"pieces": 100_000_000})
+        lines = D.compute_lines(100_000, 256, 2, {"pieces": 100_000_000})
         self.assertIn("At this computer's speed", lines[1][0])
 
     def test_passes_in_words(self):
-        self.assertEqual(B.passes_text(.2), "under one pass")
-        self.assertEqual(B.passes_text(1.), "one pass")
-        self.assertEqual(B.passes_text(2.5), "2.5 passes")
-        self.assertEqual(B.passes_text(12.2), "12 passes")
+        self.assertEqual(D.passes_text(.2), "under one pass")
+        self.assertEqual(D.passes_text(1.), "one pass")
+        self.assertEqual(D.passes_text(2.5), "2.5 passes")
+        self.assertEqual(D.passes_text(12.2), "12 passes")
 
     def test_rate_sentence(self):
         result = FakeServices().lr_range_test(tiny_spec())
-        text = B.lr_text(result, .0006)
+        text = D.lr_text(result, .0006)
         self.assertIn(f"{result['suggestion']:.2g}", text)
         self.assertIn("0.0006", text)
         self.assertNotIn("blew up", text)
-        self.assertIn("blew up", B.lr_text(dict(result, diverged=True), .0006))
-        self.assertEqual(B.lr_text(None), "")
-        self.assertIn("no suggestion", B.lr_text(dict(result, suggestion=None)))
-        self.assertIn("Stopped", B.lr_text(dict(result, cancelled=True)))
-        self.assertIn("could not run: Boom", B.lr_text({"error": "Boom"}))
+        self.assertIn("blew up", D.lr_text(dict(result, diverged=True), .0006))
+        self.assertEqual(D.lr_text(None), "")
+        self.assertIn("no suggestion", D.lr_text(dict(result, suggestion=None)))
+        self.assertIn("Stopped", D.lr_text(dict(result, cancelled=True)))
+        self.assertIn("could not run: Boom", D.lr_text({"error": "Boom"}))
 
     def test_a_sweep_that_blew_up_before_falling_says_so_at_the_failing_rate(self):
         early = dict(rates=[], losses=[], suggestion=None, steepest=None, diverged=True, failed_at=1e-6, cancelled=False)
-        self.assertEqual(B.lr_text(early), B.T["lr_blew_up_early"].format(rate="1e-06"))
+        self.assertEqual(D.lr_text(early), B.T["lr_blew_up_early"].format(rate="1e-06"))
         result = dict(FakeServices().lr_range_test(tiny_spec()), diverged=True, failed_at=.25)
-        self.assertIn("blew up past 0.25", B.lr_text(result, .0006))
+        self.assertIn("blew up past 0.25", D.lr_text(result, .0006))
 
     def test_every_new_sentence_exists(self):
         for key in ("compute_supports", "compute_under", "compute_enough", "compute_reread", "compute_roomy", "compute_repeats", "compute_steps", "compute_time",
