@@ -1,10 +1,12 @@
 """studio_api.routers.node over FakeServices: GET /node answers with studio_cluster's payload. It emits no events."""
+import json
+import os
 import unittest
 from unittest import mock
 
 import studio_cluster
 from fastapi.testclient import TestClient
-from studio_api.__main__ import make
+from studio_api.__main__ import ARGV, make, reloaded
 from studio_api.app import create_app
 from studio_api.version import app_version
 from studio_ia.services import FakeServices, Job, QueueState
@@ -52,6 +54,14 @@ class NodeApiTest(unittest.TestCase):
     def test_the_server_listens_where_peers_look_for_it(self):
         _, _, port = make(["--fake"])
         self.assertEqual(port, studio_cluster.DEFAULT_PORT)
+
+    def test_reload_builds_each_app_from_the_saved_command_line(self):
+        with mock.patch.dict(os.environ, {ARGV: json.dumps(["--fake", "--bind", "0.0.0.0"])}):
+            app = reloaded()
+        self.addCleanup(app.state.broadcaster.close)
+        self.addCleanup(app.state.jobs.close)
+        self.assertTrue(app.state.open)  # --fake is open whatever the bind
+        self.assertIsInstance(app.state.services, FakeServices)
 
 
 if __name__ == "__main__":
