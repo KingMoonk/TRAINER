@@ -89,12 +89,16 @@ class Leases(unittest.TestCase):
         self.table.seed("j", 4)
         self.assertEqual(self.table.grant("j", "a").epoch, 5)
 
-    def test_a_lease_lapses_after_its_duration(self):
+    def test_a_lease_lapses_after_its_duration_and_expires_after_two(self):
         lease = self.table.grant("j", "a", 30.)
         self.clock.advance(30)
-        self.assertEqual(self.table.lapsed(), [])
+        self.assertEqual((self.table.lapsed(), self.table.expired()), ([], []))
         self.clock.advance(1)
-        self.assertEqual(self.table.lapsed(), ["j"])
+        self.assertEqual((self.table.lapsed(), self.table.expired()), (["j"], []))
+        self.clock.advance(29)
+        self.assertEqual(self.table.expired(), [])
+        self.clock.advance(1)
+        self.assertEqual(self.table.expired(), ["j"])
         self.assertEqual(lease.renew_every, 10.)
 
     def test_a_renewal_restarts_the_count(self):
@@ -244,14 +248,17 @@ class Dispatching(unittest.TestCase):
         result = self.owner.dispatch("j", "gpu", {})
         self.assertFalse(result.confirmed)
         self.assertIsNotNone(self.owner.leases.get("j"))
-        self.clock.advance(31)  # nothing renews it
-        self.assertEqual(self.owner.tick(), [("j", "lapsed")])
+        self.clock.advance(61)  # nothing renews it: two durations later the job may be placed again
+        self.assertEqual(self.owner.tick(), [("j", "reassign")])
 
-    def test_a_lapse_is_reported_once(self):
+    def test_lapse_is_reported_once_and_reassignment_waits_a_second_duration(self):
         self.owner.dispatch("j", "gpu", {})
         self.clock.advance(31)
         self.assertEqual(self.owner.tick(), [("j", "lapsed")])
-        self.clock.advance(60)
+        self.clock.advance(10)
+        self.assertEqual(self.owner.tick(), [])
+        self.clock.advance(20)
+        self.assertEqual(self.owner.tick(), [("j", "reassign")])
         self.assertEqual(self.owner.tick(), [])
 
     def test_a_renewal_after_a_lapse_recovers_the_lease(self):
@@ -263,8 +270,12 @@ class Dispatching(unittest.TestCase):
         self.clock.advance(31)
         self.assertEqual(self.owner.tick(), [("j", "lapsed")])  # and can lapse again
 
-    def test_a_second_dispatch_is_the_next_epoch_and_fences_the_first(self):
+    def test_after_reassignment_the_old_epoch_is_refused_and_the_new_grant_is_epoch_2(self):
         old = self.owner.dispatch("j", "gpu", {}).lease
+        self.clock.advance(61)
+        self.owner.tick()
+        with self.assertRaises(StaleEpoch):
+            self.owner.renew("j", old.epoch)
         self.assertEqual(self.owner.dispatch("j", "gpu", {}).lease.epoch, 2)
         with self.assertRaises(StaleEpoch):
             self.owner.renew("j", old.epoch)
@@ -399,25 +410,34 @@ class OwnerAndRunnerTogether(unittest.TestCase):
                 del self.running[name]  # the job stopped on that node
         return self.owner.tick()
 
-    def test_a_lost_node_is_fenced_within_one_lease(self):
+    def test_a_lost_node_is_fenced_before_the_owner_places_the_job_again(self):
         self.owner.dispatch("j", "a", {})
         for _ in range(12):
             self.step()
         self.assertIn("a", self.running)  # renewing happily
-        self.net.down.update({"a", "owner"})
-        stopped_at = None
+        self.net.down.update({"a", "owner"})  # a's link to the owner is cut (the owner cannot reach a either)
+        stopped_at = reassigned_at = None
         for second in range(1, 90):
-            self.step()
-            if "a" not in self.running:
+            actions = self.step()
+            if "a" not in self.running and stopped_at is None:
                 stopped_at = second
+            if ("j", "reassign") in actions:
+                reassigned_at = second
                 break
         self.assertIsNotNone(stopped_at)
-        self.assertLessEqual(stopped_at, 30)  # a gave up within one lease, measured from the last renewal it sent
+        self.assertLessEqual(stopped_at, 30)  # a gave up within one lease
+        self.assertGreater(reassigned_at, 2 * 30 - 12)  # the owner waited for two
+        self.assertLess(stopped_at, reassigned_at)  # so the old copy was gone first
+        self.net.down.clear()
+        self.assertEqual(self.owner.dispatch("j", "b", {}).lease.epoch, 2)
+        self.assertEqual(set(self.running), {"b"})
 
     def test_a_node_that_comes_back_with_the_old_epoch_is_refused_and_stops(self):
         self.owner.dispatch("j", "a", {})
         a = self.running["a"]
         self.net.down.add("a")  # asleep: its clock does not move for the owner, who gives up on it
+        self.clock.advance(61)
+        self.owner.tick()
         self.owner.dispatch("j", "b", {})
         # a wakes up without having noticed time pass (its fence has not fired yet), and renews at epoch 1
         a.fence._deadline = self.clock() + 20
@@ -426,15 +446,59 @@ class OwnerAndRunnerTogether(unittest.TestCase):
         self.assertEqual(self.running["b"].renew(dict), None)
 
 
+class Resuming(unittest.TestCase):
+    def params(self, **cluster):
+        return {"config": {"steps": 1000, "batch_size": 8}, "examples": [{"text": "x"}], "cluster": {"steps": 1000, "offset": 0, **cluster}}
+
+    def test_with_a_checkpoint_the_job_continues_from_it_with_the_steps_that_are_left(self):
+        params, note, finished = sched.resume_params(self.params(checkpoint={"key": "box/v0-abc", "step": 400}), "gpu-box")
+        self.assertFalse(finished)
+        self.assertEqual((params["mode"], params["fetch"], params["config"]["steps"]), ("catch_up", {"init_from": "box/v0-abc"}, 600))
+        self.assertEqual(params["cluster"]["offset"], 400)
+        self.assertEqual(params["config"]["batch_size"], 8)
+        self.assertIn("step 400", note)
+        self.assertIn("optimizer starts again from zero", note)
+
+    def test_a_second_interruption_before_a_new_checkpoint_resumes_from_the_same_one(self):
+        first, _, _ = sched.resume_params(self.params(checkpoint={"key": "k", "step": 400}), "a")
+        again, _, _ = sched.resume_params(first, "b")
+        self.assertEqual((again["config"]["steps"], again["fetch"]), (600, {"init_from": "k"}))
+
+    def test_a_later_checkpoint_counts_from_the_steps_already_done(self):
+        first, _, _ = sched.resume_params(self.params(checkpoint={"key": "k", "step": 400}), "a")
+        first["cluster"]["checkpoint"] = {"key": "k2", "step": 700}  # the second attempt's own, in absolute steps
+        again, _, _ = sched.resume_params(first, "b")
+        self.assertEqual((again["config"]["steps"], again["fetch"]), (300, {"init_from": "k2"}))
+
+    def test_without_a_checkpoint_it_starts_again_and_says_so(self):
+        params, note, finished = sched.resume_params(self.params(), "gpu-box")
+        self.assertFalse(finished)
+        self.assertNotIn("fetch", params)
+        self.assertEqual(params["config"]["steps"], 1000)
+        self.assertIn("before its first checkpoint", note)
+
+    def test_a_checkpoint_at_the_last_step_means_the_job_had_finished(self):
+        _, _, finished = sched.resume_params(self.params(checkpoint={"key": "k", "step": 1000}), "a")
+        self.assertTrue(finished)
+
+    def test_the_input_params_are_not_changed(self):
+        original = self.params(checkpoint={"key": "k", "step": 400})
+        sched.resume_params(original, "a")
+        self.assertEqual(original["config"]["steps"], 1000)
+        self.assertNotIn("mode", original)
+
+
 class Relaying(unittest.TestCase):
     def test_only_events_that_make_sense_on_the_owner_are_passed_on(self):
         self.assertIsNotNone(sched.relayed({"type": "metric", "step": 5, "total": 10}))
         self.assertIsNone(sched.relayed({"type": "viz_snapshot", "step": 5, "path": "/runner/disk/x.npz"}))
         self.assertIsNone(sched.relayed({"type": "done", "directory": "/runner/disk"}))
         self.assertIsNone(sched.relayed("not an event"))
-    def test_an_event_is_passed_on_as_it_came(self):
-        self.assertEqual(sched.relayed({"type": "metric", "step": 5, "total": 600, "loss": 1.5}),
-                         {"type": "metric", "step": 5, "total": 600, "loss": 1.5})
+
+    def test_steps_continue_after_a_resume(self):
+        self.assertEqual(sched.relayed({"type": "metric", "step": 5, "total": 600, "loss": 1.5}, 400),
+                         {"type": "metric", "step": 405, "total": 1000, "loss": 1.5})
+        self.assertEqual(sched.relayed({"type": "info", "text": "hello"}, 400), {"type": "info", "text": "hello"})
 
 
 if __name__ == "__main__":
