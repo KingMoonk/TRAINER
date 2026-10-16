@@ -18,6 +18,7 @@ from studio_model import AdamW, ScratchTransformer, Tokenizer, load_checkpoint, 
 from studio_queue import Job, Plan, Runner
 from studio_rlhf import _encode_pair
 from tests.fixtures.ia_workspace import _generate_problems
+from tests.torchcheck import counting_backward, watched_models
 
 WORDS = ("yes", "no", "cat", "dog", "sun", "red", "sky", "big")
 EXAMPLES = [{"user": f"Copy: {w}", "assistant": w} for w in WORDS] * 3
@@ -148,18 +149,17 @@ class RLChecks(unittest.TestCase):
     def test_reverse_kl(self):
         student, tokenizer = self.model()
         rows = self.rows(tokenizer, ["yes", "no", "cat"])
-        same = studio_rl.Teacher(self.ckpt)
-        kl, _ = studio_rl.reverse_kl(student, same.model, rows, rows)
+        kl, _ = studio_rl.reverse_kl(student, studio_rl.Teacher(self.ckpt).score(rows), rows)
         self.assertGreaterEqual(kl, -1e-5)
         self.assertLess(kl, 1e-5)
         other = train({**TINY, "steps": 5, "seed": 3}, EXAMPLES, self.dir / "other")
         self.assertTrue(other)
-        kl, per_row = studio_rl.reverse_kl(student, studio_rl.Teacher(self.dir / "other" / "last.npz").model, rows, rows)
+        kl, per_row = studio_rl.reverse_kl(student, studio_rl.Teacher(self.dir / "other" / "last.npz").score(rows), rows)
         self.assertTrue(np.isfinite(kl) and all(np.isfinite(s).all() and np.isfinite(t).all() for s, t in per_row))
         # the privileged teacher sees the correction as a system message; the student does not
         teacher = studio_rl.privileged(self.ckpt, "Always answer yes.")
         t_rows = [_encode_pair(tokenizer, teacher.messages(USER), "yes", 32)]
-        kl, _ = studio_rl.reverse_kl(student, teacher.model, self.rows(tokenizer, ["yes"]), t_rows)
+        kl, _ = studio_rl.reverse_kl(student, teacher.score(t_rows), self.rows(tokenizer, ["yes"]))
         self.assertTrue(np.isfinite(kl))
 
     def test_a_teacher_with_another_word_list_is_rejected(self):
@@ -193,7 +193,53 @@ class RLChecks(unittest.TestCase):
         heat = next(e for e in events if e["type"] == "heat")
         self.assertEqual(len(heat["words"]), len(heat["surprise"]))
         self.assertLessEqual(record["moved"], record["words"])
-        self.assertTrue((self.dir / "r3" / "last.npz").exists())
+        self.assertTrue((self.dir / "r3").joinpath("last.npz").exists())
+
+    def privileged_round(self, name):
+        """A short round 3 with the same model and a hint as teacher: (losses per step, record)."""
+        events = []
+        record = studio_rl.learn_from_teacher(self.ckpt, [f"Copy: {w}" for w in WORDS[:4]], studio_rl.privileged(self.ckpt, "Copy the word."),
+                                              self.dir / name, steps=4, learning_rate=1e-3, emit=events.append)
+        return [e["loss"] for e in events if e["type"] == "metric"], record
+
+    def assert_unchanged_round(self, losses, record):
+        """The numbers from before the teacher left the device between phases (it scored next to the student the whole round)."""
+        for got, want in zip(losses, (.044044, .091985, -.053134, -.060713)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+        self.assertAlmostEqual(record["kl_before"], .092134, delta=1e-3)
+        self.assertAlmostEqual(record["kl_after"], -.025152, delta=1e-3)
+        self.assertEqual((record["moved"], record["words"]), (8, 34))
+
+    def test_round_3_losses_do_not_depend_on_where_the_teacher_ran(self):
+        self.assert_unchanged_round(*self.privileged_round("r3cpu"))
+
+    def test_the_teacher_is_off_the_device_while_the_student_goes_backward(self):
+        for kind, reloads in (("cuda", 0), ("mps", 4)):
+            with self.subTest(kind):
+                model, live = watched_models(kind)
+                loads = []
+                load = studio_rl.load_checkpoint
+                with mock.patch.object(studio_rl, "ScratchTransformer", model), mock.patch.object(studio_rl, "empty_cache") as emptied, \
+                        mock.patch.object(studio_rl, "load_checkpoint", lambda *a, **k: loads.append(a[0]) or load(*a, **k)), \
+                        counting_backward(live) as resident:
+                    losses, record = self.privileged_round(f"r3{kind}")
+                self.assertEqual(resident, [0] * 4)   # four steps, and the teacher was not in memory at any of their backward passes
+                self.assertTrue(emptied.called and all(call.args == (kind,) for call in emptied.call_args_list))
+                self.assertEqual(len(loads), 2 + reloads)   # the teacher's and the student's loads (the teacher then borrows the student's), plus on mps one reload per later score
+                self.assert_unchanged_round(losses, record)
+                self.assertEqual(len(live), 0)
+
+    def test_a_cpu_teacher_stays_built(self):
+        model, live = watched_models()
+        with mock.patch.object(studio_rl, "ScratchTransformer", model):
+            teacher = studio_rl.Teacher(self.ckpt)
+            _, tokenizer = self.model()
+            teacher.score(self.rows(tokenizer, ["yes"]))
+            first = teacher.model
+            teacher.score(self.rows(tokenizer, ["no"]))
+        self.assertIsNotNone(first)
+        self.assertIs(teacher.model, first)
+        self.assertEqual(len(live), 1)
 
     # ------------------------------------------------------------------ gate
     def test_gate_truth_table(self):
