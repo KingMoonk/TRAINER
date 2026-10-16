@@ -25,13 +25,38 @@ pnpm needed; the API starts without it and then serves only the routes).
 
 ### Who is allowed in
 
-The tailnet is the perimeter, and the API trusts the `Tailscale-User-Login` header that `tailscale serve` adds to each request.
+The tailnet is the perimeter, but the API does not trust a header a caller can type. How a request is identified depends on
+where it came from:
 
-- Bound to `127.0.0.1` (or `localhost`, `::1`) or run with `--fake`, the server is open: any process on this machine can use it,
-  with or without the header. That is what you want behind `tailscale serve`, which connects from the loopback address.
-- Bound to anything else (`--bind 100.64.0.7`, `--bind 0.0.0.0`), a request without `Tailscale-User-Login` gets `401`. Nothing
-  on the tailnet sends that header unless `tailscale serve` (or another proxy you trust) is in front, so do not expose the
-  port directly: leave `--bind` at its default and put `tailscale serve` in front.
+- **Open.** Bound to `127.0.0.1` (or `localhost`, `::1`) or run with `--fake`, the server is open: any process on this machine
+  can use it, with or without a header.
+- **Through `tailscale serve`** (a browser): the request arrives from the loopback address with the `Tailscale-User-Login`
+  header. `tailscale serve` deletes any `Tailscale-User-*` value the client sent and writes its own, so the API trusts it on
+  that path. A loopback request without the header gets `401`.
+- **Straight to the node's tailnet address** (another node, `http://<node>:8787`): the header is ignored. The API asks the local
+  `tailscaled` who owns the source address (`tailscale whois --json <ip>`, answers cached for a minute) and lets the caller in
+  when it is a node carrying an allowed tag (default `tag:trainer`; recorded as `node:<hostname>`) or a user listed in the
+  workspace config. Anyone else gets `401`. This needs the `tailscale` command on the node: it is found on `PATH`, at
+  `C:\Program Files\Tailscale\tailscale.exe` or at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
+
+The allow-list lives in `data/workspace.json` and is read when the API starts:
+
+```json
+{"studioConfig": {"cluster": {"allowTags": ["tag:trainer"], "allowUsers": ["friend@example.com"]}}}
+```
+
+Both keys are optional (`allowTags` defaults to `["tag:trainer"]`, `allowUsers` to nobody). A bad value stops the API at start
+with a sentence saying which key to fix.
+
+### Binding
+
+`--bind` decides who can reach the port at all:
+
+- Browsers only: leave it at `127.0.0.1` and use `tailscale serve` (below).
+- Other nodes call it: `--bind 100.64.0.7` (this machine's address from `tailscale ip -4`) so nodes reach `http://<node>:8787`,
+  but then `tailscale serve` cannot reach a loopback listener. If the same machine also serves browsers, bind `0.0.0.0` instead:
+  `serve` connects over the loopback address and nodes over the tailnet, and a request from anywhere else (the LAN) is refused
+  by the whois check. Either way, the ACL decides who gets as far as the port (`docs/cluster.md`).
 
 ## `tailscale serve`
 
@@ -47,14 +72,13 @@ The UI is then at `https://<machine>.<tailnet>.ts.net/` (the name is on the **Ma
 `tailscale serve reset` takes it down. HTTPS must be enabled for the tailnet once (**DNS** page, **HTTPS Certificates**); the
 first `serve` command offers the link.
 
-Use that `https://` URL, with no port, when listing the node in another machine's `nodes` config (`docs/cluster.md`).
+Browsers use that `https://` URL. Nodes list each other by tailnet name, which reaches the API directly on port 8787 (`docs/cluster.md`).
 
 ### ACL
 
-Because `tailscale serve` listens on port 443 of the tailnet name, the ACL rules in `docs/cluster.md` must allow
-`tag:trainer:443`, not `8787`: the API's own port is only open on the machine's loopback. Change the `dst` entries there to
-`tag:trainer:443`. The user a request is attributed to is the Tailscale login of the person who made it, so the ACL decides
-who can reach a node at all.
+`tailscale serve` listens on port 443 of the tailnet name, so people reach a node on `tag:trainer:443`; other nodes call the API's
+own port, `tag:trainer:8787`. The rules in `docs/cluster.md` have both. The user a browser request is attributed to is the
+Tailscale login of the person who made it, so the ACL decides who can reach a node at all.
 
 ## As a service on macOS (launchd)
 
@@ -112,7 +136,7 @@ Start-ScheduledTask -TaskName "Groundwork API"
 stops it, `Unregister-ScheduledTask -TaskName "Groundwork API" -Confirm:$false` removes it. `pythonw.exe` has no console, so
 to see errors run the same command once in a terminal with `python.exe`. Run `tailscale serve --bg 8787` once (Tailscale
 keeps it across restarts). Set **Power & sleep** to never sleep on this machine, and
-allow `python.exe` through Windows Firewall only if you ever bind to a non-loopback address (behind `tailscale serve` you do not).
+allow `python.exe` through Windows Firewall only if you bind to a non-loopback address (nodes calling it directly); behind `tailscale serve` alone you do not.
 
 ## Checking it works
 
