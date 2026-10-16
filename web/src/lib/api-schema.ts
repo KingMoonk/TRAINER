@@ -2341,6 +2341,16 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Checkpoint */
+        Checkpoint: {
+            /** Key */
+            key: string;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+        };
         /** Chip */
         Chip: {
             /** Known */
@@ -2402,6 +2412,8 @@ export interface components {
         };
         /** ClusterJob */
         ClusterJob: {
+            /** Checkpoint Step */
+            checkpoint_step?: number | null;
             /**
              * Epoch
              * @default 0
@@ -3644,6 +3656,7 @@ export interface components {
         };
         /** Renewal */
         Renewal: {
+            checkpoint?: components["schemas"]["Checkpoint"] | null;
             /** Epoch */
             epoch: number;
             /**

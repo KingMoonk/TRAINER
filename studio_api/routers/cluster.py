@@ -37,6 +37,7 @@ class ClusterJob(BaseModel):
     status: str
     lease: str = ""  # held | lapsed | expired
     waiting_reason: str = ""
+    checkpoint_step: int | None = None
 
 
 class LeaseModel(BaseModel):
@@ -68,12 +69,18 @@ class Accepted(BaseModel):
     epoch: int
 
 
+class Checkpoint(BaseModel):
+    key: str
+    step: int = 0
+
+
 class Renewal(BaseModel):
     epoch: int
     state: str = "running"  # fetching | queued | running
     step: int = 0
     total: int = 0
     events: list[dict] = []
+    checkpoint: Checkpoint | None = None
     waiting: bool = False
 
 

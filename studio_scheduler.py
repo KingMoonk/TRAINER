@@ -10,6 +10,7 @@ files. Every clock and every peer is injected, so each rule is a window-free tes
 * `decide`: where a waiting job goes: here, a peer, or nowhere yet.
 * `Owner` and `Guest`: the two ends of a dispatch, as state machines that call `client_for(address)` (a `studio_peer.PeerClient`).
   `Owner.tick()` says which leases lapsed; the I/O edge (studio_remote.py) acts on it.
+* `resume_params`: the params a job has when it is placed again after its node was lost.
 """
 from __future__ import annotations
 
@@ -138,6 +139,10 @@ class LeaseTable:
     def lapsed(self):
         """Jobs whose runner has been silent for longer than the lease: the runner has certainly stopped, or is about to."""
         return [j for j, (lease, heard) in self._held.items() if self.clock() - heard > lease.duration_s]
+
+    def expired(self):
+        """Jobs silent for two lease durations: the runner's self-fence has certainly fired, so the job may be placed again."""
+        return [j for j, (lease, heard) in self._held.items() if self.clock() - heard > 2 * lease.duration_s]
 
 
 class SelfFence:
@@ -281,13 +286,20 @@ class Owner:
                 pass
 
     def tick(self):
-        """[(job id, "lapsed")], each reported once: a lease that has not been renewed for its duration. The runner has certainly
-        stopped, or is about to; the job stays where it is until the lease is renewed again."""
+        """[(job id, "lapsed" | "reassign")]. "lapsed" is reported once, when a lease has not been renewed for its duration;
+        "reassign" once the owner has waited a second duration, which releases the lease so the old runner is fenced."""
         out = []
+        expired = set(self.leases.expired())
         for job_id in self.leases.lapsed():
+            if job_id in expired:
+                continue
             if job_id not in self._lapsed:
                 self._lapsed.add(job_id)
                 out.append((job_id, "lapsed"))
+        for job_id in sorted(expired):
+            self.leases.release(job_id)
+            self._lapsed.discard(job_id)
+            out.append((job_id, "reassign"))
         return out
 
 
@@ -331,8 +343,44 @@ class Guest:
         return "ok"
 
 
-# ---- progress ------------------------------------------------------------------------------------------------------
+# ---- placing a job again -------------------------------------------------------------------------------------------
 
-def relayed(event):
-    """An event a runner sent, as the owner re-emits it: None for kinds that name files on the runner."""
-    return dict(event) if isinstance(event, dict) and event.get("type") in EVENTS_RELAYED else None
+def attempt_state(params):
+    """The scheduler's notes in a job's params: the run's planned steps, the steps done before this attempt, the last checkpoint."""
+    return params.get("cluster") or {}
+
+
+def resume_params(params, node):
+    """(params, note, finished) for a job whose runner was lost. A published checkpoint is the weights only, so the job continues from
+    it with a fresh optimizer and the steps that are left; with none, it starts again. `finished` is True when the checkpoint is
+    the last step, so there is nothing left to run."""
+    notes = attempt_state(params)
+    checkpoint = notes.get("checkpoint")
+    out = {k: v for k, v in params.items() if k != "fetch"}
+    if not checkpoint:
+        out["cluster"] = {**notes, "offset": 0}
+        return out, f"It was interrupted on {node} before its first checkpoint, so it starts again from the beginning.", False
+    total, done = int(notes.get("steps") or 0), int(checkpoint["step"])
+    if total and done >= total:
+        return out, "", True
+    config = dict(out.get("config") or {})
+    if total:
+        config["steps"] = total - done
+        out["config"] = config
+    out.update(mode="catch_up", fetch={"init_from": checkpoint["key"]})
+    out.pop("init_from", None)
+    out["cluster"] = {**notes, "offset": done}
+    return out, (f"Interrupted on {node} at step {done}. It continues from that checkpoint, and the optimizer starts again from zero "
+                 "because only the weights are published."), False
+
+
+def relayed(event, offset=0):
+    """An event a runner sent, as the owner re-emits it: None for kinds that name files on the runner; steps shifted by `offset`
+    (the steps an earlier attempt already did) so progress does not start over after a resume."""
+    if not isinstance(event, dict) or event.get("type") not in EVENTS_RELAYED:
+        return None
+    out = dict(event)
+    for key in ("step", "total"):
+        if isinstance(out.get(key), int) and not isinstance(out.get(key), bool):
+            out[key] += offset
+    return out

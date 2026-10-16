@@ -6,11 +6,11 @@ the peer reports into this node's event stream, and places a job again when its 
 
 As a **runner** of a job another node owns it checks the lease and the version store, pulls the version the job starts from, puts the
 job in this node's own queue (it runs in its own worker process, studio_worker, like any other), renews the lease on the owner every
-third of its duration with the job's progress, publishes the finished version to the version store, and reports the end. It stops the
+third of its duration with the job's progress, publishes the job's checkpoints to the version store, and reports the end. It stops the
 job itself when the lease cannot be renewed in time (self-fencing) or the owner answers 409 (the job has moved on).
 
 The version store is a shared folder (`TRAINER_STORE_FOLDER`) or an S3-compatible bucket (`TRAINER_STORE_*`, docs/cluster.md). A job
-that leaves this machine needs it: the version it starts from and the finished version travel through it, so without it nothing is dispatched.
+that leaves this machine needs it: the checkpoints and the finished version travel through it, so without it nothing is dispatched.
 `TRAINER_NODE_ADDRESS` is how peers reach this node when the address they see the request come from is not it (behind a proxy).
 """
 from __future__ import annotations
@@ -30,9 +30,9 @@ from studio_peer import PeerClient
 POLL_EVERY = 5.  # seconds between polls of the peers
 TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
-NO_STORE = ("A job can only leave this machine once a version store is set up, because the version it starts from and its result travel through "
+NO_STORE = ("A job can only leave this machine once a version store is set up, because its checkpoints and its result travel through "
             "it. Set TRAINER_STORE_FOLDER to a shared folder, or the TRAINER_STORE_* bucket variables (docs/cluster.md).")
-LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result", "fetch", "cluster")  # not for the runner
+LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result")  # not for the runner
 TERMINAL = ("done", "failed", "stopped")
 
 
@@ -71,6 +71,7 @@ class GuestRun:
         self.id, self.local_id = lease.job_id, f"{lease.job_id}-e{lease.epoch}"
         self.lock = threading.Lock()
         self.events, self.sent = [], 0  # events not yet acknowledged by the owner
+        self.checkpoint, self.published_mtime, self.publishing = None, 0., False
         self.enqueued = self.cancelled = self.ended = self.reported = False
         self.stopped_by = None  # "stale" | "fenced" | "cancelled" | "replaced": the owner no longer wants this copy
         self.problem = ""
@@ -224,7 +225,7 @@ class Cluster:
             store = self.store()
             if store is None:
                 raise sched.Refused(self.store_problem)
-            body = self._package(job, store)
+            body, notes = self._package(job, store)
             result = self.owner.dispatch(job.id, address, body)
         except sched.Refused as exc:
             return self._refused(job, address, str(exc))
@@ -233,6 +234,7 @@ class Cluster:
             return self._refused(job, address, str(exc) or type(exc).__name__)
         with runner.lock:
             job.status, job.node, job.epoch = "running", address, result.lease.epoch
+            job.params = {**job.params, "cluster": notes}
             self.waiting.pop(job.id, None)
             runner._save()
         runner._emit("job", {"job": job.id, "status": "running"})
@@ -249,15 +251,19 @@ class Cluster:
         """The body of `POST /cluster/jobs`: the job with its training data inside, and the store key of the version it starts from."""
         import studio_worker
         params = {k: v for k, v in job.params.items() if k not in LOCAL_ONLY}
-        fetch = {}
+        notes = dict(sched.attempt_state(job.params))
+        fetch = dict(params.pop("fetch", None) or {})
+        params.pop("cluster", None)
         if "examples" not in params:
             params["examples"] = studio_worker.JobContext(self.runner.root, self.runner.root / "runs").examples(params)
         if not fetch and params.get("mode") == "catch_up" and params.get("init_from"):
             fetch["init_from"] = store.publish({"number": 0, "name": f"start of job {job.id}"}, params["init_from"])
         params.pop("init_from", None)
+        notes.setdefault("steps", int((params.get("config") or {}).get("steps") or 0))
+        notes.setdefault("offset", 0)
         spec = {"id": job.id, "kind": job.kind, "label": job.label, "note": job.note, "params": params, "created_at": job.created_at,
                 "eta_s": job.eta_s}
-        return {"job": spec, "owner_address": self.address, "fetch": fetch}
+        return {"job": spec, "owner_address": self.address, "fetch": fetch}, notes
 
     def _remote_jobs(self):
         with self.runner.lock:
@@ -274,8 +280,15 @@ class Cluster:
         job = self._remote(job_id)
         if job is None:
             raise sched.StaleEpoch(job_id, epoch)
+        notes = dict(sched.attempt_state(job.params))
+        checkpoint = body.get("checkpoint")
+        if checkpoint and checkpoint.get("key") and (notes.get("checkpoint") or {}).get("key") != checkpoint["key"]:
+            with self.runner.lock:
+                notes["checkpoint"] = {"key": checkpoint["key"], "step": int(notes.get("offset", 0)) + int(checkpoint.get("step") or 0)}
+                job.params = {**job.params, "cluster": notes}
+                self.runner._save()
         for event in body.get("events") or ():
-            shifted = sched.relayed(event)
+            shifted = sched.relayed(event, int(notes.get("offset", 0)))
             if shifted is not None:
                 self.runner._emit("train", {"job": job_id, **shifted})
         self.runner._emit("cluster", {"job": job_id, "state": body.get("state") or "running", "node": lease.node, "epoch": epoch,
@@ -283,17 +296,19 @@ class Cluster:
         return lease
 
     def finished(self, job_id, body):
-        """`POST /cluster/jobs/{id}/finished`: the runner's job ended. The result is a version in the store, recorded as the job's
-        `remote_result` for the version listings to show as available, not local."""
+        """`POST /cluster/jobs/{id}/finished`: the runner's job ended. The result is a published version, listed here as available but
+        not local."""
         epoch = int(body["epoch"])
         self.owner.end(job_id, epoch)
         job = self._remote(job_id)
         if job is None:
             raise sched.StaleEpoch(job_id, epoch)
+        notes = sched.attempt_state(job.params)
         with self.runner.lock:
             job.status, job.error = body["status"], body.get("error") or ""
             if body.get("key"):
-                job.params = {**job.params, "remote_result": {"key": body["key"], "node": job.node, "step": int(body.get("step") or 0)}}
+                job.params = {**job.params, "remote_result": {"key": body["key"], "node": job.node,
+                                                              "step": int(notes.get("offset", 0)) + int(body.get("step") or 0)}}
             self.runner._save()
         self.runner._emit("job", {"job": job_id, "status": job.status, "error": job.error})
         self.runner.wake.set()
@@ -308,12 +323,38 @@ class Cluster:
         self.runner.wake.set()
 
     def tick(self):
-        """Owner: report leases that lapsed. Runner: renew leases and stop jobs the owner no longer wants."""
-        for job_id, _ in self.owner.tick():
-            job = self._remote(job_id)
-            self.runner._emit("cluster", {"job": job_id, "state": "lapsed", "node": job.node if job else ""})
+        """Owner: act on leases that lapsed. Runner: renew leases, publish checkpoints, stop jobs the owner no longer wants."""
+        for job_id, what in self.owner.tick():
+            if what == "lapsed":
+                job = self._remote(job_id)
+                self.runner._emit("cluster", {"job": job_id, "state": "lapsed", "node": job.node if job else ""})
+            else:
+                self._reassign(job_id)
         for run in list(self.guests.values()):
             self._tick_guest(run)
+
+    def _reassign(self, job_id):
+        """The runner has been silent for two leases, so its self-fence has fired: the job is interrupted at its last checkpoint and
+        goes back to waiting with the next epoch, to be placed again (the same node when it returns, or another that fits)."""
+        job = self._remote(job_id)
+        if job is None:
+            return
+        node = job.node
+        with self.runner.lock:
+            params, note, finished = sched.resume_params(job.params, node)
+            job.params, job.node = params, ""
+            if finished:
+                checkpoint = sched.attempt_state(job.params)["checkpoint"]
+                job.status = "done"
+                job.params["remote_result"] = {"key": checkpoint["key"], "node": node, "step": checkpoint["step"]}
+            else:
+                job.status = "waiting"
+                job.note = f"{job.note} {note}".strip()
+            self.runner._save()
+        self.runner._emit("cluster", {"job": job_id, "state": "interrupted", "node": node, "detail": note})
+        if finished:
+            self.runner._emit("job", {"job": job_id, "status": "done", "error": ""})
+        self.runner.wake.set()
 
     def jobs_view(self):
         """Jobs owned here that run (or wait to run) away from this node, and jobs this node runs for others."""
@@ -322,14 +363,16 @@ class Cluster:
             owned = [j for j in self.runner.jobs if not j.owner and (j.node or j.id in self.waiting) and j.status in ("running", "waiting")]
         for job in owned:
             lease = self.owner.leases.get(job.id)
+            notes = sched.attempt_state(job.params)
             rows.append({"id": job.id, "kind": job.kind, "label": job.label, "role": "owner", "node": job.node, "epoch": job.epoch,
                          "status": job.status, "lease": ("lapsed" if job.id in self.owner._lapsed else "held") if lease else "",
-                         "waiting_reason": self.waiting.get(job.id, "")})
+                         "waiting_reason": self.waiting.get(job.id, ""), "checkpoint_step": (notes.get("checkpoint") or {}).get("step")})
         for run in self.guests.values():
             if not run.ended:
                 rows.append({"id": run.id, "kind": run.spec["kind"], "label": run.spec.get("label", ""), "role": "runner",
                              "node": run.owner_address, "epoch": run.lease.epoch, "status": self._guest_state(run),
-                             "lease": "expired" if run.guest.fence.expired() else "held", "waiting_reason": run.problem})
+                             "lease": "expired" if run.guest.fence.expired() else "held", "waiting_reason": run.problem,
+                             "checkpoint_step": (run.checkpoint or {}).get("step")})
         return rows
 
     # ---- runner: taking a job in ------------------------------------------------------------------------------------
@@ -400,6 +443,7 @@ class Cluster:
     def _tick_guest(self, run):
         if run.ended:
             return
+        self._publish_checkpoint(run)
         with run.lock:
             count = len(run.events)
 
@@ -409,7 +453,7 @@ class Cluster:
                 events = list(run.events[:count])
             step = max((e["step"] for e in events if isinstance(e.get("step"), int)), default=0)
             total = max((e["total"] for e in events if isinstance(e.get("total"), int)), default=0)
-            return {"state": self._guest_state(run), "step": step, "total": total, "events": events,
+            return {"state": self._guest_state(run), "step": step, "total": total, "events": events, "checkpoint": run.checkpoint,
                     "waiting": bool(job and job.status != "running")}
 
         def acked():
@@ -419,6 +463,32 @@ class Cluster:
         verdict = run.guest.renew(progress, acked)
         if verdict:
             self._stop_guest(run, verdict)
+
+    def _publish_checkpoint(self, run):
+        """Upload the job's newest checkpoint (weights only) so the owner can resume from it if this node is lost."""
+        job = next((j for j in self.runner.jobs if j.id == run.local_id and j.status == "running"), None)
+        store = self.store()
+        if job is None or store is None or run.publishing or not job.params.get("output_dir"):
+            return
+        path = Path(job.params["output_dir"]) / "last.npz"
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if mtime <= run.published_mtime:
+            return
+        run.publishing = True
+
+        def work():
+            try:
+                step = checkpoint_step(path)
+                key = store.publish({"number": 0, "name": f"job:{run.id}", "change": f"checkpoint at step {step}"}, path)
+                run.checkpoint, run.published_mtime = {"key": key, "step": step}, mtime
+            except Exception as exc:  # noqa: BLE001 - the next checkpoint tries again; the owner resumes from the last one that made it
+                run.problem = str(exc) or type(exc).__name__
+            finally:
+                run.publishing = False
+        threading.Thread(target=work, daemon=True, name=f"publish {run.id}").start()
 
     # ---- runner: the end of a job -----------------------------------------------------------------------------------
     def _on_event(self, kind, payload):
