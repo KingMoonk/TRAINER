@@ -166,6 +166,9 @@ test("a waiting row is reordered by dragging it", async ({ page }) => {
   const { calls } = await mockApi(page);
   await page.goto("/queue/");
   await expect(rows(page)).toHaveCount(3);
+  // Bring both ends into view before mouse-down. Scrolling the target after
+  // mouse-down can move the grip away before Chromium starts the native drag.
+  await rows(page).nth(2).scrollIntoViewIfNeeded();
   await rows(page).nth(0).getByRole("button", { name: "Drag to reorder: First waiting" }).dragTo(rows(page).nth(2));
   await expect(rows(page).nth(2)).toContainText("First waiting");
   expect(calls).toEqual([expect.objectContaining({ path: "/queue/jobs/a/move", body: { index: 2 } })]);
