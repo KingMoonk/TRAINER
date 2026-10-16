@@ -3,7 +3,7 @@ name: CI
 # macOS minutes bill at 10x and Windows at 2x on a private repo, so: one run per change, none for docs
 on:
   push:
-    branches: [master]
+    branches: [wedd-compute-cluster, master]
     paths-ignore: ["**.md"]
   pull_request:
     paths-ignore: ["**.md"]

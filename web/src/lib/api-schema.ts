@@ -292,6 +292,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join
+         * @description Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.
+         */
+        post: operations["join_collective__run__join_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Leave
+         * @description Leave at the next round boundary; the open round stops waiting for this member.
+         */
+        post: operations["leave_collective__run__leave_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/params": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Params
+         * @description The open round's global weights, fp32, as an .npz.
+         */
+        get: operations["params_collective__run__params_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/rounds/{round}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Round State
+         * @description Where a round stands for a member. With `wait` it long-polls (at most 30 s) until that changes.
+         */
+        get: operations["round_state_collective__run__rounds__round__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/rounds/{round}/delta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delta
+         * @description A member's pseudo-gradient (theta - theta_k) as an .npz, with its target-token count and steps. 409 when stale.
+         */
+        post: operations["delta_collective__run__rounds__round__delta_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/shards/{shard}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shard
+         * @description One training shard (tokens, target flags and offsets) as an .npz.
+         */
+        get: operations["shard_collective__run__shards__shard__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -2614,6 +2734,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/viewer/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summary
+         * @description Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,
+         *     or what is missing. POST /viewer/summary makes it.
+         */
+        get: operations["summary_viewer_summary_get"];
+        put?: never;
+        /**
+         * Make Summary
+         * @description Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text
+         *     (studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from.
+         */
+        post: operations["make_summary_viewer_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2635,13 +2781,6 @@ export interface components {
             text: string;
             /** Version */
             version?: number | null;
-        };
-        /** Accepted */
-        Accepted: {
-            /** Epoch */
-            epoch: number;
-            /** Job Id */
-            job_id: string;
         };
         /** ActionOut */
         ActionOut: {
@@ -2840,6 +2979,16 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** Checkpoint */
+        Checkpoint: {
+            /** Key */
+            key: string;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+        };
         /** Chip */
         Chip: {
             /** Known */
@@ -2901,6 +3050,8 @@ export interface components {
         };
         /** ClusterJob */
         ClusterJob: {
+            /** Checkpoint Step */
+            checkpoint_step?: number | null;
             /**
              * Epoch
              * @default 0
@@ -3612,6 +3763,50 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * JoinInfo
+         * @description What a member needs to start: the config and tokenizer, and the run's shape. `round` is the round to ask GET /rounds/{r} about.
+         */
+        JoinInfo: {
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Delta Dtype */
+            delta_dtype: string;
+            /** Generation */
+            generation: number;
+            /** Inner Steps */
+            inner_steps: number;
+            /** Node */
+            node: string;
+            /** Round */
+            round: number;
+            /** Rounds */
+            rounds: number;
+            /** Seed */
+            seed: number;
+            /** Shard Count */
+            shard_count: number;
+            /** Tokenizer */
+            tokenizer: {
+                [key: string]: unknown;
+            };
+            /** Total Steps */
+            total_steps: number;
+            /** Vocab Size */
+            vocab_size: number;
+        };
+        /** JoinRequest */
+        JoinRequest: {
+            /**
+             * Epoch
+             * @default 0
+             */
+            epoch: number;
+            /** Node */
+            node: string;
+        };
         /** Knobs */
         Knobs: {
             /** H */
@@ -3661,6 +3856,15 @@ export interface components {
             name: string;
             /** Note */
             note: string;
+        };
+        /** LeaveRequest */
+        LeaveRequest: {
+            /** Epoch */
+            epoch: number;
+            /** Generation */
+            generation: number;
+            /** Node */
+            node: string;
         };
         /** Line */
         Line: {
@@ -4871,6 +5075,7 @@ export interface components {
         };
         /** Renewal */
         Renewal: {
+            checkpoint?: components["schemas"]["Checkpoint"] | null;
             /** Epoch */
             epoch: number;
             /**
@@ -4979,6 +5184,31 @@ export interface components {
              * @default idle
              */
             status: string;
+        };
+        /**
+         * RoundView
+         * @description state: open (this member's assignment is filled in), pending (not open yet, or this member joins at a later boundary),
+         *     closed (`current` is the round to ask about) or finished. member false means the member must POST /join again.
+         */
+        RoundView: {
+            /** Current */
+            current: number;
+            /** Deadline S */
+            deadline_s?: number | null;
+            /** Generation */
+            generation?: number | null;
+            /** Member */
+            member: boolean;
+            /** Members */
+            members?: number | null;
+            /** Rank */
+            rank?: number | null;
+            /** Round */
+            round: number;
+            /** Shards */
+            shards?: number[] | null;
+            /** State */
+            state: string;
         };
         /** RowsPage */
         RowsPage: {
@@ -5574,6 +5804,27 @@ export interface components {
             /** Running */
             running: boolean;
         };
+        /** ViewerSummaryRequest */
+        ViewerSummaryRequest: {
+            /** Version */
+            version?: number | null;
+        };
+        /** ViewerSummaryStatus */
+        ViewerSummaryStatus: {
+            /** Bins */
+            bins?: number | null;
+            /** N Ctx */
+            n_ctx?: number | null;
+            /** Note */
+            note: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "stale" | "none" | "no_checkpoint";
+            /** Step */
+            step?: number | null;
+        };
         /** Warm */
         Warm: {
             /** Carries */
@@ -5691,6 +5942,21 @@ export interface components {
             messages: components["schemas"]["Message"][];
             /** Version */
             version?: number | null;
+        };
+        /** Accepted */
+        studio_api__routers__cluster__Accepted: {
+            /** Epoch */
+            epoch: number;
+            /** Job Id */
+            job_id: string;
+        };
+        /** Accepted */
+        studio_api__routers__collective__Accepted: {
+            /**
+             * Accepted
+             * @default true
+             */
+            accepted: boolean;
         };
         /** Started */
         studio_api__routers__data__Started: {
@@ -6133,7 +6399,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Accepted"];
+                    "application/json": components["schemas"]["studio_api__routers__cluster__Accepted"];
                 };
             };
             /** @description Validation Error */
@@ -6236,6 +6502,224 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    join_collective__run__join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JoinRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JoinInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leave_collective__run__leave_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LeaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    params_collective__run__params_get: {
+        parameters: {
+            query: {
+                round: number;
+            };
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    round_state_collective__run__rounds__round__get: {
+        parameters: {
+            query?: {
+                node?: string;
+                wait?: number;
+            };
+            header?: never;
+            path: {
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoundView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delta_collective__run__rounds__round__delta_post: {
+        parameters: {
+            query: {
+                node: string;
+                generation: number;
+                epoch: number;
+                tokens: number;
+                steps: number;
+                seconds?: number;
+                loss?: number | null;
+            };
+            header?: never;
+            path: {
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__collective__Accepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    shard_collective__run__shards__shard__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shard: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
             };
             /** @description Validation Error */
             422: {
@@ -9793,6 +10277,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ViewerStatus"];
+                };
+            };
+        };
+    };
+    summary_viewer_summary_get: {
+        parameters: {
+            query?: {
+                version?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewerSummaryStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    make_summary_viewer_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ViewerSummaryRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

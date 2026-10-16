@@ -66,7 +66,7 @@ class ClusterRoutes(ApiCase):
         self.assertEqual([(r["id"], r["role"], r["node"], r["epoch"], r["lease"]) for r in rows], [(job.id, "owner", "gpu-box", 1, "held")])
 
         answer = self.call("POST", "/cluster/jobs/{job_id}/renew", path={"job_id": job.id}, json={
-            "epoch": 1, "state": "running", "events": [{"type": "metric", "step": 2, "total": 100}]})
+            "epoch": 1, "state": "running", "events": [{"type": "metric", "step": 2, "total": 100}], "checkpoint": {"key": "k", "step": 2}})
         self.assertEqual(answer, {"epoch": 1, "duration_s": sched.LEASE_S})
         self.events.wait(lambda events: any(k == "train" and p.get("job") == job.id and p.get("step") == 2 for k, p in events),
                          "the runner's progress on /events")

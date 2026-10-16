@@ -59,24 +59,6 @@
         "title": "AblateRequest",
         "type": "object"
       },
-      "Accepted": {
-        "properties": {
-          "epoch": {
-            "title": "Epoch",
-            "type": "integer"
-          },
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "job_id",
-          "epoch"
-        ],
-        "title": "Accepted",
-        "type": "object"
-      },
       "ActionOut": {
         "properties": {
           "answer": {
@@ -519,6 +501,24 @@
         "title": "CheckJob",
         "type": "object"
       },
+      "Checkpoint": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "Checkpoint",
+        "type": "object"
+      },
       "Chip": {
         "properties": {
           "known": {
@@ -676,6 +676,17 @@
       },
       "ClusterJob": {
         "properties": {
+          "checkpoint_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Step"
+          },
           "epoch": {
             "default": 0,
             "title": "Epoch",
@@ -2241,6 +2252,95 @@
         "title": "JobSpec",
         "type": "object"
       },
+      "JoinInfo": {
+        "description": "What a member needs to start: the config and tokenizer, and the run's shape. `round` is the round to ask GET /rounds/{r} about.",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "delta_dtype": {
+            "title": "Delta Dtype",
+            "type": "string"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "inner_steps": {
+            "title": "Inner Steps",
+            "type": "integer"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "rounds": {
+            "title": "Rounds",
+            "type": "integer"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "shard_count": {
+            "title": "Shard Count",
+            "type": "integer"
+          },
+          "tokenizer": {
+            "additionalProperties": true,
+            "title": "Tokenizer",
+            "type": "object"
+          },
+          "total_steps": {
+            "title": "Total Steps",
+            "type": "integer"
+          },
+          "vocab_size": {
+            "title": "Vocab Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node",
+          "generation",
+          "round",
+          "config",
+          "tokenizer",
+          "inner_steps",
+          "rounds",
+          "total_steps",
+          "delta_dtype",
+          "shard_count",
+          "seed",
+          "vocab_size"
+        ],
+        "title": "JoinInfo",
+        "type": "object"
+      },
+      "JoinRequest": {
+        "properties": {
+          "epoch": {
+            "default": 0,
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node"
+        ],
+        "title": "JoinRequest",
+        "type": "object"
+      },
       "Knobs": {
         "properties": {
           "H": {
@@ -2391,6 +2491,29 @@
           "note"
         ],
         "title": "LeashOut",
+        "type": "object"
+      },
+      "LeaveRequest": {
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "generation",
+          "epoch"
+        ],
+        "title": "LeaveRequest",
         "type": "object"
       },
       "Line": {
@@ -5374,6 +5497,16 @@
       },
       "Renewal": {
         "properties": {
+          "checkpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Checkpoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "epoch": {
             "title": "Epoch",
             "type": "integer"
@@ -5602,6 +5735,93 @@
           }
         },
         "title": "RoundState",
+        "type": "object"
+      },
+      "RoundView": {
+        "description": "state: open (this member's assignment is filled in), pending (not open yet, or this member joins at a later boundary),\nclosed (`current` is the round to ask about) or finished. member false means the member must POST /join again.",
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "integer"
+          },
+          "deadline_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline S"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "member": {
+            "title": "Member",
+            "type": "boolean"
+          },
+          "members": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Members"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "shards": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shards"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "state",
+          "member",
+          "current"
+        ],
+        "title": "RoundView",
         "type": "object"
       },
       "RowsPage": {
@@ -6931,6 +7151,81 @@
         "title": "ViewerStatus",
         "type": "object"
       },
+      "ViewerSummaryRequest": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "ViewerSummaryRequest",
+        "type": "object"
+      },
+      "ViewerSummaryStatus": {
+        "properties": {
+          "bins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bins"
+          },
+          "n_ctx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Ctx"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "stale",
+              "none",
+              "no_checkpoint"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "required": [
+          "state",
+          "note"
+        ],
+        "title": "ViewerSummaryStatus",
+        "type": "object"
+      },
       "Warm": {
         "properties": {
           "carries": {
@@ -7263,6 +7558,35 @@
           "messages"
         ],
         "title": "ReplyRequest",
+        "type": "object"
+      },
+      "studio_api__routers__cluster__Accepted": {
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "epoch"
+        ],
+        "title": "Accepted",
+        "type": "object"
+      },
+      "studio_api__routers__collective__Accepted": {
+        "properties": {
+          "accepted": {
+            "default": true,
+            "title": "Accepted",
+            "type": "boolean"
+          }
+        },
+        "title": "Accepted",
         "type": "object"
       },
       "studio_api__routers__data__Started": {
@@ -7912,7 +8236,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Accepted"
+                  "$ref": "#/components/schemas/studio_api__routers__cluster__Accepted"
                 }
               }
             },
@@ -8077,6 +8401,435 @@
         "summary": "Stop",
         "tags": [
           "cluster"
+        ]
+      }
+    },
+    "/collective/{run}/join": {
+      "post": {
+        "description": "Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.",
+        "operationId": "join_collective__run__join_post",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Join",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/leave": {
+      "post": {
+        "description": "Leave at the next round boundary; the open round stops waiting for this member.",
+        "operationId": "leave_collective__run__leave_post",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/params": {
+      "get": {
+        "description": "The open round's global weights, fp32, as an .npz.",
+        "operationId": "params_collective__run__params_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Params",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/rounds/{round}": {
+      "get": {
+        "description": "Where a round stands for a member. With `wait` it long-polls (at most 30 s) until that changes.",
+        "operationId": "round_state_collective__run__rounds__round__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Node",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wait",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Wait",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoundView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Round State",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/rounds/{round}/delta": {
+      "post": {
+        "description": "A member's pseudo-gradient (theta - theta_k) as an .npz, with its target-token count and steps. 409 when stale.",
+        "operationId": "delta_collective__run__rounds__round__delta_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node",
+            "required": true,
+            "schema": {
+              "title": "Node",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "generation",
+            "required": true,
+            "schema": {
+              "title": "Generation",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": true,
+            "schema": {
+              "title": "Epoch",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tokens",
+            "required": true,
+            "schema": {
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "steps",
+            "required": true,
+            "schema": {
+              "title": "Steps",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "seconds",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Seconds",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "loss",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loss"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__collective__Accepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delta",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/shards/{shard}": {
+      "get": {
+        "description": "One training shard (tokens, target flags and offsets) as an .npz.",
+        "operationId": "shard_collective__run__shards__shard__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shard",
+            "required": true,
+            "schema": {
+              "title": "Shard",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Shard",
+        "tags": [
+          "collective"
         ]
       }
     },
@@ -12913,6 +13666,103 @@
           }
         },
         "summary": "Stop",
+        "tags": [
+          "viewer"
+        ]
+      }
+    },
+    "/viewer/summary": {
+      "get": {
+        "description": "Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,\nor what is missing. POST /viewer/summary makes it.",
+        "operationId": "summary_viewer_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewerSummaryStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Summary",
+        "tags": [
+          "viewer"
+        ]
+      },
+      "post": {
+        "description": "Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text\n(studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from.",
+        "operationId": "make_summary_viewer_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ViewerSummaryRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Make Summary",
         "tags": [
           "viewer"
         ]

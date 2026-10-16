@@ -253,16 +253,74 @@ class OwnerSide(unittest.TestCase):
         self.runner.cluster.finished(job.id, {"epoch": 1, "status": "failed", "error": "The dataset is empty."})
         self.assertEqual((job.status, job.error), ("failed", "The dataset is empty."))
 
-    def test_a_lapsed_lease_is_reported_and_the_job_stays_where_it_is(self):
+    def interrupted(self, step=None):
         job = self.runner.enqueue(self.job())
         self.place()
+        if step:
+            self.runner.cluster.renewed(job.id, {"epoch": 1, "checkpoint": {"key": "gpu-box/v0-aaa", "step": step}})
+        self.net.down.add("gpu-box")
+        cluster = self.runner.cluster
         self.clock.advance(31)
-        self.runner.cluster.tick()
+        cluster.tick()
         self.assertEqual(self.sent("cluster")[-1]["state"], "lapsed")
-        self.assertEqual((job.status, job.node), ("running", "gpu-box"))
-        self.clock.advance(100)
-        self.runner.cluster.tick()
-        self.assertEqual((job.status, job.node), ("running", "gpu-box"))  # moving it is the failover step
+        self.assertEqual(job.status, "running")  # not yet: the runner may only be slow to renew
+        self.clock.advance(30)
+        cluster.tick()
+        return job
+
+    def test_a_lost_node_is_waited_out_then_its_job_goes_back_to_waiting_from_its_checkpoint(self):
+        job = self.interrupted(step=400)
+        self.assertEqual((job.status, job.node), ("waiting", ""))
+        self.assertEqual(self.sent("cluster")[-1]["state"], "interrupted")
+        self.assertEqual((job.params["mode"], job.params["fetch"], job.params["config"]["steps"]),
+                         ("catch_up", {"init_from": "gpu-box/v0-aaa"}, 600))
+        self.assertIn("Interrupted on gpu-box at step 400", job.note)
+        self.assertIn("optimizer starts again from zero", job.note)
+        with self.assertRaises(sched.StaleEpoch):  # the node's old copy, if it comes back, is refused
+            self.runner.cluster.renewed(job.id, {"epoch": 1})
+
+    def test_the_job_is_placed_again_when_the_node_returns_at_the_next_epoch_resuming_from_the_key(self):
+        job = self.interrupted(step=400)
+        self.net.down.clear()
+        self.place()
+        self.assertEqual((job.status, job.node, job.epoch), ("running", "gpu-box", 2))
+        body = self.peer.dispatched[-1]
+        self.assertEqual((body["lease"]["epoch"], body["fetch"], body["job"]["params"]["config"]["steps"]),
+                         (2, {"init_from": "gpu-box/v0-aaa"}, 600))
+        self.assertEqual(body["job"]["params"]["mode"], "catch_up")
+        self.runner.cluster.renewed(job.id, {"epoch": 2, "events": [{"type": "metric", "step": 10, "total": 600}]})
+        self.assertEqual(self.sent("train")[-1]["step"], 410)  # progress goes on from 400, it does not start over
+        self.assertEqual(self.sent("train")[-1]["total"], 1000)
+
+    def test_another_node_takes_the_job_when_the_first_stays_away(self):
+        other = Peer(self.net, "other-box")
+        self.nodes = ["gpu-box", "other-box"]
+        self.runner = self.make_runner()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.assertEqual(job.node, "gpu-box")
+        self.runner.cluster.renewed(job.id, {"epoch": 1, "checkpoint": {"key": "gpu-box/v0-aaa", "step": 100}})
+        self.net.down.add("gpu-box")
+        for _ in range(7):  # polls keep failing for a minute
+            self.clock.advance(10)
+            self.runner.cluster.poll_once()
+            self.runner.cluster.tick()
+        self.assertEqual(job.status, "waiting")
+        self.runner._place_waiting()
+        self.assertEqual((job.status, job.node, job.epoch), ("running", "other-box", 2))
+        self.assertEqual(other.dispatched[0]["fetch"], {"init_from": "gpu-box/v0-aaa"})
+
+    def test_without_a_checkpoint_it_starts_again_and_says_so(self):
+        job = self.interrupted()
+        self.assertEqual(job.status, "waiting")
+        self.assertNotIn("fetch", job.params)
+        self.assertEqual(job.params["config"]["steps"], 1000)
+        self.assertIn("before its first checkpoint", job.note)
+
+    def test_a_job_whose_last_checkpoint_was_its_last_step_is_done_not_run_again(self):
+        job = self.interrupted(step=1000)
+        self.assertEqual(job.status, "done")
+        self.assertEqual(job.params["remote_result"]["key"], "gpu-box/v0-aaa")
 
     def test_a_pinned_job_waits_for_its_node_and_is_never_moved_to_another(self):
         Peer(self.net, "other-box")
@@ -361,9 +419,11 @@ class OwnerSide(unittest.TestCase):
         job = self.runner.enqueue(self.job())
         waiting = self.runner.enqueue(self.job(pinned="ghost"))
         self.place()
+        self.runner.cluster.renewed(job.id, {"epoch": 1, "checkpoint": {"key": "k", "step": 7}})
         self.assertEqual(self.runner.cluster.health.state("gpu-box"), sched.UP)
         rows = {r["id"]: r for r in self.runner.cluster.jobs_view()}
-        self.assertEqual((rows[job.id]["role"], rows[job.id]["node"], rows[job.id]["lease"]), ("owner", "gpu-box", "held"))
+        self.assertEqual((rows[job.id]["role"], rows[job.id]["node"], rows[job.id]["lease"], rows[job.id]["checkpoint_step"]),
+                         ("owner", "gpu-box", "held", 7))
         self.assertIn("ghost", rows[waiting.id]["waiting_reason"])
 
     def test_a_node_listed_in_a_broken_config_is_a_plain_note_not_a_crash(self):
@@ -471,16 +531,22 @@ class TwoNodes(unittest.TestCase):
         self.assertIn(key, [e["key"] for e in FolderStore(self.shared).list()])  # in the store, for the owner to list and pull
         self.assertEqual(self.a.cluster.owner.leases.get(job.id), None)
 
-    def test_progress_and_the_end_reach_the_owner(self):
+    def test_progress_checkpoints_and_the_end_reach_the_owner(self):
         (self.b_root).mkdir(parents=True, exist_ok=True)
         (self.b_root / "hold").touch()
         job = self.a.enqueue(self.job(1000))
         self.a.cluster.poll_once()
         self.a._place_waiting()
         self.assertTrue(wait(lambda: self.checkpointed()))
+        run = self.b.cluster.guests[job.id]
+        self.b.cluster.tick()  # publishes the checkpoint
+        self.assertTrue(wait(lambda: run.checkpoint is not None), "the checkpoint was not published")
         self.beat()
         steps = [e["step"] for k, e in self.a_events if k == "train" and e.get("job") == job.id and e.get("type") == "metric"]
         self.assertTrue(steps and max(steps) >= 3, steps)
+        notes = job.params["cluster"]
+        self.assertEqual(notes["checkpoint"]["step"], 3)
+        self.assertTrue(notes["checkpoint"]["key"].startswith("gpu-box/"))
         rows = {r["id"]: r for r in self.b.cluster.jobs_view()}
         self.assertEqual((rows[job.id]["role"], rows[job.id]["node"], rows[job.id]["epoch"]), ("runner", "owner-a", 1))
         (self.b_root / "hold").unlink()
@@ -503,6 +569,43 @@ class TwoNodes(unittest.TestCase):
         self.assertEqual(self.b.cluster.guests[job.id].stopped_by, "fenced")
         self.assertEqual(job.status, "running")  # the owner has heard nothing: it will wait out two leases
 
+    def test_a_lost_node_is_fenced_then_its_job_resumes_on_the_returning_node_from_the_published_checkpoint(self):
+        (self.b_root).mkdir(parents=True, exist_ok=True)
+        (self.b_root / "hold").touch()
+        job = self.a.enqueue(self.job(100))
+        self.a.cluster.poll_once()
+        self.a._place_waiting()
+        self.assertTrue(wait(lambda: self.checkpointed()))
+        run = self.b.cluster.guests[job.id]
+        self.b.cluster.tick()
+        self.assertTrue(wait(lambda: run.checkpoint is not None))
+        self.beat()
+        self.assertEqual(job.params["cluster"]["checkpoint"]["step"], 3)
+        self.net.down.update({"owner-a", "gpu-box"})  # the cable is pulled
+        for _ in range(3):
+            self.beat()
+        self.assertTrue(wait(lambda: self.b_job().status == "stopped"))
+        self.a_clock.advance(31)
+        self.a.cluster.tick()
+        self.assertEqual(job.status, "running")
+        self.a_clock.advance(30)
+        self.a.cluster.tick()
+        self.assertEqual(job.status, "waiting")  # interrupted at its checkpoint
+        self.assertIn("step 3", job.note)
+        self.assertEqual(job.params["config"]["steps"], 97)
+        (self.b_root / "hold").unlink()
+        self.net.down.clear()
+        self.a.cluster.poll_once()
+        self.a._place_waiting()
+        self.assertEqual((job.status, job.node, job.epoch), ("running", "gpu-box", 2))
+        self.assertTrue(wait(lambda: job.status == "done"), "the resumed job did not finish")
+        ran = self.ran()
+        self.assertEqual(ran["steps"], 97)
+        self.assertTrue(Path(ran["init_from"]).is_file())
+        self.assertEqual(job.params["remote_result"]["step"], 100)  # 3 steps before the loss + 97 after
+        self.assertEqual(job.epoch, 2)
+        self.assertIn("optimizer starts again from zero", job.note)
+
     def test_a_node_that_wakes_up_with_the_old_epoch_is_refused_and_stops_its_copy(self):
         (self.b_root).mkdir(parents=True, exist_ok=True)
         (self.b_root / "hold").touch()
@@ -510,11 +613,13 @@ class TwoNodes(unittest.TestCase):
         self.a.cluster.poll_once()
         self.a._place_waiting()
         self.assertTrue(wait(lambda: self.b_job() and self.b_job().status == "running"))
-        self.a.cluster.owner.leases.grant(job.id, "gpu-box")  # the owner has moved the job on (epoch 2); the runner slept through it
+        self.a_clock.advance(61)  # the owner heard nothing for two leases while the runner was asleep (its clock did not move)
+        self.a.cluster.tick()
+        self.assertEqual(job.status, "waiting")
         self.beat()  # the runner wakes and renews at epoch 1
         self.assertEqual(self.b.cluster.guests[job.id].stopped_by, "stale")
         self.assertTrue(wait(lambda: self.b_job().status == "stopped"))
-        self.assertEqual(job.status, "running")  # and nothing it said reached the job
+        self.assertEqual(job.status, "waiting")  # and nothing it said reached the job
 
     def test_the_owner_cancelling_a_job_stops_the_copy_on_the_runner(self):
         (self.b_root).mkdir(parents=True, exist_ok=True)
