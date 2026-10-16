@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { HEAD_STAGES, LEVELS, MODES, TILE_KINDS, isMatrixGroup, type HeadStage, type Level, type Mode, type TileKind } from "@/lib/scene";
-import { fetchScene, runProbeStep, viewerError, type SceneQuery } from "@/lib/viewer";
+import { fetchScene, fetchSnapshots, runProbeStep, viewerError, type SceneQuery } from "@/lib/viewer";
 
 // WebGL does not exist while the static export prerenders, so the canvas only ever loads in the browser.
 const SceneCanvas = dynamic(() => import("@/components/inside-3d/scene-canvas"), {
@@ -38,6 +38,7 @@ export function Inside3d({ version }: { version?: number }) {
       if (!["train", "checkpoint", "versions"].includes(event.kind) || timer !== undefined) return;
       timer = setTimeout(() => {
         timer = undefined;
+        void cache.invalidateQueries({ queryKey: ["viewer-snapshots"] }, { cancelRefetch: false });
         void cache.invalidateQueries({ queryKey: ["viewer-scene"] }, { cancelRefetch: false });
       }, 1000);
     });
@@ -63,7 +64,13 @@ export function Inside3d({ version }: { version?: number }) {
     refetchInterval: 15_000,
   });
 
-  const count = scene?.playback.count ?? 0;
+  const { data: snapshots = [] } = useQuery({
+    queryKey: ["viewer-snapshots", version],
+    queryFn: ({ signal }) => fetchSnapshots(version, signal),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+  const count = snapshots.length;
   const last = Math.max(0, count - 1);
 
   const onPassDone = useCallback(() => {
@@ -91,6 +98,7 @@ export function Inside3d({ version }: { version?: number }) {
       if (controller.signal.aborted) return;
       setSnapshot(result.snapshot);
       setNote(result.note);
+      await cache.invalidateQueries({ queryKey: ["viewer-snapshots"] });
       await cache.invalidateQueries({ queryKey: ["viewer-scene"] });
     } catch (reason) {
       if (!probeController.current?.signal.aborted) setNote(viewerError(reason));
@@ -216,16 +224,30 @@ export function Inside3d({ version }: { version?: number }) {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {scene?.playback.show ? (
-              <div className="grid grid-cols-3 gap-2">
-                <Button variant="outline" disabled={snapshot <= 0 || probing} onClick={() => (setPlaying(false), setSnapshot(snapshot - 1))}>
-                  <SkipBack /> Previous
-                </Button>
-                <Button disabled={probing} onClick={togglePlay}>
-                  {playing ? <Pause /> : <Play />} {playing ? "Pause" : "Play"}
-                </Button>
-                <Button variant="outline" disabled={snapshot >= last || probing} onClick={() => (setPlaying(false), setSnapshot(snapshot + 1))}>
-                  Next <SkipForward />
-                </Button>
+              <div className="flex flex-col gap-3">
+                <Select value={String(Math.min(snapshot, last))} onValueChange={(value) => (setPlaying(false), setSnapshot(Number(value)))} disabled={probing}>
+                  <SelectTrigger className="min-w-0" aria-label="Snapshot">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {snapshots.map((item) => (
+                      <SelectItem key={item.index} value={String(item.index)}>
+                        {item.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="grid grid-cols-3 gap-2">
+                  <Button variant="outline" disabled={snapshot <= 0 || probing} onClick={() => (setPlaying(false), setSnapshot(snapshot - 1))}>
+                    <SkipBack /> Previous
+                  </Button>
+                  <Button disabled={probing} onClick={togglePlay}>
+                    {playing ? <Pause /> : <Play />} {playing ? "Pause" : "Play"}
+                  </Button>
+                  <Button variant="outline" disabled={snapshot >= last || probing} onClick={() => (setPlaying(false), setSnapshot(snapshot + 1))}>
+                    Next <SkipForward />
+                  </Button>
+                </div>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">{scene?.playback.position ?? "No snapshots loaded."}</p>

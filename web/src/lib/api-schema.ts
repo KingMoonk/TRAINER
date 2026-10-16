@@ -292,6 +292,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cluster/merged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Merged Queue
+         * @description The jobs of every machine, each with the machine it runs on or is pinned to. The peers are asked at the same time, for their
+         *     node and their queue, and answer within two seconds or not at all; a peer that does not keeps its last known rows, marked stale.
+         *     Sync, so the peers are asked off the event loop. Empty when no other machine is listed.
+         */
+        get: operations["merged_queue_cluster_merged_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cluster/nodes": {
         parameters: {
             query?: never;
@@ -2005,6 +2027,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/queue/jobs/{job_id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin
+         * @description Keep a waiting job on one machine (`pinned`: its address or hostname), or let it go anywhere again (null). A pin is never
+         *     overridden: the job runs there or waits, and its waiting reason says why. Services has no pin, so a node with a job queue
+         *     pins through the Runner, and the stand-in services edit the job in place.
+         */
+        post: operations["pin_queue_jobs__job_id__pin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/next_step": {
         parameters: {
             query?: never;
@@ -3188,6 +3232,13 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** ClusterQueue */
+        ClusterQueue: {
+            /** Jobs */
+            jobs: components["schemas"]["QueueRow"][];
+            /** Nodes */
+            nodes: components["schemas"]["QueueNode"][];
+        };
         /** ComparePlan */
         ComparePlan: {
             /** Base */
@@ -4364,6 +4415,11 @@ export interface components {
             /** To Step */
             to_step: number;
         };
+        /** Pin */
+        Pin: {
+            /** Pinned */
+            pinned?: string | null;
+        };
         /**
          * PlanModel
          * @description studio_queue.Plan, the dict set_plan takes.
@@ -4810,6 +4866,69 @@ export interface components {
             old_spec: {
                 [key: string]: unknown;
             };
+        };
+        /** QueueNode */
+        QueueNode: {
+            /** Address */
+            address: string;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Hostname */
+            hostname: string;
+            /** Local */
+            local: boolean;
+            /** Online */
+            online: boolean;
+            /** Pin */
+            pin: string;
+            /**
+             * Seen At
+             * @default 0
+             */
+            seen_at: number;
+        };
+        /** QueueRow */
+        QueueRow: {
+            /** Hostname */
+            hostname: string;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /** Node */
+            node: string;
+            /**
+             * Pinned
+             * @default
+             */
+            pinned: string;
+            /** Queued Here */
+            queued_here: boolean;
+            /** Queued On */
+            queued_on: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "waiting" | "held";
+            /**
+             * Waiting Reason
+             * @default
+             */
+            waiting_reason: string;
         };
         /**
          * QueueStateModel
@@ -6675,6 +6794,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merged_queue_cluster_merged_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterQueue"];
                 };
             };
         };
@@ -9395,6 +9534,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Outlook"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pin_queue_jobs__job_id__pin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Pin"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueStateModel"];
                 };
             };
             /** @description Validation Error */

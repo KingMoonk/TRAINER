@@ -473,14 +473,14 @@ class Coordinator:
         return {**base, "state": "pending"}
 
     def round_view(self, number, node="", wait=0.):
-        """Where round `number` stands for `node`: open (with its assignment), pending, closed, or finished. With wait it returns
-        when that changes, or after at most LONG_POLL seconds."""
+        """Where round `number` stands for `node`: open (with its assignment), pending, closed, or finished. With wait, a pending
+        round is held until that changes, or for at most LONG_POLL seconds; any other state is answered at once."""
         end = time.monotonic() + min(max(wait, 0.), LONG_POLL)
         with self.cond:
             self._touch()
             self._advance()
             first = self._view(number, node)
-            while first["state"] not in ("closed", "finished"):
+            while first["state"] == "pending":
                 left = end - time.monotonic()
                 if left <= 0:
                     return first

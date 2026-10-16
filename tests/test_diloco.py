@@ -3,6 +3,7 @@ member against the real routes giving the weights plain training gives."""
 import random
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -227,6 +228,13 @@ class Rounds(Directory):
         timer.start()
         self.addCleanup(timer.cancel)
         self.assertEqual(c.round_view(0, "a", wait=5.)["state"], "open")
+
+    def test_a_long_poll_on_an_open_round_answers_at_once(self):
+        c = self.coordinator(inner_steps=2)
+        c.join("a")
+        started = time.monotonic()
+        self.assertEqual(c.round_view(0, "a", wait=5.)["state"], "open")
+        self.assertLess(time.monotonic() - started, 1.)
 
     def test_the_last_round_finishes_the_run_and_writes_the_checkpoint(self):
         c = self.coordinator(inner_steps=2, rounds=2, outer_lr=1.)

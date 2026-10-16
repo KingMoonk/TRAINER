@@ -10,8 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { AvailableVersions } from "@/components/available-versions";
 import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
+import { availableElsewhere, cameFrom, isCluster, useCluster, usePublished } from "@/lib/cluster";
 import { routeFor } from "@/lib/routes";
 import { postStream } from "@/lib/sse-post";
 import { CHAT as T } from "./copy";
@@ -47,6 +49,9 @@ export default function Page() {
     queryFn: () => unwrap(api.GET("/versions")),
     refetchInterval: 15_000, // a version finishing training appears on its own
   });
+  const cluster = useCluster().data;
+  const published = usePublished(cluster).data;
+  const multi = isCluster(cluster); // a cluster of one shows nothing about machines
   const trained = trainedVersions(versionsQuery.data ?? []);
   const numbers = trained.map((v) => v.number);
   const byNumber = new Map(trained.map((v) => [v.number, v]));
@@ -457,12 +462,29 @@ export default function Page() {
                       <span className="w-24 font-semibold">{versionName(v)}</span>
                       <span className="w-32 text-muted-foreground">{chip}</span>
                       <span className="flex-1">{v.change}</span>
+                      {multi && (
+                        <span className="text-xs text-muted-foreground" data-testid={`where-${v.number}`}>
+                          on this machine{cameFrom(published, v.number) ? ` · pulled from ${cameFrom(published, v.number)}` : ""}
+                        </span>
+                      )}
                       <span className={isLeft ? "text-violet-400" : isRight ? "text-blue-400" : "text-muted-foreground"}>{slot}</span>
                     </button>
                     <div className="mt-2"><CheckpointStep version={v} /></div>
                     </div>
                   );
                 })}
+              </CardContent>
+            </Card>
+          )}
+
+          {multi && availableElsewhere(published).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">Available on other machines</CardTitle>
+                <p className="text-sm text-muted-foreground">Pull one to chat with it here.</p>
+              </CardHeader>
+              <CardContent>
+                <AvailableVersions published={published} />
               </CardContent>
             </Card>
           )}
