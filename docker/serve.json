@@ -1,0 +1,19 @@
+{
+  "TCP": {
+    "443": {"HTTPS": true},
+    "8787": {"HTTP": true}
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": {"Proxy": "http://127.0.0.1:3000"},
+        "/api/": {"Proxy": "http://127.0.0.1:8787"}
+      }
+    },
+    "${TS_CERT_DOMAIN}:8787": {
+      "Handlers": {
+        "/": {"Proxy": "http://127.0.0.1:8787"}
+      }
+    }
+  }
+}
