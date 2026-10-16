@@ -64,9 +64,11 @@ class Capture:
                 if lines[0].startswith(":"):
                     self.connected.set()
                     continue
-                kind = next(l[7:] for l in lines if l.startswith("event: "))
-                data = next(l[6:] for l in lines if l.startswith("data: "))
-                self.events.append((kind, json.loads(data)))
+                data = json.loads(next(l[6:] for l in lines if l.startswith("data: ")))
+                named = next((l[7:] for l in lines if l.startswith("event: ")), None)
+                if named is None:  # one unnamed message carrying {"kind", "payload"}
+                    named, data = data["kind"], data["payload"]
+                self.events.append((named, data))
             self._cond.notify_all()
 
     def wait(self, ready, what="the events"):

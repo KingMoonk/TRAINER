@@ -8,6 +8,8 @@ from studio_api.routers import data as data_router
 from studio_ia.services import FakeServices
 from tests.sse_harness import ApiCase
 
+NOTES = b'{"text": "x"}\n'
+
 
 class EventingServices(FakeServices):
     """FakeServices that emit what WorkspaceServices emits for imports and downloads, and read the uploaded files."""
@@ -41,7 +43,7 @@ class DataRouterTests(ApiCase):
         self.root = Path(self.home.name).resolve()
         (self.root / "corpus").mkdir()
         (self.root / "corpus" / "stories.txt").write_text("Once upon a tide.")
-        (self.root / "notes.jsonl").write_text('{"text": "x"}\n')
+        (self.root / "notes.jsonl").write_bytes(NOTES)  # bytes: write_text would turn \n into \r\n on Windows
         (self.root / ".hidden").write_text("no")
         services = EventingServices()
         services.workspace = SimpleNamespace(root=self.root)
@@ -136,7 +138,7 @@ class DataRouterTests(ApiCase):
 
         folder = self.call("GET", "/data/browse", params={"path": str(self.root)})
         self.assertEqual([(e["name"], e["is_dir"]) for e in folder["entries"]], [("corpus", True), ("notes.jsonl", False)])  # folders first, no dotfiles
-        self.assertEqual(folder["entries"][1]["size"], len('{"text": "x"}\n'))
+        self.assertEqual(folder["entries"][1]["size"], len(NOTES))
         inner = self.call("GET", "/data/browse", params={"path": str(self.root / "corpus")})
         self.assertEqual(inner["parent"], str(self.root))
         self.assertEqual([e["name"] for e in inner["entries"]], ["stories.txt"])
