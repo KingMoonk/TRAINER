@@ -937,7 +937,10 @@ def complete(model, tokenizer, prompt, max_tokens=48, reduced_cache=False):
 
 
 class LocalModel:
-    reduced_kv_cache = True  # generation keeps keys and values in bfloat16 (float16 where unsupported); False: float32, for tests and inspection
+    # Generation's KV cache: True keeps keys and values in bfloat16 (float16 where unsupported), False in float32 (tests, inspection).
+    # None: half precision on CUDA only, where chat shares the GPU's memory with jobs; on the CPU and MPS reading the cache back
+    # up costs about a tenth of the tokens/s for memory those devices have to spare.
+    reduced_kv_cache = None
 
     @slow("build a model from a checkpoint")
     def __init__(self, path, seed=42, device="auto", data=None):
@@ -960,8 +963,11 @@ class LocalModel:
         self.config["device"] = device
         return self
 
+    def reduced_cache(self):
+        return self.model.device == "cuda" if self.reduced_kv_cache is None else bool(self.reduced_kv_cache)
+
     def complete(self, prompt, max_tokens=48):
-        return complete(self.model, self.tokenizer, prompt, max_tokens, self.reduced_kv_cache)
+        return complete(self.model, self.tokenizer, prompt, max_tokens, self.reduced_cache())
 
     def _chat(self, messages):
         """The prompt's token ids, and (position of each message's role token, role id) so a cut window starts with the right role."""
@@ -993,7 +999,7 @@ class LocalModel:
         result = []
         context = self.config["context"]
         blocked = unsayable(self.tokenizer)
-        cache = new_cache(self.model.device, self.reduced_kv_cache) if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
+        cache = new_cache(self.model.device, self.reduced_cache()) if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         available = self.tokenizer.vocab_size - OFFSET + 1
         k = available if int(top_k) <= 0 else min(int(top_k), available)
         # Sampling runs on the model's device and only the chosen id is copied back. Its stream is seeded from the model's NumPy
@@ -1047,7 +1053,7 @@ class LocalModel:
         rows = [list(tokens) for _ in range(n)]   # each reply's prompt + answer so far
         results = [[] for _ in range(n)]
         active = list(range(n))                   # reply ids still decoding, in batch order
-        cache = {"n": 0}
+        cache = new_cache(self.model.device, self.reduced_cache())
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break

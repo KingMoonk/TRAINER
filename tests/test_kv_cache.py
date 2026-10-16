@@ -170,11 +170,29 @@ class Chat(unittest.TestCase):
             model.generate([{"role": "user", "content": "Count from 4 to 9."}], temperature=0, max_tokens=8)
         return seen
 
-    def test_chat_uses_the_reduced_cache_by_default(self):
-        self.assertTrue(studio_model.LocalModel.reduced_kv_cache)
+    def test_chat_reduces_the_cache_on_cuda_only_by_default(self):
+        self.assertIsNone(studio_model.LocalModel.reduced_kv_cache)
         seen = self.reply(None)
         self.assertTrue(all(cache is seen[0] for cache in seen))
+        self.assertTrue(all(t.dtype == torch.float32 for k, s in seen[0].items() if k != "n" for t in s))
+        model = local("gqa", "rope")
+        del model.reduced_kv_cache
+        for device, reduced in (("cpu", False), ("mps", False), ("cuda", True)):
+            with mock.patch.object(model.model, "device", device):
+                self.assertEqual(model.reduced_cache(), reduced, device)
+
+    def test_reduced_cache_when_asked(self):
+        seen = self.reply(True)
         self.assertTrue(all(t.dtype == reduced_dtype("cpu") for k, s in seen[0].items() if k != "n" for t in s))
+
+    def test_a_group_of_replies_uses_the_same_cache_choice(self):
+        model = local("gqa", "rope")
+        model.reduced_kv_cache = True
+        made = []
+        real = studio_model.new_cache
+        with mock.patch.object(studio_model, "new_cache", lambda device, reduced=True: made.append(reduced) or real(device, reduced)):
+            model.generate_group([{"role": "user", "content": "Hi"}], 3, temperature=.8, max_tokens=4)
+        self.assertEqual(made, [True])
 
     def test_float32_stays_available(self):
         seen = self.reply(False)
