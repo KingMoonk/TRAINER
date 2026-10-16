@@ -18,5 +18,5 @@
   - [ ] an outcome a reviewer can check by a test or a stated manual step
   ```
 
-- The PR body says `Closes #N`. Tick acceptance criteria as they are met. A finding that changes the scope goes in an issue comment, or a new issue.
+- The PR body says `Closes #N`; the `close-issues` workflow closes the issue when the PR merges into `wedd-compute-cluster` (GitHub itself only does that for the default branch). Tick acceptance criteria as they are met. A finding that changes the scope goes in an issue comment, or a new issue.
 - Create issues with `gh issue create --repo KingMoonk/TRAINER --title ... --label ... --assignee ... --body-file ...`.
