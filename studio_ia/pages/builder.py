@@ -14,6 +14,7 @@ import studio_registry as registry
 from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM
 from studio_glossary import glossary_text
 from studio_spec import default_spec, validate_spec
+from studio_spec import config_from_spec as config_from_spec
 from studio_validate import errors
 from studio_warmstart import NOTES
 from studio_ia import threads
