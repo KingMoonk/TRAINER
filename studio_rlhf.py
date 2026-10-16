@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from studio_backend import empty_cache
 from studio_core import atomic_json, messages_of, now, replace_file, uid
 from studio_model import (ASSISTANT, BOS, EOS, SYSTEM, USER, AdamW, LocalModel, ScratchTransformer, Tokenizer,
                           batch_arrays, load_checkpoint, samples_from)
@@ -385,16 +386,23 @@ def preference_terms(policy_logp, reference_logp, lengths, count, cfg):
     return metrics, g
 
 
-def preference_batch(policy, reference, rows, count, cfg, backward=False):
-    """Score `rows` (count chosen then count rejected, encoded) and optionally accumulate gradients into `policy`."""
+def reference_logps(reference, rows):
+    """Summed answer log-prob of each encoded row under the frozen reference model, as NumPy: the reference's whole contribution to
+    the loss, so it can be dropped from the device once every row is scored."""
+    x, y = batch_arrays(rows)
+    with torch.no_grad():
+        logps, _ = _sequence_logps(reference, x, y)
+    return reference.backend.to_cpu(logps).astype(np.float64)
+
+
+def preference_batch(policy, reference_logp, rows, count, cfg, backward=False):
+    """Score `rows` (count chosen then count rejected, encoded) and optionally accumulate gradients into `policy`.
+    reference_logp: the reference model's reference_logps for the same rows."""
     x, y = batch_arrays(rows)
     policy_logp, (_, _, valid, cache) = _sequence_logps(policy, x, y, tape=backward)
-    with torch.no_grad():
-        reference_logp, _ = _sequence_logps(reference, x, y)
     pl = policy.backend.to_cpu(policy_logp).astype(np.float64)
-    rl = reference.backend.to_cpu(reference_logp).astype(np.float64)
     lengths = policy.backend.to_cpu(valid.sum(dim=1)).astype(np.float64)
-    result, g = preference_terms(pl, rl, lengths, count, cfg)
+    result, g = preference_terms(pl, reference_logp, lengths, count, cfg)
     if backward:
         # d(loss)/d(policy_logp) per sequence is g; autograd carries it back through the log-softmax and the model.
         weights = torch.as_tensor(g, dtype=policy_logp.dtype, device=policy_logp.device)
@@ -438,14 +446,20 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
     data = load_checkpoint(base_checkpoint)
     model_cfg = dict(data["config"], device=cfg["device"], dropout=0)
     tokenizer = Tokenizer.restore(data["tokenizer"])
-    policy = ScratchTransformer(model_cfg, tokenizer.vocab_size)
-    policy.load_weights(data["model"])
-    reference = ScratchTransformer(model_cfg, tokenizer.vocab_size)
-    reference.load_weights(data["model"])
-    optimizer = AdamW(policy, cfg["weight_decay"])
     rng = random.Random(cfg["seed"])
     encoded = [(_encode_pair(tokenizer, p["messages"], p["chosen"], model_cfg["context"]),
                 _encode_pair(tokenizer, p["messages"], p["rejected"], model_cfg["context"])) for p in pairs]
+    # The reference never changes, so it scores every pair once, in a phase of its own, and is gone before the policy exists.
+    reference = ScratchTransformer(model_cfg, tokenizer.vocab_size)
+    reference.load_weights(data["model"])
+    flat, step_rows = [row for pair in encoded for row in pair], 2 * cfg["batch_size"]
+    reference_logp = np.concatenate([reference_logps(reference, flat[i:i + step_rows]) for i in range(0, len(flat), step_rows)]).reshape(-1, 2)
+    device = reference.backend.device
+    del reference
+    empty_cache(device)
+    policy = ScratchTransformer(model_cfg, tokenizer.vocab_size)
+    policy.load_weights(data["model"])
+    optimizer = AdamW(policy, cfg["weight_decay"])
     order = list(range(len(encoded)))
     rng.shuffle(order)
     held = int(len(order) * cfg["validation"]) if len(order) >= 10 else 0
@@ -471,7 +485,7 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
 
     def stats(ids, backward=False):
         rows = [encoded[i][0] for i in ids] + [encoded[i][1] for i in ids]
-        return preference_batch(policy, reference, rows, len(ids), cfg, backward)
+        return preference_batch(policy, np.concatenate([reference_logp[ids, 0], reference_logp[ids, 1]]), rows, len(ids), cfg, backward)
 
     def evaluate():
         if not val_ids:

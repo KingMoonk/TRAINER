@@ -866,6 +866,12 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         return record
     except BaseException as exc:
         record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
+        if step:  # keep what the run learned since its last checkpoint, so it can resume; a failing save must not hide `exc`
+            try:
+                save("last.npz")
+                record["checkpoint"] = "last.npz"
+            except Exception:
+                pass
         atomic_json(directory / "run.json", record)
         raise
 
@@ -910,8 +916,8 @@ def complete(model, tokenizer, prompt, max_tokens=48):
 
 class LocalModel:
     @slow("build a model from a checkpoint")
-    def __init__(self, path, seed=42, device="auto"):
-        data = load_checkpoint(path, weights_only=True)
+    def __init__(self, path, seed=42, device="auto", data=None):
+        data = data or load_checkpoint(path, weights_only=True)   # `data`: the same checkpoint, already loaded by the caller
         self.config = validate_config(data["config"])
         self.config["device"] = device
         self.tokenizer = Tokenizer.restore(data["tokenizer"])
