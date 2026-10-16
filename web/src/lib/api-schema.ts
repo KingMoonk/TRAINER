@@ -346,6 +346,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/data/problems/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Problem Rules
+         * @description Generatable rules in desktop picker order; imported answer keys cannot generate examples.
+         */
+        get: operations["problem_rules_data_problems_rules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/refresh_downloads": {
         parameters: {
             query?: never;
@@ -3389,6 +3409,28 @@ export interface components {
              */
             text: string;
         };
+        /** ProblemRule */
+        ProblemRule: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** ProblemRules */
+        ProblemRules: {
+            /**
+             * Max Drafts
+             * @default 200
+             */
+            max_drafts: number;
+            /**
+             * Max Problems
+             * @default 5000
+             */
+            max_problems: number;
+            /** Rules */
+            rules: components["schemas"]["ProblemRule"][];
+        };
         /**
          * QueueStateModel
          * @description studio_ia.services.QueueState.
@@ -4857,6 +4899,26 @@ export interface operations {
             };
         };
     };
+    problem_rules_data_problems_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemRules"];
+                };
+            };
+        };
+    };
     refresh_downloads_data_refresh_downloads_post: {
         parameters: {
             query?: never;
@@ -5019,6 +5081,7 @@ export interface operations {
                 query?: string;
                 cursor?: string | null;
                 limit?: number;
+                review_only?: boolean;
             };
             header?: never;
             path: {

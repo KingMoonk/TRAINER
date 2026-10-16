@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from studio_api.routers import data as data_router
 from studio_ia.services import FakeServices
+import studio_rules
 from tests.sse_harness import ApiCase
 
 NOTES = b'{"text": "x"}\n'
@@ -53,6 +54,10 @@ class DataRouterTests(ApiCase):
         return services
 
     def test_every_route_answers(self):
+        rules = self.call("GET", "/data/problems/rules")
+        self.assertEqual(rules["rules"], [{"id": rule, "label": studio_rules.LABELS[rule]} for rule in studio_rules.RULES])
+        self.assertEqual((rules["max_problems"], rules["max_drafts"]), (5000, 200))
+        self.assertFalse(set(studio_rules.KEYED) & {rule["id"] for rule in rules["rules"]})
         self.assertTrue(self.call("GET", "/data/has_text")["has_text"])
         self.assertEqual(self.call("GET", "/data/drafts"), {"count": 0})
 
@@ -83,6 +88,10 @@ class DataRouterTests(ApiCase):
         self.assertEqual(self.call("GET", "/data/drafts"), {"count": 2})
         drafts = self.call("GET", "/data/{kind}/rows", path={"kind": "conversations"}, params={"query": "q"})["rows"]
         keep, drop = [r["id"] for r in drafts if r["status"] == "Review"][:2]
+        review = self.call("GET", "/data/{kind}/rows", path={"kind": "conversations"}, params={"review_only": True, "limit": 1})
+        self.assertEqual([r["id"] for r in review["rows"]], [keep])
+        following = self.call("GET", "/data/{kind}/rows", path={"kind": "conversations"}, params={"review_only": True, "limit": 1, "cursor": review["next_cursor"]})
+        self.assertEqual([r["id"] for r in following["rows"]], [drop])
         self.assertIsNone(self.call("POST", "/data/examples/{example_id}/review", 204, path={"example_id": keep}, json={"keep": True}))
         self.assertIsNone(self.call("POST", "/data/examples/{example_id}/review", 204, path={"example_id": drop}, json={"keep": False}))
         self.assertEqual(self.call("GET", "/data/drafts"), {"count": 0})
