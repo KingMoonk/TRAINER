@@ -1,6 +1,6 @@
 import type { components } from "@/lib/api-schema";
 import { ApiError } from "@/lib/api";
-import type { ClusterQueue, QueueNode, QueueRow } from "@/lib/cluster";
+import { nodeName, type ClusterQueue, type QueueNode, type QueueRow } from "@/lib/cluster";
 import { T, fill } from "./copy";
 
 export type Queue = components["schemas"]["QueueStateModel"];
@@ -88,9 +88,9 @@ export function placeText(row: QueueRow): string {
   return row.pinned ? fill(T.pinnedTo, { node: row.hostname || row.pinned }) : T.runsAnywhere;
 }
 
-/** What a machine is called in the "Run on" list: its name, marked when it is this machine or not answering. */
-export function nodeLabel(node: QueueNode): string {
-  const name = node.hostname || node.address;
+/** What a machine is called in the "Run on" list: its name (with its address when another listed machine shares it), marked when it is this machine or not answering. */
+export function nodeLabel(node: QueueNode, nodes: QueueNode[]): string {
+  const name = nodeName(node, nodes);
   return node.local ? `${name} (${T.thisMachine})` : node.online ? name : `${name} (${T.offline})`;
 }
 

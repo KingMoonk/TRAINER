@@ -8,7 +8,7 @@ import type { QueueState, StudioStatus } from "@/lib/types";
 
 /** The machines in the cluster, this one marked and any that stopped answering. */
 export function machinesText(cluster: ClusterQueue): string {
-  return cluster.nodes.map((n) => `${nodeName(n)}${n.local ? " (this machine)" : n.online ? "" : " (offline)"}`).join(", ");
+  return cluster.nodes.map((n) => `${nodeName(n, cluster.nodes)}${n.local ? " (this machine)" : n.online ? "" : " (offline)"}`).join(", ");
 }
 
 /** What is going on elsewhere: jobs on the other machines and versions to pull. "" when there is nothing. */

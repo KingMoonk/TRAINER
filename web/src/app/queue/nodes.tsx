@@ -2,7 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { seenText, type ClusterQueue, type QueueNode, type QueueRow } from "@/lib/cluster";
+import { nodeName, seenText, type ClusterQueue, type QueueNode, type QueueRow } from "@/lib/cluster";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
 import { nodeLabel, pinChoice, placeText } from "./logic";
@@ -37,7 +37,7 @@ export function PinSelect({ id, name, row, nodes, actions }: { id: string; name:
         {pinned && !nodes.some((n) => n.pin === value) && <option value={value}>{value}</option>}
         {nodes.map((node) => (
           <option key={node.address} value={node.pin}>
-            {nodeLabel(node)}
+            {nodeLabel(node, nodes)}
           </option>
         ))}
       </select>
@@ -59,7 +59,7 @@ export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
           {cluster.nodes.map((node) => (
             <li key={node.address} data-testid={`node-${node.address}`} className={cn(!node.online && "opacity-60")}>
               <Badge variant="outline" title={node.error || undefined}>
-                {nodeLabel(node)}
+                {nodeLabel(node, cluster.nodes)}
               </Badge>
             </li>
           ))}
@@ -68,7 +68,7 @@ export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
           .filter((node) => !node.online)
           .map((node) => (
             <p key={node.address} role="status" className="text-xs text-muted-foreground">
-              {fill(T.notAnswering, { node: node.hostname || node.address, seen: node.seen_at ? ` (last answered ${seenText(node.seen_at)})` : "" })}
+              {fill(T.notAnswering, { node: nodeName(node, cluster.nodes), seen: node.seen_at ? ` (last answered ${seenText(node.seen_at)})` : "" })}
             </p>
           ))}
         {rows.length === 0 ? (

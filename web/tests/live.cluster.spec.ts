@@ -4,8 +4,8 @@ import { expect, test } from "@playwright/test";
 
 // Two real --fake servers, no intercepted responses: the primary (the "live" project's server, port 4174) lists a second one
 // (started here, port 4175) as its other machine. Both are on this computer, so they share a hostname; the second is told apart
-// by its address, which is what the Queue page pins a job to. Versions cannot be covered here (FakeServices has no version
-// store to publish to), so merged versions are covered against a mocked API in cluster-queue.spec.ts.
+// by its address, which is what the Queue page pins a job to and what its name then carries. Versions cannot be covered here
+// (FakeServices has no version store to publish to), so merged versions are covered against a mocked API in cluster-queue.spec.ts.
 
 const PEER_PORT = 4175;
 const PEER = `127.0.0.1:${PEER_PORT}`;
@@ -51,7 +51,8 @@ test("jobs of both machines appear with their node, a pin moves a row, and a sto
   expect((await request.post(`${peerUrl}/queue/pause`)).ok()).toBeTruthy();
   created.push(await enqueue(request, "", "Cluster live local A"), await enqueue(request, "", "Cluster live local B"));
   const peerJob = await enqueue(request, peerUrl, "Cluster live peer job");
-  const peerName = (await (await request.get(`${peerUrl}/node`)).json()).hostname as string;
+  const hostname = (await (await request.get(`${peerUrl}/node`)).json()).hostname as string;
+  const peerName = `${hostname} (${PEER})`; // the primary has the same hostname, so the address is added
 
   try {
     // A cluster of one: nothing about machines anywhere.
