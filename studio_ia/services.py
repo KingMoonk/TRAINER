@@ -598,6 +598,35 @@ class Services:
         as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
+    def viewer_summary(self, number=None) -> tuple:
+        """(state, summary) of a version's saved whole-context summary (studio_summary.summary_state): state is ready, stale, none or
+        no_checkpoint; summary is {edges, n_ctx, step, attention, stream_norms} when ready or stale, else None. A file read."""
+        from studio_summary import summary_state
+        return summary_state(self._summary_checkpoint(number))
+
+    def viewer_summarize(self, number=None) -> dict:
+        """Run the chosen (default current) version's checkpoint over a full window of its held-back text, save the summary beside
+        the run's snapshots and return it (studio_summary.whole_context). ValueError with a sentence when there is no checkpoint or
+        no held-back text to read. Slow: call it off the Tk thread."""
+        from pathlib import Path
+
+        from studio_ia.copy import INSIDE3D
+        from studio_summary import save_summary, whole_context
+        checkpoint = self._summary_checkpoint(number)
+        if not checkpoint or not Path(checkpoint).is_file():
+            raise ValueError(INSIDE3D["summary_no_checkpoint"])
+        summary = whole_context(checkpoint, self._heldout())
+        save_summary(checkpoint, summary)
+        return summary
+
+    def _summary_checkpoint(self, number):
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
+        return version.best_checkpoint if version is not None else None
+
+    def _heldout(self):
+        """The held-back documents as text."""
+        raise NotImplementedError
+
 
 class FakeServices(Services):
     """Empty, in-memory placeholder data so pages render before real services exist. A test fixture and `studio_api --fake`
@@ -617,6 +646,7 @@ class FakeServices(Services):
         self._viewer_running = False
         self.snapshot_paths: list = []  # what viewer_snapshots returns
         self.probe_path = None  # what viewer_probe_step returns
+        self.heldout_docs: list = []  # the held-back text viewer_summarize reads
         self.passive_sessions, self.passive_signin = [], False  # what passive() returns
 
     def viewer_status(self):
@@ -643,6 +673,9 @@ class FakeServices(Services):
     def viewer_probe_step(self, text, number=None):
         self.viewer_log.append(("probe", text))
         return self.probe_path
+
+    def _heldout(self):
+        return self.heldout_docs
 
     def versions(self):
         return list(self._versions)
