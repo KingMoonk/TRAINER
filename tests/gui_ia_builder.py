@@ -26,6 +26,7 @@ class BuilderTest(unittest.TestCase):
         self.fake.versions()[0].best_checkpoint = "/tmp/ckpt/best.npz"  # trained, so a catch-up can start from it
         self.has_text = lambda kind, query="": DataSummary(kind, 1, sets=[{"id": "d1", "name": "books", "count": 1}])
         self.fake.data = self.has_text
+        self.fake.set_setting(B.ADVANCED, True)  # module menus and per-block choices: most tests here use them
         try:
             self.app = Studio(self.fake)
         except tk.TclError as error:
@@ -267,6 +268,45 @@ class BuilderTest(unittest.TestCase):
         saved = self.fake.versions()[1].spec
         self.assertEqual(saved["train"], spec["train"])
         self.assertEqual(saved["dims"]["n_ctx"], 2048)
+
+
+    def test_clicking_a_part_explains_it_and_links_to_its_pages(self):
+        self.assertIn(B.T["explain_hint"], texts(self.page.explain_box))
+        self.page.explain_part("mixer", 0)
+        self.app.update()
+        shown = texts(self.page.explain_box)
+        e = B.explain("mixer", self.page.draft, 0, self.page.lists)
+        for key in ("title", "module", "example"):
+            self.assertIn(e[key], shown)
+        self.assertEqual(sorted(self.page.part_links), sorted(route for route, _, _ in e["links"]))
+        self.page.close_explain()
+        self.assertIn(B.T["explain_hint"], texts(self.page.explain_box))
+
+    def test_where_the_size_goes(self):
+        draft = B.sizes(self.page.base_spec(), self.page.cur["V"])["parts"]
+        self.assertEqual(self.page.param_texts, B.param_shares(draft))
+        for key, text in self.page.param_texts:
+            self.assertEqual(self.page.param_legend[key].cget("text"), text)
+
+    def test_a_starting_question_sets_up_one_change_and_saves_its_question(self):
+        self.page.try_question("depth")
+        self.app.update()
+        self.assertEqual(len(self.page.chip_texts), 1)
+        self.assertIn(B.T["exp_asking"].format(question=B.T["exp_depth"]), self.page.tray_text)
+        self.page.save()
+        self.assertEqual(self.fake.versions()[1].prediction, {"question": B.T["exp_depth"]})
+
+    def test_before_a_few_versions_train_the_parts_have_no_menus(self):
+        fake = FakeServices()
+        fake.save_version(default_spec(), "first design")
+        fake.data = self.has_text
+        app = Studio(fake)
+        self.addCleanup(app.destroy)
+        page = app.show("builder")
+        app.update()
+        self.assertFalse(page.advanced)
+        self.assertFalse(any(isinstance(mb, tk.Menubutton) for mb, *_ in page.pickers))
+        self.assertIn(page.basic_note, texts(page))
 
 
 if __name__ == "__main__":
