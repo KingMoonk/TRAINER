@@ -9,12 +9,13 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import studio_cluster as sc
 import studio_scheduler as sched
 from studio_peer import PeerError
-from studio_publish import NO_STORE, FolderStore
+from studio_publish import NO_STORE, FolderStore, StoreLimitError, _Store
 from studio_queue import Job, Plan, Runner
 from studio_remote import Cluster
 from tests.fake_cluster import Clock, Net, refuse
@@ -583,6 +584,41 @@ class TwoNodes(unittest.TestCase):
         self.assertTrue(notes["checkpoint"]["key"].startswith("gpu-box/"))
         rows = {r["id"]: r for r in self.b.cluster.jobs_view()}
         self.assertEqual((rows[job.id]["role"], rows[job.id]["node"], rows[job.id]["epoch"]), ("runner", "owner-a", 1))
+        (self.b_root / "hold").unlink()
+        self.assertTrue(wait(lambda: job.status == "done"))
+
+    def test_a_checkpoint_the_store_refuses_is_reported_to_the_owner_and_the_job_keeps_training(self):
+        (self.b_root).mkdir(parents=True, exist_ok=True)
+        (self.b_root / "hold").touch()
+        job = self.a.enqueue(self.job(1000))
+        self.a.cluster.poll_once()
+        self.a._place_waiting()
+        self.assertTrue(wait(lambda: self.checkpointed()))
+        run = self.b.cluster.guests[job.id]
+        full = StoreLimitError("Not uploaded: this upload needs 1.00 MB and the bucket already holds 10.00 GB, which would make 10.00 GB, "
+                               "over the 10.00 GB limit (the R2 free tier).")
+        with mock.patch.object(_Store, "_admit", side_effect=full) as admit:
+            self.b.cluster.tick()
+            self.assertTrue(wait(lambda: run.refusal and not run.publishing), "the refusal was not recorded")
+            self.b.cluster.tick()
+            self.b.cluster.tick()  # the same checkpoint is not offered again: it would be refused again, a listing of the bucket each time
+            self.assertEqual(admit.call_count, 1)
+        self.assertIsNone(run.checkpoint)
+        self.assertEqual(self.b_job().status, "running")  # training goes on; only the sharing of this checkpoint is lost
+        self.assertIn("Checkpoint at step 3 not shared: Not uploaded", run.refusal)
+        self.assertIn(run.refusal, {r["id"]: r for r in self.b.cluster.jobs_view()}[job.id]["waiting_reason"])
+        self.beat()
+        self.assertIn(run.refusal, job.note)  # the owner's job says it, where the queue page shows it
+        self.assertIn(run.refusal, job.params["cluster"]["problem"])
+        self.assertIn(("cluster", {"job": job.id, "state": "checkpoint_refused", "node": "gpu-box", "detail": run.refusal}), self.a_events)
+        self.beat()
+        self.assertEqual(job.note.count("not shared"), 1)  # said once
+        run.refused_mtime = 0.  # room again (versions deleted): the next attempt goes through and the problem clears
+        self.b.cluster.tick()
+        self.assertTrue(wait(lambda: run.checkpoint is not None), "the checkpoint was not published once there was room")
+        self.assertEqual(run.refusal, "")
+        self.beat()
+        self.assertNotIn("problem", job.params["cluster"])
         (self.b_root / "hold").unlink()
         self.assertTrue(wait(lambda: job.status == "done"))
 

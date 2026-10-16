@@ -59,6 +59,7 @@ class GuestRun:
         self.lock = threading.Lock()
         self.events, self.sent = [], 0  # events not yet acknowledged by the owner
         self.checkpoint, self.published_mtime, self.publishing = None, 0., False
+        self.refused_mtime, self.refusal = 0., ""  # the newest checkpoint the store refused (over its limit), and why: it is not offered again
         self.enqueued = self.cancelled = self.ended = self.reported = False
         self.stopped_by = None  # "stale" | "fenced" | "cancelled" | "replaced": the owner no longer wants this copy
         self.problem = ""
@@ -288,6 +289,16 @@ class Cluster:
         if job is None:
             raise sched.StaleEpoch(job_id, epoch)
         notes = dict(sched.attempt_state(job.params))
+        problem = (body.get("problem") or "").strip()
+        if problem != notes.get("problem", ""):  # a refused checkpoint is said once on the job, and again only if the reason changes
+            with self.runner.lock:
+                notes = {**notes, "problem": problem} if problem else {k: v for k, v in notes.items() if k != "problem"}
+                job.params = {**job.params, "cluster": notes}
+                if problem:
+                    job.note = f"{job.note} {problem}".strip()
+                self.runner._save()
+            if problem:
+                self.runner._emit("cluster", {"job": job_id, "state": "checkpoint_refused", "node": lease.node, "detail": problem})
         checkpoint = body.get("checkpoint")
         if checkpoint and checkpoint.get("key") and (notes.get("checkpoint") or {}).get("key") != checkpoint["key"]:
             with self.runner.lock:
@@ -378,7 +389,7 @@ class Cluster:
             if not run.ended:
                 rows.append({"id": run.id, "kind": run.spec["kind"], "label": run.spec.get("label", ""), "role": "runner",
                              "node": run.owner_address, "epoch": run.lease.epoch, "status": self._guest_state(run),
-                             "lease": "expired" if run.guest.fence.expired() else "held", "waiting_reason": run.problem,
+                             "lease": "expired" if run.guest.fence.expired() else "held", "waiting_reason": run.problem or run.refusal,
                              "checkpoint_step": (run.checkpoint or {}).get("step")})
         return rows
 
@@ -461,7 +472,7 @@ class Cluster:
             step = max((e["step"] for e in events if isinstance(e.get("step"), int)), default=0)
             total = max((e["total"] for e in events if isinstance(e.get("total"), int)), default=0)
             return {"state": self._guest_state(run), "step": step, "total": total, "events": events, "checkpoint": run.checkpoint,
-                    "waiting": bool(job and job.status != "running")}
+                    "waiting": bool(job and job.status != "running"), "problem": run.refusal}
 
         def acked():
             with run.lock:
@@ -482,15 +493,18 @@ class Cluster:
             mtime = path.stat().st_mtime
         except OSError:
             return
-        if mtime <= run.published_mtime:
+        if mtime <= max(run.published_mtime, run.refused_mtime):
             return
         run.publishing = True
 
         def work():
+            import studio_publish
             try:
                 step = checkpoint_step(path)
                 key = store.publish({"number": 0, "name": f"job:{run.id}", "change": f"checkpoint at step {step}"}, path)
-                run.checkpoint, run.published_mtime = {"key": key, "step": step}, mtime
+                run.checkpoint, run.published_mtime, run.refusal = {"key": key, "step": step}, mtime, ""
+            except studio_publish.StoreLimitError as exc:  # the job keeps training; the owner is told through the next renewal (`problem`)
+                run.refused_mtime, run.refusal = mtime, f"Checkpoint at step {step} not shared: {exc}"
             except Exception as exc:  # noqa: BLE001 - the next checkpoint tries again; the owner resumes from the last one that made it
                 run.problem = str(exc) or type(exc).__name__
             finally:

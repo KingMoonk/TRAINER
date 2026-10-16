@@ -5602,6 +5602,11 @@
             "title": "Events",
             "type": "array"
           },
+          "problem": {
+            "default": "",
+            "title": "Problem",
+            "type": "string"
+          },
           "state": {
             "default": "running",
             "title": "State",

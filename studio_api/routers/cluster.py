@@ -106,6 +106,7 @@ class Renewal(BaseModel):
     events: list[dict] = []
     checkpoint: Checkpoint | None = None
     waiting: bool = False
+    problem: str = ""  # why the runner could not share its latest checkpoint (the version store refused it); the job keeps training
 
 
 class Renewed(BaseModel):
