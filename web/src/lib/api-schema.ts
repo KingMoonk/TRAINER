@@ -1712,6 +1712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/training-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Training Run
+         * @description The run the page shows: a running job's live run, else the newest version's latest run.
+         */
+        get: operations["training_run_training_run_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/versions": {
         parameters: {
             query?: never;
@@ -3488,6 +3508,49 @@ export interface components {
              */
             kind: "conversations" | "problems" | "pairs" | "corrections" | "heldout_docs" | "heldout_problems";
         };
+        /** RunPageModel */
+        RunPageModel: {
+            /**
+             * Change
+             * @default
+             */
+            change: string;
+            /** Chat Version */
+            chat_version?: number | null;
+            curve: components["schemas"]["CurveModel"];
+            /** Gate Vs */
+            gate_vs?: number | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Parent */
+            parent?: number | null;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            references: components["schemas"]["ReferencesModel"];
+            /**
+             * Running
+             * @default false
+             */
+            running: boolean;
+            /** Status */
+            status?: ("learning" | "flat" | "memorising") | null;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+            switch: components["schemas"]["SwitchNote"];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /** Version */
+            version?: number | null;
+        };
         /** RunRequest */
         RunRequest: {
             /** Version */
@@ -3694,6 +3757,24 @@ export interface components {
              * @default
              */
             query: string;
+        };
+        /**
+         * SwitchNote
+         * @description Which line the page says about Chat switching (studio_ia.pages.training_run.switch_note): the key is the copy's, gap is
+         *     in bits per character, docs and need are set for gate_few_docs.
+         */
+        SwitchNote: {
+            /** Docs */
+            docs?: number | null;
+            /** Gap */
+            gap?: string | null;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "gate_few_docs" | "gate_better" | "gate_not_sure" | "gate_not_better" | "no_band_yet" | "held_back_below" | "held_back_inside";
+            /** Need */
+            need?: number | null;
         };
         /** TeacherOut */
         TeacherOut: {
@@ -6786,6 +6867,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FreeSpace"];
+                };
+            };
+        };
+    };
+    training_run_training_run_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunPageModel"];
                 };
             };
         };
