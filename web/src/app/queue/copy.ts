@@ -32,7 +32,7 @@ export const T = {
   dragHandle: "Drag to reorder",
   nothingWaiting: "Nothing waiting.",
   nothingWaitingTip: "When the current job ends, the computer keeps improving the current version in its steady phase, within the plan below.",
-  reorderTip: "Drag ⠇ to reorder. A held job keeps its place and is skipped until you release it.",
+  reorderTip: "Drag ⠇ to reorder, or focus it and use the arrow keys. A held job keeps its place and is skipped until you release it.",
   whenTrain: "WHEN IT MAY TRAIN",
   whenTrainTip: "Chat answering never stops training. It shares the computer, so training slows while it answers.",
   hours: "Hours",
