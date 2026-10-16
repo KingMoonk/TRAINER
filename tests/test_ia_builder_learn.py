@@ -12,6 +12,7 @@ from unittest import mock
 from studio_core import Workspace
 from studio_estimate import estimate
 from studio_ia import pieces as cut
+from studio_ia import design
 from studio_ia.copy import BUILDER as T
 from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices, Version, WorkspaceServices
@@ -119,7 +120,7 @@ class Params(unittest.TestCase):
     def test_blocks_hold_every_block_row(self):
         spec = default_spec()
         rows = estimate(spec, 256)["rows"]
-        parts = B.param_parts(rows)
+        parts = design.param_parts(rows)
         self.assertEqual(parts["blocks"], sum(r["params"] for r in rows if r["block"] is not None))
         self.assertEqual(parts["head"], sum(r["params"] for r in rows if r["block"] is None and r["slot"] in ("norm", "head")))
 

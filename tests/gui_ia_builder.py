@@ -9,6 +9,7 @@ from studio_spec import block_at, default_spec
 from studio_versions import spec_diff
 from studio_warmstart import NOTES
 from studio_ia.copy import EXPECTATION
+from studio_ia import design as D
 from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices
 from studio_ia.shell import Studio
@@ -91,7 +92,7 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(len(self.fake.versions()), 1)  # draft stays on the page
         self.assertEqual(self.fake.draft_spec()["dims"]["n_layer"], 4)  # but Quick test and Compare runs can see it
         self.assertEqual(self.page.hover_text.count("Different look-back heads"), 1)
-        self.assertIn(B.EXPECT["more"], self.page.hover_text)
+        self.assertIn(D.EXPECT["more"], self.page.hover_text)
         self.assertNotIn("Different look-back heads", "\n".join(texts(self.page)))
         self.page.discard()
         self.assertEqual(self.page.tray_kicker, B.T["no_changes"])
@@ -147,7 +148,7 @@ class BuilderTest(unittest.TestCase):
     def test_cost_panel_says_whether_the_weights_carry_over(self):
         self.page.edit(L=4)
         self.assertEqual(self.page.warm["kind"], "same")
-        self.assertIn(B.WARM["same"][0], texts(self.page))
+        self.assertIn(D.WARM["same"][0], texts(self.page))
         self.page.edit(V=2)
         self.assertFalse(self.page.warm["carries"])
         self.page.discard()
@@ -159,7 +160,7 @@ class BuilderTest(unittest.TestCase):
         self.assertTrue(any(t.startswith("No error curve yet") for t in texts(self.page)))
 
     def test_a_design_reopened_elsewhere_lands_in_the_picture(self):
-        spec = B.write_spec(default_spec(), dict(self.page.cur, L=6))
+        spec = D.write_spec(default_spec(), dict(self.page.cur, L=6))
         self.fake.stage_draft(spec)
         self.page.refresh()
         self.assertEqual(self.page.chip_texts, ["more blocks (2 → 6)"])
@@ -176,7 +177,7 @@ class BuilderTest(unittest.TestCase):
 
     def test_cost_say_matches_formulas(self):
         self.page.edit(L=4)
-        a, b = (B.sizes(B.write_spec(default_spec(), dict(self.page.cur, L=n)), 0) for n in (2, 4))
+        a, b = (D.sizes(D.write_spec(default_spec(), dict(self.page.cur, L=n)), 0) for n in (2, 4))
         self.assertEqual(self.page.cost_say[B.T["size_label"]], B.say(a["params"], b["params"], "bigger", "smaller"))
         self.assertEqual(self.page.cost_say[B.T["time_per_step"]], B.say(a["time"], b["time"], "slower", "faster"))
         self.assertEqual(self.page.cost_say[B.T["memory_while_training"]], B.say(a["memory"], b["memory"], "more", "less"))
@@ -188,7 +189,7 @@ class BuilderTest(unittest.TestCase):
         for key in ("part_head", "final_norm", "part_position", "part_embedding"):
             self.assertIn(B.T[key], shown)
         self.assertEqual([(slot, mb.cget("text")) for mb, _, slot, _ in self.page.pickers],
-                         [(slot, B.module_name(slot, self.page.cur["M"][slot])) for slot in ("head", "position", "embedding")])
+                         [(slot, D.module_name(slot, self.page.cur["M"][slot])) for slot in ("head", "position", "embedding")])
         self.page.toggle(0)
         self.app.update()
         detail = texts(self.page.block_rows[0][8])
@@ -219,12 +220,12 @@ class BuilderTest(unittest.TestCase):
         menu = mb.nametowidget(mb.cget("menu"))
         menu.tk.eval(menu.cget("postcommand"))
         labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)]
-        rope = next(i for i, label in enumerate(labels) if label.startswith(B.module_name("position", "rope")))
+        rope = next(i for i, label in enumerate(labels) if label.startswith(D.module_name("position", "rope")))
         self.assertIn(B.T["wont_fit"], labels[rope])
         self.assertEqual(menu.entrycget(rope, "state"), "disabled")
-        menu.invoke(labels.index(B.module_name("position", "none")))
+        menu.invoke(labels.index(D.module_name("position", "none")))
         self.assertEqual(self.page.draft["M"]["position"], "none")
-        self.assertEqual(mb.cget("text"), B.module_name("position", "none"))
+        self.assertEqual(mb.cget("text"), D.module_name("position", "none"))
 
     def test_heads_knob_does_nothing_for_a_look_back_without_heads(self):
         self.page.pick("mixer", "gru")
@@ -237,7 +238,7 @@ class BuilderTest(unittest.TestCase):
     def test_last_change_sentence_only_with_history(self):
         self.page.edit(L=4)
         self.assertNotIn("Last time", self.page.hover_text)
-        spec4 = B.write_spec(default_spec(), dict(self.page.cur, L=4))
+        spec4 = D.write_spec(default_spec(), dict(self.page.cur, L=4))
         self.assertEqual(spec_diff(default_spec(), spec4), ["more blocks (2 → 4)"])
         self.fake.save_version(spec4, "more blocks (2 → 4)")
         self.page.refresh()
@@ -257,7 +258,7 @@ class BuilderTest(unittest.TestCase):
         self.assertIn(B.T["preset_gpt3_small_style"], shown)
         for line in self.page.preset_cost["lines"]:
             self.assertIn(line, shown)
-        self.assertIn(B.T["preset_recipe"].format(recipe=B.recipe_text(spec)), shown)
+        self.assertIn(B.T["preset_recipe"].format(recipe=D.recipe_text(spec)), shown)
         self.page.preset_btn.invoke()
         self.app.update()
         self.assertEqual(self.page.tray_kicker, B.T["not_saved"])

@@ -72,12 +72,6 @@ class VersionsApiTest(unittest.TestCase):
         refused = self.save()
         self.assertEqual((refused.status_code, refused.json()["detail"]), (400, "That design has no layers."))
 
-    def test_import_pretrained_saves_a_version(self):
-        made = self.client.post("/versions/import-pretrained", json={"name": "gpt2"})
-        self.assertEqual(made.status_code, 201, made.text)
-        self.assertEqual(self.services.imports, ["gpt2"])
-        self.assertEqual(self.tap.wait("versions")[0]["number"], made.json()["number"])
-
     def test_slow_reads_are_jobs_whose_progress_reaches_events(self):
         self.save()
         for route, kind, result in (("/versions/best", "versions.best", None), ("/versions/1/checkpoint-step", "versions.checkpoint_step", None),

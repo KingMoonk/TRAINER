@@ -15,7 +15,7 @@ from studio_api.version import app_version
 from studio_versions import NoCheckpoint
 
 ROUTERS = ("versions", "queue", "storage", "passive", "data", "pretraining", "post_training", "chat", "inspect", "benchmark",
-           "viewer", "node")  # one module each in studio_api.routers
+           "viewer", "node", "design")  # one module each in studio_api.routers
 LOCAL_ORIGIN = r"^http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 WEB_OUT = Path(__file__).resolve().parent.parent / "web" / "out"
 
@@ -24,7 +24,8 @@ def get_services(request: Request):
     return request.app.state.services
 
 
-def create_app(services, open=False):
+def create_app(services, open=False, **auth):
+    """`auth` is TailscaleAuth's allow_tags, allow_users and whois (studio_cluster.allowed_callers gives the first two)."""
     @asynccontextmanager
     async def lifespan(app):
         yield
@@ -36,7 +37,7 @@ def create_app(services, open=False):
     app.state.open = open
     app.state.broadcaster = events.Broadcaster(services)
     app.state.jobs = jobs.Jobs(services)
-    app.add_middleware(TailscaleAuth, open=open)
+    app.add_middleware(TailscaleAuth, open=open, **auth)
     if open:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
         app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, allow_methods=["*"], allow_headers=["*"])
 
