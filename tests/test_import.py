@@ -607,11 +607,12 @@ class Services(unittest.TestCase):
 
     def import_with(self, handler):
         """Workspace services whose import job is `handler` (one of the fakes above, so no job ever reaches the real download).
-        Cleanups run last-in first-out: the services close first, then their folder is removed (Windows cannot remove a folder a
-        running job still has files open in)."""
+        Cleanups run last-in first-out: the services close first, then the job still saving after close()'s wait is waited for,
+        then their folder is removed (Windows cannot remove a folder a running job still has files open in)."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         svc = FixtureServices(str(Path(tmp.name) / "workspace"))
+        self.addCleanup(lambda: svc.runner.thread and svc.runner.thread.join(30))
         self.addCleanup(svc.close)
         svc.runner.handlers = {**svc.runner.handlers, "import_pretrained": handler}
         return svc
