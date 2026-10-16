@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import studio_catalog as cat
 from studio_ia.copy import PRETRAINING as T
-from studio_ia.pages.pretraining import PretrainingPage, collection_items, fill_collection_row, tile_items
+from studio_ia.pages.pretraining import PretrainingPage, fill_collection_row
+from studio_ia.pretraining_plan import collection_items, tile_items
 from studio_ia.theme import C
 from studio_ia.widgets import KeyedRows
 from tests.fake_widgets import Parent, Widget

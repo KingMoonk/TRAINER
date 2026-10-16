@@ -89,6 +89,27 @@ class PageTest(unittest.TestCase):
         self.assertEqual(pages(self.ws, "text", "heron", dups={row["id"]})[1][0]["status"], "Near-duplicate")
 
 
+    def test_review_filter_precedes_pagination_on_disk_and_in_memory(self):
+        for dataset in (self.disk, self.json):
+            self.ws.add(dataset, [
+                {"user": f"Draft {dataset} {i}", "assistant": "Needs review", "quality": "Review", "synthetic": True}
+                for i in range(2)
+            ], "synthetic")
+            self.ws.add(dataset, [{"user": f"Ordinary {dataset}", "assistant": "Not a model draft", "quality": "Review"}], "manual")
+        sets = [(self.disk, "Talk"), (self.json, "Notes")]
+        found, cursor = [], None
+        while True:
+            rows, cursor = dk.page(self.ws, "conversations", sets=sets, cursor=cursor, limit=1, review_only=True)
+            found.extend(rows)
+            if cursor is None:
+                break
+        self.assertEqual(len(found), 4)
+        self.assertTrue(all(row["a"].startswith("Draft ") and row["status"] == "Review" for row in found))
+        self.ws.mark_reviewed([found[0]["id"]])
+        rows, _ = dk.page(self.ws, "conversations", sets=sets, limit=10, review_only=True)
+        self.assertEqual(len(rows), 3)
+
+
 class WorkspaceServicesPageTest(unittest.TestCase):
     def test_data_page_reads_the_sets_of_the_summary(self):
         with tempfile.TemporaryDirectory() as tmp:

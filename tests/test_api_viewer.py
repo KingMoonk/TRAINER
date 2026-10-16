@@ -4,6 +4,7 @@ import copy
 import math
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -163,6 +164,33 @@ class ViewerApiTest(unittest.TestCase):
         self.assertEqual(again["result"]["snapshot"], 2)
         self.assertEqual(len(self.client.get("/viewer/snapshots").json()), 3)
         self.assertEqual(self.client.post("/viewer/probe", json={"text": "x"}).status_code, 422)
+
+    def test_selected_version_uses_its_own_snapshots_and_probe(self):
+        older = self.version.number
+        newer = trained(self.services).number
+        paths = {older: [str(self.paths[0])], newer: [str(self.paths[1])]}
+        probe_path = str(self.save(3))
+        tap = self.enterContext(EventTap(self.app))
+        with patch.object(self.services, "viewer_snapshots", side_effect=lambda number: paths[number]), \
+                patch.object(self.services, "viewer_probe_step", return_value=probe_path) as probe:
+            before = self.client.get("/viewer/scene", params={"version": older}).json()
+            self.assertEqual(before["stats"]["step"], 1)
+            job, _ = finished(tap, self.client.post("/viewer/probe", json={"version": older, "text": "hello there"}))
+            self.assertEqual(job["status"], "done", job)
+            probe.assert_called_once_with("hello there", older)
+            self.assertEqual(job["result"]["snapshot"], 1)
+            own = self.client.get("/viewer/snapshots", params={"version": older}).json()
+            other = self.client.get("/viewer/snapshots", params={"version": newer}).json()
+            self.assertEqual([row["name"] for row in own], ["step_00000001.npz", "step_00000003.npz"])
+            self.assertEqual([row["name"] for row in other], ["step_00000002.npz"])
+            after = self.client.get("/viewer/scene", params={"version": older, "snapshot": 1}).json()
+            self.assertEqual(after["stats"]["step"], 3)
+
+    def test_unknown_version_never_probes_the_current_version(self):
+        with patch.object(self.services, "viewer_probe_step") as probe:
+            self.assertEqual(self.client.post("/viewer/probe", json={"version": 999}).status_code, 400)
+            self.assertEqual(self.client.get("/viewer/snapshots", params={"version": 999}).status_code, 400)
+            probe.assert_not_called()
 
     def test_a_probe_with_no_checkpoint_fails_with_a_sentence(self):
         tap = self.enterContext(EventTap(self.app))

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -10,12 +10,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { api, ApiError, unwrap } from "@/lib/api";
+import { api, ApiError, subscribe, unwrap } from "@/lib/api";
+import type { components } from "@/lib/api-schema";
 import { routeFor } from "@/lib/routes";
 import { postStream } from "@/lib/sse-post";
 import { CHAT as T } from "./copy";
+import { CheckpointStep, FewShotCheck, checkKey, useBestVersion } from "./checks";
 import {
   canRate,
+  changesCheckpoints,
   compareStart,
   scoreRows,
   trainedVersions,
@@ -38,16 +41,34 @@ function describe(error: unknown): string {
 
 export default function Page() {
   const route = routeFor("chat");
+  const queryClient = useQueryClient();
   const versionsQuery = useQuery({
     queryKey: ["versions"],
     queryFn: () => unwrap(api.GET("/versions")),
     refetchInterval: 15_000, // a version finishing training appears on its own
   });
-  const trained = trainedVersions((versionsQuery.data ?? []) as Version[]);
+  const trained = trainedVersions(versionsQuery.data ?? []);
   const numbers = trained.map((v) => v.number);
   const byNumber = new Map(trained.map((v) => [v.number, v]));
+  const best = useBestVersion(trained);
 
-  // null = "follow the best checkpoint": the server picks when the version is left out of the request.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const close = subscribe((event) => {
+      if (!changesCheckpoints(event)) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ["versions"] });
+        void queryClient.invalidateQueries({ queryKey: ["chat", "best"] });
+        void queryClient.invalidateQueries({ queryKey: ["chat", "checkpoint"] });
+        // A checkpoint can be rewritten at the same path; never reuse its old example-check result.
+        void queryClient.resetQueries({ queryKey: ["chat", "few-shot"] });
+      }, 250);
+    });
+    return () => { close(); clearTimeout(timer); };
+  }, [queryClient]);
+
+  // null = follow the actual best resolved by the server's scoring job.
   const [picked, setPicked] = useState<number | null>(null);
   const [compare, setCompare] = useState<[number, number] | null>(null);
   const [thread, setThread] = useState<Message[]>([]);
@@ -57,22 +78,26 @@ export default function Page() {
   const [correction, setCorrection] = useState("");
   const [whole, setWhole] = useState(false);
   const [how, setHow] = useState(false);
+  const [replyVersion, setReplyVersion] = useState<number | null>(null);
   const controllers = useRef<(AbortController | null)[]>([null, null]);
 
   useEffect(() => {
     const live = controllers.current;
-    return () => live.forEach((c) => c?.abort());
+    return () => live.forEach((c, i) => { c?.abort(); live[i] = null; });
   }, []);
 
   // A picked version that stopped being trained (or vanished) goes back to following the best one.
-  const answering = picked !== null && byNumber.has(picked) ? picked : null;
+  const following = picked === null || !byNumber.has(picked);
+  const resolved = following ? best.data ?? null : picked;
   const busy = panes.some((p) => p.status === "streaming");
+  const answering = busy && !compare ? replyVersion : resolved;
   const left = compare ? byNumber.get(compare[0]) : undefined;
   const right = compare ? byNumber.get(compare[1]) : undefined;
+  const ready = compare ? !!left && !!right : answering !== null && byNumber.has(answering) && (!following || (!best.isFetching && !best.isError));
 
   const setPane = (i: number, next: PaneState) => setPanes((p) => (i === 0 ? [next, p[1]] : [p[0], next]));
 
-  async function run(i: number, version: number | null, messages: Message[], single: boolean) {
+  async function run(i: number, version: number, messages: Message[], single: boolean) {
     const ctl = new AbortController();
     controllers.current[i] = ctl;
     let text = "";
@@ -82,8 +107,9 @@ export default function Page() {
     try {
       await postStream(
         "/chat/reply",
-        { version, messages },
+        { version, messages } satisfies components["schemas"]["studio_api__routers__chat__ReplyRequest"],
         (event) => {
+          if (controllers.current[i] !== ctl) return;
           const payload = (event.payload ?? {}) as { text?: string; message?: string };
           if (event.kind === "text" || event.kind === "done") {
             text = payload.text ?? text;
@@ -98,6 +124,7 @@ export default function Page() {
     } catch (error) {
       failed = describe(error);
     }
+    if (controllers.current[i] !== ctl) return;
     controllers.current[i] = null;
     if (!failed && !finished && !ctl.signal.aborted) failed = "The reply ended early.";
     if (failed) {
@@ -116,17 +143,18 @@ export default function Page() {
 
   function send() {
     const content = draft.trim();
-    if (!content || busy || !numbers.length) return;
+    if (!content || busy || !ready) return;
     const message: Message = { role: "user", content };
     const messages = compare ? [message] : [...thread, message];
     setDraft("");
     setThread(messages);
     setPanes([IDLE, IDLE]);
+    setReplyVersion(compare ? compare[0] : answering);
     if (compare) {
       void run(0, compare[0], messages, false);
       void run(1, compare[1], messages, false);
     } else {
-      void run(0, answering, messages, true);
+      void run(0, answering!, messages, true);
     }
   }
 
@@ -136,17 +164,23 @@ export default function Page() {
 
   function reset(nextCompare: [number, number] | null) {
     stop();
+    controllers.current[0] = controllers.current[1] = null;
     setCompare(nextCompare);
     setThread([]);
     setPanes([IDLE, IDLE]);
+    setReplyVersion(null);
   }
 
   function pick(number: number) {
+    if (busy) return;
     if (compare) {
       if (number !== compare[0] && number !== compare[1]) {
         stop();
+        controllers.current[0] = controllers.current[1] = null;
         setCompare([compare[0], number]);
         setPanes([IDLE, IDLE]);
+        setThread([]);
+        setReplyVersion(null);
       }
     } else {
       setPicked(number);
@@ -154,7 +188,7 @@ export default function Page() {
   }
 
   const replies: [string, string] = [panes[0].text, panes[1].text];
-  const rateEnabled = !!compare && canRate(replies, busy);
+  const rateEnabled = !!compare && panes.every((pane) => pane.status === "done") && canRate(replies, busy);
 
   const rate = useMutation({
     mutationFn: async (chosenIndex: 0 | 1) => {
@@ -184,7 +218,7 @@ export default function Page() {
       unwrap(
         api.POST("/chat/corrections", {
           body: {
-            version: compare ? compare[0] : answering,
+            version: replyVersion,
             messages: thread.slice(0, lastUser + 1),
             correction: correction.trim(),
             whole_answer: whole,
@@ -221,7 +255,7 @@ export default function Page() {
           <Skeleton className="h-40 w-full" />
           <Skeleton className="h-10 w-full" />
         </div>
-      ) : versionsQuery.isError ? (
+      ) : versionsQuery.isError && !versionsQuery.data ? (
         <Card>
           <CardContent className="flex flex-col items-start gap-3">
             <p className="text-sm">Could not load the versions: {describe(versionsQuery.error)}</p>
@@ -232,30 +266,32 @@ export default function Page() {
         </Card>
       ) : (
         <>
+          {versionsQuery.isError && <p role="alert">Could not refresh the versions: {describe(versionsQuery.error)}</p>}
           <Card>
             <CardContent className="flex flex-wrap items-center gap-3">
               <Badge variant="outline">Live</Badge>
               <span className="text-lg font-semibold">
-                {numbers.length ? (compare ? "Two versions" : answering !== null ? `Version ${answering}` : "Best checkpoint") : T.noTrained}
+                {numbers.length ? (compare ? "Two versions" : answering !== null ? `Version ${answering}` : best.isFetching ? T.findingBest : "Pick a trained version") : T.noTrained}
               </span>
               {numbers.length > 0 && !compare && (
-                <span className="text-sm text-muted-foreground">{answering === null ? T.follows : T.picked}</span>
+                <span className="text-sm text-muted-foreground">{following ? T.follows : T.picked}</span>
               )}
+              {best.data != null && !best.isFetching && !best.isError && <span className="text-sm text-muted-foreground">{T.best(best.data)}</span>}
               {!numbers.length && (
                 <Link href="/builder" className="text-sm text-primary underline-offset-4 hover:underline">
                   {T.noTrainedLink}
                 </Link>
               )}
               <div className="ml-auto flex gap-2">
-                {!compare && answering !== null && (
-                  <Button variant="ghost" size="sm" onClick={() => setPicked(null)}>
+                {!compare && !following && (
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPicked(null)}>
                     Follow the best checkpoint
                   </Button>
                 )}
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={compare ? false : numbers.length < 2}
+                  disabled={busy || (!compare && (numbers.length < 2 || !ready))}
                   onClick={() => reset(compare ? null : compareStart(numbers, answering))}
                 >
                   {compare ? T.backToOne : T.compareBtn}
@@ -263,6 +299,13 @@ export default function Page() {
               </div>
             </CardContent>
           </Card>
+
+          {numbers.length > 0 && <div className="flex flex-wrap items-center gap-2 text-sm">
+            {best.isFetching && <span role="status" className="flex items-center gap-2"><Skeleton className="h-4 w-20" />{T.findingBest}</span>}
+            {best.isError && <p role="alert">{T.bestFailed}: {describe(best.error)}</p>}
+            {best.data === null && !best.isFetching && !best.isError && <p>{T.noBest}</p>}
+            <Button variant="ghost" size="sm" disabled={best.isFetching || busy} onClick={() => void best.refetch()}>{T.retryBest}</Button>
+          </div>}
 
           <section aria-label="Replies" className={compare ? "grid gap-4 md:grid-cols-2" : "flex flex-col gap-4"}>
             {compare ? (
@@ -274,6 +317,7 @@ export default function Page() {
                       <CardTitle className={i === 0 ? "text-violet-400" : "text-blue-400"}>
                         {version ? versionName(version) : "No version"}
                       </CardTitle>
+                      {version && <CheckpointStep version={version} />}
                     </CardHeader>
                     <CardContent className="flex flex-col gap-3">
                       <ReplyText pane={panes[i]} />
@@ -293,6 +337,7 @@ export default function Page() {
               })
             ) : (
               <Card>
+                {scored && <CardHeader><CardTitle>{versionName(scored)}</CardTitle><CheckpointStep version={scored} /></CardHeader>}
                 <CardContent className="flex min-h-40 flex-col gap-3">
                   {thread.length === 0 && panes[0].status === "idle" && <p className="text-sm text-muted-foreground">{T.itsReply}</p>}
                   {thread.map((m, k) => (
@@ -321,7 +366,7 @@ export default function Page() {
               className="h-9 min-w-0 flex-1 rounded-lg border bg-transparent px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               placeholder={compare ? T.placeholderCompare : T.placeholderSingle}
               value={draft}
-              disabled={!numbers.length}
+              disabled={!ready}
               onChange={(e) => setDraft(e.target.value)}
             />
             {busy ? (
@@ -329,7 +374,7 @@ export default function Page() {
                 {T.stop}
               </Button>
             ) : (
-              <Button type="submit" disabled={!numbers.length || !draft.trim()}>
+              <Button type="submit" disabled={!ready || !draft.trim()}>
                 {T.send}
               </Button>
             )}
@@ -349,7 +394,7 @@ export default function Page() {
                 className="flex flex-col gap-3 rounded-lg border p-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (correction.trim() && lastUser >= 0) teach.mutate();
+                  if (correction.trim() && lastUser >= 0 && replyVersion !== null && !busy) teach.mutate();
                 }}
               >
                 <p className="text-sm text-muted-foreground">{T.teachCorrectionDesc}</p>
@@ -365,7 +410,7 @@ export default function Page() {
                     <Switch id="whole-answer" checked={whole} onCheckedChange={setWhole} />
                     <Label htmlFor="whole-answer">{T.wholeAnswer}</Label>
                   </div>
-                  <Button type="submit" size="sm" disabled={!correction.trim() || lastUser < 0 || teach.isPending}>
+                  <Button type="submit" size="sm" disabled={!correction.trim() || lastUser < 0 || replyVersion === null || busy || teach.isPending}>
                     Save
                   </Button>
                   {lastUser < 0 && <span className="text-sm text-muted-foreground">Send a message first; a correction belongs to a reply.</span>}
@@ -399,12 +444,13 @@ export default function Page() {
                         : "";
                   const chip = v.status === "training" ? "catching up" : v.verdict || (v.parent == null ? "baseline" : "not compared yet");
                   return (
+                    <div key={v.number} className="rounded-lg border p-3">
                     <button
-                      key={v.number}
                       type="button"
+                      disabled={busy}
                       aria-pressed={isLeft || isRight}
                       onClick={() => pick(v.number)}
-                      className={`flex flex-wrap items-center gap-3 rounded-lg border p-3 text-left text-sm transition-colors hover:bg-muted ${
+                      className={`flex w-full flex-wrap items-center gap-3 rounded-lg border p-3 text-left text-sm transition-colors hover:bg-muted disabled:opacity-50 ${
                         isLeft ? "border-violet-400 bg-muted/50" : isRight ? "border-blue-400 bg-muted/50" : ""
                       }`}
                     >
@@ -413,6 +459,8 @@ export default function Page() {
                       <span className="flex-1">{v.change}</span>
                       <span className={isLeft ? "text-violet-400" : isRight ? "text-blue-400" : "text-muted-foreground"}>{slot}</span>
                     </button>
+                    <div className="mt-2"><CheckpointStep version={v} /></div>
+                    </div>
                   );
                 })}
               </CardContent>
@@ -431,6 +479,7 @@ export default function Page() {
               </CardContent>
             </Card>
           )}
+          {scored && <FewShotCheck key={JSON.stringify(checkKey("few-shot", scored))} version={scored} />}
 
           <div className="flex flex-wrap gap-2">
             <Link href="/compare" className={buttonVariants()}>

@@ -41,17 +41,16 @@ class ShellTest(unittest.TestCase):
             self.assertEqual(on, [area], route)
 
     def test_queue_event_updates_machine_strip(self):
-        self.assertIn("Nothing is training", self.app.strip_text)
+        self.wait_for(lambda: "Nothing is training" in self.app.strip_text)  # the strip draws the snapshots a worker computes
         self.fake.set_queue(QueueState(job=Job("1", "pretrain", "Version 5 catch-up"), step=50, total=200,
                                        phase="steady", eta_s=600, up_next=[Job("2", "quicktest")]))
-        self.app.update()
-        self.assertIn("Version 5 catch-up", self.app.strip_text)
+        self.wait_for(lambda: "Version 5 catch-up" in self.app.strip_text)
         self.assertIn("1 queued", self.app.strip_text)
         self.assertAlmostEqual(self.app.strip_bar.fraction, 0.25)
 
     def wait_for(self, what):
         """Pump Tk until `what()` holds: the Next row is filled in by the worker thread."""
-        for _ in range(100):
+        for _ in range(250):
             self.app.update()
             if what():
                 return

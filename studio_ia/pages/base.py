@@ -67,6 +67,11 @@ class Page(ttk.Frame):
     def refresh(self):
         """Re-read services and redraw. Called when the page is shown."""
 
+    topics: tuple = ()  # snapshot topics the page reads (studio_ia.snapshots); the shell calls redraw() when they change
+
+    def redraw(self, changed):
+        """While the page is shown, once per frame in which any of `topics` changed (`changed`, a set). Read the snapshots only."""
+
     def preload(self):
         """The slow service reads refresh() is about to make, and nothing else: it can run off the Tk thread, so no widgets."""
 

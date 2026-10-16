@@ -7,15 +7,15 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from studio_api import events, jobs
 from studio_api.auth import TailscaleAuth
+from studio_api.static import ExportFiles
 from studio_api.version import app_version
 from studio_versions import NoCheckpoint
 
 ROUTERS = ("versions", "queue", "storage", "passive", "data", "pretraining", "post_training", "chat", "inspect", "benchmark",
-           "viewer", "node", "design", "collective")  # one module each in studio_api.routers
+           "viewer", "node", "quicktest", "design", "cluster", "collective", "training_run")  # one module each in studio_api.routers
 LOCAL_ORIGIN = r"^http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 WEB_OUT = Path(__file__).resolve().parent.parent / "web" / "out"
 
@@ -61,5 +61,5 @@ def create_app(services, open=False, **auth):
     app.include_router(events.router)
     app.include_router(jobs.router)
     if WEB_OUT.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_OUT, html=True), name="web")
+        app.mount("/", ExportFiles(directory=WEB_OUT, html=True), name="web")
     return app

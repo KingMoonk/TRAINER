@@ -599,13 +599,15 @@ class Workspace:
         else:
             yield from (e for e in self.examples(dataset_id) if dk.classify(e) == kind)
 
-    def kind_rows(self, dataset_id, kind, query="", after=0, limit=200, rules=()):
+    def kind_rows(self, dataset_id, kind, query="", after=0, limit=200, rules=(), review_only=False):
         """[(rowid, example)] of one disk dataset: up to `limit` rows of `kind` after rowid `after`, in storage order, whose user,
         assistant or intent hold `query` (SQLite folds case for ASCII letters only) or whose stored rule is one of `rules`."""
         where, parameters = self._where(dataset_id, query)
         if query.strip() and rules:
             where = f"({where} OR dataset_id=? AND ({' OR '.join(['payload LIKE ?'] * len(rules))}))"
             parameters = parameters + [dataset_id] + [f'%"rule": "{rule}"%' for rule in rules]
+        if review_only:
+            where = f"({where}) AND quality='Review' AND json_extract(payload, '$.synthetic')=1"
         with self._connect() as connection:
             cursor = connection.execute(f"SELECT rowid,{_READ} FROM records WHERE {where} AND kind=? AND rowid>? ORDER BY rowid LIMIT ?",
                                         parameters + [kind, after, limit])

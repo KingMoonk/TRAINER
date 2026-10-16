@@ -23,7 +23,6 @@ MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
 PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine
-SAMPLE_MB = 64  # ponytail: flat per-sample memory guess for the batch cap; jobs may override with params["sample_mb"]
 
 
 @dataclass
@@ -50,6 +49,9 @@ class Job:
     created_at: float = field(default_factory=time.time)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     error: str = ""
+    node: str = ""                  # the peer it runs (or ran) on; "" for a job that runs here
+    epoch: int = 0                  # the lease epoch it was last placed at (studio_scheduler); a write carrying another epoch is refused
+    owner: str = ""                 # for a job another node owns and this one runs: how to reach that node
 
 
 @dataclass(frozen=True)
@@ -112,11 +114,6 @@ def idle_seconds():
     return None
 
 
-def physical_memory():
-    from studio_passive import total_memory  # has the Windows path; os.sysconf is POSIX-only
-    return total_memory()
-
-
 def size_text(n):
     return f"{n / 2 ** 30:.1f} GB" if n >= 2 ** 30 else f"{n / 2 ** 20:.0f} MB"
 
@@ -126,10 +123,6 @@ def disk_need(root):
     checkpoint is the best guide to the next one)."""
     largest = max((p.stat().st_size for p in Path(root).glob("runs/*/*.npz")), default=0)
     return max(MIN_FREE, 3 * largest)
-
-
-def batch_cap(plan, sample_mb=SAMPLE_MB, ram=None):
-    return max(1, int((ram or physical_memory()) * MEMORY[plan.memory] / (sample_mb * 2 ** 20)))
 
 
 def passive_running(root):
@@ -167,7 +160,7 @@ class Runner:
     job starts: it fills in what the handler would otherwise ask the app for (output folder, checkpoints) and returns the context
     the handler gets, {"root", "run_dir"}. Without it the context is the folder above data/ and its runs/."""
 
-    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now):
+    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, cluster=None):
         self.path, self.handlers, self.prepare, self.tick, self.clock = Path(path), handlers, prepare, tick, clock
         self.root = self.path.parent.parent
         self.handles = set()           # live workers: the running job's and any cool-down branched off it
@@ -188,6 +181,8 @@ class Runner:
         self._sync_pause()
         self.closed = threading.Event()
         self.thread = None
+        import studio_remote
+        self.cluster = (cluster or studio_remote.Cluster)(self)  # inert until peers are listed in the workspace config; `cluster(runner)` for tests
 
     # ---- persistence
     def _load(self):
@@ -199,8 +194,10 @@ class Runner:
         self.jobs = [Job(**j) for j in data.get("jobs", [])]
         self.user_paused = bool(data.get("user_paused", False))
         for job in self.jobs:          # a run cut short by a restart goes back to the front
-            if job.status == "running":
-                job.status = "waiting"
+            if job.owner and job.status in ("running", "waiting", "held"):  # another node's job cannot renew its lease now: its owner places it again
+                job.status, job.error = "stopped", "This machine restarted while it ran the job for another machine, which will place it again."
+            elif job.status == "running":  # a job that was running on a peer is placed again, at the next epoch, so the peer's copy is fenced
+                job.status, job.node = "waiting", ""
 
     def _save(self):
         done = [j for j in self.jobs if j.status not in ("waiting", "running", "held")][-50:]
@@ -267,13 +264,18 @@ class Runner:
         self._emit("queue", {"job": job_id})
 
     def remove(self, job_id):
+        remote = None
         with self.lock:
             job = next((j for j in self.jobs if j.id == job_id), None)
             if job is self.running:
                 self.stop_event.set()  # the running job is stopped (the runner thread tells its worker); the runner marks it
+            elif job and job.node and job.status == "running":
+                remote = job           # running on a peer: it is told to stop, and the record is kept as stopped
             elif job:
                 self.jobs.remove(job)
                 self._save()
+        if remote:
+            self.cluster.cancel(remote)
         self.wake.set()
         self._emit("queue", {"job": job_id})
 
@@ -347,6 +349,7 @@ class Runner:
     def start(self):
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
+        self.cluster.start()
 
     def shutdown(self, timeout=10):
         """Stop the running job and wait up to `timeout` for it to save. A worker still saving then is left to finish: it exits by
@@ -358,6 +361,7 @@ class Runner:
             handle.stop()
         if self.thread:
             self.thread.join(timeout)
+        self.cluster.close()
 
     # ---- runner thread
     def _sync_pause(self):
@@ -437,12 +441,31 @@ class Runner:
         while not self.closed.is_set():
             self.wake.clear()  # before looking: whatever sets it from here on is seen by the next pass
             self._watch()
-            with self.lock:
-                job = next((j for j in self.jobs if j.status == "waiting"), None)
+            self._place_waiting()
+            job = self._next_local()
             if not job or self.blocked or self.user_paused:
                 self.wake.wait(self.tick)
                 continue
             self._run(job)
+
+    def _next_local(self):
+        """The first waiting job that belongs on this machine: a job pinned to, or better placed on, a peer is skipped, not waited for."""
+        with self.lock:
+            waiting = [j for j in self.jobs if j.status == "waiting"]
+        return next((j for j in waiting if self.cluster.place(j).where == "local"), None)
+
+    def _place_waiting(self):
+        """Hand each waiting job that belongs on a peer to it. Runs between jobs and while one runs, so a free peer is used at once. The
+        plan's hours still apply (they say when to train) and so does a pause; this machine's battery and keyboard do not, because they
+        say nothing about the peer."""
+        if self.user_paused or self.blocked == "outside hours":
+            return
+        with self.lock:
+            waiting = [j for j in self.jobs if j.status == "waiting"]
+        for job in waiting:
+            placement = self.cluster.place(job)
+            if placement.where == "remote":
+                self.cluster.dispatch(job, placement.node)
 
     def _disk_problem(self):
         """A sentence when the disk holding the queue and the checkpoints cannot fit a run, else ''. A failed job names the
@@ -461,7 +484,7 @@ class Runner:
         short = self._disk_problem()
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
-            job.params = {**job.params, "max_batch_size": batch_cap(self.plan, job.params.get("sample_mb", SAMPLE_MB))}
+            job.params = {**job.params, "memory_share": MEMORY[self.plan.memory]}  # studio_memory.batch_cap fits the job's batch to it
             self.stop_event.clear()
             self._save()
         started = time.monotonic()
@@ -486,6 +509,7 @@ class Runner:
         while handle and not handle.done.is_set():
             self.wake.clear()
             self._watch()
+            self._place_waiting()
             handle.sync(self.stop_event, self.pause_event)  # whatever set them also set wake
             if not handle.done.is_set():
                 self.wake.wait(self.tick)

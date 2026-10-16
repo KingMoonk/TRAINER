@@ -16,6 +16,7 @@ from studio_ia import services as services_module
 from studio_ia import threads
 from studio_ia.copy import BENCH
 from studio_ia.pages.base import Page
+from studio_ia.snapshots import OWN_EVENTS, Render
 from studio_ia.theme import C, GUTTER, SIDEBAR_W, apply, font, tk_label
 from studio_ia.widgets import Progress, _activate
 
@@ -52,9 +53,10 @@ ROUTES = {
 }
 
 
-def strip_lines(q, version=None):
+def strip_lines(q, version=None, known=True):
     """The machine strip's text for a QueueState: (now line, queued line, chat line, chat line is the Resume link).
-    Idle and paused by the user reads "Paused by you", and the chat line turns into the way out of it."""
+    Idle and paused by the user reads "Paused by you", and the chat line turns into the way out of it. known=False: the
+    version Chat follows is still being worked out."""
     waiting = len(q.up_next)
     if q.job is None:
         now = "Paused by you" if q.paused else "Nothing is training"
@@ -64,6 +66,8 @@ def strip_lines(q, version=None):
         left = format_duration(q.eta_s) + " left · " if q.eta_s is not None else ""
     if q.job is None and q.paused:
         chat = "Resume ›"
+    elif not known:
+        chat = "Finding the version Chat uses…"
     else:
         chat = f"Chat uses version {version.number} · best so far" if version else "Chat has no trained version yet"
     return now, f"{left}{waiting} queued", chat, q.job is None and q.paused
@@ -118,13 +122,14 @@ class Studio(tk.Tk):
         for route, cls in (("trace", trace.TracePage), ("head_zoom", head_zoom.HeadZoomPage), ("value_map", value_map.ValueMapPage),
                            ("loss", loss.LossPage), ("head_lab", head_lab.HeadLabPage)):
             self.register(route, cls)
-        self.unsubscribe = self.services.subscribe(self.on_event)
         threads.attach()
+        self.render = Render()  # redraws what the snapshots that changed feed, once per frame
+        self.render.subscribe(("queue", "versions"), lambda _changed: self.refresh_strip())
+        self.services.snapshots.start()  # every topic is computed on its worker; the strip fills in as they arrive
+        self.unsubscribe = self.services.subscribe(self.on_event)  # after the snapshots: a page that raises cannot starve them
         self._settle()
         self._pump()
         self.services.start_queue()  # jobs saved as waiting by the last session start again
-        with timed("shell.refresh_strip"):
-            self.refresh_strip()
         self.refresh_next()
         with timed("shell.show_builder"):
             self.show("builder")
@@ -161,7 +166,6 @@ class Studio(tk.Tk):
         self.strip_bar = Progress(strip)
         self.strip_next = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
         self.strip_chat = tk_label(strip, "", 12, "muted", "panel", wraplength=SIDEBAR_W - 2 * GUTTER)
-        self._strip_pending = False
         self._strip_resume = False  # the chat line is the "Resume" link only while the queue is paused by the user and idle
         for seq in ("<Button-1>", "<Return>", "<space>"):
             self.strip_chat.bind(seq, self._strip_chat_click)
@@ -233,12 +237,12 @@ class Studio(tk.Tk):
         return "\n".join(w.cget("text") for w in (self.strip_now, self.strip_next, self.strip_chat))
 
     def refresh_strip(self):
-        q = self.services.queue()
-        try:
-            v = self.services.best_version() or self.services.current_version()
-        except NotImplementedError:
-            v = None
-        now, queued, chat, resume = strip_lines(q, v)
+        """Draw the strip from the "queue" and "versions" snapshots only: no service call, so nothing here can be slow."""
+        q = self.services.snapshots.get("queue")
+        if q is None:  # not computed yet: its first snapshot redraws the strip
+            return
+        versions = self.services.snapshots.get("versions")
+        now, queued, chat, resume = strip_lines(q, versions and versions.chat, known=versions is not None)
         self.strip_now.configure(text=now)
         if q.job is None:
             self.strip_bar.set(None)
@@ -248,13 +252,9 @@ class Studio(tk.Tk):
         self.strip_chat.configure(text=chat, fg=C["violet"] if resume else C["muted"], cursor="hand2" if resume else "", takefocus=int(resume))
         self._strip_resume = resume
 
-    def _strip_tick(self):
-        self._strip_pending = False
-        self.refresh_strip()
-
     def _strip_chat_click(self, _event=None):
-        if self._strip_resume:
-            self.services.resume()
+        if self._strip_resume:  # a command: the strip changes when the next "queue" snapshot arrives
+            self.services.snapshots.send(self.services.resume, topics=("queue",), name="resume")
 
     def _highlight(self, area):
         for key, (row, stripe, inner, title) in self._area_rows.items():
@@ -286,6 +286,8 @@ class Studio(tk.Tk):
             page.slow, page.background, page.reload = self.slow, self.background, lambda: self.show(route)
             page.quiet_reload = lambda: self._quiet_reload(route)
             page.quietly = self.quietly
+            if page.topics:  # a shown page redraws once per frame in which a topic it reads changed
+                self.render.subscribe(page.topics, lambda changed, r=route: self.route == r and self.pages[r].redraw(changed))
         page = self.pages[route]
         self._highlight(spec.area)
         self._wanted = route  # a later click wins over a page still loading
@@ -395,7 +397,9 @@ class Studio(tk.Tk):
 
     def _pump(self):
         self.services.pump()  # events the queue runner and other workers emitted, delivered here on the Tk thread
-        self._pump_id = self.after(50, self._pump)
+        self.services.snapshots.tick()  # topics that training steps asked for, at most once a second
+        self.render.frame()  # then one redraw per page for the snapshots they brought, at most about 30 a second
+        self._pump_id = self.after(33, self._pump)
 
     def _watch_stalls(self):
         """The Tk loop beats every 100 ms; a daemon thread writes logs/ui-stalls.log, with the Tk thread's stack, when it stops beating."""
@@ -417,13 +421,12 @@ class Studio(tk.Tk):
         self._settle_id = self.after(250, self._settle)
 
     def on_event(self, kind, payload):
+        if kind == "snapshot":
+            self.render.mark(payload)  # drawn by the next frame, with whatever else changed by then
+        if kind in OWN_EVENTS:  # pages that predate snapshots refresh on events they do not know: keep these from them
+            return
         if kind in NEXT_EVENTS:
             self.refresh_next()
-        if kind in ("queue", "job", "blocked", "versions"):  # "versions": also when held-back scores came in and Chat may follow another
-            self.refresh_strip()
-        elif kind == "train" and not self._strip_pending:  # steps arrive several times a second: redraw the strip once a second
-            self._strip_pending = True
-            self.after(1000, self._strip_tick)
         if self.route:
             self.pages[self.route].on_event(kind, payload)
 
@@ -432,6 +435,7 @@ class Studio(tk.Tk):
             self._stalls.stop()
             self.after_cancel(self._beat_id)
         ui_guard.unbind(self.services._ui_thread)
+        self.services.snapshots.stop()
         for lane in self.lanes.values():
             lane.stop()
         threads.detach()

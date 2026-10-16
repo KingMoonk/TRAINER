@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -24,15 +25,25 @@ def cap_threads():
     torch.set_num_threads(background_threads())
 
 
+_probe = threading.Lock()
+
+
 @lru_cache(maxsize=1)
 def gpu_status():
-    """Probe the GPU torch can see (CUDA first, then MPS) with a small calculation; a visible device alone isn't enough."""
+    """Probe the GPU torch can see (CUDA first, then MPS) with a small calculation; a visible device alone isn't enough.
+    One probe at a time: the cache only serves calls that arrive after the first one has finished, and two threads
+    bringing Metal up at once (the API runs its routes in a thread pool) crash the process."""
+    with _probe:
+        return _probe_gpu()
+
+
+def _probe_gpu():
     try:
         if torch.cuda.is_available():
             kind, name = "cuda", torch.cuda.get_device_name(0)
             memory = int(torch.cuda.get_device_properties(0).total_memory)
         elif torch.backends.mps.is_available():
-            kind, name, memory = "mps", "Apple GPU (Metal)", 0
+            kind, name, memory = "mps", "Apple GPU (Metal)", int(torch.mps.recommended_max_memory())  # unified memory: what Metal may address
         else:
             raise RuntimeError("No CUDA or Metal GPU was found.")
         sample = torch.ones((4, 4), dtype=torch.float32, device=kind)
