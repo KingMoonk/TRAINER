@@ -6,9 +6,56 @@ can only be approximate (a framework keeps workspace of its own), so the out-of-
 the backstop for a batch the estimate accepted."""
 from __future__ import annotations
 
+import threading
+
 import torch
 
 ADAMW_COPIES = 4  # per trainable parameter: the weight, its gradient and AdamW's two moments
+
+
+def pool(device):
+    """The memory a model on `device` takes from: a CUDA GPU's own, or the machine's RAM (the CPU, and Apple's MPS, which shares it)."""
+    return "gpu" if device == "cuda" else "ram"
+
+
+def weight_bytes(model):
+    """What a compiled model's weights hold, in the memory of the device they are on."""
+    return sum(value.numel() * value.element_size() for value in model.p.values())
+
+
+class Ledger:
+    """What the app process holds in memory outside the running job: the chat models, each registered when it loads and released
+    when it is evicted. The queue subtracts a pool's total from the share it hands a job on that pool; the worker process never
+    sees the ledger, only the reduced share. Entries stay in the order they were registered."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._held = {}  # key -> (bytes, device)
+
+    def register(self, key, nbytes, device="cpu"):
+        with self._lock:
+            self._held[key] = (int(nbytes), device)
+
+    def release(self, key):
+        with self._lock:
+            self._held.pop(key, None)
+
+    def total(self, device="cpu"):
+        """Bytes held in the memory a job on `device` draws on."""
+        with self._lock:
+            return sum(n for n, d in self._held.values() if pool(d) == pool(device))
+
+    def largest(self, device="cpu"):
+        """Bytes of the biggest single entry in that memory (0 when there is none)."""
+        with self._lock:
+            return max((n for n, d in self._held.values() if pool(d) == pool(device)), default=0)
+
+
+def device_of(cfg):
+    """The device a training run of the validated config `cfg` lands on: the choice the model's build makes."""
+    from studio_backend import get_backend
+    d = cfg["width"], cfg["context"], cfg["layers"]
+    return get_backend(cfg["device"], work=cfg["batch_size"] * d[1] * d[0] * max(1, d[2])).device
 
 
 def physical_memory():
@@ -52,7 +99,6 @@ def batch_cap(config, share, device=None, ram=None, gpu=None):
     """The largest batch of `config` whose training step fits `share` of the memory of the device it will run on: never
     above the declared batch size, never below 1 (the out-of-memory retry handles the rest). An estimate with nothing per
     sample (every module skipped) keeps the declared batch size."""
-    from studio_backend import get_backend
     from studio_model import validate_config
     cfg = validate_config(config)
     declared = cfg["batch_size"]
@@ -60,7 +106,6 @@ def batch_cap(config, share, device=None, ram=None, gpu=None):
     if per_sample <= 0:
         return declared
     if device is None:
-        d = cfg["width"], cfg["context"], cfg["layers"]
-        device = get_backend(cfg["device"], work=declared * d[1] * d[0] * max(1, d[2])).device  # the choice the model's build makes
+        device = device_of(cfg)
     room = budget(device, share, ram, gpu) - fixed
     return max(1, min(declared, room // per_sample))
