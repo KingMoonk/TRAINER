@@ -124,8 +124,8 @@ def pass_at_k(checkpoint, problems, count=PROBE_PROBLEMS, k=PROBE_ANSWERS, tempe
         messages = _messages(problem)
         prompt = _prompt_text(messages)
         budget = studio_rules.max_tokens(problem["rule"])
-        ok = sum(bool(studio_rules.check(problem["rule"], prompt, local.generate(messages, max_tokens=budget, temperature=temperature),
-                                         problem.get("params"))) for _ in range(k))
+        ok = sum(bool(studio_rules.check(problem["rule"], prompt, answer, problem.get("params")))
+                 for answer in local.generate_group(messages, k, max_tokens=budget, temperature=temperature))
         passed += ok
         solved += ok > 0
     return {"problems": len(problems), "k": k, "solved": solved, "passed": passed, "answers": len(problems) * k}
@@ -160,7 +160,7 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             messages = _messages(problem)
             prompt = _prompt_text(messages)
             budget = max_tokens or studio_rules.max_tokens(problem["rule"])  # sized by the rule unless the caller fixes it
-            answers = [local.generate(messages, max_tokens=budget, temperature=temperature) for _ in range(group)]
+            answers = local.generate_group(messages, group, max_tokens=budget, temperature=temperature)   # one prompt prefill for the group
             passed = [studio_rules.check(problem["rule"], prompt, a, problem.get("params")) for a in answers]
             rewards = [float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.) for a, ok in zip(answers, passed)]
             flat = not has_spread(rewards)   # all pass or all fail: nothing to learn

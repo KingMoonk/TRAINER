@@ -877,15 +877,35 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise
 
 
-def last_logits(model, window, sliding, cache):
-    """Logits of the position after `window`. With a KV cache only the tokens it has not seen are run;
-    once the text outgrows the context (`sliding`) every position shifts, so the cache is dropped and the window re-prefilled."""
+def batch_logits(model, windows, sliding, cache):
+    """Logits [rows, V] of the position after each window (all the same length). With a KV cache only the tokens it has not seen
+    are run; once the text outgrows the context (`sliding`) every position shifts, so the cache is dropped and the windows re-prefilled."""
     if cache is None:
-        return model.forward(np.array([window], dtype=np.int64))[0, -1]
+        return model.forward(np.array(windows, dtype=np.int64))[:, -1]
     if sliding:
         cache.clear()
         cache["n"] = 0
-    return model.forward(np.array([window[cache["n"]:]], dtype=np.int64), cache=cache)[0, -1]
+    return model.forward(np.array([window[cache["n"]:] for window in windows], dtype=np.int64), cache=cache)[:, -1]
+
+
+def last_logits(model, window, sliding, cache):
+    """Logits of the position after `window`; see batch_logits."""
+    return batch_logits(model, [window], sliding, cache)[0]
+
+
+def expand_cache(cache, rows):
+    """Copy a batch-1 KV cache to `rows` independent rows (every cached tensor leads with the batch axis)."""
+    for key, value in cache.items():
+        if key != "n":
+            cache[key] = tuple(part.expand(rows, *part.shape[1:]).contiguous() for part in value)
+
+
+def keep_cache_rows(cache, rows):
+    """Drop every row of a batched KV cache except `rows` (indices into the current batch), so a finished answer stops costing compute."""
+    for key, value in cache.items():
+        if key != "n":
+            index = torch.as_tensor(rows, dtype=torch.long, device=value[0].device)
+            cache[key] = tuple(part.index_select(0, index) for part in value)
 
 
 def unsayable(tokenizer):
@@ -943,29 +963,35 @@ class LocalModel:
     def complete(self, prompt, max_tokens=48):
         return complete(self.model, self.tokenizer, prompt, max_tokens, self.reduced_kv_cache)
 
-    @slow("generate with a model")
-    def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
+    def _chat(self, messages):
+        """The prompt's token ids, and (position of each message's role token, role id) so a cut window starts with the right role."""
         tokens = [BOS]
         roles = {"user": USER, "assistant": ASSISTANT, "system": SYSTEM}
-        starts = []  # (position of each message's role token, role id) so a cut window starts with the right role
+        starts = []
         for message in messages:
             starts.append((len(tokens), roles.get(message["role"], USER)))
             tokens += [roles.get(message["role"], USER)] + self.tokenizer.encode(message["content"]) + [EOS]
         starts.append((len(tokens), ASSISTANT))
         tokens += [ASSISTANT]
+        return tokens, starts
+
+    def _window(self, tokens, starts):
+        """The last `context` tokens, cut mid-message the way training cuts."""
+        context = self.config["context"]
+        if len(tokens) <= context:
+            return tokens
+        cut = tokens[-context:]
+        first = len(tokens) - context
+        owner = [role for position, role in starts if position <= first]
+        if owner and first not in {position for position, _ in starts}:
+            cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
+        return cut
+
+    @slow("generate with a model")
+    def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None):
+        tokens, starts = self._chat(messages)
         result = []
         context = self.config["context"]
-
-        def window():
-            if len(tokens) <= context:
-                return tokens
-            cut = tokens[-context:]
-            first = len(tokens) - context
-            owner = [role for position, role in starts if position <= first]
-            if owner and first not in {position for position, _ in starts}:
-                cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
-            return cut
-
         blocked = unsayable(self.tokenizer)
         cache = new_cache(self.model.device, self.reduced_kv_cache) if self.model.can_cache else None  # prefill once, then one token per step; no support -> the whole window each step
         available = self.tokenizer.vocab_size - OFFSET + 1
@@ -976,7 +1002,7 @@ class LocalModel:
         for i in range(max(1, min(4096, int(max_tokens)))):
             if stop and stop.is_set():
                 break
-            logits = last_logits(self.model, window(), len(tokens) > context, cache)
+            logits = last_logits(self.model, self._window(tokens, starts), len(tokens) > context, cache)
             logits[blocked] = -torch.inf
             if temperature <= 0:
                 token = int(logits.argmax())
@@ -993,3 +1019,62 @@ class LocalModel:
         if on_text:
             on_text(text)
         return text
+
+    @slow("generate with a model")
+    def generate_group(self, messages, n, max_tokens=160, temperature=.8, top_k=40, stop=None):
+        """`n` replies to one prompt, as a list of texts: the same replies, for the same seeds, as `n` calls of generate().
+
+        The prompt is run through the model once (batch 1), its KV cache is copied to `n` rows and the rows decode together.
+        Each reply stops at its own end token or at the token budget, and a finished row leaves the batch. Each row is sampled with
+        its own generator, seeded from `self.rng` in the order generate() would draw them. `temperature` is one number or one per
+        reply. A model with no KV cache falls back to calling generate() `n` times. Once the text outgrows the context window every
+        row re-reads its own window each step, as generate() does."""
+        n = int(n)
+        temperatures = list(temperature) if isinstance(temperature, (list, tuple)) else [temperature] * n
+        if len(temperatures) != n:
+            raise ValueError("Give one temperature, or one per reply.")
+        if n < 2 or not self.model.can_cache:
+            return [self.generate(messages, max_tokens=max_tokens, temperature=t, top_k=top_k, stop=stop) for t in temperatures]
+        if all(t <= 0 for t in temperatures):   # greedy rows are identical: decode one
+            return [self.generate(messages, max_tokens=max_tokens, temperature=0, top_k=top_k, stop=stop)] * n
+        tokens, starts = self._chat(messages)
+        context = self.config["context"]
+        blocked = unsayable(self.tokenizer)
+        available = self.tokenizer.vocab_size - OFFSET + 1
+        k = available if int(top_k) <= 0 else min(int(top_k), available)
+        generators = [torch.Generator(self.model.device).manual_seed(int(self.rng.integers(2 ** 62))) if t > 0 else None for t in temperatures]
+        scale = torch.tensor([[max(.05, float(t)) if t > 0 else 1.] for t in temperatures], dtype=torch.float32, device=self.model.device)
+        rows = [list(tokens) for _ in range(n)]   # each reply's prompt + answer so far
+        results = [[] for _ in range(n)]
+        active = list(range(n))                   # reply ids still decoding, in batch order
+        cache = {"n": 0}
+        for i in range(max(1, min(4096, int(max_tokens)))):
+            if stop and stop.is_set():
+                break
+            sliding = len(rows[active[0]]) > context
+            if i == 0:   # one prompt for everyone: run it once
+                logits = batch_logits(self.model, [self._window(tokens, starts)], sliding, cache)
+                if not sliding:
+                    expand_cache(cache, n)
+                logits = logits.expand(n, -1).clone()
+            else:
+                logits = batch_logits(self.model, [self._window(rows[r], starts) for r in active], sliding, cache)
+            logits[:, blocked] = -torch.inf
+            top, keep = torch.topk(logits / scale[active], k, dim=-1)
+            probabilities = torch.softmax(top, dim=-1)
+            picks = [keep[j, torch.multinomial(probabilities[j], 1, generator=generators[r])[0]] if generators[r] is not None
+                     else logits[j].argmax() for j, r in enumerate(active)]
+            chosen = torch.stack(picks).tolist()   # the only copy back to the host
+            alive = []
+            for j, (r, token) in enumerate(zip(active, chosen)):
+                if token != EOS:
+                    results[r].append(token)
+                    rows[r].append(token)
+                    alive.append(j)
+            if len(alive) < len(active):
+                active = [active[j] for j in alive]
+                if not active:
+                    break
+                if not sliding:   # a sliding step's cache is rebuilt from the windows on the next one
+                    keep_cache_rows(cache, alive)
+        return [self.tokenizer.decode(result) for result in results]
