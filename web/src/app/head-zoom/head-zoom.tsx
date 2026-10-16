@@ -39,8 +39,8 @@ const STEP_NAME: Record<StepKey, string> = {
 type HeadStats = { entropy: number[]; mean_distance: number[]; first_token_mass: number[]; previous_token_mass: number[] };
 type Loaded = { version: Version; forward: Forward; blocks: Record<number, number> };
 
-async function load(): Promise<Loaded | string> {
-  const version = await readVersion();
+async function load(number?: number): Promise<Loaded | string> {
+  const version = await readVersion(undefined, number);
   if (!version?.best_checkpoint) return "No trained checkpoint yet: train a version in Pretraining to look inside its heads.";
   let forward = await runJob<Forward>(unwrap(api.POST("/inspect/forward", { body: { version: version.number, text: EXAMPLE_PROMPT, hooks: true } })));
   if (forward.ids[0].length > MAX_TOKENS) {
@@ -54,7 +54,7 @@ async function load(): Promise<Loaded | string> {
 const number = (value: string | null, fallback: number) => (value !== null && /^\d+$/.test(value) ? Number(value) : fallback);
 const three = (value: number) => String(Number(value.toPrecision(3)));
 
-export function HeadZoom() {
+export function HeadZoom({ requestedVersion }: { requestedVersion?: number }) {
   const params = useSearchParams();
   const [loaded, setLoaded] = useState<Loaded | string | null>(null);
   const [pick, setPick] = useState<[number, number]>([number(params.get("block"), 0), number(params.get("head"), 0)]);
@@ -63,14 +63,14 @@ export function HeadZoom() {
 
   useEffect(() => {
     let dead = false;
-    load().then(
+    load(requestedVersion).then(
       (result) => !dead && setLoaded(result),
       (error) => !dead && setLoaded(sentence(error)),
     );
     return () => {
       dead = true;
     };
-  }, []);
+  }, [requestedVersion]);
 
   const data = typeof loaded === "object" && loaded ? loaded : null;
   // A block or head the model does not have lands on its first block and head, as the Tk page does.
@@ -235,7 +235,7 @@ export function HeadZoom() {
                     );
                   })}
                 </ul>
-                <Link className="text-sm text-primary underline-offset-4 hover:underline" href="/value-map/">
+                <Link className="text-sm text-primary underline-offset-4 hover:underline" href={`/value-map/?version=${data.version.number}`}>
                   {HEAD_ZOOM.where_meet} ›
                 </Link>
               </>
@@ -267,7 +267,7 @@ export function HeadZoom() {
         </CardContent>
       </Card>
 
-      <Link className="text-sm text-primary underline-offset-4 hover:underline" href={`/head-lab/`}>
+      <Link className="text-sm text-primary underline-offset-4 hover:underline" href={`/head-lab/${data ? `?version=${data.version.number}` : ""}`}>
         Back to the Head lab ›
       </Link>
     </Shell>

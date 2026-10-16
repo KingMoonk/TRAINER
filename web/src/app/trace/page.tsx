@@ -1,7 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useVersionParameter } from "@/lib/version-param";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,15 +32,24 @@ const num = (value: number | null, digits = 2) => (value === null || value === u
 const stageName = (row: Row) => (row.kind === "embedding" ? TRACE.embedding : row.kind === "output" ? TRACE.output : row.stage);
 
 export default function Page() {
+  return <Suspense fallback={<Skeleton className="m-8 h-64" />}><VersionedTrace /></Suspense>;
+}
+
+function VersionedTrace() {
+  const version = useVersionParameter();
+  return <TracePage key={version ?? "best"} version={version} />;
+}
+
+function TracePage({ version }: { version?: number }) {
   const route = routeFor("trace");
   const [text, setText] = useState(DEFAULT_TEXT);
   const [submitted, setSubmitted] = useState(DEFAULT_TEXT);
 
   // pos -1 follows the last position, as the Tk page does. version null is the best trained version.
   const trace = useQuery({
-    queryKey: ["inspect", "trace", submitted],
+    queryKey: ["inspect", "trace", version, submitted],
     queryFn: ({ signal }) =>
-      runJob<Trace>(() => unwrap(api.POST("/inspect/trace", { body: { text: submitted, pos: -1 } })), signal),
+      runJob<Trace>(() => unwrap(api.POST("/inspect/trace", { body: { version, text: submitted, pos: -1 } })), signal),
     retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
@@ -50,6 +60,7 @@ export default function Page() {
     <main className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-4 p-4 md:p-8">
       <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
       <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
+    {version !== undefined && <p className="text-sm text-muted-foreground">Version {version}</p>}
       <p className="max-w-prose text-muted-foreground">
         {route.lead} {TRACE.no_numbers}
       </p>

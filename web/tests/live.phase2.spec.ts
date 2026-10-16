@@ -40,7 +40,7 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("navigation").getByRole("link", { name: "Queue", exact: true }).click();
   await expect(page.getByRole("main").getByText(new RegExp(`Version ${version.number} from scratch`))).toBeVisible();
   await page.getByRole("main").getByRole("button", { name: "Resume", exact: true }).click();
-  const start = page.getByRole("button", { name: "Start waiting jobs", exact: true });
+  const start = page.getByRole("button", { name: "Start the waiting jobs", exact: true });
   const progress = page.getByRole("progressbar", { name: "Job progress" });
   // A prior live test/retry may already have started the persistent fake runner.
   await expect.poll(async () => await start.isVisible() || await progress.isVisible()).toBeTruthy();

@@ -34,8 +34,8 @@ type Changed = { on?: string | null; off?: string | null; bits?: { before: numbe
 const GUESSES = [HEAD_LAB.lot, HEAD_LAB.little, HEAD_LAB.not_at_all];
 const EXAMPLE_PROMPT = HEAD_LAB.example_prompt.replace(/ …$/, "");
 
-async function load(): Promise<Loaded | string> {
-  const version = await readVersion();
+async function load(number?: number): Promise<Loaded | string> {
+  const version = await readVersion(undefined, number);
   if (!version?.best_checkpoint) return HEAD_LAB.no_checkpoint;
   const prepared = await runJob<{ ids: number[]; tokens: string[] }>(unwrap(api.POST("/inspect/prepared", { body: { version: version.number } })));
   const forward = await runJob<Forward>(unwrap(api.POST("/inspect/forward", { body: { version: version.number, ids: prepared.ids, hooks: true } })));
@@ -49,7 +49,7 @@ async function load(): Promise<Loaded | string> {
   return { version, ids: prepared.ids, tokens: prepared.tokens, patterns, tests };
 }
 
-export function HeadLab() {
+export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
   const [loaded, setLoaded] = useState<Loaded | string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
@@ -64,7 +64,7 @@ export function HeadLab() {
 
   useEffect(() => {
     let dead = false;
-    load().then(
+    load(requestedVersion).then(
       (result) => {
         if (dead) return;
         setLoaded(result);
@@ -78,7 +78,7 @@ export function HeadLab() {
     return () => {
       dead = true;
     };
-  }, []);
+  }, [requestedVersion]);
 
   const version = typeof loaded === "object" && loaded ? loaded.version.number : null;
 
@@ -294,7 +294,7 @@ export function HeadLab() {
               {HEAD_LAB.test_pattern}
             </Button>
           </div>
-          <Link className="text-primary underline-offset-4 hover:underline" href={`/head-zoom/?block=${selBlock}&head=${selHead}`}>
+          <Link className="text-primary underline-offset-4 hover:underline" href={`/head-zoom/?version=${version}&block=${selBlock}&head=${selHead}`}>
             {HEAD_LAB.step_through} ›
           </Link>
           {tested.has(current) && (

@@ -2,7 +2,8 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useVersionParameter } from "@/lib/version-param";
 import { InspectControls } from "@/components/inspect-controls";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,11 +14,20 @@ import { LOSS as T } from "./copy";
 import { lossView, probability, showPiece, type LossResult } from "./logic";
 
 export default function Page() {
+  return <Suspense fallback={<Skeleton className="m-8 h-64" />}><VersionedLoss /></Suspense>;
+}
+
+function VersionedLoss() {
+  const version = useVersionParameter();
+  return <LossPage key={version ?? "best"} initialVersion={version} />;
+}
+
+function LossPage({ initialVersion }: { initialVersion?: number }) {
   const cache = useQueryClient();
   const versions = useQuery({ queryKey: ["versions"], queryFn: ({ signal }) => unwrap(api.GET("/versions", { signal })), refetchInterval: 15_000 });
   const trained = (versions.data ?? []).filter((version) => version.best_checkpoint);
-  const [selected, setSelected] = useState<number>();
-  const best = useQuery({ queryKey: ["inspect", "best-version", trained.map((item) => [item.number, item.best_checkpoint, item.status])], enabled: trained.length > 0,
+  const [selected, setSelected] = useState<number | undefined>(initialVersion);
+  const best = useQuery({ queryKey: ["inspect", "best-version", trained.map((item) => [item.number, item.best_checkpoint, item.status])], enabled: trained.length > 0 && selected === undefined,
     queryFn: async ({ signal }) => {
       const value = await awaitJob<unknown>(await unwrap(api.POST("/versions/best", { signal })), signal);
       if (value === null) return null;
@@ -30,7 +40,7 @@ export default function Page() {
     },
     staleTime: 30_000, retry: false,
   });
-  const version = trained.some((item) => item.number === selected) ? selected :
+  const version = selected !== undefined ? trained.find((item) => item.number === selected)?.number :
     trained.some((item) => item.number === best.data) ? best.data ?? undefined : best.isSuccess ? trained.at(-1)?.number : undefined;
   const checkpoint = trained.find((item) => item.number === version)?.best_checkpoint;
   const [text, setText] = useState<string>(T.defaultText);
@@ -68,7 +78,8 @@ export default function Page() {
     <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
     <p className="max-w-prose text-muted-foreground">{T.lead}</p>
     {versions.isPending ? <Skeleton className="h-40 w-full" aria-label="Loading versions" /> : versions.isError ?
-      <Card><CardContent role="alert">{T.versionsFailed} <Button variant="outline" onClick={() => void versions.refetch()}>{T.retry}</Button></CardContent></Card> : !trained.length ?
+      <Card><CardContent role="alert">{T.versionsFailed} <Button variant="outline" onClick={() => void versions.refetch()}>{T.retry}</Button></CardContent></Card> : selected !== undefined && !trained.some((item) => item.number === selected) ?
+      <Card><CardContent className="space-y-3" role="alert"><p>Version {selected} has no available trained checkpoint.</p><Button variant="outline" onClick={() => setSelected(undefined)}>Choose another version</Button></CardContent></Card> : !trained.length ?
       <Card><CardContent><p>{T.empty}</p><Link href="/pretraining/" className="text-sm underline">{T.openPretraining}</Link></CardContent></Card> : <>
       <Card><CardContent className="flex flex-col gap-4">
         <InspectControls text={text} onText={setText} version={version} onVersion={setSelected} versions={trained}
