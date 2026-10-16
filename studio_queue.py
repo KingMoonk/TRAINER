@@ -22,6 +22,8 @@ MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
 PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine
+
+
 @dataclass
 class Plan:
     hours: str = "any"             # any | nights | set; "any" so a first Train starts at once
