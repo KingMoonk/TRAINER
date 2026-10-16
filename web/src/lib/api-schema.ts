@@ -1695,6 +1695,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storage/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Exports
+         * @description The versions that have trained, so can be exported, each with the reason GGUF is unavailable for it (if it is).
+         */
+        get: operations["exports_storage_exports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storage/free": {
         parameters: {
             query?: never;
@@ -2497,6 +2517,19 @@ export interface components {
             headline: string;
             /** Lines */
             lines: string[];
+        };
+        /** ExportRow */
+        ExportRow: {
+            /**
+             * Gguf Problem
+             * @description why this design cannot be written as GGUF, in plain words; "" when it can
+             * @default
+             */
+            gguf_problem: string;
+            /** Name */
+            name: string;
+            /** Number */
+            number: number;
         };
         /** FieldsModel */
         FieldsModel: {
@@ -6766,6 +6799,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    exports_storage_exports_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportRow"][];
                 };
             };
         };

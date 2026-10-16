@@ -22,6 +22,12 @@ class FreeSpace(BaseModel):
     bytes: int
 
 
+class ExportRow(BaseModel):
+    number: int
+    name: str
+    gguf_problem: str = Field("", description='why this design cannot be written as GGUF, in plain words; "" when it can')
+
+
 @router.get("", response_model=StorageUse)
 def storage(days: int | None = Query(None, ge=0), data: bool = False, services=Depends(get_services)):
     """What a clean-up with the same arguments would delete."""
@@ -39,3 +45,12 @@ def clean_storage(body: CleanRequest, services=Depends(get_services)):
 @router.get("/free", response_model=FreeSpace)
 def free_space(services=Depends(get_services)):
     return FreeSpace(bytes=services.free_space())
+
+
+@router.get("/exports", response_model=list[ExportRow])
+def exports(services=Depends(get_services)):
+    """The versions that have trained, so can be exported, each with the reason GGUF is unavailable for it (if it is)."""
+    import studio_export
+    from studio_model import effective_spec, validate_config
+    return [ExportRow(number=v.number, name=v.name, gguf_problem=studio_export.gguf_problem(effective_spec(validate_config(v.spec))))
+            for v in services.versions() if v.best_checkpoint]
