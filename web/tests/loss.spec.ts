@@ -85,7 +85,7 @@ test("zero target probability produces a finite clamped loss", async ({ page }) 
   await expect(page.getByTestId("loss-nats")).toHaveText("690.78 nats");
   await expect(page.getByTestId("loss-bpc")).toHaveText("498.29 bits per character");
   await expect(targetRow(page).getByRole("cell")).toHaveText(["0.0e+0", "1", "−1.00"]);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
 });
 
 test("random and trained requests preserve the chosen version and submitted prompt", async ({ page }) => {
@@ -154,12 +154,12 @@ test("a failed inspection can be retried with the same input", async ({ page }) 
   const state = await mockLoss(page);
   state.failure = "The checkpoint could not be read.";
   await page.goto("/loss/");
-  await expect(page.getByRole("alert")).toContainText(state.failure);
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(state.failure);
   await expect(page.getByTestId("loss-nats")).toHaveCount(0);
   state.failure = "";
   await page.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(page.getByTestId("loss-nats")).toHaveText("3.22 nats");
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
   expect(state.requests).toHaveLength(2);
   expect(state.requests[1]).toEqual(state.requests[0]);
 });
