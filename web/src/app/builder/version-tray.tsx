@@ -17,9 +17,7 @@ type Version = components["schemas"]["Version"];
 type Queue = components["schemas"]["QueueStateModel"];
 type Curve = { steps: number[][]; smooth: number[][]; heldout: number[][]; total: number };
 
-// Inside 3D still reads a bundled fixture. Add its link when #125 connects it to
-// the selected version; sending users to unrelated fixture weights is misleading.
-const INSPECTORS = ["trace", "head_lab", "head_zoom", "loss", "value_map"] as const;
+const INSPECTORS = ["trace", "head_lab", "head_zoom", "loss", "value_map", "inside3d"] as const;
 
 export function versionState(version: Version, queue?: Queue, editingVersion?: number) {
   if (queue?.job?.params.version === version.number) return queue.paused ? "Training paused" : "Training";

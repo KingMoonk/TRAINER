@@ -578,12 +578,12 @@ class Services:
         """Messages the viewer sent back since the last call."""
         raise NotImplementedError
 
-    def viewer_snapshots(self) -> list:
-        """The current version's training snapshots (absolute paths of <run>/viz/step_*.npz), oldest first."""
+    def viewer_snapshots(self, number=None) -> list:
+        """A version's training snapshots, oldest first; omit number for the current version."""
         raise NotImplementedError
 
-    def viewer_probe_step(self, text):
-        """Run one real training step of the current version's checkpoint on `text` without touching training, save it
+    def viewer_probe_step(self, text, number=None):
+        """Run one real training step of the chosen (default current) version's checkpoint without touching training, save it
         as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
@@ -626,10 +626,10 @@ class FakeServices(Services):
     def viewer_poll(self):
         return []
 
-    def viewer_snapshots(self):
+    def viewer_snapshots(self, number=None):
         return list(self.snapshot_paths)
 
-    def viewer_probe_step(self, text):
+    def viewer_probe_step(self, text, number=None):
         self.viewer_log.append(("probe", text))
         return self.probe_path
 
@@ -1231,19 +1231,19 @@ class WorkspaceServices(Services):
     def viewer_poll(self):
         return self._viz.poll() if self._viz is not None else []
 
-    def viewer_snapshots(self):
-        version = self.current_version()
+    def viewer_snapshots(self, number=None):
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
         if version is None:
             return []
         return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
 
-    def viewer_probe_step(self, text):
+    def viewer_probe_step(self, text, number=None):
         import numpy as np
 
         from studio_core import uid
         from studio_model import Tokenizer, load_checkpoint
         from studio_snapshot import one_step, save
-        version = self.current_version()
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
         source = version.best_checkpoint if version is not None else None
         if not source or not Path(source).exists():
             return None

@@ -64,7 +64,7 @@ test("every inspector link follows the selected version without mobile overflow"
   const history = page.getByRole("region", { name: "Version history" });
   const links = [
     ["Trace a position", "trace"], ["Head lab", "head-lab"], ["Inside a head", "head-zoom"],
-    ["Loss", "loss"], ["Value map", "value-map"],
+    ["Loss", "loss"], ["Value map", "value-map"], ["Inside the network", "inside-3d"],
   ];
   for (const [name, path] of links) await expect(history.getByRole("link", { name, exact: false })).toHaveAttribute("href", `/${path}/?version=2`);
   await history.getByRole("button", { name: /Version 1/ }).click();

@@ -1,9 +1,10 @@
 "use client";
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { subscribe } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { HEAD_STAGES, LEVELS, MODES, TILE_KINDS, isMatrixGroup, type HeadStage, type Level, type Mode, type TileKind } from "@/lib/scene";
-import { fetchScene, runProbeStep, type SceneQuery } from "@/lib/viewer";
+import { fetchScene, runProbeStep, viewerError, type SceneQuery } from "@/lib/viewer";
 
 // WebGL does not exist while the static export prerenders, so the canvas only ever loads in the browser.
 const SceneCanvas = dynamic(() => import("@/components/inside-3d/scene-canvas"), {
@@ -28,7 +29,20 @@ const STAGE_HELP: Record<HeadStage, string> = {
   values: "what the head passes on",
 };
 
-export function Inside3d() {
+export function Inside3d({ version }: { version?: number }) {
+  const cache = useQueryClient();
+  const probeController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const close = subscribe((event) => {
+      if (!["train", "checkpoint", "versions"].includes(event.kind) || timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        void cache.invalidateQueries({ queryKey: ["viewer-scene"] }, { cancelRefetch: false });
+      }, 1000);
+    });
+    return () => { close(); clearTimeout(timer); probeController.current?.abort(); };
+  }, [cache]);
   const [level, setLevel] = useState<Level>("Model");
   const [mode, setMode] = useState<Mode>("Build");
   const [headStage, setHeadStage] = useState<HeadStage>("pattern");
@@ -40,11 +54,13 @@ export function Inside3d() {
   const [reduceMotion, setReduceMotion] = useState(false);
   const [showNumbers, setShowNumbers] = useState(true);
 
-  const query: SceneQuery = { level, mode, headStage, tileKind, snapshot };
+  const query: SceneQuery = { version, level, mode, headStage, tileKind, snapshot };
   const { data: scene, error, isPending } = useQuery({
     queryKey: ["viewer-scene", query],
-    queryFn: () => fetchScene(query),
+    queryFn: ({ signal }) => fetchScene(query, signal),
     placeholderData: keepPreviousData,
+    retry: false,
+    refetchInterval: 15_000,
   });
 
   const count = scene?.playback.count ?? 0;
@@ -69,11 +85,15 @@ export function Inside3d() {
     setPlaying(false);
     setNote("Running one real training step on this version's checkpoint...");
     try {
-      const result = await runProbeStep();
+      const controller = new AbortController();
+      probeController.current = controller;
+      const result = await runProbeStep(version, controller.signal);
+      if (controller.signal.aborted) return;
       setSnapshot(result.snapshot);
       setNote(result.note);
+      await cache.invalidateQueries({ queryKey: ["viewer-scene"] });
     } catch (reason) {
-      setNote(reason instanceof Error ? reason.message : String(reason));
+      if (!probeController.current?.signal.aborted) setNote(viewerError(reason));
     } finally {
       setProbing(false);
     }
@@ -116,11 +136,12 @@ export function Inside3d() {
         <header>
           <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
           <h1 className="text-lg font-semibold tracking-tight">Inside the network</h1>
+          {version !== undefined && <p className="text-sm text-muted-foreground">Version {version}</p>}
         </header>
 
         {error && (
           <p role="alert" className="rounded-md border border-destructive/40 p-2 text-sm text-destructive">
-            {error instanceof Error ? error.message : "The scene could not be loaded."}
+            {viewerError(error)}
           </p>
         )}
 
@@ -209,7 +230,7 @@ export function Inside3d() {
             ) : (
               <p className="text-sm text-muted-foreground">{scene?.playback.position ?? "No snapshots loaded."}</p>
             )}
-            <Button variant="secondary" disabled={probing || scene?.view.controls.snapshots.show === false} onClick={probe}>
+            <Button variant="secondary" disabled={probing || !scene || !!error || !scene.view.controls.snapshots.show || !scene.view.controls.snapshots.probe_enabled} onClick={probe}>
               {probing ? "Running one step..." : "Run one real step"}
             </Button>
             {(note || scene?.stats.note) && (

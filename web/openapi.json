@@ -3813,6 +3813,18 @@
             "minLength": 2,
             "title": "Text",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "title": "ProbeRequest",
@@ -11758,6 +11770,24 @@
       "get": {
         "description": "The snapshots a scene can show, oldest first: a scene's `snapshot` is an index into this list.",
         "operationId": "snapshots_viewer_snapshots_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -11772,6 +11802,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Snapshots",
