@@ -58,11 +58,27 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # web/src/lib/api-schema.ts is generated from the committed web/openapi.json; tests/test_api_schema.py checks that file
+      - run: pnpm gen:api
+      - run: git diff --exit-code -- src/lib/api-schema.ts
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
+      # the live test runs `python -m studio_api --fake`, which imports the engine (torch): install the CPU wheel, not the CUDA one
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-training.txt
+      - run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r ../requirements.txt
       - run: pnpm test
+        env:
+          API_LIVE: "1"
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
