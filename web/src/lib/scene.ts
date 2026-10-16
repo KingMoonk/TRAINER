@@ -96,8 +96,10 @@ export type SceneView = {
     snapshots: { show: boolean; probe: string; probe_enabled: boolean; note: string };
     toggles: ("motion" | "numbers")[];
   };
-  camera: { target: Vec3; distance: number };
 };
+
+/** How a level is framed (the Panda3D viewer's own framing). Only the whole scene carries it: a frame keeps the user's orbit. */
+export type SceneCamera = { target: Vec3; distance: number; level: Level };
 
 export type Selection = {
   run: string | null;
@@ -188,6 +190,7 @@ export type ScenePayload = Sections & {
   full: true;
   up: "z";
   palette: Record<PaletteKey, PaletteEntry>;
+  camera: SceneCamera;
   groups: Record<string, SceneGroup>;
   removed_groups: string[];
   cursor: Cursor;

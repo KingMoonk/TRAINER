@@ -253,13 +253,14 @@ function Replay({
 }
 
 /**
- * Orbit camera. It frames each level when the level changes (`view.camera`, the Panda3D viewer's own framing), keeping the
+ * Orbit camera. It frames each level when the level changes (`camera`, the Panda3D viewer's own framing), keeping the
  * user's angle; in "Ride a token" it follows the pulse while Play runs.
  */
 function CameraRig({ scene, playing, pulse }: { scene: ScenePayload; playing: boolean; pulse: { current: Vector3 } }) {
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   const camera = useThree((state) => state.camera);
-  const { level, camera: framing } = scene.view;
+  const { level } = scene.view;
+  const framing = scene.camera;
   const follow = scene.playback.pulse.follow && playing && (level === "Model" || level === "Window");
   const angle = useRef({ heading: HEADING, pitch: PITCH });
   const [tx, ty, tz] = framing.target;
