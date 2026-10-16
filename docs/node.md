@@ -37,7 +37,7 @@ where it came from:
   `tailscaled` who owns the source address (`tailscale whois --json <ip>`, answers cached for a minute) and lets the caller in
   when it is a node carrying an allowed tag (default `tag:trainer`; recorded as `node:<hostname>`) or a user listed in the
   workspace config. Anyone else gets `401`. This needs the `tailscale` command on the node: it is found on `PATH`, at
-  `C:\Program Files\Tailscale	ailscale.exe` or at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
+  `C:\Program Files\Tailscale\tailscale.exe` or at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
 
 The allow-list lives in `data/workspace.json` and is read when the API starts:
 
