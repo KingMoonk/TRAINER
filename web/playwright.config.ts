@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 // Smoke tests against the static export in out/ (run `pnpm build` first). No API is running: tests/serve-out.mjs 404s /events,
 // and a test that needs events fulfils them itself.
 //
-// The "live" project runs tests/live.spec.ts against `python -m studio_api --fake`, which serves out/ and a real /events. It
+// The "live" project runs tests/live.spec.ts and tests/live.<page>.spec.ts against `python -m studio_api --fake`, which serves out/ and a real /events. It
 // needs the Python requirements (torch included, because FakeServices imports the engine), so it only runs when API_LIVE=1;
 // API_PYTHON names the interpreter (default `python`; `.venv/bin/python` from a checkout).
 const PORT = 4173;
@@ -20,14 +20,16 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: "live.spec.ts",
+      testIgnore: ["live.spec.ts", "live.*.spec.ts"],
       use: { ...devices["Desktop Chrome"], baseURL: `http://127.0.0.1:${PORT}` },
     },
     ...(live
       ? [
           {
             name: "live",
-            testMatch: "live.spec.ts",
+            workers: 1, // These specs share one in-memory workspace.
+            fullyParallel: false,
+            testMatch: ["live.spec.ts", "live.*.spec.ts"],
             use: { ...devices["Desktop Chrome"], baseURL: `http://127.0.0.1:${LIVE_PORT}` },
           },
         ]
@@ -43,7 +45,7 @@ export default defineConfig({
     ...(live
       ? [
           {
-            command: `${process.env.API_PYTHON ?? "python"} -m studio_api --fake --port ${LIVE_PORT}`,
+            command: `${process.env.API_PYTHON ?? "python"} -m studio_api --fake --fake-step-seconds 0.25 --port ${LIVE_PORT}`,
             cwd: "..",
             url: `http://127.0.0.1:${LIVE_PORT}/builder/`,
             reuseExistingServer: !process.env.CI,
