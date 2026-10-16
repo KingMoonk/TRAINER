@@ -41,10 +41,16 @@ def _examples(job, context):
 
 
 def pretrain(job, context, emit, stop, pause):
+    import studio_memory
     import studio_model
     p = job.params
     cfg = dict(p["config"])
-    cfg["batch_size"] = min(cfg.get("batch_size", 8), p.get("max_batch_size", 10 ** 9))  # plan's memory cap
+    share = p.get("memory_share", 1.)
+    declared = cfg.get("batch_size", studio_model.DEFAULT_CONFIG["batch_size"])
+    cfg["batch_size"] = studio_memory.batch_cap(cfg, share)  # the plan's share of the device's memory
+    if cfg["batch_size"] < declared:
+        emit({"type": "info", "text": f"A batch of {declared} does not fit the {share:.0%} of memory the plan allows this job: "
+                                      f"training with batch size {cfg['batch_size']}."})
     out = output_dir(job, context.run_dir)
     init = p.get("init_from") if p.get("mode") == "catch_up" else None
     job.params["output_dir"] = str(out)
