@@ -16,9 +16,9 @@ export function queueText(queue: StudioStatus["queue"]): string {
 
 function Item({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-2">
+    <div className="flex min-w-0 items-baseline gap-2">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-sm">{children}</span>
+      <span className="min-w-0 break-words text-sm">{children}</span>
     </div>
   );
 }
@@ -35,9 +35,9 @@ export function StatusStrip() {
       role="status"
       aria-label="Status"
       data-connection={connection}
-      className="studio-glass flex min-h-14 flex-wrap items-center gap-x-6 gap-y-2 border-b px-5 py-3 md:px-8"
+      className="studio-glass flex min-h-14 min-w-0 flex-wrap items-center gap-x-6 gap-y-2 border-b px-4 py-3 md:px-8"
     >
-      <div className={cn("flex flex-wrap items-center gap-x-6 gap-y-1", connection === "offline" && "opacity-60")}>
+      <div className={cn("flex min-w-0 flex-wrap items-center gap-x-6 gap-y-1", connection === "offline" && "opacity-60")}>
         <Item label="Version">{value(version ?? "None yet")}</Item>
         <Item label="Queue">{value(queueText(queue))}</Item>
         <Item label="Resources">
