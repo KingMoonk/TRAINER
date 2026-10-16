@@ -248,8 +248,14 @@ def _gate_group(model, frame, gate):
                 kind='label_selected' if selected else 'label', selected=selected)
     if frame['level'] == 'Model':
         bins = len(frame['edges']) - 1
+        norms = frame['stream_norms'].get(f'block{index}.resid.norm')
+        peak = max((max(value, default=0.) for value in frame['stream_norms'].values()), default=0.)  # one scale for every block
         for b in range(bins):
-            group.box('activation', (BIN_START + BIN_SPAN * b / max(1, bins - 1), 0., 1.5), (.18, .6, .8))
+            x = BIN_START + BIN_SPAN * b / max(1, bins - 1)
+            if norms is not None and b < len(norms) and peak > 0:  # the stream's size in this bin of the context, raw in `value`
+                group.box('activation', (x, 0., 1.5), (.18, .6, min(2., max(.1, 2. * norms[b] / peak))), value=float(norms[b]))
+            else:
+                group.box('activation', (x, 0., 1.5), (.18, .6, .8))
         for hook, mass in frame['attention'].items():
             if not hook.startswith(f'block{index}.'):
                 continue

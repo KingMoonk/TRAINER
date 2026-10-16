@@ -142,6 +142,51 @@ class ModelLevel(unittest.TestCase):
         self.assertEqual(self.client.post("/viewer/frame", json={"level": "Model"}).json()["stats"]["note"], "")
         self.assertGreater(len(self.client.post("/viewer/binary", json={"level": "Model", "arrays": "binary"}).content), 0)
 
+    def bins(self, scene, gate):
+        """(sizes [n, 3], values or None) of the activation boxes of one block in a Model scene."""
+        (entry,) = [box for box in scene["groups"][f"gate:{gate}"]["boxes"] if box["kind"] == "activation"]
+        sizes = np.asarray(entry["size"]["data"]).reshape(-1, 3)
+        return sizes, (np.asarray(entry["value"]["data"]) if "value" in entry else None)
+
+    def test_the_activation_boxes_follow_the_streams_size_when_there_is_a_summary(self):
+        self.make()
+        scene = self.client.get("/viewer/scene", params={"level": "Model"}).json()
+        saved = summary.summary_state(self.checkpoint)[1]["stream_norms"]
+        peak = max(norms.max() for norms in saved.values())
+        heights = []
+        for gate in (0, 1):
+            sizes, values = self.bins(scene, gate)
+            np.testing.assert_allclose(values, saved[f"block{gate}.resid.norm"], rtol=1e-4)  # the real number, not the drawn size
+            np.testing.assert_allclose(sizes[:, 2], np.clip(2. * values / peak, .1, 2.), rtol=1e-5)
+            self.assertTrue(np.all(sizes[:, :2] == [.18, .6]))
+            heights.append(sizes[:, 2])
+        self.assertAlmostEqual(max(h.max() for h in heights), 2., places=5)  # one scale for both blocks
+        self.assertGreater(np.ptp(np.concatenate(heights)), 0)  # not all the same size
+        framed = self.client.post("/viewer/frame", json={"level": "Model"}).json()
+        self.assertEqual(self.bins(framed, 0)[1].tolist(), self.bins(scene, 0)[1].tolist())
+
+    def test_the_activation_boxes_are_fixed_without_a_summary(self):
+        for _ in range(2):  # none, then stale
+            scene = self.client.get("/viewer/scene", params={"level": "Model"}).json()
+            for gate in (0, 1):
+                sizes, values = self.bins(scene, gate)
+                self.assertIsNone(values)
+                self.assertTrue(np.all(sizes == [.18, .6, .8]))
+            self.make()
+            write_checkpoint(self.checkpoint, self.version.spec, Tokenizer("byte"), seed=5)
+            os.utime(self.checkpoint, ns=(1, 1))
+
+    def test_a_gru_block_still_gets_boxes_sized_by_its_stream(self):
+        self.version.spec = spec_with_gru_second_block()
+        write_checkpoint(self.checkpoint, self.version.spec, Tokenizer("byte"))
+        self.make()
+        scene = self.client.get("/viewer/scene", params={"level": "Model"}).json()
+        sizes, values = self.bins(scene, 1)
+        saved = summary.summary_state(self.checkpoint)[1]["stream_norms"]["block1.resid.norm"]
+        np.testing.assert_allclose(values, saved, rtol=1e-4)
+        self.assertEqual(sizes.shape, (32, 3))
+        self.assertFalse(np.all(sizes[:, 2] == .8))
+
     def test_other_levels_do_not_read_the_summary(self):
         self.make()
         self.assertEqual(self.model(level="Window").summaries, {})
