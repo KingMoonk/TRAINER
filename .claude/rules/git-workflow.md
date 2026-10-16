@@ -2,11 +2,12 @@
 
 - `wedd-compute-cluster` is the base branch: the upcoming main branch. PRs target it and are squash-merged into it. Merge, never rebase, never force-push.
 - `master` is legacy. Do not fetch, compare against, merge from or open PRs to `master` unless the user asks for it in that task.
-- Every task runs in its own worktree under `/Users/wedd/dev/TRAINER-worktrees/<slug>`, on a branch cut from `origin/wedd-compute-cluster`: `cd /Users/wedd/dev/TRAINER && git fetch -q origin wedd-compute-cluster && git worktree add /Users/wedd/dev/TRAINER-worktrees/<slug> -b <branch> origin/wedd-compute-cluster`. Open its PR with `--base wedd-compute-cluster`.
-- The main checkout `/Users/wedd/dev/TRAINER` stays on `master`, and `wedd-compute-cluster` is checked out in its own worktree. Never switch or detach either.
+- Issue-based dev: each issue or task gets a new branch off `wedd-compute-cluster` in its own new worktree under `/Users/wedd/dev/TRAINER-worktrees/<slug>`, then work starts there: `cd /Users/wedd/dev/TRAINER && git fetch -q origin wedd-compute-cluster && git worktree add /Users/wedd/dev/TRAINER-worktrees/<slug> -b <branch> origin/wedd-compute-cluster`. Open its PR with `--base wedd-compute-cluster`.
+- Never check out `wedd-compute-cluster` itself (no `git checkout`/`switch` to it, no `git worktree add <path> wedd-compute-cluster`): git allows a branch in only one worktree, so a checkout anywhere blocks everyone else with "already used by worktree". Always branch from `origin/wedd-compute-cluster` with `-b`.
+- The main checkout `/Users/wedd/dev/TRAINER` stays on `master`. Never switch or detach it.
 - A worktree made with `git worktree add` has no `.venv`. Run tests with `/Users/wedd/dev/TRAINER/.venv/bin/python tasks.py test ...`.
 - Parallel tasks never edit the same files. Split file ownership up front.
-- Staying current: the `sync-base.sh` hook (`.claude/hooks/sync-base.sh`, wired in `.claude/settings.json`) fetches `wedd-compute-cluster` at session start and at most every two minutes per prompt. It fast-forwards the local `wedd-compute-cluster` when its checkout is clean, and reports when `origin/wedd-compute-cluster` moved and whether a merge into your branch would be clean. It never touches `master`, and stays quiet on branches forked from `master`.
+- Staying current: the `sync-base.sh` hook (`.claude/hooks/sync-base.sh`, wired in `.claude/settings.json`) fetches `wedd-compute-cluster` at session start and at most every two minutes per prompt. It fast-forwards the local `wedd-compute-cluster` ref, and reports when `origin/wedd-compute-cluster` moved and whether a merge into your branch would be clean. It never touches `master`, and stays quiet on branches forked from `master`.
   - It reports a clean merge and your tree is clean: merge now with `git merge --no-edit origin/wedd-compute-cluster`.
   - It reports conflicts: finish and commit your current edit, then merge and resolve.
   - Always merge the PR's base branch before opening the PR.
