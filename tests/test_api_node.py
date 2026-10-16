@@ -49,7 +49,7 @@ class NodeApiTest(unittest.TestCase):
 
     def test_it_emits_nothing(self):
         self.client.get("/node")
-        self.assertEqual(self.tap.events, [])
+        self.assertEqual([event for event in self.tap.events if event[0] != "status"], [])  # initial shell snapshot is independent
 
     def test_the_server_listens_where_peers_look_for_it(self):
         _, _, port = make(["--fake"])

@@ -14,6 +14,7 @@ test("import text, queue pretraining, watch progress and see the trained version
   const source = `phase2-flow-${testInfo.retry}`;
   const text = `A small boat crossed the quiet lake for browser check ${testInfo.retry}.`;
   await page.goto("/your-data/");
+  await page.getByRole("tab", { name: /^Text it reads/ }).click();
   await page.getByRole("button", { name: "Import files", exact: true }).click();
   await page.getByLabel("Choose files").setInputFiles({ name: `${source}.txt`, mimeType: "text/plain", buffer: Buffer.from(text) });
   await page.getByRole("button", { name: "Import 1 file", exact: true }).click();
@@ -39,7 +40,7 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("navigation").getByRole("link", { name: "Queue", exact: true }).click();
   await expect(page.getByRole("main").getByText(new RegExp(`Version ${version.number} from scratch`))).toBeVisible();
   await page.getByRole("main").getByRole("button", { name: "Resume", exact: true }).click();
-  const start = page.getByRole("button", { name: "Start waiting jobs", exact: true });
+  const start = page.getByRole("button", { name: "Start the waiting jobs", exact: true });
   const progress = page.getByRole("progressbar", { name: "Job progress" });
   // A prior live test/retry may already have started the persistent fake runner.
   await expect.poll(async () => await start.isVisible() || await progress.isVisible()).toBeTruthy();

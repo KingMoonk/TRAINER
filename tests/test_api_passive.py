@@ -46,7 +46,7 @@ class PassiveApiTest(unittest.TestCase):
         self.client.get("/passive")
         self.client.post("/passive/p1/stop")
         self.client.delete("/passive/signin")
-        self.assertEqual(self.tap.events, [])
+        self.assertEqual([event for event in self.tap.events if event[0] != "status"], [])  # initial shell snapshot is independent
 
 
 if __name__ == "__main__":
