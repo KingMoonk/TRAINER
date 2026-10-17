@@ -4,7 +4,7 @@ __pycache__/
 /exports/
 /runs/
 /artifacts/
-.venv/
+.venv
 .claude/worktrees/
 /build/
 /dist/
@@ -16,4 +16,3 @@ __pycache__/
 /web/node_modules/
 /web/.next/
 /web/out/
-/.env

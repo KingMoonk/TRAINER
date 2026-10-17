@@ -15,7 +15,7 @@ class WorkspaceArgumentTest(unittest.TestCase):
             with mock.patch("studio_core.Workspace") as workspace, mock.patch(
                 "studio_ia.services.WorkspaceServices", return_value=FakeServices()
             ) as services:
-                app, host, _ = make(["--workspace", str(root)])
+                app, host, _ = make(["--allow-cpu", "--workspace", str(root)])
             self.addCleanup(app.state.jobs.close)
             self.addCleanup(app.state.broadcaster.close)
             workspace.assert_called_once_with(root)
