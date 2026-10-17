@@ -1,0 +1,171 @@
+"use client";
+
+import Link from "next/link";
+import { SeriesChart } from "@/components/series-chart";
+import { Badge } from "@/components/ui/badge";
+import { isActive, trafficSeries, type Run } from "@/app/cluster/training/logic";
+import { useStopMember, useStopRun } from "@/app/cluster/training/use-training";
+import { useQueueActions } from "@/app/queue/use-queue";
+import { etaText, runEta } from "@/app/runs/logic";
+import { Hint } from "@/app/runs/hint";
+import { TRAINING as TR } from "@/lib/copy/training";
+import { RemoveMemberButton, SoloControls, StopRunButton } from "./controls";
+import { T, fill } from "./copy";
+import { EventLog } from "./event-log";
+import { ProgressCard, RunHeader } from "./header";
+import { roundNumber } from "./live";
+import { LossPanel } from "./loss-panel";
+import { dilocoShape, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
+import { RoundBanner } from "./round-banner";
+import { Timeline } from "./timeline";
+import { Topology } from "./topology";
+import type { RunView } from "./use-run-view";
+
+const PANEL = "flex min-w-0 flex-1 basis-96 flex-col gap-3 rounded-xl border border-border bg-card p-5";
+
+/** A run spread over several machines: the round, who is doing what, the round timeline, the loss by round and the events. */
+export function DilocoView({ run }: { run: Run }) {
+  const stopRun = useStopRun();
+  const stopMember = useStopMember();
+  const eta = runEta(run);
+  const status = [TR.phases[run.phase], eta == null ? "" : fill(T.eta, { eta: etaText(eta) })].filter(Boolean).join(" · ");
+  const readouts = [
+    { id: "inner", label: T.lInner, value: lossText(lastOf(roundPairs(run.history, (r) => r.loss))), tip: T.lTrainTip, colour: "var(--info)" },
+    { id: "val", label: T.lVal, value: lossText(lastOf(roundPairs(run.history, (r) => r.val_loss))), tip: T.lValTip, colour: "var(--warning)" },
+  ].filter((readout) => readout.value !== "");
+  return (
+    <div className="flex flex-col gap-6" data-testid={`run-${run.id}`}>
+      <RunHeader
+        title={run.label || T.untitled}
+        shape={dilocoShape(run)}
+        controls={
+          run.can_stop && isActive(run) ? (
+            <div role="group" aria-label={T.controls} className="flex items-center gap-2">
+              <span className="font-mono text-xs text-warning">{T.coordinatorLabel}</span>
+              <StopRunButton pending={stopRun.isPending && stopRun.variables === run.id} onConfirm={() => stopRun.mutate(run.id)} />
+            </div>
+          ) : undefined
+        }
+      />
+      {run.note && <p className="text-sm text-muted-foreground" data-testid="run-note">{run.note}</p>}
+      <ProgressCard
+        now={fill(T.roundOf, { round: roundNumber(run) })}
+        of={fill(T.roundTotal, { rounds: run.rounds })}
+        percent={percentOf(run.round, run.rounds)}
+        status={status}
+        statusTip={T.etaTip}
+      />
+      <RoundBanner run={run} />
+      <section aria-labelledby="run-who" className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+        <h2 id="run-who" className="text-lg font-semibold"><Hint tip={T.whoTip} plain>{T.who}</Hint></h2>
+        <Topology
+          run={run}
+          memberAction={(member) =>
+            member.can_stop && isActive(run) ? (
+              <RemoveMemberButton
+                node={member.node}
+                pending={stopMember.isPending && stopMember.variables.id === run.id && stopMember.variables.node === member.node}
+                onConfirm={() => stopMember.mutate({ id: run.id, node: member.node })}
+              />
+            ) : null
+          }
+        />
+      </section>
+      <div className="rounded-xl border border-border bg-card p-5">
+        <Timeline run={run} />
+      </div>
+      <div className="flex flex-wrap gap-4">
+        <LossPanel id="run-loss" title={T.lossVsRound} series={roundSeries(run.history)} xLabel={T.lossAxisRound} readouts={readouts} empty={TR.noRounds} />
+        <div className={PANEL}>
+          <EventLog run={run} />
+        </div>
+      </div>
+      {run.history.length > 0 && (
+        <details className="rounded-xl border border-border bg-card p-5">
+          <summary className="cursor-pointer text-sm font-medium">{TR.traffic}</summary>
+          <p className="mt-2 max-w-prose text-xs text-muted-foreground">{TR.trafficLead}</p>
+          <SeriesChart series={trafficSeries(run.history)} xLabel={TR.roundAxis} yLabel="MB" className="mt-2 h-48 w-full" />
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** A job on this computer alone: |W| = 1, so no round, timeline or transfer panels. */
+export function SoloView({ view }: { view: Extract<RunView, { kind: "solo" }> }) {
+  const { job, queue, running, machine, curve } = view;
+  const actions = useQueueActions();
+  const busy = actions.pause.isPending || actions.resume.isPending || actions.stopAfterCooldown.isPending || actions.remove.isPending;
+  const step = running ? queue.step : 0;
+  const total = running ? queue.total : 0;
+  const eta = running ? queue.eta_s : job.eta_s;
+  const status = [
+    running ? queue.phase || T.phaseWord : job.status,
+    running && queue.lr != null ? fill(T.lr, { lr: queue.lr.toExponential(1) }) : "",
+    eta != null ? fill(T.eta, { eta: etaText(eta) }) : "",
+  ].filter(Boolean).join(" · ");
+  const train = curve ? lastOf(trainLine(curve)) : null;
+  const val = curve ? lastOf(curve.heldout) : null;
+  const readouts = [
+    { id: "train", label: T.lTrain, value: lossText(train), tip: T.lTrainTip, colour: "var(--info)" },
+    { id: "val", label: T.lVal, value: lossText(val), tip: T.lValTip, colour: "var(--warning)" },
+    { id: "gap", label: T.gap, value: gapText(curve ? gapNow(curve) : null), tip: T.gapTip },
+  ].filter((readout) => readout.value !== "");
+  return (
+    <div className="flex flex-col gap-6" data-testid={`run-${job.id}`}>
+      <RunHeader
+        title={job.label || job.kind}
+        shape={soloShape(machine)}
+        controls={
+          running ? (
+            <SoloControls
+              paused={queue.paused}
+              stopping={queue.stopping}
+              busy={busy}
+              onPause={() => actions.pause.mutate()}
+              onResume={() => actions.resume.mutate()}
+              onCoolDown={() => actions.stopAfterCooldown.mutate()}
+              onStopNow={() => actions.remove.mutate(job.id)}
+            />
+          ) : undefined
+        }
+      />
+      {job.note && <p className="text-sm text-muted-foreground">{job.note}</p>}
+      <ProgressCard
+        now={fill(T.stepOf, { step: step.toLocaleString("en-US") })}
+        of={total > 0 ? fill(T.stepTotal, { total: total.toLocaleString("en-US") }) : ""}
+        percent={percentOf(step, total)}
+        status={status}
+        statusTip={T.soloStatusTip}
+      />
+      <section aria-labelledby="run-who" className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+        <h2 id="run-who" className="text-lg font-semibold">{T.who}</h2>
+        <Hint tip={T.soloNodeTip} plain className="w-fit max-w-md">
+          <span className="flex flex-col gap-1.5 rounded-xl border-2 border-warning bg-info/10 p-5" data-testid="solo-node">
+            <span><b className="text-lg">{machine}</b></span>
+            <span className="font-mono text-xs text-warning">{T.coordinatorWorker}</span>
+            <span className="text-sm">{T.localData}</span>
+            {train != null && <span className="font-mono text-xs text-muted-foreground">{fill(T.soloLoss, { value: lossText(train) })}</span>}
+            {!running && <Badge variant="secondary" className="w-fit">{job.status}</Badge>}
+          </span>
+        </Hint>
+      </section>
+      <div className="flex flex-wrap gap-4">
+        <LossPanel
+          id="run-loss"
+          title={T.lossVsStep}
+          series={stepSeries(curve)}
+          xLabel={T.lossAxisStep}
+          readouts={readouts}
+          empty={T.noCurveSolo}
+          overfit={curve ? overfit(curve) : undefined}
+        />
+        <section aria-labelledby="run-events" className={PANEL}>
+          <h2 id="run-events" className="text-lg font-semibold">{T.events}</h2>
+          <p className="text-sm text-muted-foreground">{T.soloNoEvents}</p>
+          <Link href="/runs/new/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">{T.relaunch}</Link>
+        </section>
+      </div>
+    </div>
+  );
+}

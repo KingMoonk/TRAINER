@@ -1,39 +1,49 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { TRAINING as T } from "@/lib/copy/training";
+import { cn } from "@/lib/utils";
+import { isActive, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
+import { T as V } from "./copy";
 import {
   deviceBadge, edges, liveLossText, liveSpeedText, progressFraction, reportedText, shardsText, stateColor, stepsText, type Edge,
 } from "./live";
-import { isActive, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
 
-/** One edge between the coordinator and a member: θ goes down at the start of a round, Δ comes up at its end. It moves while the transfer runs. */
+/** One edge between the coordinator and a member: θ goes out at the start of a round, Δ comes back at its end. It moves while the transfer runs. */
 function EdgeView({ edge, node }: { edge: Edge; node: string }) {
   const down = edge.direction === "down";
-  const colour = edge.active ? (down ? "var(--chart-1)" : "var(--chart-2)") : "var(--border)";
+  const colour = edge.active ? (down ? "var(--warning)" : "var(--info)") : "var(--border)";
+  const head = (
+    <svg viewBox="0 0 8 12" width="8" height="12" className="shrink-0" aria-hidden="true">
+      <polygon points={down ? "0,0 8,6 0,12" : "8,0 0,6 8,12"} fill={colour} />
+    </svg>
+  );
   return (
-    <div className="flex items-stretch gap-2" data-testid={`edge-${edge.direction}-${node}`} data-active={edge.active}>
-      <svg viewBox="0 0 12 48" width="12" className="h-12 shrink-0" aria-hidden="true">
-        <line x1="6" x2="6" y1={down ? 2 : 46} y2={down ? 38 : 10} stroke={colour} strokeWidth="2" className={edge.active ? "edge-flow" : undefined} />
-        <polygon points={down ? "1,38 11,38 6,46" : "1,10 11,10 6,2"} fill={colour} />
-      </svg>
-      <span className="flex flex-col justify-center text-xs">
+    <div className="flex flex-col gap-0.5 text-xs" data-testid={`edge-${edge.direction}-${node}`} data-active={edge.active}>
+      <span className="flex items-baseline justify-between gap-2">
         <span className="text-muted-foreground">{down ? T.thetaDown : T.deltaUp}</span>
         <span className="tabular-nums">{edge.label}</span>
+      </span>
+      <span className="flex items-center" aria-hidden="true">
+        {!down && head}
+        <svg height="12" className="min-w-8 flex-1">
+          <line x1="0" x2="100%" y1="6" y2="6" stroke={colour} strokeWidth="2" className={edge.active ? "edge-flow" : undefined} />
+        </svg>
+        {down && head}
       </span>
     </div>
   );
 }
 
-function MemberNode({ run, member, stopping, onStop }: { run: Run; member: Member; stopping: boolean; onStop: () => void }) {
+function MemberNode({ run, member, action }: { run: Run; member: Member; action: ReactNode }) {
   const bad = needsReason(member);
   const fraction = progressFraction(member, run);
   const facts = [liveSpeedText(member), liveLossText(member), shardsText(member), reportedText(member)].filter(Boolean);
+  const round = run.phase === "training" || run.phase === "collecting";
   return (
     <div
-      className="flex flex-col gap-2 rounded-lg border-2 p-3"
-      style={{ borderColor: stateColor(member) }}
+      className={cn("flex flex-col gap-2 rounded-lg border-2 bg-info/5 p-3", bad ? "border-destructive" : "border-info")}
       data-testid={`node-${member.node}`}
       data-state={member.state}
       data-phase={member.phase ?? ""}
@@ -43,11 +53,7 @@ function MemberNode({ run, member, stopping, onStop }: { run: Run; member: Membe
         {member.device && <Badge variant="outline" data-testid={`device-${member.node}`}>{deviceBadge(member)}</Badge>}
         <Badge variant={bad ? "destructive" : "secondary"} data-testid={`state-${member.node}`}>{T.memberStates[member.state]}</Badge>
         {member.local && <span className="text-xs text-muted-foreground">{T.thisComputer}</span>}
-        {member.can_stop && (
-          <Button className="ml-auto" variant="outline" size="sm" disabled={stopping} aria-label={T.stopMemberLabel.replace("{node}", member.node)} onClick={onStop}>
-            {T.stopMember}
-          </Button>
-        )}
+        {action && <span className="ml-auto">{action}</span>}
       </div>
       {memberDevice(member) && <p className="text-xs text-muted-foreground">{memberDevice(member)}</p>}
       {member.phase && member.state === "training" && <p className="text-sm" data-testid={`phase-${member.node}`}>{T.memberPhases[member.phase]}</p>}
@@ -67,37 +73,48 @@ function MemberNode({ run, member, stopping, onStop }: { run: Run; member: Membe
       <p className="flex flex-wrap gap-x-3 text-xs tabular-nums text-muted-foreground" data-testid={`facts-${member.node}`}>
         {facts.map((fact) => <span key={fact}>{fact}</span>)}
       </p>
+      {round && member.state === "training" && (
+        <p className="text-xs text-muted-foreground" data-testid={`sent-${member.node}`}>{member.sent ? V.deltaIn : V.deltaPending}</p>
+      )}
       {bad && <p className="text-sm text-muted-foreground" data-testid={`reason-${member.node}`}>{reasonText(member)}</p>}
     </div>
   );
 }
 
 /**
- * The run as a picture: the coordinator on top (the shared weights θ, the outer optimizer and the held-back text) and a node for each machine below,
- * each joined to it by a θ edge and a Δ edge. Stop run sits on the coordinator, Stop on each machine.
+ * The run as a picture: the coordinator on the left (the shared weights θ, the outer optimiser and the held-back text) and a node for each
+ * machine to its right, each joined to it by a θ edge and a Δ edge. The coordinator is the warning colour, a worker the info colour.
+ * The page decides what controls go on the coordinator and on each machine (`coordinatorAction`, `memberAction`).
  */
-export function Topology({ run, stoppingRun, stoppingNode, onStopRun, onStopMember }: {
-  run: Run; stoppingRun: boolean; stoppingNode: string; onStopRun: () => void; onStopMember: (node: string) => void;
+export function Topology({ run, coordinatorAction, memberAction }: {
+  run: Run; coordinatorAction?: ReactNode; memberAction?: (member: Member) => ReactNode;
 }) {
   return (
     <section aria-label={`${T.topology}: ${run.label}`} className="flex flex-col gap-3" data-testid="topology">
-      <div className="mx-auto flex w-full max-w-lg flex-col items-center gap-1 rounded-lg border-2 border-border p-3 text-center" data-testid="coordinator">
-        <p className="font-medium">{T.coordinatorTitle}: {run.owner}</p>
-        <p className="text-xs text-muted-foreground">{T.coordinatorHolds}</p>
-        {run.can_stop && isActive(run) && (
-          <Button variant="outline" size="sm" disabled={stoppingRun} onClick={onStopRun}>{stoppingRun ? T.stoppingRun : T.stopRun}</Button>
-        )}
-      </div>
-      <ul className="grid gap-x-4 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+      <ul
+        className="grid gap-x-4 gap-y-4 md:grid-cols-[minmax(0,15rem)_minmax(6rem,1fr)_minmax(0,24rem)]"
+        style={{ "--rows": Math.max(1, run.members.length) } as React.CSSProperties}
+      >
+        <li
+          className="flex flex-col items-center gap-1 rounded-lg border-2 border-warning bg-warning/5 p-3 text-center md:col-start-1 md:row-start-1 md:self-center md:[grid-row:1/span_var(--rows)]"
+          data-testid="coordinator"
+        >
+          <p className="font-mono text-xs text-warning">{V.coordinatorRole}</p>
+          <p className="font-medium">{T.coordinatorTitle}: {run.owner}</p>
+          <p className="text-xs text-muted-foreground">{T.coordinatorHolds}</p>
+          {coordinatorAction && isActive(run) && coordinatorAction}
+        </li>
         {run.members.map((member) => {
           const [down, up] = edges(run, member);
           return (
-            <li key={member.node} className="flex flex-col gap-1" data-testid={`member-${member.node}`}>
-              <div className="grid grid-cols-2 gap-2">
+            <li key={member.node} className="contents" data-testid={`member-${member.node}`}>
+              <div className="flex flex-col justify-center gap-2 md:col-start-2">
                 <EdgeView edge={down} node={member.node} />
                 <EdgeView edge={up} node={member.node} />
               </div>
-              <MemberNode run={run} member={member} stopping={stoppingNode === member.node} onStop={() => onStopMember(member.node)} />
+              <div className="md:col-start-3">
+                <MemberNode run={run} member={member} action={memberAction?.(member)} />
+              </div>
             </li>
           );
         })}

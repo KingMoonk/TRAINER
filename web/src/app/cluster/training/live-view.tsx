@@ -1,6 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { runViewHref } from "@/app/runs/view/logic";
+import { T as V } from "@/app/runs/view/copy";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SeriesChart, type Series } from "@/components/series-chart";
 import { TRAINING as T } from "@/lib/copy/training";
@@ -94,10 +98,23 @@ export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMemb
           </span>
         </CardDescription>
         {run.note && <p className="text-sm text-muted-foreground" data-testid={`run-note-${run.id}`}>{run.note}</p>}
+        <Link href={runViewHref(run.id)} className="w-fit text-sm text-highlight underline-offset-4 hover:underline" data-testid={`open-run-view-${run.id}`}>{V.openRunView}</Link>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         <RoundBanner run={run} />
-        <Topology run={run} stoppingRun={stoppingRun} stoppingNode={stoppingNode} onStopRun={onStopRun} onStopMember={onStopMember} />
+        <Topology
+          run={run}
+          coordinatorAction={
+            run.can_stop ? <Button variant="outline" size="sm" disabled={stoppingRun} onClick={onStopRun}>{stoppingRun ? T.stoppingRun : T.stopRun}</Button> : undefined
+          }
+          memberAction={(member) =>
+            member.can_stop ? (
+              <Button variant="outline" size="sm" disabled={stoppingNode === member.node} aria-label={T.stopMemberLabel.replace("{node}", member.node)} onClick={() => onStopMember(member.node)}>
+                {T.stopMember}
+              </Button>
+            ) : null
+          }
+        />
         <Timeline run={run} />
         <Charts run={run} />
         <EventLog run={run} />
