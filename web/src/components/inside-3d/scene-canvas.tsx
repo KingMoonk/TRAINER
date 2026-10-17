@@ -5,7 +5,7 @@
 
 import { Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useRef, type ComponentRef, type MutableRefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ComponentRef, type MutableRefObject } from "react";
 import { Color, InstancedMesh, Matrix4, Quaternion, Vector3, type Mesh, type MeshBasicMaterial } from "three";
 import {
   pulsePose,
@@ -16,7 +16,9 @@ import {
   type SceneGroup,
   type SceneLabel,
 } from "@/lib/scene";
-import { useThemeColor } from "@/components/theme";
+import { useThemeColor, useThemeColors } from "@/components/theme";
+import { useRamp } from "@/components/viz/use-ramp";
+import { Tile, type TileColors } from "./tile";
 
 // The scene is z-up (x right, y into the screen); three.js is y-up. Rotating the whole scene by -90 degrees about x
 // turns scene (x, y, z) into three (x, z, -y), so every position in the payload is used as it arrives.
@@ -25,6 +27,26 @@ const HEADING = (25 * Math.PI) / 180;
 const PITCH = (32 * Math.PI) / 180;
 
 type Palette = ScenePayload["palette"];
+
+// The thermal look's own colours are theme tokens; the server's palette (which an older server or a mock may not have the new kinds in) is the fallback.
+const SCENE_TOKENS = ["--scene-connector", "--scene-text", "--scene-text-muted", "--scene-mask", "--scene-frame"] as const;
+const REDUCED = "(prefers-reduced-motion: reduce)";
+/** A label whose kind the palette lacks takes the page's own text colour. */
+const INHERIT: PaletteEntry = { color: "currentColor", alpha: 1 };
+
+function usePrefersReducedMotion(): boolean {
+  return useSyncExternalStore(
+    (notify) => { const list = window.matchMedia(REDUCED); list.addEventListener("change", notify); return () => list.removeEventListener("change", notify); },
+    () => window.matchMedia(REDUCED).matches,
+    () => false,
+  );
+}
+
+/** The palette with the thermal kinds' colours from the theme where it has them. */
+function themed(palette: Palette, [connector, text, muted]: string[]): Palette {
+  const put = (kind: keyof Palette, color: string) => (color ? { [kind]: { ...(palette[kind] ?? { alpha: 1 }), color } } : {});
+  return { ...palette, ...put("connector", connector), ...put("tile_title", text), ...put("tile_dims", muted), ...put("tile_axis", muted) } as Palette;
+}
 
 // Boxes with their own per-instance colours take them unchanged, so the material's tint is white.
 const WHITE = new Color(1, 1, 1);
@@ -44,6 +66,12 @@ export default function SceneCanvas({ scene, playing, reduceMotion, showNumbers,
   const pulse = useRef(new Vector3());
   const elements = useRef(new Map<string, HTMLElement>());
   const labels = useMemo(() => sceneLabels(scene, showNumbers), [scene, showNumbers]);
+  const tokens = useThemeColors(SCENE_TOKENS);
+  const palette = useMemo(() => themed(scene.palette, tokens), [scene.palette, tokens]);
+  const colors = useMemo<TileColors>(() => ({ mask: tokens[3], frame: tokens[4] }), [tokens]);
+  const ramp = useRamp();
+  const asked = usePrefersReducedMotion();
+  const still = reduceMotion || asked;
   return (
     <div className="relative h-full w-full overflow-hidden">
       <Canvas
@@ -57,7 +85,7 @@ export default function SceneCanvas({ scene, playing, reduceMotion, showNumbers,
         <directionalLight position={[8, 14, 10]} intensity={1.6} />
         <group rotation={Z_UP}>
           {Object.entries(scene.groups).map(([key, group]) => (
-            <Group key={key} group={group} palette={scene.palette} />
+            <Group key={key} group={group} palette={palette} ramp={ramp} colors={colors} still={still} />
           ))}
           <Replay scene={scene} playing={playing} reduceMotion={reduceMotion} onPassDone={onPassDone} position={pulse} />
         </group>
@@ -69,7 +97,7 @@ export default function SceneCanvas({ scene, playing, reduceMotion, showNumbers,
           <Label
             key={label.key}
             label={label}
-            palette={scene.palette[label.kind]}
+            palette={palette[label.kind] ?? INHERIT}
             register={(element) => {
               if (element) elements.current.set(label.key, element);
               else elements.current.delete(label.key);
@@ -81,9 +109,12 @@ export default function SceneCanvas({ scene, playing, reduceMotion, showNumbers,
   );
 }
 
-function Group({ group, palette }: { group: SceneGroup; palette: Palette }) {
+function Group({ group, palette, ramp, colors, still }: { group: SceneGroup; palette: Palette; ramp: Uint8Array | null; colors: TileColors; still: boolean }) {
   return (
     <group position={group.origin}>
+      {group.tiles?.map((tile) => (
+        <Tile key={tile.id} tile={tile} ramp={ramp} colors={colors} still={still} />
+      ))}
       {group.boxes.map((entry, i) => (
         <Boxes key={`${entry.kind}-${i}`} entry={entry} palette={palette[entry.kind]} />
       ))}
@@ -160,7 +191,7 @@ function sceneLabels(scene: ScenePayload, showNumbers: boolean): PlacedLabel[] {
   return Object.entries(scene.groups).flatMap(([key, group]) =>
     group.labels
       .map((label, i) => ({ label, i }))
-      .filter(({ label }) => showNumbers || label.kind !== "token")
+      .filter(({ label }) => showNumbers || (label.kind !== "token" && label.kind !== "tile_axis"))
       .map(({ label, i }) => {
         const [x, y, z] = [0, 1, 2].map((axis) => group.origin[axis] + label.position[axis]);
         return { ...label, key: `${key}/${i}`, world: new Vector3(x, z, -y) };
@@ -173,14 +204,15 @@ function sceneLabels(scene: ScenePayload, showNumbers: boolean): PlacedLabel[] {
  * root while React is rendering, which React 19 reports as an error in development.) `LabelProjector` moves them every frame.
  */
 function Label({ label, palette, register }: { label: PlacedLabel; palette: PaletteEntry; register: (element: HTMLElement | null) => void }) {
-  const small = label.kind === "token";
+  const small = label.kind === "token" || label.kind === "tile_axis" || label.kind === "tile_dims";
+  const bare = small || label.kind === "tile_title"; // tile names, shapes and token labels sit on the scene with no box of their own
   return (
     <div
       ref={register}
-      className={`absolute left-0 top-0 whitespace-nowrap rounded-sm font-mono will-change-transform ${small ? "px-1 text-[10px]" : "px-2 py-0.5 text-xs"}`}
+      className={`absolute left-0 top-0 whitespace-nowrap rounded-sm font-mono will-change-transform ${small ? "px-1 text-[10px]" : label.kind === "tile_title" ? "px-1 text-xs font-semibold" : "px-2 py-0.5 text-xs"}`}
       style={{
         color: palette.color,
-        background: small ? "transparent" : `color-mix(in srgb, ${palette.frame} ${(palette.frame_alpha ?? 1) * 100}%, transparent)`,
+        background: bare || !palette.frame ? "transparent" : `color-mix(in srgb, ${palette.frame} ${(palette.frame_alpha ?? 1) * 100}%, transparent)`,
         visibility: "hidden",
       }}
     >

@@ -19,6 +19,8 @@
  *   categorical     cat-1..8 (Value map's eight heads)
  *   visualisations  viz-1..5 viz-end (Pretraining's size preview) scene-background (Inside 3D viewport)
  *                   heat-positive heat-negative cell-masked (Inside a head)
+ *                   scene-connector scene-text scene-text-muted scene-mask scene-frame (Inside 3D's thermal tiles: arrows, labels,
+ *                   masked cells, the picked outline). The viewport stays dark in light mode too, and these are made for it.
  *   heat ramp       ramp-1..9 (viridis, low to high: the loss landscape's surface, Inside 3D's tiles)
  *                   landscape-wire landscape-path landscape-current landscape-minimum (the loss landscape's lines and markers)
  *   selection       selected-surface selected-border: how a chosen box, row, card or option looks everywhere. Neutral
@@ -113,6 +115,11 @@
   --color-cat-7: var(--cat-7);
   --color-cat-8: var(--cat-8);
   --color-scene-background: var(--scene-background);
+  --color-scene-connector: var(--scene-connector);
+  --color-scene-text: var(--scene-text);
+  --color-scene-text-muted: var(--scene-text-muted);
+  --color-scene-mask: var(--scene-mask);
+  --color-scene-frame: var(--scene-frame);
   --color-ramp-1: var(--ramp-1);
   --color-ramp-2: var(--ramp-2);
   --color-ramp-3: var(--ramp-3);
@@ -210,8 +217,15 @@
   --viz-4: #c0e0c7;
   --viz-5: #e6c3da;
   --viz-end: #e3e5ea;
-  /* The 3D viewport stays dark in every mode: the server paints the scene's boxes and labels for a dark canvas. */
+  /* The 3D viewport stays dark in every mode, on purpose: a heat ramp that runs dark purple to yellow reads best on near-black, the
+     server paints the scene's boxes and labels for a dark canvas, and one look keeps screenshots and docs alike. Its tokens below follow it. */
   --scene-background: #0e1014;
+  /* Inside 3D's thermal tiles: thin arrows, the tile names and shapes, masked cells, the picked outline. Made for the dark viewport. */
+  --scene-connector: #8a93a6;
+  --scene-text: #e8eaf0;
+  --scene-text-muted: #9aa3b5;
+  --scene-mask: #171a21;
+  --scene-frame: #ffffff;
   /* The heat ramp (viridis, low to high) and the loss landscape's markers. Both are drawn on the dark scene viewport in every mode. */
   --ramp-1: #440154;
   --ramp-2: #472d7b;
@@ -315,6 +329,12 @@
   --viz-5: #4a2f45;
   --viz-end: #0a0b0e;
   --scene-background: #0e1014;
+  /* Inside 3D's thermal tiles: thin arrows, the tile names and shapes, masked cells, the picked outline. Made for the dark viewport. */
+  --scene-connector: #8a93a6;
+  --scene-text: #e8eaf0;
+  --scene-text-muted: #9aa3b5;
+  --scene-mask: #171a21;
+  --scene-frame: #ffffff;
   /* The heat ramp (viridis, low to high) and the loss landscape's markers. Both are drawn on the dark scene viewport in every mode. */
   --ramp-1: #440154;
   --ramp-2: #472d7b;

@@ -636,6 +636,11 @@ class Services:
         as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
+    def viewer_token_text(self, number, ids):
+        """The text of each token id (a list of strings, '' for a piece with no text), for the viewer's labels; None when the version
+        has no tokenizer yet. A small file read."""
+        return None
+
     def viewer_summary(self, number=None) -> tuple:
         """(state, summary) of a version's saved whole-context summary (studio_summary.summary_state): state is ready, stale, none or
         no_checkpoint; summary is {edges, n_ctx, step, attention, stream_norms} when ready or stale, else None. A file read."""
@@ -708,6 +713,9 @@ class FakeServices(Services):
 
     def viewer_snapshots(self, number=None):
         return list(self.snapshot_paths)
+
+    def viewer_token_text(self, number, ids):
+        return None
 
     def viewer_probe_step(self, text, number=None):
         self.viewer_log.append(("probe", text))
@@ -1380,6 +1388,18 @@ class WorkspaceServices(Services):
         if version is None:
             return []
         return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
+
+    def viewer_token_text(self, number, ids):
+        import json
+
+        from studio_model import Tokenizer
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
+        for run in (version.runs if version is not None else []):
+            path = Path(self._abs(run)) / "tokenizer.json"
+            if path.is_file():
+                tokenizer = Tokenizer.restore(json.loads(path.read_text(encoding="utf-8")))
+                return [tokenizer.decode([int(i)]) for i in ids]
+        return None
 
     def viewer_probe_step(self, text, number=None):
         import numpy as np

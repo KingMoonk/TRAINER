@@ -705,5 +705,139 @@ class ViewerParity(Scenes):
         self.assertEqual(sj.scene_payload(self.scene('Weights', False))['view']['controls']['rows'], ['level', 'mode', 'mixer', 'tile'])
 
 
+def tiles_of(payload, group):
+    return {tile['id']: tile for tile in payload['groups'][group].get('tiles', [])}
+
+
+def attention_snapshot(mixer, kv_heads=None):
+    spec = make_spec()
+    spec['block']['mixer'] = {'id': mixer, 'config': {'heads': 4, **({'kv_heads': kv_heads} if kv_heads else {})}}
+    spec = validate_spec(spec)
+    return spec, one_step(CompiledModel(spec, 9, device='cpu'), [[1, 2, 3, 4, 5, 6]], [[2, 3, 4, 5, 6, 7]])
+
+
+class Thermal(Scenes):
+    """The thermal look: real matrices as heat-map tiles with shapes, connectors and token labels."""
+
+    def view(self, **extra):
+        return sj.ViewState(thermal=True, **extra)
+
+    def test_the_default_payload_has_no_tiles_and_says_so(self):
+        for level in sj.VIEWER_LEVELS:
+            payload = sj.scene_payload(self.scene(level))
+            self.assertFalse(payload['view']['thermal'])
+            self.assertFalse(any('tiles' in group for group in payload['groups'].values()), level)
+
+    def test_a_head_is_its_matrices_in_order_with_shapes(self):
+        scene = self.scene('Head')
+        payload = settled(sj.scene_payload(scene, self.view()))
+        tiles = tiles_of(payload, 'matrix')
+        self.assertEqual(list(tiles), ['x', 'wq', 'q', 'wk', 'k', 'wv', 'v', 'scores', 'pattern', 'out'])
+        self.assertEqual(tiles['x']['shape'], [6, 16])
+        self.assertEqual((tiles['wq']['shape'], tiles['q']['shape'], tiles['k']['shape']), ([16, 4], [6, 4], [6, 4]))
+        self.assertEqual((tiles['scores']['shape'], tiles['pattern']['shape'], tiles['out']['shape']), ([6, 6], [6, 6], [6, 4]))
+        self.assertEqual(sorted(i for i, t in tiles.items() if 'mask' in t), ['pattern', 'scores'])
+        mask = np.asarray(tiles['pattern']['mask']['data']).reshape(6, 6)
+        self.assertTrue(np.array_equal(mask.astype(bool), np.triu(np.ones((6, 6), bool), 1)))  # the later keys, masked
+        labels = [label['text'] for label in payload['groups']['matrix']['labels']]
+        self.assertIn('W_Q', labels)
+        self.assertIn('6 \u00d7 16', labels)
+        self.assertGreater(len([line for line in payload['groups']['matrix']['lines'] if line['kind'] == 'connector']), 0)
+
+    def test_tile_values_are_the_snapshots_raw_numbers(self):
+        scene = self.scene('Head')
+        pattern = scene.snapshot['arrays']['hook::block0.attn.pattern'][0, 0, :6, :6]
+        tile = tiles_of(sj.scene_payload(scene, self.view()), 'matrix')['pattern']
+        np.testing.assert_allclose(np.asarray(tile['values']['data']).reshape(6, 6), pattern, rtol=1e-4, atol=1e-6)
+        self.assertEqual(tile['range'], [0., float(pattern.max())])
+
+    def test_a_big_matrix_is_capped_but_keeps_its_true_shape(self):
+        group = sj._Group()
+        group.tile('big', np.arange(100 * 70, dtype=float).reshape(100, 70), (0, 0, 0), (1, 1), mask=np.ones((100, 70), bool))
+        tile = group.encode()['tiles'][0]
+        self.assertEqual(tile['shape'], [100, 70])
+        self.assertEqual(tile['values'].data.shape, (sj.TILE_CAP, sj.TILE_CAP))
+        self.assertEqual(tile['mask'].data.shape, (sj.TILE_CAP, sj.TILE_CAP))
+        self.assertTrue(0 <= tile['values'].data.min() and tile['values'].data.max() <= 6999)  # block averages stay inside the range
+
+    def test_token_text_labels_the_axes_and_falls_back_to_ids(self):
+        scene = self.scene('Head')
+        plain = [label['text'] for label in sj.scene_payload(scene, self.view())['groups']['matrix']['labels'] if label['kind'] == 'tile_axis']
+        self.assertEqual(plain[:2], ['1', '2'])
+        text = ['the', ' cat', '', '\n', 'x', 'y']
+        spoken = [label['text'] for label in sj.scene_payload(scene, self.view(token_text=text))['groups']['matrix']['labels'] if label['kind'] == 'tile_axis']
+        self.assertIn('\u00b7cat', spoken)
+        self.assertIn('\u21b5', spoken)
+        self.assertIn('#3', spoken)  # a piece with no text shows its id
+
+    def test_weights_are_one_tile_with_the_picked_cell_framed(self):
+        scene = self.scene('Weights')
+        payload = settled(sj.scene_payload(scene, self.view(cell=[2, 3])))
+        tile = tiles_of(payload, 'matrix')['weights']
+        self.assertEqual(len(tile['values']['data']), int(np.prod(tile['values']['shape'])))
+        self.assertEqual(payload['groups']['matrix']['weight_name'], scene.frame()['weight_name'])
+        self.assertTrue([line for line in payload['groups']['matrix']['lines'] if line['kind'] == 'connector'])
+
+    def test_the_model_level_stacks_each_blocks_heads(self):
+        payload = settled(sj.scene_payload(self.scene('Model'), self.view()))
+        tiles = tiles_of(payload, 'gate:0')
+        self.assertEqual([i for i in tiles if i.startswith('head:')], [f'head:{h}' for h in range(4)])
+        self.assertEqual(len([i for i in tiles if i.startswith('k:')]), 4)  # MHA: a key set per head
+        self.assertTrue(tiles['head:0']['selected'])
+        self.assertFalse(tiles['head:1']['selected'])
+        self.assertIn('MHA', ' '.join(label['text'] for label in payload['groups']['gate:0']['labels']))
+
+    def test_the_attention_variant_shows_in_how_keys_and_values_are_shared(self):
+        for mixer, kv, variant, sets in (('gqa', 2, 'GQA', 2), ('gqa', 1, 'MQA', 1)):
+            spec, snapshot = attention_snapshot(mixer, kv)
+            scene = SceneModel(copy.deepcopy(spec))
+            scene.load_snapshot(snapshot)
+            scene.level = 'Model'
+            payload = settled(sj.scene_payload(scene, self.view()))
+            tiles = tiles_of(payload, 'gate:0')
+            keys = [tiles[i] for i in tiles if i.startswith('k:')]
+            self.assertEqual(len(keys), sets, variant)
+            self.assertAlmostEqual(sum(t['size'][0] for t in keys), sum(tiles[f'head:{h}']['size'][0] for h in range(4)), places=4)  # they span the heads
+            self.assertIn(variant, ' '.join(label['text'] for label in payload['groups']['gate:0']['labels']))
+
+    def test_a_gqa_head_poster_slices_its_own_weights_and_shares_keys(self):
+        spec, snapshot = attention_snapshot('gqa', 2)
+        scene = SceneModel(copy.deepcopy(spec))
+        scene.load_snapshot(snapshot)
+        scene.level = 'Head'
+        scene.choose(head=3)
+        tiles = tiles_of(settled(sj.scene_payload(scene, self.view())), 'matrix')
+        self.assertEqual((tiles['wq']['shape'], tiles['wk']['shape']), ([16, 4], [16, 4]))
+        self.assertIn('shared by 2', tiles['k']['label'])
+        keys = snapshot['arrays']['hook::block0.attn.k'][0, 1]  # head 3 reads key group 1
+        np.testing.assert_allclose(np.asarray(tiles['k']['values']['data']).reshape(6, 4), keys, rtol=1e-4, atol=1e-6)
+
+    def test_no_snapshot_draws_empty_tiles_or_a_note_not_an_error(self):
+        for level in sj.VIEWER_LEVELS:
+            payload = settled(sj.scene_payload(self.scene(level, False), self.view()))
+            self.assertTrue(payload['groups'])
+
+    def test_the_arrays_ride_the_binary_route_too(self):
+        scene = self.scene('Head')
+        inline = settled(sj.scene_payload(scene, self.view()))
+        data, manifest = sj.scene_binary(scene, self.view())
+        binary = settled(sj.scene_payload(scene, self.view(), arrays='binary'))
+        read, wrote = list(refs(decode(binary, data, manifest)['groups'])), list(refs(inline['groups']))
+        self.assertEqual(len(read), len(wrote))
+        for got, want in zip(read, wrote):
+            self.assertEqual(got['shape'], want['shape'])
+            np.testing.assert_allclose(got['data'], want['data'], rtol=1e-5, atol=1e-6)
+        self.assertLess(len(data), 40_000)  # bounded: a head is a handful of capped tiles
+
+    def test_a_live_frame_resends_only_the_tiles_that_changed(self):
+        scene = self.scene('Head')
+        first = sj.scene_payload(scene, self.view())
+        again = sj.scene_frame(scene, first['cursor'], self.view())
+        self.assertEqual(again['groups'], {})
+        scene.load_snapshot(copy.deepcopy(self.snapshot) | {'step': 7})
+        scene.snapshot['arrays']['hook::block0.attn.pattern'] = scene.snapshot['arrays']['hook::block0.attn.pattern'] * .5
+        self.assertIn('matrix', sj.scene_frame(scene, first['cursor'], self.view())['groups'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -53,6 +53,7 @@ class ViewControls(BaseModel):
     spec: dict[str, Any] | None = None  # a design the client changed (swap a mixer); None = the version's own
     note: str = ""
     probing: bool = False
+    thermal: bool = False  # heat-map tiles of the real matrices in place of the bar matrices (studio_scene_json's "Thermal look")
 
 
 class FrameRequest(ViewControls):
@@ -216,12 +217,14 @@ def build(request: Request, state: ViewControls):
     model.reduce_motion, model.show_numbers = state.reduce_motion, state.show_numbers
     paths = snapshot_paths(request, version.number)
     view = scene_json.ViewState(head_stage=state.head_stage, tile_kind=state.tile_kind, cell=list(state.cell), playing=state.playing,
-                                snapshot_paths=paths, note=state.note, probing=state.probing)
+                                snapshot_paths=paths, note=state.note, probing=state.probing, thermal=state.thermal)
     scene_json.scrub_to(model, view, state.snapshot, known(paths))  # a snapshot that will not load is said in the note
     if state.spec:
         model.update_spec(copy.deepcopy(state.spec))  # a design the client changed wins over the snapshot's
     if state.level == "Model":
         add_summary(services, version.number, model, view)
+    if state.thermal and model.snapshot is not None and "ids" in model.snapshot["arrays"]:
+        view.token_text = services.viewer_token_text(version.number, model.snapshot["arrays"]["ids"][0].tolist())
     return model, view
 
 
@@ -260,12 +263,12 @@ def controls_after(state, model, view):
     return ViewControls(version=state.version, level=model.level, mode=model.mode, head_stage=view.head_stage, tile_kind=view.tile_kind,
                         snapshot=max(view.snapshot_index, 0), selection=asdict(model.selection), cell=list(view.cell),
                         playing=view.playing, reduce_motion=model.reduce_motion, show_numbers=model.show_numbers,
-                        spec=copy.deepcopy(model.spec), note=view.note, probing=view.probing)
+                        spec=copy.deepcopy(model.spec), note=view.note, probing=view.probing, thermal=view.thermal)
 
 
 def controls_query(version: int | None = None, level: Level = "Model", mode: Mode = "Build",
-                   headStage: HeadStage = "pattern", tileKind: TileKind = "weight", snapshot: int = 0):
-    return ViewControls(version=version, level=level, mode=mode, head_stage=headStage, tile_kind=tileKind, snapshot=snapshot)
+                   headStage: HeadStage = "pattern", tileKind: TileKind = "weight", snapshot: int = 0, thermal: bool = False):
+    return ViewControls(version=version, level=level, mode=mode, head_stage=headStage, tile_kind=tileKind, snapshot=snapshot, thermal=thermal)
 
 
 @router.get("/scene")
