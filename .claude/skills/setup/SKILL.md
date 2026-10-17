@@ -11,7 +11,7 @@ checks each step.
 
 ## Ground rules
 
-- Never open an app window: no `app.py`, no Tk, no Panda3D viewer, no `tests/gui_*.py`. The web UI is checked with `curl`.
+- Never open an app window: no `app.py`, no Tk, no Panda3D viewer. The web UI is checked with `curl`.
 - Never read, print or ask for secrets. For the version bucket, report only which `TRAINER_STORE_*` variable *names* are set
   (`[ -n "${TRAINER_STORE_SECRET:-}" ]`), never values. Do not read `~/.config/trainer` or shell profiles. Do not run
   `studio_publish --check` (it contacts the bucket); tell the user to run it themselves if they want to.

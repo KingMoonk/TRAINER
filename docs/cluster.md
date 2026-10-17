@@ -85,7 +85,9 @@ brings it back.
 
 The API serves the same survey: `GET /cluster/nodes` lists this machine first and then each listed peer (`local` marks this machine;
 a peer that does not answer has `online: false` and an `error` sentence), and `PUT /cluster/nodes` with `{"addresses": [...]}` saves
-the list in `studioConfig.nodes` for you. Each entry is checked first: a name or IP, with an optional `:port`, or an `http://` or
+the list in `studioConfig.nodes` for you. The web app's **Settings** page, **Machines**, does both: it lists every machine with
+the reason one does not answer, edits and saves the list, and shows this machine's tailnet name (`tailnet_name` on the `local`
+entry) to copy and give to someone. A machine that answers 401 brings a hint about `tag:trainer` and `allowUsers` (see ACL above). Each entry is checked first: a name or IP, with an optional `:port`, or an `http://` or
 `https://` URL; anything else is refused with a sentence, up to 32 entries. Peers are asked at the same time and the survey ends at
 the two-second timeout, so one dead machine never holds up the rest.
 

@@ -4,7 +4,10 @@
  * palette class (text-amber-500) or a colour literal (#fff, rgb(...), oklch(...)). `pnpm lint` runs
  * scripts/check-theme.mjs, which fails on either one anywhere in src/ except this file.
  *
- * Token list (each is defined in :root for light and in .dark for dark, and exposed to Tailwind as --color-<name>):
+ * Token list. Each is defined in :root (light) and .dark (dark). Most are exposed to Tailwind in @theme inline as
+ * --color-<name>, which gives bg-<name>, text-<name>, border-<name>, ... The exceptions are used as var(--<name>) in CSS
+ * or an inline style: viz-*, heat-*, cell-masked, canvas-glow, selection*, glass-fallback, blur-*, and card-shadow
+ * (which is exposed as the shadow-card utility through --shadow-card).
  *   shadcn base     background foreground card popover primary secondary muted accent destructive border input ring
  *                   chart-1..5 sidebar-* (each with its -foreground where it has one)
  *   status          warning warning-soft success info notice (destructive is the error colour)
@@ -16,6 +19,9 @@
  *   categorical     cat-1..8 (Value map's eight heads)
  *   visualisations  viz-1..5 viz-end (Pretraining's size preview) scene-background (Inside 3D viewport)
  *                   heat-positive heat-negative cell-masked (Inside a head)
+ *   selection       selected-surface selected-border: how a chosen box, row, card or option looks everywhere. Neutral
+ *                   on purpose and not overridden by accents; apply it with the `selected-box` utility (below), and
+ *                   keep the accent for the small control inside (checkbox, radio dot) and for primary buttons/links.
  *   non-colour      shadow-card canvas-glow selection selection-foreground glass-fallback blur-glass blur-card
  *
  * Modes: :root is light, .dark is dark (the default, set by next-themes on <html>). Per-mode details such as
@@ -24,6 +30,10 @@
  * Accent themes: a [data-theme="<id>"] block overrides only the accent tokens (primary, ring, sidebar-primary,
  * sidebar-ring, chart-*, highlight*, part-cost, part-own), once for light and once for `.dark[data-theme]`. No
  * attribute is the neutral default. Switching is components/theme.tsx.
+ *
+ * Every accent must set the SAME list of tokens in both its [data-theme] (light) block and its .dark[data-theme] block.
+ * `.dark` and `[data-theme]` have equal specificity and the accent blocks come later, so a token set only in the light
+ * block would beat .dark's value in dark mode; the .dark[data-theme] block is more specific and restores it.
  *
  * To add an accent theme: copy an existing pair of blocks at the bottom, change the id and the values, and add the id
  * to ACCENTS in components/theme.tsx and its label in lib/copy/appearance.ts.
@@ -197,6 +207,8 @@
   --heat-negative: oklch(0.62 0.16 250);
   --cell-masked: color-mix(in oklch, var(--background) 94%, black);
 
+  --selected-surface: rgb(0 0 0 / 6%);
+  --selected-border: rgb(0 0 0 / 28%);
   --card-shadow: 0 8px 32px -16px rgb(30 40 70 / 28%);
   --canvas-glow: radial-gradient(ellipse at 80% 0%, rgb(90 110 170 / 9%), transparent 55%);
   --selection: rgb(90 110 170 / 28%);
@@ -284,6 +296,8 @@
   --heat-negative: oklch(0.65 0.15 250);
   --cell-masked: color-mix(in oklch, var(--background) 70%, black);
 
+  --selected-surface: rgb(255 255 255 / 7%);
+  --selected-border: rgb(255 255 255 / 22%);
   --card-shadow: 0 8px 32px -16px rgb(0 0 0 / 60%);
   --canvas-glow: radial-gradient(ellipse at 80% 0%, rgb(255 255 255 / 3%), transparent 55%);
   --selection: rgb(176 190 218 / 30%);
@@ -397,6 +411,12 @@
   --part-own: oklch(0.65 0.14 155);
 }
 
+/* The one selected look for a box, row, card or option. Change it with --selected-surface / --selected-border. */
+@utility selected-box {
+  background-color: var(--selected-surface);
+  border-color: var(--selected-border);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -430,6 +450,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Loading must still read as loading: skeletons hold a dimmed fill instead of pulsing, spinners turn slowly. */
+  [data-slot="skeleton"] { opacity: 0.55; }
+  .animate-spin { animation-duration: 2s !important; animation-iteration-count: infinite !important; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;

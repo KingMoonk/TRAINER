@@ -42,6 +42,7 @@ def create_app(services, open=False, origins=(), hosts=(), **auth):
     app = FastAPI(title="Groundwork API", version=app_version(), lifespan=lifespan)
     app.state.services = services
     app.state.open = open
+    app.state.hosts = hosts  # a HostNames knows this node's tailnet name (GET /cluster/nodes)
     app.state.broadcaster = events.Broadcaster(services)
     app.state.jobs = jobs.Jobs(services)
     origins = tuple(origins)

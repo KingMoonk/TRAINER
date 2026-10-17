@@ -45,7 +45,7 @@ function MakeData({ initialKind }: { initialKind: Kind }) {
       <Link href="/your-data/" className={buttonVariants({ variant: "outline" })}>{T.yourData}</Link></div>
     <div role="group" aria-label="What to make" className="grid gap-3 md:grid-cols-3">
       {KINDS.map((value) => <button key={value} type="button" disabled={making} aria-pressed={kind === value} onClick={() => setKind(value)}
-        className={`rounded-xl border p-4 text-left transition-colors disabled:opacity-50 ${kind === value ? "border-primary bg-primary/10" : "border-border bg-card hover:bg-muted"}`}>
+        className={`rounded-xl border p-4 text-left transition-colors disabled:opacity-50 ${kind === value ? "selected-box" : "border-border bg-card hover:bg-muted"}`}>
         <span className="block font-medium">{T.cards[value].title}</span><span className={`mt-2 block text-xs ${value === "problems" ? "text-info" : "text-warning"}`}>{T.cards[value].safety}</span>
       </button>)}
     </div>

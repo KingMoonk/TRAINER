@@ -1,0 +1,41 @@
+name: Nightly
+
+# The slow, platform-specific tier: unit tests and the real training run on macOS and Windows. Pull requests run the
+# Linux job in ci.yml instead (macOS minutes bill at 10x and Windows at 2x on a private repo).
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: wedd-compute-cluster  # a scheduled run uses the default branch otherwise
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      # ruff, compileall, unit tests and the real training run, in that order; see tasks.py
+      - run: python tasks.py test:ci:e2e
+        timeout-minutes: 20  # the Windows unit suite alone was ~10 min (2100 tests) and is growing
+      # a native crash (exit 245/246) leaves its C stack only in the macOS crash report
+      - if: failure() && runner.os == 'macOS'
+        run: |
+          sleep 15
+          for f in ~/Library/Logs/DiagnosticReports/*.ips; do [ -e "$f" ] && { echo "== $f"; cat "$f"; }; done
+      # Windows: the Application log names the faulting module (torch_cpu.dll, say) and the exception code of a native crash
+      - if: failure() && runner.os == 'Windows'
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error','Windows Error Reporting'; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue | Format-List TimeCreated, ProviderName, Message
