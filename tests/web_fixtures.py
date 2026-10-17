@@ -102,20 +102,28 @@ def _steady(value, ids, host=HOST):
 
 def record() -> dict[str, str]:
     """{fixture file name: its text}, from one pass of STEPS over a fresh FakeServices."""
-    services = FakeServices()
-    client = TestClient(create_app(services, open=True, hosts=ANY))
-    ids: dict[str, str] = {}
-    jobs: list[str] = []
-    out = {}
-    for name, method, path, body in STEPS:
-        sent = path.format(job1=jobs[0] if jobs else "", job2=jobs[1] if len(jobs) > 1 else "")
-        response = client.request(method, sent, json=body)
-        reply = response.json() if response.content else None
-        if name.startswith("queue-enqueue"):
-            jobs.append(reply["id"])
-        fixture = {"request": {"method": method, "path": path, "body": body}, "status": response.status_code, "body": reply}
-        out[f"{name}.json"] = json.dumps(_steady(fixture, ids), indent=2, sort_keys=True) + "\n"
-    out.update(_demo(client, services, ids))
+    import studio_distributed
+
+    kept = dict(studio_distributed.RUNS)  # runs another test left in the process are not part of a fresh app's answers
+    studio_distributed.RUNS.clear()
+    try:
+        services = FakeServices()
+        client = TestClient(create_app(services, open=True, hosts=ANY))
+        ids: dict[str, str] = {}
+        jobs: list[str] = []
+        out = {}
+        for name, method, path, body in STEPS:
+            sent = path.format(job1=jobs[0] if jobs else "", job2=jobs[1] if len(jobs) > 1 else "")
+            response = client.request(method, sent, json=body)
+            reply = response.json() if response.content else None
+            if name.startswith("queue-enqueue"):
+                jobs.append(reply["id"])
+            fixture = {"request": {"method": method, "path": path, "body": body}, "status": response.status_code, "body": reply}
+            out[f"{name}.json"] = json.dumps(_steady(fixture, ids), indent=2, sort_keys=True) + "\n"
+        out.update(_demo(client, services, ids))
+    finally:
+        studio_distributed.RUNS.clear()
+        studio_distributed.RUNS.update(kept)
     return out
 
 
