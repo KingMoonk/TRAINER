@@ -16,8 +16,8 @@
 
 The same issue rule applies on the main thread (`.claude/rules/github-issues.md`). For a subagent:
 
-1. Before delegating, find or open the GitHub issue. Its acceptance criteria are the subagent's definition of done.
-2. The subagent claims it: `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me`, then re-reads it to confirm no one else holds it.
+1. Before delegating, find or open the GitHub issue and check its assignees (`gh issue view N --repo KingMoonk/TRAINER --json assignees --jq '[.assignees[].login]'`). Never delegate an issue assigned to anyone but you, even one you are co-assigned on. Its acceptance criteria are the subagent's definition of done.
+2. The subagent checks the assignees again, then claims it: `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me`, and re-reads it to confirm no one else holds it.
 3. It works on its own branch in its own worktree, off `origin/wedd-compute-cluster` (`.claude/rules/git-workflow.md`). Two subagents never share a worktree or edit the same files.
 4. It commits (Conventional Commits), pushes, and opens a PR with `--base wedd-compute-cluster`.
 5. The PR description is precise and short: what changed and why, how it was tested, known limitations, and `Closes #N` for each issue it finishes (`Part of #N` for a partial step). The `close-issues` workflow closes those issues when the PR merges into `wedd-compute-cluster`.
