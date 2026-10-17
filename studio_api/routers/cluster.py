@@ -69,7 +69,7 @@ class ClusterJob(BaseModel):
 class QueueNode(BaseModel):
     address: str  # the entry in the list, or "local" for this machine
     hostname: str  # "" for a machine that never answered
-    pin: str  # what to send as a job's `pinned` to keep it on this machine: its address for a listed machine (two can share a hostname), else its hostname
+    pin: str  # what to send as a job's `pinned` to keep it on this machine: its address for a listed machine (two can share a hostname), else its hostname (its address, "local", when a listed machine shares that hostname)
     local: bool
     online: bool
     error: str = ""
@@ -191,7 +191,9 @@ def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQue
     own = studio_cluster_queue.own_node(cluster)
     peers = state.peer_queues.survey(addresses)
     rows = studio_cluster_queue.merge(own, peers, local_jobs(services), getattr(cluster, "waiting", None))
-    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own.hostname or own.address, local=True, online=True),
+    shared = any(p.info.hostname.lower() == own.hostname.lower() for p in peers)  # a hostname pin would name two machines
+    own_pin = own.address if shared or not own.hostname else own.hostname
+    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own_pin, local=True, online=True),
              *(QueueNode(address=p.info.address, hostname=p.info.hostname, pin=p.info.address, local=False,
                          online=p.info.online, error=p.info.error, seen_at=p.seen_at) for p in peers)]
     return ClusterQueue(nodes=nodes, jobs=[QueueRow(**asdict(r)) for r in rows])

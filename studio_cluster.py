@@ -291,18 +291,24 @@ def fits(requirements, node):
             and (not requirements.dtype or requirements.dtype in node.dtypes))
 
 
-def matches(pinned, node):
-    return bool(pinned) and pinned.strip().lower() in (node.address.lower(), node.hostname.lower())
+def pinned_nodes(pinned, nodes):
+    """The machines a typed pin answers to: the one whose address it is, else every one with that hostname (case-insensitive). More
+    than one means the pin is ambiguous (two machines can share a hostname, never an address): the job is not placed."""
+    key = pinned.strip().lower() if pinned else ""
+    if not key:
+        return []
+    return [n for n in nodes if n.address.lower() == key] or [n for n in nodes if n.hostname.lower() == key]
 
 
 def place(requirements, nodes, pinned=None):
     """The node a job should run on, or None when none fits (the job waits). Pure.
 
     pinned: the address or hostname the user chose. That node is returned if it fits (free, memory, dtype), else None: a pin
-    is never overridden by a better node. Otherwise every node that fits is ranked by (device preference met, then the most
+    is never overridden by a better node. A hostname that two nodes share names no node, so the job waits (see `pinned_nodes`). Otherwise every node that fits is ranked by (device preference met, then the most
     memory when the job asks for it) and the first in `nodes` order wins a tie, so list this machine first to keep work local."""
     if pinned:
-        return next((n for n in nodes if matches(pinned, n) and fits(requirements, n)), None)
+        found = pinned_nodes(pinned, nodes)
+        return found[0] if len(found) == 1 and fits(requirements, found[0]) else None
     candidates = [n for n in nodes if fits(requirements, n)]
     if not candidates:
         return None

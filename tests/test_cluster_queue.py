@@ -77,6 +77,12 @@ class Merge(unittest.TestCase):
         self.assertEqual([(r.id, r.hostname, r.queued_on) for r in rows.values()],
                          [("m", "here-box", "here-box"), ("pa", "here-box (a)", "here-box (a)")])
 
+    def test_a_pin_to_a_hostname_two_machines_share_names_neither(self):
+        net = Net(a=peer("twin"), b=peer("TWIN"))
+        rows = self.merge(net, [Job("pretrain", "typed", id="t", params={"pinned": "Twin"}), Job("pretrain", "addr", id="u", params={"pinned": "b"})])[1]
+        self.assertEqual((rows["t"].node, rows["t"].hostname, rows["t"].pinned), ("", "Twin", "Twin"))
+        self.assertEqual((rows["u"].node, rows["u"].hostname), ("b", "TWIN (b)"))
+
     def test_an_offline_peer_with_no_known_name_does_not_collide(self):
         net = Net(a=DOWN, b=DOWN, c=peer("gpu-box", job("pc", "running")))
         rows = self.merge(net)[1]
@@ -165,6 +171,12 @@ class QueueRoute(ApiCase):
                          [("local", "here-box", "here-box", True, True), ("gpu", "gpu-box", "gpu", False, True)])
         self.assertEqual([(r["id"], r["status"], r["hostname"], r["queued_on"], r["queued_here"], r["stale"]) for r in body["jobs"]],
                          [(mine["id"], "waiting", "", "here-box", True, False), ("p1", "running", "gpu-box", "gpu-box", False, False)])
+
+    def test_this_machines_pin_is_its_address_when_a_peer_shares_its_hostname(self):
+        self.net.peers["gpu"]["node"] = node_payload("HERE-box")
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        body = self.call("GET", "/cluster/merged")
+        self.assertEqual([(n["address"], n["pin"]) for n in body["nodes"]], [("local", "local"), ("gpu", "gpu")])
 
     def test_pinning_a_waiting_job_to_the_other_machine_changes_where_its_row_says_it_runs(self):
         self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})

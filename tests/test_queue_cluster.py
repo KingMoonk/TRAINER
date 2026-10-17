@@ -104,7 +104,7 @@ class Peer:
 
     def handle(self, method, path, body):
         if path == "node":
-            return payload(hostname=self.address, **self.node)
+            return payload(**{"hostname": self.address, **self.node})
         if path == "cluster/jobs":
             if self.refuse:
                 raise refuse(409, self.refuse)
@@ -338,6 +338,21 @@ class OwnerSide(unittest.TestCase):
         self.net.down.clear()
         self.place()
         self.assertEqual((job.status, job.node), ("running", "gpu-box"))
+
+    def test_a_job_pinned_to_a_hostname_two_peers_share_waits_for_an_address(self):
+        a, b = Peer(self.net, "10.0.0.2:8787", hostname="Twin"), Peer(self.net, "10.0.0.3:8787", hostname="twin")
+        self.nodes = [a.address, b.address]
+        self.runner = self.make_runner()
+        job = self.runner.enqueue(self.job(pinned="twin"))
+        self.place()
+        self.assertEqual((job.status, a.dispatched, b.dispatched), ("waiting", [], []))
+        reason = self.runner.cluster.waiting[job.id]
+        self.assertIn("Twin (10.0.0.2:8787) and twin (10.0.0.3:8787)", reason)
+        self.assertIn("by its address", reason)
+        self.assertIsNone(self.runner._next_local())
+        self.runner.pin(job.id, b.address)
+        self.place()
+        self.assertEqual((job.status, job.node, len(a.dispatched), len(b.dispatched)), ("running", b.address, 0, 1))
 
     def test_a_job_pinned_to_this_machine_never_leaves_it(self):
         job = self.runner.enqueue(self.job(pinned="laptop"))
