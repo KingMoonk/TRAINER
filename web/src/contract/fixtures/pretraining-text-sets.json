@@ -1,0 +1,26 @@
+{
+  "body": [
+    {
+      "count": 2,
+      "held": false,
+      "id": "Your files",
+      "library": false,
+      "name": "Your files",
+      "on": true
+    },
+    {
+      "count": 1,
+      "held": false,
+      "id": "Your data",
+      "library": false,
+      "name": "Your data",
+      "on": true
+    }
+  ],
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/pretraining/text_sets"
+  },
+  "status": 200
+}

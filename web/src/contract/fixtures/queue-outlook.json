@@ -1,0 +1,11 @@
+{
+  "body": {
+    "outlook": "Starts after Version 2 pretraining"
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/queue/outlook"
+  },
+  "status": 200
+}

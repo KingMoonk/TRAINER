@@ -1,0 +1,11 @@
+{
+  "body": {
+    "detail": "No version store is set up, so versions cannot be shared between machines. Set TRAINER_STORE_FOLDER to a shared folder, or the TRAINER_STORE_* bucket variables (docs/cluster.md), or \"studioConfig\": {\"store\": {\"folder\": ...}} in the workspace."
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/versions/published"
+  },
+  "status": 409
+}

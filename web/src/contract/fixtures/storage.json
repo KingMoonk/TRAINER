@@ -1,0 +1,12 @@
+{
+  "body": {
+    "bytes": 0,
+    "items": 0
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/storage"
+  },
+  "status": 200
+}

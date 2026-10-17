@@ -1,0 +1,475 @@
+{
+  "body": {
+    "block_slots": [
+      "norm",
+      "mixer",
+      "channel"
+    ],
+    "heads": [
+      1,
+      4,
+      8
+    ],
+    "part_slots": [
+      "embedding",
+      "position",
+      "head"
+    ],
+    "slots": [
+      {
+        "modules": [
+          {
+            "blurb": "One trainable d-vector per vocabulary entry.",
+            "fields": [],
+            "name": "Learned table",
+            "short": "learned",
+            "tip": "Token embedding\nA table that turns each token into a list of numbers (a vector), which is the form the model works with.\n\nOne trainable d-vector per vocabulary entry."
+          },
+          {
+            "blurb": "A rank-r token table projected to model width; the tied head reuses both factors.",
+            "fields": [
+              {
+                "default": 0,
+                "help": "Embedding rank; 0 uses one quarter of d_model.",
+                "max": 2048,
+                "min": 0,
+                "name": "rank",
+                "type": "int"
+              }
+            ],
+            "name": "Factorized table",
+            "short": "factorized",
+            "tip": "Factorized embedding\nBuilds the token table from two smaller tables, as in ALBERT. Saves many parameters when the word list is large and the model is small.\n\nA rank-r token table projected to model width; the tied head reuses both factors."
+          }
+        ],
+        "name": "Embedding",
+        "slot": "embedding",
+        "tip": "Token embedding\nA table that turns each token into a list of numbers (a vector), which is the form the model works with."
+      },
+      {
+        "modules": [
+          {
+            "blurb": "A trainable vector per position, added to x. Fixed maximum length.",
+            "fields": [],
+            "name": "Learned",
+            "short": "learned",
+            "tip": "Learned position\nA trainable vector for every position, added to the token's numbers, as in GPT-2. Simple and good, but it cannot handle texts longer than it was trained on.\n\nA trainable vector per position, added to x. Fixed maximum length."
+          },
+          {
+            "blurb": "Fixed sine and cosine position vectors, added to the stream.",
+            "fields": [],
+            "name": "Sinusoidal",
+            "short": "sinusoidal",
+            "tip": "Sinusoidal position\nFixed sine and cosine waves of different speeds mark each position, as in the original Transformer. Nothing to learn, and every position gets a distinct pattern.\n\nFixed sine and cosine position vectors, added to the stream."
+          },
+          {
+            "blurb": "Rotates each query and key pair by its token position; adds no learned weights.",
+            "fields": [
+              {
+                "default": 10000.0,
+                "max": 1000000.0,
+                "min": 2.0,
+                "name": "base",
+                "type": "float"
+              }
+            ],
+            "name": "Rotary (RoPE)",
+            "short": "rope",
+            "tip": "RoPE (rotary position embedding)\nRotates attention's queries and keys by an angle that depends on position, so attention sees how far apart two tokens are. Used by most modern models; needs an attention mixer.\n\nRotates each query and key pair by its token position; adds no learned weights."
+          },
+          {
+            "blurb": "Adds a head-specific linear distance penalty to attention scores.",
+            "fields": [],
+            "name": "ALiBi",
+            "short": "alibi",
+            "tip": "ALiBi (attention with linear biases)\nMakes attention pay a little less attention to tokens the further back they are. No learned weights, copes well with longer texts; needs an attention mixer.\n\nAdds a head-specific linear distance penalty to attention scores."
+          },
+          {
+            "blurb": "No position signal. Order-aware mixers don\u2019t need one; attention can infer some order from the causal mask.",
+            "fields": [],
+            "name": "None (NoPE)",
+            "short": "none",
+            "tip": "No position (NoPE)\nGives no position signal. Recurrent and convolution mixers know the order anyway; attention can still guess some order from only seeing earlier tokens.\n\nNo position signal. Order-aware mixers don\u2019t need one; attention can infer some order from the causal mask."
+          }
+        ],
+        "name": "Position",
+        "slot": "position",
+        "tip": "Position encoding\nTells the model where each token sits in the text. Attention on its own sees a set of tokens, not their order, so it needs this; recurrent mixers already know the order."
+      },
+      {
+        "modules": [
+          {
+            "blurb": "Reuses the embedding matrix, transposed. No new parameters.",
+            "fields": [],
+            "name": "Tied to embedding",
+            "short": "tied",
+            "tip": "Tied head\nReuses the token table (embedding) backwards to score words, so it adds no parameters. The usual choice for small models.\n\nReuses the embedding matrix, transposed. No new parameters."
+          },
+          {
+            "blurb": "A separate learned matrix and bias project the stream to vocabulary logits.",
+            "fields": [],
+            "name": "Untied projection",
+            "short": "untied",
+            "tip": "Untied head\nA separate table for scoring words. More parameters, and the reading and writing tables can specialise; bigger models sometimes prefer it.\n\nA separate learned matrix and bias project the stream to vocabulary logits."
+          }
+        ],
+        "name": "Output head",
+        "slot": "head",
+        "tip": "Output head (word scores)\nTurns the last block's numbers into a score for every entry in the word list; the highest scores are the likeliest next pieces."
+      },
+      {
+        "modules": [
+          {
+            "blurb": "Subtract mean, divide by std, scale and shift.",
+            "fields": [
+              {
+                "default": 1e-05,
+                "help": "Added to the variance so a constant input does not divide by zero.",
+                "max": 0.01,
+                "min": 1e-12,
+                "name": "eps",
+                "type": "float"
+              },
+              {
+                "choices": [
+                  "pre",
+                  "post"
+                ],
+                "default": "pre",
+                "help": "pre: x + f(norm(x)), GPT-2 onward. post: norm(x + f(x)), the 2017 transformer and GPT-1.",
+                "name": "placement",
+                "type": "str"
+              }
+            ],
+            "name": "LayerNorm",
+            "short": "layernorm",
+            "tip": "LayerNorm\nA step that keeps numbers at a steady scale so training does not blow up: it re-centres each token's numbers and rescales them. The GPT-2 choice and a safe default.\n\nSubtract mean, divide by std, scale and shift."
+          },
+          {
+            "blurb": "Scale each token by its root mean square, then apply a learned gain.",
+            "fields": [
+              {
+                "default": 1e-05,
+                "help": "Added to the mean square for numerical stability.",
+                "max": 0.01,
+                "min": 1e-12,
+                "name": "eps",
+                "type": "float"
+              },
+              {
+                "choices": [
+                  "pre",
+                  "post"
+                ],
+                "default": "pre",
+                "help": "pre: x + f(norm(x)); post: norm(x + f(x)).",
+                "name": "placement",
+                "type": "str"
+              }
+            ],
+            "name": "RMSNorm",
+            "short": "rmsnorm",
+            "tip": "RMSNorm\nA simpler LayerNorm: it only rescales by the typical size of the numbers and skips re-centring them. Slightly faster, works as well in practice, and is what LLaMA-style models use.\n\nScale each token by its root mean square, then apply a learned gain."
+          },
+          {
+            "blurb": "Identity. Useful to see why normalization matters.",
+            "fields": [
+              {
+                "choices": [
+                  "pre",
+                  "post"
+                ],
+                "default": "pre",
+                "name": "placement",
+                "type": "str"
+              }
+            ],
+            "name": "None",
+            "short": "none",
+            "tip": "No normalization\nLeaves the numbers as they are. Not a good choice for real training; pick it to see why normalization matters, as deeper models often become unstable without it.\n\nIdentity. Useful to see why normalization matters."
+          }
+        ],
+        "name": "Norm",
+        "slot": "norm",
+        "tip": "Normalization (even out)\nRescales each token's numbers to a steady size before the next step works on them. Without it, numbers can grow or shrink layer by layer until training breaks. Almost every modern model keeps one."
+      },
+      {
+        "modules": [
+          {
+            "blurb": "Every position reads earlier positions, weighted by softmax(q\u00b7k / \u221ad_head). Cost grows with T\u00b2.",
+            "fields": [
+              {
+                "default": 4,
+                "help": "Parallel attention heads. d_model must divide evenly; each head works in d_model \u00f7 heads dimensions.",
+                "max": 64,
+                "min": 1,
+                "name": "heads",
+                "type": "int"
+              },
+              {
+                "default": true,
+                "help": "Bias terms on the QKV and output projections (GPT-2 has them; many later models drop them).",
+                "name": "bias",
+                "type": "bool"
+              }
+            ],
+            "name": "Softmax attention",
+            "short": "attention",
+            "tip": "Attention\nThe part of a block that lets each token look back at earlier ones and decide which matter. Like highlighting the relevant words in a sentence before answering. The most capable token mixer, but its cost grows with the square of the text length.\n\nEvery position reads earlier positions, weighted by softmax(q\u00b7k / \u221ad_head). Cost grows with T\u00b2."
+          },
+          {
+            "blurb": "Query heads share fewer key/value heads; one KV head is multi-query attention.",
+            "fields": [
+              {
+                "default": 4,
+                "max": 64,
+                "min": 1,
+                "name": "heads",
+                "type": "int"
+              },
+              {
+                "default": 2,
+                "help": "One key/value head per group; 1 is MQA.",
+                "max": 64,
+                "min": 1,
+                "name": "kv_heads",
+                "type": "int"
+              },
+              {
+                "default": true,
+                "name": "bias",
+                "type": "bool"
+              }
+            ],
+            "name": "Grouped-query attention",
+            "short": "gqa",
+            "tip": "GQA (grouped-query attention)\nAttention where several heads share one set of keys and values. Nearly as good as full attention but needs less memory when generating, which is why large models use it.\n\nQuery heads share fewer key/value heads; one KV head is multi-query attention."
+          },
+          {
+            "blurb": "ELU+1 feature maps with recurrent numerator and denominator states.",
+            "fields": [
+              {
+                "default": 4,
+                "max": 64,
+                "min": 1,
+                "name": "heads",
+                "type": "int"
+              },
+              {
+                "default": true,
+                "name": "bias",
+                "type": "bool"
+              },
+              {
+                "default": 1e-06,
+                "max": 0.01,
+                "min": 1e-12,
+                "name": "eps",
+                "type": "float"
+              }
+            ],
+            "name": "Causal linear attention",
+            "short": "linear",
+            "tip": "Linear attention\nAn approximation of attention whose cost grows in a straight line with the text length instead of with its square. Cheaper on long texts, usually a bit less accurate.\n\nELU+1 feature maps with recurrent numerator and denominator states."
+          },
+          {
+            "blurb": "Input-dependent state update with causal convolution and a gated output.",
+            "fields": [
+              {
+                "default": 16,
+                "max": 128,
+                "min": 1,
+                "name": "state",
+                "type": "int"
+              },
+              {
+                "default": 2,
+                "max": 8,
+                "min": 1,
+                "name": "expand",
+                "type": "int"
+              },
+              {
+                "default": 4,
+                "max": 32,
+                "min": 1,
+                "name": "kernel",
+                "type": "int"
+              },
+              {
+                "default": 16,
+                "max": 128,
+                "min": 1,
+                "name": "dt_rank",
+                "type": "int"
+              }
+            ],
+            "name": "Selective state space",
+            "short": "ssm",
+            "tip": "SSM (state space model)\nCarries a running summary (a state) along the text and updates it token by token, like Mamba. Fast on long texts; good at smooth, flowing patterns, weaker at copying exact earlier words.\n\nInput-dependent state update with causal convolution and a gated output."
+          },
+          {
+            "blurb": "A gated recurrent state passes information forward through tokens.",
+            "fields": [],
+            "name": "GRU",
+            "short": "gru",
+            "tip": "GRU (gated recurrent unit)\nA classic recurrent network: a memory passed from token to token, with gates deciding what to keep. Simple and small, but it trains step by step, so it is slow on long texts.\n\nA gated recurrent state passes information forward through tokens."
+          },
+          {
+            "blurb": "A gated hidden state and cell state carry information across tokens.",
+            "fields": [],
+            "name": "LSTM",
+            "short": "lstm",
+            "tip": "LSTM (long short-term memory)\nA recurrent network with a separate long-term memory cell and three gates. It holds on to information longer than a GRU but is larger and also trains step by step.\n\nA gated hidden state and cell state carry information across tokens."
+          },
+          {
+            "blurb": "A local depthwise filter followed by a pointwise projection.",
+            "fields": [
+              {
+                "default": 4,
+                "max": 32,
+                "min": 1,
+                "name": "kernel",
+                "type": "int"
+              }
+            ],
+            "name": "Causal convolution",
+            "short": "conv",
+            "tip": "Causal convolution\nLooks at a small fixed window of recent tokens. Very fast and good at local patterns such as spelling, but it cannot reach far back on its own.\n\nA local depthwise filter followed by a pointwise projection."
+          },
+          {
+            "blurb": "No token mixer in this block: positions do not exchange information here.",
+            "fields": [],
+            "name": "None",
+            "short": "none",
+            "tip": "No token mixer\nThis block does not look at other tokens at all; each token is processed alone. Useful to see how much looking back matters.\n\nNo token mixer in this block: positions do not exchange information here."
+          }
+        ],
+        "name": "Token mixer",
+        "slot": "mixer",
+        "tip": "Token mixer (look back)\nThe part of a block that lets each token use the tokens before it. Attention is the usual choice; the others trade some of its power for speed or memory on long texts."
+      },
+      {
+        "modules": [
+          {
+            "blurb": "Two linear layers with a GELU between them, hidden width 4 \u00d7 d.",
+            "fields": [
+              {
+                "default": 0,
+                "help": "Hidden width. 0 means 4 \u00d7 d_model.",
+                "max": 8192,
+                "min": 0,
+                "name": "d_ff",
+                "type": "int"
+              },
+              {
+                "default": true,
+                "name": "bias",
+                "type": "bool"
+              },
+              {
+                "default": 1,
+                "help": "Hidden layers. A standard transformer MLP has 1; more is kept for older designs.",
+                "max": 4,
+                "min": 1,
+                "name": "layers",
+                "type": "int"
+              },
+              {
+                "choices": [
+                  "gelu",
+                  "relu"
+                ],
+                "default": "gelu",
+                "name": "activation",
+                "type": "str"
+              }
+            ],
+            "name": "MLP \u00b7 GELU",
+            "short": "mlp_gelu",
+            "tip": "MLP with GELU\nThe usual thinking room: widen each token's numbers (4 times by default), bend them with GELU, a smooth on/off curve, then narrow them back. The standard choice in GPT-2-style models.\n\nTwo linear layers with a GELU between them, hidden width 4 \u00d7 d."
+          },
+          {
+            "blurb": "SiLU gate times an up projection, then a down projection.",
+            "fields": [
+              {
+                "default": 0,
+                "help": "Hidden width; 0 rounds 8d/3 up to a multiple of 16.",
+                "max": 8192,
+                "min": 0,
+                "name": "d_ff",
+                "type": "int"
+              }
+            ],
+            "name": "SwiGLU",
+            "short": "swiglu",
+            "tip": "SwiGLU\nA gated MLP: one half of the widened numbers decides how much of the other half passes through. Used in LLaMA and PaLM; often learns a little better for the same size.\n\nSiLU gate times an up projection, then a down projection."
+          },
+          {
+            "blurb": "A router selects k GELU MLP experts per token and adds a load-balancing loss.",
+            "fields": [
+              {
+                "default": 8,
+                "max": 32,
+                "min": 2,
+                "name": "experts",
+                "type": "int"
+              },
+              {
+                "default": 2,
+                "max": 8,
+                "min": 1,
+                "name": "top_k",
+                "type": "int"
+              },
+              {
+                "default": 0,
+                "max": 8192,
+                "min": 0,
+                "name": "d_ff",
+                "type": "int"
+              },
+              {
+                "default": 0.01,
+                "max": 1,
+                "min": 0,
+                "name": "aux_weight",
+                "type": "float"
+              }
+            ],
+            "name": "Top-k mixture of experts",
+            "short": "moe",
+            "tip": "MoE (mixture of experts)\nSeveral MLPs (experts) with a router that sends each token to only the best few. Many more parameters for about the same work per token; harder to train well.\n\nA router selects k GELU MLP experts per token and adds a load-balancing loss."
+          },
+          {
+            "blurb": "No channel mixer. Common for SSM blocks; weak for attention stacks.",
+            "fields": [],
+            "name": "None",
+            "short": "none",
+            "tip": "No thinking room\nLeaves out the MLP. Common in SSM blocks, which do their own mixing; weak for attention models, which rely on the MLP to store what they learn.\n\nNo channel mixer. Common for SSM blocks; weak for attention stacks."
+          }
+        ],
+        "name": "Channel mixer",
+        "slot": "channel",
+        "tip": "MLP (feed-forward network)\nThe part of a block that 'thinks' about each position by itself after attention has gathered the information."
+      }
+    ],
+    "widths": [
+      "Narrow",
+      "Normal",
+      "Wide"
+    ],
+    "words": [
+      "Letters",
+      "Small word list",
+      "Large word list",
+      "Whole words"
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/design/registry"
+  },
+  "status": 200
+}

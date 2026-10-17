@@ -10,8 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "gen:api": "openapi-typescript openapi.json -o src/lib/api-schema.ts",
-    "test:e2e": "playwright test",
-    "record:api": "node scripts/record-api.mjs"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

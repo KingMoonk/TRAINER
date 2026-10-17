@@ -9,6 +9,8 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = 4173;
 const LIVE_PORT = 4174;
 const live = process.env.API_LIVE === "1";
+// The nightly run adds WebKit (Safari's engine), which the every-PR run leaves out to stay fast: WEBKIT=1.
+const webkit = process.env.WEBKIT === "1";
 
 export default defineConfig({
   testDir: "tests",
@@ -23,6 +25,15 @@ export default defineConfig({
       testIgnore: ["live.spec.ts", "live.*.spec.ts"],
       use: { ...devices["Desktop Chrome"], baseURL: `http://127.0.0.1:${PORT}` },
     },
+    ...(webkit
+      ? [
+          {
+            name: "webkit",
+            testIgnore: ["live.spec.ts", "live.*.spec.ts"],
+            use: { ...devices["Desktop Safari"], baseURL: `http://127.0.0.1:${PORT}` },
+          },
+        ]
+      : []),
     ...(live
       ? [
           {

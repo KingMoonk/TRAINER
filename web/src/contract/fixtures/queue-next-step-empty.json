@@ -1,0 +1,13 @@
+{
+  "body": {
+    "line": "Pick a shape in Build your model, then save it as version 1.",
+    "route": "builder",
+    "title": "Design your first model"
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/queue/next_step"
+  },
+  "status": 200
+}
