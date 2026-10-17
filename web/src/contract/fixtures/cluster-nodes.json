@@ -13,6 +13,7 @@
       "local": true,
       "memory_bytes": 17179869184,
       "online": true,
+      "tailnet_name": "",
       "version": "v0.0.0"
     }
   ],
