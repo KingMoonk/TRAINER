@@ -22,6 +22,7 @@ export const ROUTES: Route[] = [
   { route: "head_zoom", href: "/head-zoom", area: "designer", title: "Inside a head", lead: "One attention head, one step at a time, on a real prompt.", lookInside: true },
   { route: "value_map", href: "/value-map", area: "designer", title: "Value map", lead: "How a head's values are projected down and back up, and why the heads add up.", lookInside: true },
   { route: "loss", href: "/loss", area: "designer", title: "Loss", lead: "What one wrong or right prediction costs, and the gradient it sends back.", lookInside: true },
+  { route: "landscape", href: "/landscape", area: "designer", title: "Loss landscape", lead: "The error as you move the weights, drawn live while a version trains.", lookInside: true },
   { route: "head_lab", href: "/head-lab", area: "designer", title: "Head lab", lead: "Where does each attention head look, and how much does the model rely on it?", lookInside: true },
   { route: "inside3d", href: "/inside-3d", area: "designer", title: "Inside the network", lead: "Build the model from the inside and watch it train.", lookInside: true },
   { route: "pretraining", href: "/pretraining", area: "pretraining", title: "Pretraining", lead: "Feed it text. It learns by predicting the next word, over and over." },

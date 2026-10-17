@@ -77,6 +77,7 @@ function LossPage({ initialVersion }: { initialVersion?: number }) {
     <p className="text-xs text-muted-foreground">{T.breadcrumb}</p>
     <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
     <p className="max-w-prose text-muted-foreground">{T.lead}</p>
+    <Link href="/landscape/" className="self-start text-sm underline">{T.landscapeLink}</Link>
     {versions.isPending ? <Skeleton className="h-40 w-full" aria-label="Loading versions" /> : versions.isError ?
       <Card><CardContent role="alert">{T.versionsFailed} <Button variant="outline" onClick={() => void versions.refetch()}>{T.retry}</Button></CardContent></Card> : selected !== undefined && !trained.some((item) => item.number === selected) ?
       <Card><CardContent className="space-y-3" role="alert"><p>Version {selected} has no available trained checkpoint.</p><Button variant="outline" onClick={() => setSelected(undefined)}>Choose another version</Button></CardContent></Card> : !trained.length ?

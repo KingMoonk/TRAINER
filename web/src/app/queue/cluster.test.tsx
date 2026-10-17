@@ -250,7 +250,7 @@ describe("Queue page with several machines", () => {
     expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   });
 
-  // The card lists jobs that run on other machines, so a lone machine's own jobs do not show it (#316).
+  // The card lists jobs that run on other machines, so a lone machine's own jobs do not show it (#316, fixed on the base branch).
   test("a cluster of one that lists itself alone shows no Other machines card", async () => {
     await aloneWithJobs();
     expect(screen.queryByTestId("other-machines")).toBeNull();

@@ -199,6 +199,35 @@ class ViewerApiTest(unittest.TestCase):
         self.assertEqual(job["status"], "failed")
         self.assertIn(T["probe_no_checkpoint"], job["error"])
 
+    def test_landscape_is_a_job_with_a_grid_a_minimum_and_a_path(self):
+        tap = self.enterContext(EventTap(self.app))
+        job, _ = finished(tap, self.client.post("/viewer/landscape", json={"grid": 9, "span": 2}))
+        self.assertEqual(job["status"], "done", job)
+        out = job["result"]
+        self.assertEqual((out["grid"], len(out["axis"]), len(out["loss"]), len(out["loss"][0])), (9, 9, 9, 9))
+        self.assertEqual(out["axis"][4], 0)  # the current weights are a cell
+        self.assertEqual(out["current"]["loss"], out["loss"][4][4])
+        self.assertLessEqual(out["minimum"]["loss"], out["current"]["loss"])
+        self.assertTrue(out["trajectory"])
+        self.assertEqual(set(out["cost"]), {"seconds", "evaluations"})
+        self.assertEqual(out["mode"], "random")
+
+    def test_landscape_live_frames_are_small_and_the_path_grows(self):
+        tap = self.enterContext(EventTap(self.app))
+        first, _ = finished(tap, self.client.post("/viewer/landscape", json={"live": True, "grid": 41}))
+        later, _ = finished(tap, self.client.post("/viewer/landscape", json={"live": True, "grid": 41}))
+        self.assertLessEqual(first["result"]["grid"], 15)
+        self.assertGreater(len(later["result"]["trajectory"]), len(first["result"]["trajectory"]))
+
+    def test_landscape_rejects_a_grid_outside_its_bounds_and_reports_a_sentence_when_it_cannot_run(self):
+        self.assertEqual(self.client.post("/viewer/landscape", json={"grid": 3}).status_code, 422)
+        self.assertEqual(self.client.post("/viewer/landscape", json={"mode": "tsne"}).status_code, 422)
+        tap = self.enterContext(EventTap(self.app))
+        with patch.object(self.services, "inspect_landscape", side_effect=ValueError("No held-back text yet.")):
+            job, _ = finished(tap, self.client.post("/viewer/landscape", json={}))
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("No held-back text yet.", job["error"])
+
     def test_the_viewer_process_is_started_stopped_and_spoken_to(self):
         self.assertEqual(self.client.get("/viewer/status").json(), {"available": True, "running": False, "connected": False})
         self.assertEqual(self.client.post("/viewer/start", json={"level": "Window", "mode": "Train"}).json(),

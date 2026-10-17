@@ -19,6 +19,8 @@
  *   categorical     cat-1..8 (Value map's eight heads)
  *   visualisations  viz-1..5 viz-end (Pretraining's size preview) scene-background (Inside 3D viewport)
  *                   heat-positive heat-negative cell-masked (Inside a head)
+ *   heat ramp       ramp-1..9 (viridis, low to high: the loss landscape's surface, Inside 3D's tiles)
+ *                   landscape-wire landscape-path landscape-current landscape-minimum (the loss landscape's lines and markers)
  *   selection       selected-surface selected-border: how a chosen box, row, card or option looks everywhere. Neutral
  *                   on purpose and not overridden by accents; apply it with the `selected-box` utility (below), and
  *                   keep the accent for the small control inside (checkbox, radio dot) and for primary buttons/links.
@@ -111,6 +113,19 @@
   --color-cat-7: var(--cat-7);
   --color-cat-8: var(--cat-8);
   --color-scene-background: var(--scene-background);
+  --color-ramp-1: var(--ramp-1);
+  --color-ramp-2: var(--ramp-2);
+  --color-ramp-3: var(--ramp-3);
+  --color-ramp-4: var(--ramp-4);
+  --color-ramp-5: var(--ramp-5);
+  --color-ramp-6: var(--ramp-6);
+  --color-ramp-7: var(--ramp-7);
+  --color-ramp-8: var(--ramp-8);
+  --color-ramp-9: var(--ramp-9);
+  --color-landscape-wire: var(--landscape-wire);
+  --color-landscape-path: var(--landscape-path);
+  --color-landscape-current: var(--landscape-current);
+  --color-landscape-minimum: var(--landscape-minimum);
   --shadow-card: var(--card-shadow);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
@@ -197,6 +212,20 @@
   --viz-end: #e3e5ea;
   /* The 3D viewport stays dark in every mode: the server paints the scene's boxes and labels for a dark canvas. */
   --scene-background: #0e1014;
+  /* The heat ramp (viridis, low to high) and the loss landscape's markers. Both are drawn on the dark scene viewport in every mode. */
+  --ramp-1: #440154;
+  --ramp-2: #472d7b;
+  --ramp-3: #3b528b;
+  --ramp-4: #2c728e;
+  --ramp-5: #21918c;
+  --ramp-6: #28ae80;
+  --ramp-7: #5ec962;
+  --ramp-8: #addc30;
+  --ramp-9: #fde725;
+  --landscape-wire: #4b5160;
+  --landscape-path: #f5f6f8;
+  --landscape-current: #ff4fa3;
+  --landscape-minimum: #ff6a3d;
   --heat-positive: oklch(0.78 0.15 75);
   --heat-negative: oklch(0.62 0.16 250);
   --cell-masked: color-mix(in oklch, var(--background) 94%, black);
@@ -286,6 +315,20 @@
   --viz-5: #4a2f45;
   --viz-end: #0a0b0e;
   --scene-background: #0e1014;
+  /* The heat ramp (viridis, low to high) and the loss landscape's markers. Both are drawn on the dark scene viewport in every mode. */
+  --ramp-1: #440154;
+  --ramp-2: #472d7b;
+  --ramp-3: #3b528b;
+  --ramp-4: #2c728e;
+  --ramp-5: #21918c;
+  --ramp-6: #28ae80;
+  --ramp-7: #5ec962;
+  --ramp-8: #addc30;
+  --ramp-9: #fde725;
+  --landscape-wire: #4b5160;
+  --landscape-path: #f5f6f8;
+  --landscape-current: #ff4fa3;
+  --landscape-minimum: #ff6a3d;
   --heat-positive: oklch(0.8 0.16 80);
   --heat-negative: oklch(0.65 0.15 250);
   --cell-masked: color-mix(in oklch, var(--background) 70%, black);
