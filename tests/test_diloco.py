@@ -68,8 +68,27 @@ class Rules(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_arrays(b"not an archive")
 
+    def test_int8_arrays_are_a_quarter_of_fp32_and_within_half_a_step_of_the_original(self):
+        rng = np.random.default_rng(0)
+        arrays = {"w": rng.normal(size=(64, 32)).astype(np.float32) * .01, "zero": np.zeros(5, np.float32), "b.c": np.array([3., -3., 0.], np.float32)}
+        body = encode_arrays(arrays, "int8")
+        out = decode_arrays(body)
+        self.assertEqual(set(out), set(arrays))  # the scales are not arrays of the model
+        for name, value in arrays.items():
+            self.assertEqual(out[name].dtype, np.float32)
+            np.testing.assert_allclose(out[name], value, atol=np.abs(value).max() / 127 / 2 + 1e-9)
+        np.testing.assert_array_equal(out["zero"], arrays["zero"])
+        self.assertLess(len(body), len(encode_arrays(arrays, "float16")))
+        big = {"w": rng.normal(size=(256, 256)).astype(np.float32)}
+        self.assertLess(len(encode_arrays(big, "int8")), len(encode_arrays(big, "float16")) * .55)
+        self.assertLess(len(encode_arrays(big, "int8")), len(encode_arrays(big, "float32")) * .27)
+
+    def test_a_non_finite_int8_tensor_decodes_non_finite(self):
+        out = decode_arrays(encode_arrays({"w": np.array([1., np.inf])}, "int8"))["w"]
+        self.assertFalse(np.isfinite(out).all())
+
     def test_settings_refuse_nonsense(self):
-        for bad in ({"inner_steps": 0}, {"delta_dtype": "int8"}, {"outer_momentum": 1.}, {"min_members": 3, "max_members": 2}):
+        for bad in ({"inner_steps": 0}, {"delta_dtype": "int4"}, {"outer_momentum": 1.}, {"min_members": 3, "max_members": 2}):
             with self.assertRaises(ValueError):
                 support.settings(**bad)
 

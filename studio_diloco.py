@@ -36,7 +36,8 @@ import numpy as np
 FORMAT = 1
 LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
 STATE_PREFIXES = ("theta::", "momentum::")
-DELTA_DTYPES = ("float16", "float32")
+DELTA_DTYPES = ("int8", "float16", "float32")
+SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
 
 
@@ -121,11 +122,30 @@ def round_seconds(settings, step_time):
     return step_time * settings.inner_steps * (1 + settings.slack_ratio) + settings.slack_seconds
 
 
+def quantize_int8(value):
+    """(int8 values, float32 scale) for one tensor: scale = max |x| / 127, values round(x / scale). A non-finite tensor gets a NaN
+    scale, so it decodes non-finite and the coordinator refuses it as it would any other."""
+    value = np.asarray(value, dtype=np.float32)
+    peak = float(np.max(np.abs(value))) if value.size else 0.
+    if not np.isfinite(peak):
+        return np.zeros(value.shape, np.int8), np.float32("nan")
+    scale = np.float32(peak / 127.)
+    if scale == 0:
+        return np.zeros(value.shape, np.int8), np.float32(0.)
+    return np.clip(np.rint(value / scale), -127, 127).astype(np.int8), scale
+
+
 def encode_arrays(arrays, dtype="float32"):
-    """A {name: array} as an uncompressed .npz body; float16 is clipped to its range first."""
+    """A {name: array} as an uncompressed .npz body; float16 is clipped to its range first; int8 stores each tensor as int8 values
+    plus a per-tensor float32 scale (name + "::scale"), a quarter of the fp32 size."""
     buffer = io.BytesIO()
     if dtype == "float16":
         np.savez(buffer, **{name: np.clip(value, -65504., 65504.).astype(np.float16) for name, value in arrays.items()})
+    elif dtype == "int8":
+        out = {}
+        for name, value in arrays.items():
+            out[name], out[name + SCALE_SUFFIX] = quantize_int8(value)
+        np.savez(buffer, **out)
     else:
         np.savez(buffer, **{name: np.asarray(value, dtype=np.float32) for name, value in arrays.items()})
     return buffer.getvalue()
@@ -135,7 +155,15 @@ def decode_arrays(data):
     """The fp32 arrays of an .npz body. ValueError when it is not one."""
     try:
         with np.load(io.BytesIO(data), allow_pickle=False) as archive:
-            return {name: archive[name].astype(np.float32) for name in archive.files}
+            out = {}
+            for name in archive.files:
+                if name.endswith(SCALE_SUFFIX) and name[:-len(SCALE_SUFFIX)] in archive.files:
+                    continue
+                value = archive[name]
+                if value.dtype == np.int8:
+                    value = value.astype(np.float32) * np.float32(archive[name + SCALE_SUFFIX])
+                out[name] = value.astype(np.float32)
+            return out
     except Exception as exc:  # noqa: BLE001 - zip and numpy raise many types for a bad body
         raise ValueError(f"The body is not an .npz archive of arrays ({exc}).") from None
 
@@ -228,6 +256,7 @@ class Round:
     deadline: float
     window: float
     contributions: dict = field(default_factory=dict)  # node -> (tokens, steps, seconds, loss, delta)
+    uploaded: dict = field(default_factory=dict)  # node -> bytes of its delta body on the wire
     open: bool = True
 
 
@@ -448,7 +477,8 @@ class Coordinator:
                "members": list(current.members), "contributed": list(sent), "dropped": dropped, "tokens": tokens,
                "steps": {node: value[1] for node, value in sent.items()},
                "loss": sum(t * loss for t, loss in losses) / sum(t for t, _ in losses) if losses else None,
-               "val_loss": self.evaluate(self.theta), "seconds": now - current.opened, "deadline_seconds": current.window,
+               "val_loss": self.evaluate(self.theta), "seconds": now - current.opened,
+               "delta_bytes": sum(current.uploaded.get(node, 0) for node in sent), "delta_dtype": self.settings.delta_dtype, "deadline_seconds": current.window,
                "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.}
         self.history.append(row)
         self.deal = current.deal
@@ -506,7 +536,7 @@ class Coordinator:
             raise KeyError(shard)
         return shard_blob(self.train, int(self.bounds[shard]), int(self.bounds[shard + 1]))
 
-    def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None):
+    def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0):
         """Take a member's pseudo-gradient for the open round. Stale is raised (409) for any other round or generation, a
         member that is not in the round, a lease epoch that is not the member's, or a second contribution."""
         with self.cond:
@@ -531,6 +561,7 @@ class Coordinator:
             if tokens < 0 or steps < 1:
                 raise ValueError("A contribution needs at least one step.")
             current.contributions[node] = (int(tokens), int(steps), float(seconds), loss, delta)
+            current.uploaded[node] = int(size)
             self._advance()
             self.cond.notify_all()
 
@@ -744,8 +775,12 @@ class Member:
                   "steps": step - self.first_step, "seconds": self.clock() - self.began}
         if self.loss is not None:
             params["loss"] = self.loss
+        began = self.clock()
         try:
             self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{self.round}/delta", body, params, timeout=self.wait + 120))
+            upload, trained = self.clock() - began, params["seconds"]
+            self.emit({"type": "info", "text": f"Round {self.round}: sent {len(body)} bytes of {self.info['delta_dtype']} delta in {upload:.2f} s "
+                                               f"({upload / max(1e-9, trained + upload):.0%} of the member's {trained + upload:.2f} s round)."})
         except PeerError as exc:
             if exc.status != 409:
                 raise
