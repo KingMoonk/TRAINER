@@ -790,6 +790,37 @@ class OwnerSide(unittest.TestCase):
         self.assertTrue(self.held(older))
         self.assertEqual(self.deleted(), [])
 
+    def test_forgetting_a_removed_jobs_key_waits_for_the_lock_the_other_readers_of_that_list_use(self):
+        self.use_bucket()
+        cluster = self.runner.cluster
+        cluster._removed["gone"] = ["a", "b"]
+        with cluster._keep_lock:
+            thread = threading.Thread(target=cluster._forgotten, args=("gone", "a"))
+            thread.start()
+            thread.join(.2)
+            self.assertTrue(thread.is_alive())
+            self.assertEqual(cluster._removed, {"gone": ["a", "b"]})
+        thread.join(5)
+        self.assertEqual(cluster._removed, {"gone": ["b"]})
+
+    def test_a_job_that_ends_while_the_owner_is_interrupting_it_stays_ended(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        cluster, real, calls = self.runner.cluster, self.runner.cluster._remote, []
+
+        def late(job_id):  # the lease lapsed and `_reassign` found the job; then the runner's end arrived
+            found = real(job_id)
+            if not calls:
+                calls.append(job_id)
+                cluster.finished(job_id, {"epoch": 1, "status": "failed", "error": "The dataset is empty."})
+            return found
+
+        with mock.patch.object(cluster, "_remote", side_effect=late):
+            cluster._reassign(job.id)
+        self.assertEqual((job.status, job.error, job.epoch), ("failed", "The dataset is empty.", 1))
+        self.assertNotIn("fetch", job.params)
+
     def test_a_pinned_job_waits_for_its_node_and_is_never_moved_to_another(self):
         Peer(self.net, "other-box")
         self.nodes = ["gpu-box", "other-box"]

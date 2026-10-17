@@ -400,6 +400,8 @@ class Cluster:
             return
         node = job.node
         with self.runner.lock:
+            if self._remote(job_id) is not job:  # it ended, or was cancelled or placed again, since it was looked up: leave it as it is
+                return
             note, finished = sched.interrupt(job)
             self.runner._save()
         self.runner._emit("cluster", {"job": job_id, "state": "interrupted", "node": node, "detail": note})
@@ -546,7 +548,7 @@ class Cluster:
 
     def _forgotten(self, job_id, key):
         """`key` is deleted (or was never the job's): take it off the job's record, so it is not tried again."""
-        with self._lock:
+        with self._keep_lock:  # (a leaf lock: nothing else is taken while it is held)
             if job_id in self._removed:
                 self._removed[job_id] = [k for k in self._removed[job_id] if k != key]
                 if not self._removed[job_id]:
