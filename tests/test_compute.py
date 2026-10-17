@@ -214,6 +214,14 @@ class CostPanel(unittest.TestCase):
         self.assertIn("under one pass", lines[1][0])
         self.assertIn("3 minutes", lines[1][0])  # 2M tokens at 10K a second is 200 s
 
+    def test_supported_estimate_says_about_once_whether_or_not_the_count_is_estimated(self):
+        for preview in ({"pieces": 2_000_000, "tokens_per_second": 10_000.},
+                        {"pieces": 2_000_000, "tokens_per_second": 10_000., "estimated": True}):
+            text = D.compute_lines(1_000_000, 256, 2, preview)[0][0]
+            self.assertEqual(text.count("about"), 1, text)
+            self.assertIn("supports about 100.0K parameters", text)
+            self.assertNotIn("about about", text)
+
     def test_repeated_text_is_named_but_not_called_under_trained(self):
         lines = D.compute_lines(1_000_000, 256, 2, {"pieces": 2_000_000, "tokens_per_second": 10_000., "estimated": True})
         self.assertIn("about 100.0K parameters", lines[0][0])

@@ -397,8 +397,7 @@ def compute_lines(params, context, layers, preview, gpu=""):
     tail = (T["compute_under"] if p["under_trained"] else T["compute_repeats"] if p["over_repeated"]
             else T["compute_reread"].format(times=f"{p['epochs_for_optimal']:.1f}", most=MAX_EPOCHS) if params > p["data_params"]
             else T["compute_roomy"] if p["data_params"] >= 4 * params else T["compute_enough"])
-    about = "about " if preview.get("estimated") else ""
-    lines = [(T["compute_supports"].format(supported=about + amount(p["data_params"]), rule=TOKENS_PER_PARAM, params=amount(params)) + tail,
+    lines = [(T["compute_supports"].format(supported=amount(p["data_params"]), rule=TOKENS_PER_PARAM, params=amount(params)) + tail,
               p["under_trained"]),
              (T["compute_steps"].format(steps=p["steps"], rows=ROWS, passes=passes_text(p["epochs"]))
               + T["compute_time"].format(time=duration(p["seconds_needed"])), False)]
