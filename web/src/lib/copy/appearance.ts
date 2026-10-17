@@ -3,10 +3,10 @@ import type { Accent, Mode } from "@/lib/theme";
 
 export const APPEARANCE = {
   h1: "Settings",
-  lead: "Preferences for this computer, kept in this browser.",
+  lead: "Preferences for this computer.",
   settingsLabel: "Settings",
   section: "Appearance",
-  sectionLead: "Pick light or dark, and an accent colour.",
+  sectionLead: "Pick light or dark, and an accent colour. Kept in this browser.",
   modeTitle: "Mode",
   modeDesc: "System follows your computer's light or dark setting.",
   modes: { light: "Light", dark: "Dark", system: "System" } satisfies Record<Mode, string>,

@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAccent } from "@/components/theme";
 import { APPEARANCE } from "@/lib/copy/appearance";
+import { MachinesSection } from "./machines";
 import { ACCENTS, MODES, type Accent, type Mode } from "@/lib/theme";
 
 // The chosen button: the app-wide neutral selected look (globals.css), plus a tick.
@@ -64,6 +65,7 @@ export default function Page() {
         </CardContent>
       </Card>
       </section>
+      <MachinesSection />
     </main>
   );
 }

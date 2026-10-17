@@ -47,6 +47,7 @@ class ClusterNode(BaseModel):
     dtypes: list[str]
     online: bool
     error: str = ""  # why a machine is offline, in plain words
+    tailnet_name: str = ""  # this machine's MagicDNS name, to give to another machine's list; "" for a peer, or when Tailscale is unknown
 
 
 class NodeList(BaseModel):
@@ -159,12 +160,15 @@ class Stop(BaseModel):
 
 
 @router.get("/nodes")
-def nodes(services=Depends(get_services)) -> list[ClusterNode]:
+def nodes(request: Request, services=Depends(get_services)) -> list[ClusterNode]:
     """This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with
-    the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop."""
+    the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop. This node's
+    tailnet name comes from the host-name refresh (studio_api.hosts), never from a call to tailscale while the request waits."""
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     state = {"studioConfig": {"nodes": services.setting("nodes", [])}}
-    return [ClusterNode(**asdict(info), local=info.address == studio_cluster.LOCAL)
+    tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
+    return [ClusterNode(**asdict(info), local=info.address == studio_cluster.LOCAL,
+                        tailnet_name=tailnet if info.address == studio_cluster.LOCAL else "")
             for info in studio_cluster.survey(state, own, timeout=studio_cluster.POLL_TIMEOUT)]
 
 
