@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Palette, Sparkles } from "lucide-react";
+import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Settings, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
-const settingsClass = (active: boolean) => cn("flex shrink-0 items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", active && "border-surface-border bg-surface-raised font-medium text-foreground shadow-sm");
+const gearClass = (active: boolean) => cn("flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", active && "border-surface-border bg-surface-raised text-foreground");
 const icons = { designer: Network, pretraining: Layers3, post: Sparkles, chat: MessageSquare, queue: ListOrdered, resources: Database };
 
 export function Sidebar() {
@@ -31,9 +31,9 @@ export function Sidebar() {
             </Link>
           );
         })}
-        {/* On a phone the sidebar is a bar across the top, so Appearance joins the row; on a desktop it sits at the foot. */}
-        <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined} className={cn(settingsClass(pathname === "/settings"), "md:hidden")}>
-          <Palette className="size-4" aria-hidden="true" />{APPEARANCE.link}
+        {/* On a phone the sidebar is a bar across the top, so the gear joins the row; on a desktop it sits at the foot. */}
+        <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined} title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel} className={cn(gearClass(pathname === "/settings"), "md:hidden")}>
+          <Settings className="size-4" aria-hidden="true" />
         </Link>
       </nav>
       {pages.length > 1 && (
@@ -46,8 +46,9 @@ export function Sidebar() {
         </div>
       )}
       <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined}
-        className={cn(settingsClass(pathname === "/settings"), "mx-3 mb-3 hidden md:mt-auto md:flex")}>
-        <Palette className="size-4" aria-hidden="true" />{APPEARANCE.link}
+        title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel}
+        className={cn(gearClass(pathname === "/settings"), "mx-4 mb-4 hidden md:mt-auto md:flex")}>
+        <Settings className="size-4" aria-hidden="true" />
       </Link>
     </aside>
   );
