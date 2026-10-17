@@ -6253,6 +6253,8 @@ export interface components {
             round: number;
             /** Rounds */
             rounds: number;
+            /** Saved Version */
+            saved_version: number | null;
             /** Started At */
             started_at: number;
             /**

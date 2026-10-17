@@ -246,6 +246,13 @@ After each round the coordinator writes the ordinary `last.npz` (the global weig
 checkpoint today) and `diloco.json` (round, generation, term, outer momentum file, shard deal, membership, per-round
 metrics). Restarting the coordinator continues from the last completed round, unless a failover has moved the run.
 
+**Saving the weights as a Version (#333).** A `pretrain_distributed` job carries its design's version through queued, training and
+trained like a local pretrain (`VERSION_JOBS`). When the job ends `done` and the run's `run.json` says `completed` (all rounds
+done), `WorkspaceServices._record_distributed` records the run folder on that version, points its best checkpoint at the final
+`last.npz`, scores it on the held-back text like a local pretrain, and adds a change note naming the run and its machines. The
+run's view then names it (`saved_version`) and the Training tab links to it. A stopped or failed run saves nothing, even past
+some rounds (the round weights stay in the run folder): the version goes back to `saved`.
+
 **Durability.** The latest completed round (`θ`, `v`, `diloco.json`, term) is on the coordinator and its `R` replicas, so
 it survives the loss of any `R` of those `R + 1` nodes without the bucket. Only the latest round is kept; runs are
 experiments and there is no round history to restore.

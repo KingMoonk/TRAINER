@@ -217,6 +217,21 @@ describe("Training tab: polling", () => {
     await waitFor(() => expect(calls.runs).toBeGreaterThanOrEqual(3), { timeout: 4000 });
   });
 
+  test("a finished run names the version it saved and links to it; a stopped one says nothing", async () => {
+    server([run({ state: "finished", can_stop: false, saved_version: 3 })]);
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const saved = await screen.findByTestId("run-saved-r1");
+    expect(saved).toHaveTextContent("Weights saved as Version 3.");
+    expect(within(saved).getByRole("link", { name: /Version 3/ })).toHaveAttribute("href", "/head-lab?version=3");
+  });
+
+  test("a run that saved nothing shows no saved version", async () => {
+    server([run({ state: "stopped", can_stop: false })]);
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    await screen.findByTestId("run-r1");
+    expect(screen.queryByTestId("run-saved-r1")).toBeNull();
+  });
+
   test("does not poll once no run is going", async () => {
     const calls = server([run({ state: "finished", can_stop: false })]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });

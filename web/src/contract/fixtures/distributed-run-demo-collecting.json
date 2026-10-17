@@ -240,6 +240,7 @@
     "phase": "collecting",
     "round": 0,
     "rounds": 400,
+    "saved_version": null,
     "started_at": 1700000000.0,
     "state": "running",
     "theta_bytes": 4000000,

@@ -292,6 +292,10 @@ class Routes(unittest.TestCase):
         self.assertTrue(rows["127.0.0.1:9"]["note"])
         self.assertEqual([r["round"] for r in run["history"]], [0, 1, 2])
         self.assertEqual([r["id"] for r in self.client.get("/distributed/runs").json()], [run["id"]])
+        end = time.monotonic() + 10.
+        while time.monotonic() < end and self.client.get(f"/distributed/runs/{run['id']}").json()["saved_version"] is None:
+            time.sleep(.01)  # the job notes the saved version just after the coordinator reads finished
+        self.assertEqual(self.client.get(f"/distributed/runs/{run['id']}").json()["saved_version"], 1)
 
     def test_a_run_can_be_stopped_and_one_member_taken_out(self):
         run_id = self.start(rounds=2000).json()["id"]
@@ -301,7 +305,8 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/members/nobody/stop").status_code, 409)
         stopped = self.client.post(f"/distributed/runs/{run_id}/stop")
         self.assertEqual((stopped.status_code, stopped.json()["state"], stopped.json()["can_stop"]), (200, "stopped", False))
-        self.assertEqual(self.wait_state(run_id, "stopped")["members"][0]["state"], "stopped")
+        stopped_run = self.wait_state(run_id, "stopped")
+        self.assertEqual((stopped_run["members"][0]["state"], stopped_run["saved_version"]), ("stopped", None))
 
     def test_a_run_waiting_in_the_queue_can_be_stopped_before_it_runs(self):
         self.services.pause()

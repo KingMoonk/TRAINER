@@ -23,7 +23,7 @@ export const line = (n: number, over: Partial<RoundTimeline> = {}): RoundTimelin
 export const event = (seq: number, over: Partial<RunEvent> = {}): RunEvent => ({ seq, t: seq, kind: "joined", node: "gpu-box", round: 0, text: "gpu-box joined.", ...over });
 
 export const run = (over: Partial<Run> = {}): Run => ({
-  id: "r1", label: "Version 2 across machines", version: 2, state: "running", note: "", started_at: 100, owner: "mac-mini", round: 2, rounds: 10, inner_steps: 100,
+  id: "r1", label: "Version 2 across machines", version: 2, saved_version: null, state: "running", note: "", started_at: 100, owner: "mac-mini", round: 2, rounds: 10, inner_steps: 100,
   outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", can_stop: true, history: [round(0), round(1)],
   phase: "training", deadline_s: null, grace_s: 2, window_s: null, contributed: 0, expected: 2, theta_bytes: 0, now_s: 20, timeline: [], events: [],
   members: [

@@ -140,6 +140,7 @@ class Run(BaseModel):
     note: str
     started_at: float
     owner: str  # the computer that coordinates
+    saved_version: int | None  # the version whose weights this run saved when it finished; None while it runs, and for a stopped or failed run
     round: int  # rounds finished
     rounds: int
     inner_steps: int

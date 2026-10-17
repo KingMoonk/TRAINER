@@ -14,7 +14,7 @@ const node = (address: string, hostname: string, over: Record<string, unknown> =
 });
 const member = (name: string, address: string) => ({ node: name, address, local: address === "local", device: "", device_name: "", state: "training", note: "", can_stop: false, steps: 0, rounds_done: 0, missed: 0, sent: true, last_delta_bytes: null, last_delta_dtype: "", tokens_per_second: null });
 const diloco = (over: Record<string, unknown> = {}) => ({
-  id: "v5run", label: "from scratch", version: 5, state: "running", note: "", started_at: 5, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", can_stop: true,
+  id: "v5run", label: "from scratch", version: 5, saved_version: null, state: "running", note: "", started_at: 5, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", can_stop: true,
   history: [{ round: 7, loss: 3.41, val_loss: 3.47, seconds: 600, step: 700, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0 }],
   members: [member("mac", "local"), member("beast", "beast:8000")],
   ...over,
