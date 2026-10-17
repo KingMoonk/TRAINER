@@ -41,13 +41,13 @@ def refusal(has, status):
             "or pass --allow-cpu to run on the CPU anyway.")
 
 
-def check(allow_cpu=False, probe=machine_accelerator, status=None):
+def check(allow_cpu=False, probe=None, status=None):
     """The device the API will use, as a line for the log; SystemExit with one sentence when it would be the CPU by accident.
     `status` is studio_backend.gpu_status (called only when needed)."""
     from studio_backend import gpu_status
     status = (status or gpu_status)()
     device = torch_device(status)
-    has = "" if allow_cpu or device != "cpu" else probe()
+    has = "" if allow_cpu or device != "cpu" else (probe or machine_accelerator)()  # looked up per call so a test can swap it
     if has:
         raise SystemExit(refusal(has, status))
     return f"device: {device}" + (f" ({status['name']})" if status.get("name") else "") + (" (--allow-cpu)" if allow_cpu and device == "cpu" else "")

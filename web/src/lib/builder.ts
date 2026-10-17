@@ -100,6 +100,14 @@ export const design = {
   },
 };
 
+/** The unsaved draft, published so Quick test and Compare runs can read it (builder.py stage): null takes it back. */
+export const quicktest = {
+  stage: async (spec: Spec | null) => {
+    if (spec) await unwrap(api.PUT("/quicktest/draft", { body: { spec } }));
+    else await unwrap(api.DELETE("/quicktest/draft"));
+  },
+};
+
 /** The sets of text to train on (the ids a catch-up job reads), and the queue. */
 export const queueJobs = {
   textSets: () => unwrap(api.GET("/pretraining/text_sets")),
@@ -245,6 +253,77 @@ export const COST_ROWS: CostRow[] = [
 export function fitsText(fits: boolean | null | undefined): string {
   const verdict = fits == null ? BUILDER.training_memory_fits : fits ? "fits" : BUILDER.wont_fit;
   return `${BUILDER.training_memory} ${verdict}`;
+}
+
+// ------------------------------------------------------------------------------------------------ where the size goes
+
+/** The four parts a model's parameters split into, in bar order, with the theme colour class that paints each. */
+export const PARAM_PARTS = [
+  { key: "table", name: BUILDER.params_table, fill: "bg-part-attention" },
+  { key: "position", name: BUILDER.params_position, fill: "bg-muted-foreground" },
+  { key: "blocks", name: BUILDER.params_blocks, fill: "bg-part-mlp" },
+  { key: "head", name: BUILDER.params_head, fill: "bg-part-cost" },
+] as const;
+
+export type ParamKey = (typeof PARAM_PARTS)[number]["key"];
+
+/** Each design's parts as percentages of the larger design's total, so both bars share one scale (builder.py param_bars). */
+export function paramBars(a: Record<string, number>, b: Record<string, number>): [number[], number[]] {
+  const total = (parts: Record<string, number>) => PARAM_PARTS.reduce((sum, p) => sum + (parts[p.key] ?? 0), 0);
+  const top = Math.max(total(a), total(b), 1);
+  const widths = (parts: Record<string, number>) => PARAM_PARTS.map((p) => ((parts[p.key] ?? 0) / top) * 100);
+  return [widths(a), widths(b)];
+}
+
+/** "word table 12%" for each part in bar order (builder.py param_shares). */
+export function paramShares(parts: Record<string, number>): { key: ParamKey; text: string }[] {
+  const total = PARAM_PARTS.reduce((sum, p) => sum + (parts[p.key] ?? 0), 0) || 1;
+  return PARAM_PARTS.map((p) => ({
+    key: p.key,
+    text: fill(BUILDER.params_share, { name: p.name, share: `${Math.round(((parts[p.key] ?? 0) / total) * 100)}%` }),
+  }));
+}
+
+/** A sentence when the word table is at least half the model, else "" (builder.py param_note). */
+export function paramNote(parts: Record<string, number>): string {
+  const total = PARAM_PARTS.reduce((sum, p) => sum + (parts[p.key] ?? 0), 0) || 1;
+  return (parts.table ?? 0) >= 0.5 * total ? BUILDER.params_table_heavy : "";
+}
+
+// ------------------------------------------------------------------------------------------------ your text, cut into pieces
+
+export type PieceChip = { label: string; state: "pieces" | "lost" };
+export type PiecesView = { chips: PieceChip[]; note: string | null; line: string };
+
+/** The example sentence under word list v, and the count line that puts every list's count side by side (design.pieces_for).
+ *  `lists` is the word-lists job's result, or undefined while it is still being read. */
+export function piecesFor(v: number, lists: WordLists | undefined): PiecesView {
+  const counts = lists ? lists.lists.map((l) => (l ? l.count.toLocaleString("en-US") : "–")) : ["–", "–", "–", "–"];
+  let line = `${counts.join(" · ")} ${BUILDER.pieces_unit}`;
+  if (!lists) return { chips: [], note: BUILDER.pieces_reading, line };
+  const found = lists.lists[v] ?? null;
+  if (!found) return { chips: [], note: v === 2 ? BUILDER.pieces_gpt2_missing : BUILDER.pieces_needs_text, line };
+  const chips = found.chips.map((c): PieceChip => ({ label: c.label, state: c.known ? "pieces" : "lost" }));
+  const lost = chips.filter((c) => c.state === "lost").length;
+  if (lost) line += `, ${fill(lost > 1 ? BUILDER.pieces_lost_many : BUILDER.pieces_lost_one, { n: String(lost) })}`;
+  return { chips, note: null, line };
+}
+
+// ------------------------------------------------------------------------------------------------ when answering
+
+/** The question both versions are asked (builder.py PROMPT). */
+export const PROMPT = BUILDER.example_prompt;
+
+export type AnswerRow = { number: number; why: string };
+
+/** The rows of the "when answering" card: version n and n + 1, each with why it cannot answer ("" when it can). `trained` holds
+ *  the numbers that have trained weights; nothing can answer while it is empty, so there are no rows (builder.py answer_rows).
+ *  Version 0 is not a version, so it never gets a row. */
+export function answerRows(n: number, trained: ReadonlySet<number>, editing: boolean): AnswerRow[] {
+  if (!trained.size) return [];
+  return [n, n + 1]
+    .filter((k) => k > 0)
+    .map((k) => ({ number: k, why: trained.has(k) ? "" : editing && k === n + 1 ? BUILDER.compare_later : BUILDER.not_trained }));
 }
 
 // ------------------------------------------------------------------------------------------------ the tower

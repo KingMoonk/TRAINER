@@ -9,6 +9,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useWordLists } from "@/components/builder/pieces";
 import { design, detailOf, type Choices, type Explaining } from "@/lib/builder";
 import { BUILDER } from "@/lib/copy/builder";
 import { routeFor } from "@/lib/routes";
@@ -22,13 +23,7 @@ function hrefFor(route: string, block: number) {
 }
 
 export function Explain({ draft, explaining, onClose }: Props) {
-  const listsQ = useQuery({
-    queryKey: ["design", "word-lists"],
-    queryFn: ({ signal }) => design.wordLists(signal),
-    enabled: explaining !== null,
-    staleTime: Infinity,
-    retry: false,
-  });
+  const listsQ = useWordLists(explaining !== null);
   // A word list that is missing or still being read leaves the example without its pieces, as on the Tk page.
   const list = listsQ.data?.lists[draft.V] ?? null;
   const pieces = list ? list.chips.map((chip) => chip.label) : null;

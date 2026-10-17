@@ -3,7 +3,11 @@ import { ApiError } from "./api-core";
 import { emit, mockApi } from "@/test/network";
 import { BUILDER } from "./copy/builder";
 import {
+  paramBars,
+  paramNote,
+  paramShares,
   anchoredDraft,
+  answerRows,
   bar,
   BLOCK_LINES,
   blockViews,
@@ -24,6 +28,7 @@ import {
   nextVersionName,
   optionLabel,
   partName,
+  piecesFor,
   PART_SLOTS,
   pretraining,
   queueJobs,
@@ -569,5 +574,87 @@ describe("queueJobs, pretraining and versions", () => {
       expect(error).toMatchObject({ status: 409, path: "/post-training/imports", body: '{"detail":"Already downloading."}' });
       expect(detailOf(error)).toBe("Already downloading.");
     });
+  });
+});
+
+describe("where the size goes", () => {
+  const now = { table: 40, position: 10, blocks: 40, head: 10 };
+  const next = { table: 40, position: 10, blocks: 140, head: 10 };
+
+  test("both bars are drawn to the larger design's scale", () => {
+    const [a, b] = paramBars(now, next);
+    expect(a).toEqual([20, 5, 20, 5]);
+    expect(b.reduce((x, y) => x + y, 0)).toBeCloseTo(100);
+  });
+
+  test("a missing part counts as zero and an empty design does not divide by zero", () => {
+    expect(paramBars({}, {})).toEqual([[0, 0, 0, 0], [0, 0, 0, 0]]);
+  });
+
+  test("shares name each part in bar order", () => {
+    expect(paramShares(now).map((s) => s.text)).toEqual(["word table 40%", "position 10%", "blocks 40%", "word scores 10%"]);
+  });
+
+  test("the note shows only when the word table is half the model or more", () => {
+    expect(paramNote(now)).toBe("");
+    expect(paramNote({ table: 60, position: 0, blocks: 30, head: 10 })).toBe(BUILDER.params_table_heavy);
+    expect(paramNote({ table: 50, position: 0, blocks: 50, head: 0 })).toBe(BUILDER.params_table_heavy);
+  });
+});
+
+describe("piecesFor", () => {
+  const chip = (label: string, known = true) => ({ label, known });
+  const lists = {
+    sentence: "Hi there",
+    lists: [
+      { id: "letters", vocab_size: 256, count: 8, chips: [chip("H"), chip("i")] },
+      { id: "small", vocab_size: 500, count: 1234, chips: [chip("Hi"), chip("there")] },
+      null,
+      { id: "words", vocab_size: 900, count: 2, chips: [chip("Hi"), chip("there", false)] },
+    ],
+  } as unknown as Parameters<typeof piecesFor>[1];
+
+  test("while the lists are being read it says so and shows dashes", () => {
+    expect(piecesFor(1, undefined)).toEqual({ chips: [], note: BUILDER.pieces_reading, line: "– · – · – · – pieces" });
+  });
+
+  test("chips and the count line for a list, with thousands separators", () => {
+    const view = piecesFor(1, lists);
+    expect(view.chips).toEqual([{ label: "Hi", state: "pieces" }, { label: "there", state: "pieces" }]);
+    expect(view.line).toBe("8 · 1,234 · – · 2 pieces");
+    expect(view.note).toBeNull();
+  });
+
+  test("words the whole-word list lacks are counted as lost", () => {
+    expect(piecesFor(3, lists).line).toBe("8 · 1,234 · – · 2 pieces, 1 word lost to “unknown”");
+    expect(piecesFor(3, lists).chips[1]).toEqual({ label: "there", state: "lost" });
+  });
+
+  test("a list that is not available says why", () => {
+    expect(piecesFor(2, lists).note).toBe(BUILDER.pieces_gpt2_missing);
+    const own = { ...lists!, lists: [lists!.lists[0], null, null, null] } as typeof lists;
+    expect(piecesFor(1, own).note).toBe(BUILDER.pieces_needs_text);
+  });
+});
+
+describe("answerRows", () => {
+  test("nothing trained: no rows, so no prompt or button", () => {
+    expect(answerRows(2, new Set(), true)).toEqual([]);
+  });
+
+  test("the untrained next version of an unsaved draft says to save and train it", () => {
+    expect(answerRows(2, new Set([2]), true)).toEqual([
+      { number: 2, why: "" },
+      { number: 3, why: BUILDER.compare_later },
+    ]);
+  });
+
+  test("a saved version that has not trained says so", () => {
+    expect(answerRows(2, new Set([2]), false)[1]).toEqual({ number: 3, why: BUILDER.not_trained });
+    expect(answerRows(2, new Set([3]), true)[0]).toEqual({ number: 2, why: BUILDER.not_trained });
+  });
+
+  test("version 0 never gets a row", () => {
+    expect(answerRows(0, new Set([1]), true)).toEqual([{ number: 1, why: "" }]);
   });
 });
