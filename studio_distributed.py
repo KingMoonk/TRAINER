@@ -123,7 +123,8 @@ def invite(job, client_for=PeerClient):
                                                              + " cannot be told where to join. Set TRAINER_NODE_ADDRESS to it.")
             return
         body = {"kind": "diloco_member", "label": f"{job.label} (member)",
-                "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0}}
+                "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0,
+                              **({"member_options": p["member_options"]} if p.get("member_options") else {})}}
         try:
             machine.peer_job = client_for(machine.address, timeout=INVITE_TIMEOUT, retries=0).post_json("/queue/jobs", body)["id"]
         except Exception as exc:  # noqa: BLE001 - whatever went wrong is the machine's note

@@ -140,6 +140,10 @@ class Invitations(unittest.TestCase):
         self.assertEqual((rows["box"].state, rows["box"].peer_job), ("invited", "job-box"))
         self.assertEqual((rows["old"].state, rows["old"].reason), ("unreachable", "old did not answer within 2 seconds."))
 
+    def test_the_owner_s_member_options_go_to_the_invited_members_too(self):
+        runs.invite(owner_job(MACHINES, member_options={"overlap": True}), clients())
+        self.assertEqual(FakeClient.calls[0][3]["params"]["member_options"], {"overlap": True})
+
     def test_a_machine_that_answers_401_says_what_to_change_and_the_others_still_join(self):
         job = owner_job([*MACHINES[:2], {"node": "pc", "address": "pc", "device": "cuda"}])
         refuse = PeerError("pc answered 401", status=401, detail="not allowed")
