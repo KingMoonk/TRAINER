@@ -8,6 +8,9 @@ A native Python desktop studio for creating datasets and training your own langu
 
 From nothing to the web UI in your browser, on this machine and on any device on your tailnet.
 
+With Claude Code, `/setup` (`.claude/skills/setup/`) runs these steps, starts the API and lists anything missing in the
+Tailscale setup (login, HTTPS certificates, `serve`, tags, the workspace node list).
+
 **1. Install the tools.**
 
 - Python 3.12 or newer (the pinned NumPy 2.5 and pandas 3.0 need 3.12). On macOS, `python3` from Xcode is 3.9 and will not
