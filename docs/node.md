@@ -65,7 +65,8 @@ pass `--allow-host`. Other nodes address this one by the name in their `studioCo
 name, Tailscale name or IP; any other name needs `--allow-host`.
 
 `--allow-host` takes a name, or a pattern where one `*` stands for exactly one label (`node.*.ts.net`; at least two literal labels
-are required). A node without the `tailscale` command, such as the API container in `compose.yaml`, needs it: compose passes
+are required). **Put a wildcard only under a domain you control**: `*.co.uk` or `*.duckdns.org` would let any stranger's
+name through and re-open DNS rebinding. A node without the `tailscale` command, such as the API container in `compose.yaml`, needs it: compose passes
 `--allow-host ${TS_HOSTNAME:-groundwork-dev}` and `--allow-host ${TS_HOSTNAME:-groundwork-dev}.*.ts.net`, which covers the
 `groundwork-dev.<tailnet>.ts.net` name `tailscale serve` forwards. Add others through `API_ARGS`.
 

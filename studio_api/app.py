@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from studio_api import events, jobs
 from studio_api.auth import TailscaleAuth
-from studio_api.hosts import ANY, HostCheck
+from studio_api.hosts import ANY, HostCheck, HostNames
 from studio_api.static import ExportFiles
 from studio_api.version import app_version
 from studio_versions import NoCheckpoint
@@ -34,6 +34,8 @@ def create_app(services, open=False, origins=(), hosts=(), **auth):
     @asynccontextmanager
     async def lifespan(app):
         yield
+        if isinstance(hosts, HostNames):
+            hosts.stop.set()  # the Tailscale-name refresh thread
         app.state.jobs.close()
         app.state.broadcaster.close()
 

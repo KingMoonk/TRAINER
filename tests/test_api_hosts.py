@@ -18,7 +18,7 @@ FORGED = {"Tailscale-User-Login": "victim@example.com"}
 
 
 def names(tailscale=lambda: TS, **kw):
-    out = own_names(bind=kw.pop("bind", "127.0.0.1"), tailscale=tailscale, hostname=lambda: "Mini.local", **kw)
+    out = own_names(bind=kw.pop("bind", "127.0.0.1"), tailscale=tailscale, hostname=lambda: "Mini.local", binary=lambda: "tailscale", **kw)
     out.refresh()
     return out
 
@@ -146,7 +146,7 @@ class Names(unittest.TestCase):
 class Refresh(unittest.TestCase):
     def test_names_missing_at_start_arrive_later_and_a_failed_read_keeps_the_good_ones(self):
         answers = [(), ("mini.tail1234.ts.net",), ()]
-        got = own_names(tailscale=lambda: answers.pop(0), hostname=lambda: "box")
+        got = own_names(tailscale=lambda: answers.pop(0), hostname=lambda: "box", binary=lambda: "tailscale")
         with self.assertLogs("studio_api.hosts", "WARNING"):
             got.refresh()
         self.assertFalse(got.allowed("mini.tail1234.ts.net"))
@@ -163,7 +163,7 @@ class Refresh(unittest.TestCase):
             reads.append(1)
             return ("mini.tail1234.ts.net",) if len(reads) > 1 else ()
 
-        got = own_names(tailscale=read, hostname=lambda: "box")
+        got = own_names(tailscale=read, hostname=lambda: "box", binary=lambda: "tailscale")
         with self.assertLogs("studio_api.hosts", "WARNING"):
             got.start_refresh(first=.01, then=.01)
         self.addCleanup(got.stop.set)
@@ -175,6 +175,21 @@ class Refresh(unittest.TestCase):
         count = len(reads)
         got.allowed("evil.example.com")
         self.assertEqual(len(reads), count)
+
+
+class Lifecycle(Client, unittest.TestCase):
+    def test_no_tailscale_command_logs_an_expected_info_not_a_warning(self):
+        got = own_names(tailscale=lambda: (), hostname=lambda: "box", binary=lambda: None)
+        with self.assertLogs("studio_api.hosts", "INFO") as logs:
+            got.refresh()
+        self.assertEqual([r.levelname for r in logs.records], ["INFO"])
+        self.assertIn("no tailscale command", logs.output[0])
+
+    def test_shutdown_stops_the_refresh_thread(self):
+        got = names()
+        with TestClient(create_app(FakeServices(), hosts=got, open=True)):
+            self.assertFalse(got.stop.is_set())
+        self.assertTrue(got.stop.is_set())
 
 
 class Defaults(Client, unittest.TestCase):
@@ -191,6 +206,18 @@ class Defaults(Client, unittest.TestCase):
         self.assertIn("--allow-host", listed.json()["detail"])
         other = client.get("/jobs", headers={"Host": "evil.example.com", "Origin": "https://evil.example.com"})
         self.assertNotIn("access-control-allow-origin", other.headers)
+
+    def test_a_refused_preflight_from_a_listed_origin_gets_the_cors_set_and_others_nothing(self):
+        site = "https://trainer.example.vercel.app"
+        client = self.client(names(), origins=[site])
+        ask = {"Host": "evil.example.com", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "x-groundwork-token"}
+        listed = client.options("/jobs", headers={**ask, "Origin": site})
+        self.assertEqual((listed.status_code, listed.headers["access-control-allow-origin"]), (200, site))
+        self.assertIn("x-groundwork-token", listed.headers["access-control-allow-headers"])
+        self.assertIn("access-control-allow-methods", listed.headers)
+        other = client.options("/jobs", headers={**ask, "Origin": "https://evil.example.com"})
+        self.assertEqual(other.status_code, 421)
+        self.assertFalse([h for h in other.headers if h.startswith("access-control")])
 
 
 class Wiring(unittest.TestCase):

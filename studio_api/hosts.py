@@ -97,11 +97,11 @@ def tailscale_names(run=subprocess.run, binary=tailscale_binary):
 class HostNames:
     """The names a node answers to. `fixed` never changes; the Tailscale names are replaced by `refresh`."""
 
-    def __init__(self, fixed=(), tailscale=tailscale_names):
+    def __init__(self, fixed=(), tailscale=tailscale_names, binary=tailscale_binary):
         names = [n for n in (host_name(v) for v in fixed) if n]
         self.exact = frozenset(n for n in names if "*" not in n) | {"localhost"}
         self.patterns = tuple(re.compile(r"[^.]+".join(map(re.escape, n.split("*")))) for n in names if "*" in n)
-        self.tailscale, self.read = frozenset(), tailscale
+        self.tailscale, self.read, self.binary = frozenset(), tailscale, binary
         self.stop, self.warned = threading.Event(), False
 
     def allowed(self, value):
@@ -113,8 +113,11 @@ class HostNames:
         """Read the Tailscale names now; warns once each time they go from known to empty."""
         names = frozenset(self.read())
         if not names and (self.tailscale or not self.warned):
-            log.warning("No Tailscale name known for this node: requests through `tailscale serve` or Funnel are refused until "
-                        "tailscale answers (read again every %.0f s) or the name is given with --allow-host.", REFRESH_EMPTY)
+            if self.binary():
+                log.warning("No Tailscale name known for this node: requests through `tailscale serve` or Funnel are refused until "
+                            "tailscale answers (read again every %.0f s) or the name is given with --allow-host.", REFRESH_EMPTY)
+            else:
+                log.info("no tailscale command; only localhost, IPs and --allow-host names are accepted")
         self.warned = True
         if names or not self.tailscale:
             self.tailscale = names  # a failed read after a good one keeps the good names
@@ -131,7 +134,7 @@ class HostNames:
         threading.Thread(target=loop, name="tailscale-host-names", daemon=True).start()
 
 
-def own_names(bind="", extra=(), tailscale=tailscale_names, hostname=socket.gethostname):
+def own_names(bind="", extra=(), tailscale=tailscale_names, hostname=socket.gethostname, binary=tailscale_binary):
     """The HostNames for a node: localhost, its bound address, this machine's name (full and short) and the `--allow-host` names.
     The Tailscale names come from `refresh()` / `start_refresh()`."""
     fixed = [bind, *extra]
@@ -140,12 +143,13 @@ def own_names(bind="", extra=(), tailscale=tailscale_names, hostname=socket.geth
         fixed += [name, name.partition(".")[0]]
     except OSError:
         pass
-    return HostNames(fixed, tailscale)
+    return HostNames(fixed, tailscale, binary)
 
 
 class HostCheck:
     """ASGI middleware, outside auth and CORS: 421 for a request, a closed handshake for a websocket, when Host is not allowed.
-    The 421 carries the CORS allow-origin for a listed web origin, so the page can show the message instead of a network error."""
+    For a listed web origin the 421 carries the CORS allow-origin, and a preflight is answered 200 with the CORS set, so the page
+    can show the message instead of a network error. Other origins get no CORS headers."""
 
     def __init__(self, app, hosts=(), origins=()):
         self.app, self.names, self.origins = app, hosts if isinstance(hosts, HostNames) else HostNames(hosts), tuple(origins)
@@ -161,7 +165,15 @@ class HostCheck:
             return await send({"type": "websocket.close", "code": 1008})
         answer = [(b"content-type", b"application/json")]
         origin = next((v for k, v in headers if k == b"origin"), b"")
-        if origin.decode("latin-1") in self.origins:
+        listed = origin.decode("latin-1") in self.origins
+        if listed:
             answer += [(b"access-control-allow-origin", origin), (b"vary", b"Origin")]
+            if scope.get("method") == "OPTIONS" and any(k == b"access-control-request-method" for k, _ in headers):
+                # a preflight must succeed before the browser sends the request whose 421 carries the message
+                asked = next((v for k, v in headers if k == b"access-control-request-headers"), b"*")
+                answer += [(b"access-control-allow-methods", b"*"), (b"access-control-allow-headers", asked),
+                           (b"access-control-max-age", b"60")]
+                await send({"type": "http.response.start", "status": 200, "headers": answer})
+                return await send({"type": "http.response.body", "body": b""})
         await send({"type": "http.response.start", "status": 421, "headers": answer})
         await send({"type": "http.response.body", "body": json.dumps({"detail": REFUSAL}).encode()})
