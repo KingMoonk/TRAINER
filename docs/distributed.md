@@ -246,6 +246,12 @@ After each round the coordinator writes the ordinary `last.npz` (the global weig
 checkpoint today) and `diloco.json` (round, generation, term, outer momentum file, shard deal, membership, per-round
 metrics). Restarting the coordinator continues from the last completed round, unless a failover has moved the run.
 
+**The Training tab's records (#334).** The runs the tab lists are kept in `data/distributed_runs.json` (`studio_distributed.persist`,
+written atomically when a run is opened, after each round, when it stops and once the invitations are answered) and read back when
+the services start (`load`, the newest `KEPT`). A missing or corrupt file gives no runs. A run whose last account still says it was
+going loads as stopped with a note that the app restarted, unless the queue still holds its job (then it waits as queued and the
+job rebuilds the coordinator from `diloco.json`).
+
 **Durability.** The latest completed round (`θ`, `v`, `diloco.json`, term) is on the coordinator and its `R` replicas, so
 it survives the loss of any `R` of those `R + 1` nodes without the bucket. Only the latest round is kept; runs are
 experiments and there is no round history to restore.

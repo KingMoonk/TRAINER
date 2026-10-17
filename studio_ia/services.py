@@ -1351,6 +1351,8 @@ class WorkspaceServices(Services):
                                           on_start=self.chat_job_started, on_end=self.chat_job_ended)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
+        import studio_distributed
+        studio_distributed.load(self.root)  # the Training tab's runs from before a restart
         workspace.progress = self.note
         # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
         self._schema = start_thread(workspace.ensure_schema) if workspace.schema_pending() else None
@@ -1387,6 +1389,8 @@ class WorkspaceServices(Services):
         if getattr(self, "_viz", None) is not None:
             self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
+        import studio_distributed
+        studio_distributed.unload(self.root)
         if self._schema is not None:  # its connection holds records.sqlite open, and Windows cannot delete an open file
             self._schema.join()
 
