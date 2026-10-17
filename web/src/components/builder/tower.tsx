@@ -93,7 +93,7 @@ function PartName({ part, block, label, tip, className, explain }: { part: Part;
   return (
     <button
       type="button"
-      className={cn("rounded-sm px-1 text-left text-sm hover:underline", on && "selected-box", className)}
+      className={cn("rounded-sm border border-transparent px-1 text-left text-sm hover:underline", on && "selected-box", className)}
       title={tip}
       aria-pressed={on}
       aria-label={fill(BUILDER.explain_open, { part: label })}
@@ -247,7 +247,7 @@ function Block({ view, registry, draft, picker, explain }: BlockProps) {
         {heads > 0 && (
           <button
             type="button"
-            className={cn("rounded-sm px-1 text-xs text-part-attention", isExplained(explain.explaining, "mixer", i) && "selected-box")}
+            className={cn("rounded-sm border border-transparent px-1 text-xs text-part-attention", isExplained(explain.explaining, "mixer", i) && "selected-box")}
             aria-label={fill(BUILDER.explain_open, { part: `${partName("mixer")} · block ${i + 1}` })}
             data-testid={`explain-heads-${i}`}
             onClick={() => explain.onExplain("mixer", i)}
@@ -258,7 +258,7 @@ function Block({ view, registry, draft, picker, explain }: BlockProps) {
         {width > 0 && (
           <button
             type="button"
-            className={cn("rounded-sm px-1 py-1", isExplained(explain.explaining, "channel", i) && "selected-box")}
+            className={cn("rounded-sm border border-transparent px-1 py-1", isExplained(explain.explaining, "channel", i) && "selected-box")}
             aria-label={fill(BUILDER.explain_open, { part: `${partName("channel")} · block ${i + 1}` })}
             data-testid={`explain-room-${i}`}
             onClick={() => explain.onExplain("channel", i)}
