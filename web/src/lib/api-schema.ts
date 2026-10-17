@@ -325,7 +325,8 @@ export interface paths {
         /**
          * Nodes
          * @description This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with
-         *     the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop.
+         *     the reason, never dropped. Sync, so the GPU probe and the peers (asked at the same time) run off the event loop. This node's
+         *     tailnet name comes from the host-name refresh (studio_api.hosts), never from a call to tailscale while the request waits.
          */
         get: operations["nodes_cluster_nodes_get"];
         /**
@@ -3252,6 +3253,11 @@ export interface components {
             memory_bytes: number;
             /** Online */
             online: boolean;
+            /**
+             * Tailnet Name
+             * @default
+             */
+            tailnet_name: string;
             /** Version */
             version: string;
         };

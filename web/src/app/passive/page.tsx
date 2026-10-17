@@ -10,6 +10,7 @@ import { api, subscribe, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
 import { PASSIVE } from "./copy";
 import { competes, sessionView, type SessionRow } from "./session";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 const route = routeFor("passive");
 const REFRESH_MS = 5_000;
@@ -66,11 +67,8 @@ export default function Page() {
   const warning = competes(sessions, queue.data);
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-8">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-        <p className="max-w-prose text-muted-foreground">{PASSIVE.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={route.title} lead={PASSIVE.lead} />
 
       {warning && (
         <p role="alert" data-testid="passive-warning" className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning-soft">

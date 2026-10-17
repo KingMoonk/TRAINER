@@ -11,6 +11,7 @@ import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { TRACE } from "./copy";
 import { reason, runJob } from "./use-job";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 type Row = {
   stage: string;
@@ -57,13 +58,8 @@ function TracePage({ version }: { version?: number }) {
   const data = trace.data;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-4 p-4 md:p-8">
-      <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
-      <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-    {version !== undefined && <p className="text-sm text-muted-foreground">Version {version}</p>}
-      <p className="max-w-prose text-muted-foreground">
-        {route.lead} {TRACE.no_numbers}
-      </p>
+    <main className={PAGE_MAIN}>
+      <PageHeader breadcrumb="Network designer › Look inside" title={route.title} meta={version !== undefined ? `Version ${version}` : undefined} lead={`${route.lead} ${TRACE.no_numbers}`} />
 
       <Card>
         <CardContent className="flex flex-col gap-3">
