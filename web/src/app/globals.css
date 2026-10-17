@@ -4,7 +4,10 @@
  * palette class (text-amber-500) or a colour literal (#fff, rgb(...), oklch(...)). `pnpm lint` runs
  * scripts/check-theme.mjs, which fails on either one anywhere in src/ except this file.
  *
- * Token list (each is defined in :root for light and in .dark for dark, and exposed to Tailwind as --color-<name>):
+ * Token list. Each is defined in :root (light) and .dark (dark). Most are exposed to Tailwind in @theme inline as
+ * --color-<name>, which gives bg-<name>, text-<name>, border-<name>, ... The exceptions are used as var(--<name>) in CSS
+ * or an inline style: viz-*, heat-*, cell-masked, canvas-glow, selection*, glass-fallback, blur-*, and card-shadow
+ * (which is exposed as the shadow-card utility through --shadow-card).
  *   shadcn base     background foreground card popover primary secondary muted accent destructive border input ring
  *                   chart-1..5 sidebar-* (each with its -foreground where it has one)
  *   status          warning warning-soft success info notice (destructive is the error colour)
@@ -24,6 +27,10 @@
  * Accent themes: a [data-theme="<id>"] block overrides only the accent tokens (primary, ring, sidebar-primary,
  * sidebar-ring, chart-*, highlight*, part-cost, part-own), once for light and once for `.dark[data-theme]`. No
  * attribute is the neutral default. Switching is components/theme.tsx.
+ *
+ * Every accent must set the SAME list of tokens in both its [data-theme] (light) block and its .dark[data-theme] block.
+ * `.dark` and `[data-theme]` have equal specificity and the accent blocks come later, so a token set only in the light
+ * block would beat .dark's value in dark mode; the .dark[data-theme] block is more specific and restores it.
  *
  * To add an accent theme: copy an existing pair of blocks at the bottom, change the id and the values, and add the id
  * to ACCENTS in components/theme.tsx and its label in lib/copy/appearance.ts.
@@ -424,6 +431,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Loading must still read as loading: skeletons hold a dimmed fill instead of pulsing, spinners turn slowly. */
+  [data-slot="skeleton"] { opacity: 0.55; }
+  .animate-spin { animation-duration: 2s !important; animation-iteration-count: infinite !important; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
