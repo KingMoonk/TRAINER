@@ -411,6 +411,12 @@ class Services:
         """Ask a passive session to stop. Returns its status afterwards."""
         raise NotImplementedError
 
+    def keep_passive_going(self, session_id=None):
+        """Start the watchdog again for an active passive session whose watchdog is gone (it then restarts the trainer). Without
+        `session_id`, the active session, if any. Returns the session's status, or None when there is no such session; a session that
+        is stopped, failed or finished raises RuntimeError."""
+        raise NotImplementedError
+
     def remove_passive_signin(self):
         """Stop the passive watchdog from starting when you sign in."""
         raise NotImplementedError
@@ -956,6 +962,21 @@ class FakeServices(Services):
                 row.update(status="stopped", trainer="Stopped", watchdog="Stopped")
                 return "stopped"
         return None
+
+    def resume_passive_at_start(self):
+        pass  # a fake has no watchdog to bring back
+
+    def keep_passive_going(self, session_id=None):
+        active = [r for r in self.passive_sessions if r["status"] in ("queued", "running", "paused")]
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None) if session_id else (active[0] if active else None)
+        if row is None:
+            return None
+        if row not in active:
+            raise RuntimeError(f"Passive session {row['id']} is {row['status']}, so there is nothing to keep going.")
+        if row.get("watchdog") != "Running":
+            row.update(watchdog="Running", trainer="Running")  # the real watchdog starts the trainer on its first check
+            self.passive_kept = [*getattr(self, "passive_kept", []), row["id"]]
+        return row["status"]
 
     def remove_passive_signin(self):
         self.passive_signin = False
@@ -1890,6 +1911,29 @@ class WorkspaceServices(Services):
         import studio_passive_watch as watch
         from studio_passive import PassiveStore
         return watch.stop(PassiveStore(self.root), session_id)
+
+    def keep_passive_going(self, session_id=None, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""
+        import studio_passive_watch as watch
+        from studio_passive import ACTIVE, PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        session = store.get(session_id) if session_id else store.active()
+        if session is None:
+            return None
+        if session["status"] not in ACTIVE:
+            raise RuntimeError(f"Passive session {session['id']} is {session['status']}, so there is nothing to keep going.")
+        watch.start(self.root, session["id"], **hooks)
+        return store.get(session["id"])["status"]
+
+    def resume_passive_at_start(self, **hooks):
+        """Called once when the API starts: an active passive session left without a watchdog (it never started, it died, the
+        computer restarted without the sign-in entry) gets one again. Never stops the server from starting."""
+        try:
+            self.keep_passive_going(**hooks)
+        except Exception as exc:
+            print(f"passive training: could not start the watchdog again: {exc}", flush=True)
 
     def remove_passive_signin(self):
         import studio_passive_watch as watch

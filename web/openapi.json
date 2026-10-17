@@ -13799,6 +13799,49 @@
         ]
       }
     },
+    "/passive/{session_id}/keep-going": {
+      "post": {
+        "description": "Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended.",
+        "operationId": "keep_passive_going_passive__session_id__keep_going_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep Passive Going",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
     "/passive/{session_id}/stop": {
       "post": {
         "operationId": "stop_passive_passive__session_id__stop_post",

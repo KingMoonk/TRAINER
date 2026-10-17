@@ -58,6 +58,31 @@ describe("Passive training page", () => {
     expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/passive/p1/stop"]);
   });
 
+  test("Keep it going shows only for an active session with no trainer and no watchdog, and starts the watchdog again", async () => {
+    let sessions = [
+      { ...running, trainer: "Stopped", watchdog: "Stopped", heard: null },
+      { ...running, id: "p2", trainer: "Stopped", watchdog: "Running" },
+      stopped,
+    ];
+    const calls = mockApi({
+      "GET /passive": () => ({ body: { sessions, signin: false } }),
+      "GET /queue": { body: idle },
+      "POST /passive/p1/keep-going": () => {
+        sessions = [{ ...running, trainer: "Restarting", watchdog: "Running" }, sessions[1], sessions[2]];
+        return { body: { status: "running" } };
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<PassivePage />);
+    const dead = await screen.findByTestId("session-p1");
+    expect(within(screen.getByTestId("session-p2")).queryByRole("button", { name: "Keep it going" })).toBeNull();
+    expect(within(screen.getByTestId("session-p0")).queryByRole("button", { name: "Keep it going" })).toBeNull();
+    await user.click(within(dead).getByRole("button", { name: "Keep it going" }));
+    await waitFor(() => expect(within(screen.getByTestId("session-p1")).queryByRole("button", { name: "Keep it going" })).toBeNull());
+    expect(screen.getByTestId("passive-note")).toHaveTextContent("Started the watchdog again.");
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/passive/p1/keep-going"]);
+  });
+
   test("the sign-in start can be removed", async () => {
     let signin = true;
     const calls = mockApi({

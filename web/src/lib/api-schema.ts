@@ -1775,6 +1775,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/passive/{session_id}/keep-going": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep Passive Going
+         * @description Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended.
+         */
+        post: operations["keep_passive_going_passive__session_id__keep_going_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/passive/{session_id}/stop": {
         parameters: {
             query?: never;
@@ -10174,6 +10194,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    keep_passive_going_passive__session_id__keep_going_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
