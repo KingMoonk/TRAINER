@@ -1,6 +1,6 @@
 # Agent rules
 
-- Use the `Makefile` for every command it covers (`make help` lists them); call `tasks.py` or `pnpm` directly only for what it lacks. Test with `make test` (ruff and all unit tests) or `make test T="tests.test_x tests.test_y"` (just those modules). In a worktree, which has no `.venv`, add `VENV_PY=/Users/wedd/dev/TRAINER/.venv/bin/python`. For work in `web/`, also run `make web-check` (Vitest, lint, typecheck, build) and `pnpm gen:api` from `web/`. Nothing else runs locally. Details: `.claude/rules/testing.md`.
+- Use the `Makefile` for every command it covers (`make help` lists them); call `tasks.py` or `pnpm` directly only for what it lacks. Test with `make test` (ruff and all unit tests) or `make test T="tests.test_x tests.test_y"` (just those modules). Worktrees get `.venv` as a symlink to the main checkout's (`.claude/rules/git-workflow.md`). For work in `web/`, also run `make web-check` (Vitest, lint, typecheck, build) and `pnpm gen:api` from `web/`. Nothing else runs locally. Details: `.claude/rules/testing.md`.
 - Only run `make test-ci`, `tasks.py test:ci:e2e` or `tests.e2e_train` if trying to debug CI issues.
 - Never run Playwright (`pnpm test:e2e`, `web:e2e`) locally: it is CI-only. Never open an app window locally (no `app.py`, `studio_ia.shell`, Panda3D viewer, `tk.Tk()`); `tests/test_*.py` must stay window-free, and Vitest tests run in jsdom, never a real browser.
 - While iterating, run just the affected tests (see `.claude/rules/affected-tests.md`).
