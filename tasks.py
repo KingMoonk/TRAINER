@@ -1,15 +1,14 @@
 """One entry point for tests, so nobody has to remember the flags.
 
-    python tasks.py test [tests.test_x ...]   ruff + window-free unit tests (all, or just the modules named). Run this locally.
-    python tasks.py test:ci                   test + compileall + the window tests (tests/gui_*.py). CI only.
-    python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). CI only.
+    python tasks.py test [tests.test_x ...]   ruff + unit tests (all, or just the modules named). Run this locally.
+    python tasks.py test:ci                   test + compileall. Every pull request runs it, on Linux.
+    python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). Nightly, on macOS and Windows.
     python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
     python tasks.py web:lint                  eslint + tsc on the web UI (web/). Needs pnpm.
     python tasks.py web:test                  Playwright smoke tests against web/out. Run web:build first, and `pnpm exec playwright install chromium` once.
     python tasks.py web:build                 next build: the static export in web/out.
 
-Each level includes the one before it. The window tests open real Tk and Panda3D windows, so test:ci and test:ci:e2e refuse
-to run unless CI is set (GitHub Actions sets it). Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
+Each level includes the one before it. Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
 """
 import os
 import shutil
@@ -25,7 +24,6 @@ PROFILE = Path(__file__).with_name("profile.svg")
 
 
 UNIT = {"GROUNDWORK_STRICT_UI": "1", "GROUNDWORK_STALL_LOG": "0"}  # a slow primitive on a bound UI thread raises; no stall watcher in tests
-WINDOW = {"GROUNDWORK_STRICT_UI": "0", "GROUNDWORK_STALL_LOG": "0"}  # window tests drive pages on the Tk thread directly: they log it (studio_ui_guard)
 
 
 def run(*cmd, env=None, cwd=None):
@@ -40,30 +38,25 @@ def run(*cmd, env=None, cwd=None):
 def test(modules=()):
     run(PY, "-m", "ruff", "check", ".")
     if modules:
-        window = [m for m in modules if "gui_" in m or "e2e" in m]
-        if window:
-            sys.exit(f"{window} open windows or train for real: they run in CI only (test:ci, test:ci:e2e).")
+        e2e = [m for m in modules if "e2e" in m]
+        if e2e:
+            sys.exit(f"{e2e} train for real: they run in test:ci:e2e only.")
         run(PY, "-X", "faulthandler", "-m", "unittest", *VERBOSE, *modules, env=UNIT)
     else:
-        # test_*.py only, which never open a window. A native crash prints every thread's Python stack instead of ending silently.
+        # test_*.py only. A native crash prints every thread's Python stack instead of ending silently.
         run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", *VERBOSE, env=UNIT)
 
 
 def test_ci():
-    if not os.environ.get("CI"):
-        sys.exit("test:ci opens real windows and runs in CI only. Run `python tasks.py test` locally.")
     run(PY, "-m", "compileall", "-q", ".")  # catches syntax errors in modules no test imports
     # runners differ in CPU; a crash in a CPU kernel (bf16, say) shows up on some of them only
     run(PY, "-c", "import platform, torch; print('+ cpu:', platform.processor(), '| torch', torch.__version__, torch.backends.cpu.get_cpu_capability())")
     test()
-    # One process per module, as in the app: Panda3D runs in its own process there, never beside Tk. A crash prints every thread's stack.
-    for path in sorted(Path(__file__).with_name("tests").glob("gui_*.py")):
-        run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", "-p", path.name, *VERBOSE, env=WINDOW)
 
 
 def test_ci_e2e():
     test_ci()
-    run(PY, "-m", "unittest", "tests.e2e_train", *VERBOSE, env=WINDOW)  # a real training run on a committed sample, about 1 s of compute
+    run(PY, "-m", "unittest", "tests.e2e_train", *VERBOSE, env=UNIT)  # a real training run on a committed sample, about 1 s of compute
 
 
 def profile():
