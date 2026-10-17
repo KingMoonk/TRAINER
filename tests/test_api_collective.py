@@ -16,6 +16,8 @@ import studio_model
 from studio_queue import Job
 from tests import diloco_support as support
 
+MARGIN = .1  # final val loss, int8 vs float16: measured gaps are 0.00 to 0.05 (the two members race, so a run is not bit-exact)
+
 
 class Collective(unittest.TestCase):
     def setUp(self):
@@ -149,6 +151,21 @@ class Training(Collective):
         self.assertTrue(all(r["generation"] == first for r in two.history))
         self.assertEqual(sorted(p.name for p in (self.dir / "two").glob("last.npz")), ["last.npz"])
         self.assertFalse((self.dir / "two-m0" / "data" / "remote_shards" / "two").exists())  # members delete their shard cache when the run ends
+
+    def test_int8_deltas_end_within_a_margin_of_the_float16_run_and_cost_fewer_bytes(self):
+        shape = dict(inner_steps=4, rounds=6, outer_lr=.7, outer_momentum=.9, min_members=2)
+        half = self.train(2, "half", delta_dtype="float16", **shape)
+        quarter = self.train(2, "quarter", delta_dtype="int8", **shape)
+        losses = (half.history[-1]["val_loss"], quarter.history[-1]["val_loss"])
+        sent = (sum(r["delta_bytes"] for r in half.history), sum(r["delta_bytes"] for r in quarter.history))
+        print(f"2 members, 6 rounds x 4 steps: final val loss float16 {losses[0]:.4f}, int8 {losses[1]:.4f} (gap {losses[1] - losses[0]:+.4f}); "
+              f"delta bytes float16 {sent[0]}, int8 {sent[1]} ({sent[1] / sent[0]:.0%}); "
+              f"round seconds float16 {sum(r['seconds'] for r in half.history):.2f}, int8 {sum(r['seconds'] for r in quarter.history):.2f}")
+        self.assertEqual({r["delta_dtype"] for r in quarter.history}, {"int8"})
+        self.assertLess(abs(losses[1] - losses[0]), MARGIN)
+        self.assertLess(quarter.history[-1]["val_loss"], quarter.history[0]["val_loss"])
+        self.assertGreater(sent[0], 0)
+        self.assertLess(sent[1], sent[0])
 
 
 class OwnerJob(unittest.TestCase):

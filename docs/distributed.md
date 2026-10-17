@@ -151,13 +151,14 @@ All routes are on the coordinator's API, behind node-to-node auth, under `/colle
 | `POST /join` | node, lease epoch | rank, generation, round, config, tokenizer, shard ids |
 | `GET /params?round=r` | | the round's `θ`, fp32 `.npz` (downloads are the fast direction on Starlink) |
 | `GET /shards/{s}` | | one training shard |
-| `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16 `.npz` | `202`, or `409` when stale |
+| `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16, fp32 or int8 `.npz` (int8: per-tensor scale beside the values) | `202`, or `409` when stale |
 | `GET /rounds/{r}` | | `open` or `closed` with the next round; a `pending` round long-polls up to 30 s |
 | `POST /leave` | generation, epoch | `204` |
 
 Bytes per member per round for a 25M-parameter model: 100 MB down (fp32) and 50 MB up (fp16). At 20 Mbps up, the upload is
-about 20 s against H = 500 steps of compute, so communication is a small share of the round. int8 deltas and streaming
-fragments come later, as their own issues, once measurements show the transfer is the bottleneck.
+about 20 s against H = 500 steps of compute, so communication is a small share of the round. `delta_dtype: int8` sends a quarter of fp32 (25 MB up for that model). Each round logs the delta bytes and round seconds
+(`diloco.json` history, and an info event on the member with its upload time). Streaming fragments come later, once
+measurements show the transfer is the bottleneck.
 
 ### Checkpoints
 

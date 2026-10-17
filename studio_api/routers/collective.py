@@ -102,7 +102,7 @@ async def delta(request: Request, round: int, node: str, generation: int, epoch:
     body = await request.body()
 
     def apply():
-        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss)
+        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss, len(body))
     await run_in_threadpool(apply)
     return Accepted()
 
