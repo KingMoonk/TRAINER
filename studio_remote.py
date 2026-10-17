@@ -20,6 +20,7 @@ import dataclasses
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +29,7 @@ from pathlib import Path
 import studio_cluster
 import studio_publish
 import studio_scheduler as sched
+import studio_state
 from studio_peer import PeerClient
 
 POLL_EVERY = 5.  # seconds between polls of the peers
@@ -102,6 +104,8 @@ class Cluster:
         self._known = {}  # peer address -> its last NodeInfo
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
         self._store, self._store_problem, self._store_mtime = None, "", object()  # object(): not yet read, equal to no mtime
+        self.state = studio_state.Replica(socket.gethostname(), studio_state.next_incarnation(runner.root / "data" / studio_state.INCARNATION_FILE),
+                                          clock)  # the observation store; nothing publishes into it yet
         self.polled = threading.Event()
         self._threads = []
         self._lock = threading.RLock()
@@ -205,9 +209,14 @@ class Cluster:
         def ask(address):
             try:
                 payload = self.client_for(address, retries=0, timeout=studio_cluster.POLL_TIMEOUT).get_json("node")
-                return address, studio_cluster.info_from_payload(address, payload), ""
+                info = studio_cluster.info_from_payload(address, payload)
             except Exception as exc:  # noqa: BLE001 - unreachable, slow or nonsense all mean "did not answer"
                 return address, None, f"{type(exc).__name__}: {exc}"
+            try:  # the observation store rides this poll; a peer without /state/sync (an older version) is still online
+                studio_state.sync_peer(self.state, self.client_for(address, retries=0, timeout=studio_cluster.POLL_TIMEOUT))
+            except Exception as exc:  # noqa: BLE001 - the next poll tries again
+                _log.debug("state sync with %s failed: %s", address, exc)
+            return address, info, ""
 
         with ThreadPoolExecutor(max_workers=min(8, len(peers))) as pool:
             results = list(pool.map(ask, peers))
