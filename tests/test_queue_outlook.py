@@ -2,9 +2,7 @@
 import unittest
 from datetime import datetime
 
-from studio_ia.pages.queue import toggle_state
-from studio_ia.services import FakeServices, Job, QueueState, Version
-from studio_ia.shell import strip_lines
+from studio_ia.services import FakeServices, Job, QueueState
 from studio_queue import PASSIVE, Gate
 
 NOON = datetime(2026, 1, 1, 12)
@@ -59,28 +57,6 @@ class Outlook(unittest.TestCase):
         gate = Gate("outside hours", datetime(2026, 1, 1, 22))
         self.assertEqual(outlook(None, job=running, gate=gate, plan={"hours": "nights"}),
                          "Starts after Version 3; the queue opens tonight at 22:00 (plan: nights only)")
-
-
-class Strip(unittest.TestCase):
-    def test_idle_paused_strip_offers_resume(self):
-        now, queued, chat, resume = strip_lines(QueueState(paused=True, up_next=[Job("a", "quicktest")]))
-        self.assertEqual((now, queued, chat, resume), ("Paused by you", "1 queued", "Resume ›", True))
-
-    def test_idle_strip_and_running_strip_keep_chat_line(self):
-        v = Version(2)
-        self.assertEqual(strip_lines(QueueState(), v), ("Nothing is training", "0 queued", "Chat uses version 2 · best so far", False))
-        job = Job("1", "pretrain", "Version 5")
-        now, queued, chat, resume = strip_lines(QueueState(job=job, phase="steady", eta_s=600), None)
-        self.assertEqual((now, chat, resume), ("Version 5 · steady", "Chat has no trained version yet", False))
-        self.assertEqual(strip_lines(QueueState(job=job, paused=True))[0], "Version 5 · paused")
-
-
-class IdleToggle(unittest.TestCase):
-    def test_only_the_idle_toggle_greys_out(self):
-        gate = Gate(None, None, False)
-        self.assertEqual(toggle_state("idle_only", "x", gate), (False, "Not available on this computer"))
-        self.assertEqual(toggle_state("pause_on_battery", "x", gate), (True, "x"))
-        self.assertEqual(toggle_state("idle_only", "x", Gate()), (True, "x"))
 
 
 if __name__ == "__main__":

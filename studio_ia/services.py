@@ -801,7 +801,7 @@ class FakeServices(Services):
             job = self._take_job()
             if job is None:
                 return
-            self._worker = threads.start(self._run_jobs, job)
+            self._worker = start_thread(self._run_jobs, job)
 
     def wait_idle(self, timeout=10.0):
         """Test hook: block until the worker has run every waiting job; True when it has."""
@@ -1205,7 +1205,7 @@ class FakeServices(Services):
 import json  # noqa: E402
 import math  # noqa: E402
 import uuid  # noqa: E402
-from studio_ia import threads  # noqa: E402
+from studio_ia.snapshots import start_thread  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -1300,7 +1300,7 @@ class WorkspaceServices(Services):
         self.runner.subscribe(self._record_job)
         workspace.progress = self.note
         # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-        self._schema = threads.start(workspace.ensure_schema) if workspace.schema_pending() else None
+        self._schema = start_thread(workspace.ensure_schema) if workspace.schema_pending() else None
 
     def _reads(self, workspace):
         import studio_versions
@@ -1341,21 +1341,14 @@ class WorkspaceServices(Services):
     _viz = None
 
     def viewer_status(self):
-        import sys
         script = Path(__file__).resolve().parent.parent / "studio_brain3d.py"
-        frozen = getattr(sys, "frozen", False)  # bundled: no script beside the executable
         viz = self._viz
-        return {"available": frozen or script.exists(), "running": bool(viz and viz.running), "connected": bool(viz and viz.connected)}
+        return {"available": script.exists(), "running": bool(viz and viz.running), "connected": bool(viz and viz.connected)}
 
     def viewer_start(self, scene=None):
-        import sys
-
-        from studio_core import module_command
         from studio_vizbridge import VizBridge
         if self._viz is None:
-            frozen = getattr(sys, "frozen", False)
-            self._viz = VizBridge(Path(__file__).resolve().parent.parent / "studio_brain3d.py",
-                                  command=module_command("studio_brain3d") if frozen else None)
+            self._viz = VizBridge(Path(__file__).resolve().parent.parent / "studio_brain3d.py")
         if not self._viz.running:
             self._viz.start(log_path=self.root / "logs" / "viewer.log")
         version = self.current_version()
@@ -2406,7 +2399,7 @@ class WorkspaceServices(Services):
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
             self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
-        self._worker = threads.start(run)
+        self._worker = start_thread(run)
         return True
 
     def download_sources(self, ids=None, kind="text", install=False):
@@ -2632,7 +2625,7 @@ class WorkspaceServices(Services):
                 with self._score_lock:
                     self._to_score.pop(key, None)
             self.emit("versions", None)
-        threads.start(run)
+        start_thread(run)
 
     def _gate(self, parent_ckpt, candidate_ckpt):
         """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair.

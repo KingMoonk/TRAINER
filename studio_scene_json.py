@@ -33,7 +33,7 @@ VIEWER_LEVELS = ('Model', 'Window', 'Head', 'Weights')  # the viewer offers thes
 GATE_SPACING, LANE_PITCH, MATRIX_PITCH = 3., .38, .4  # between blocks (y), between tokens (x), between matrix cells
 BIN_START, BIN_SPAN = -5.5, 11.  # the Model level's bins run along x from here, this far
 
-# the theme colours the scene uses (studio_ia.theme.C, which imports Tk; a test keeps them equal)
+# the theme colours the scene uses (studio_viewer_ui.C; a test keeps them equal)
 THEME = {'bg': '#0e1014', 'panel': '#15181e', 'panel2': '#1b1f27', 'border': '#2a2f3a', 'text': '#e6e8ec', 'text2': '#c3c8d1',
          'violet': '#9f8cff', 'amber': '#e5b567', 'blue': '#6cb4ee', 'pink': '#e58fb0', 'violet_bg': '#1a1730'}
 # kind id -> (theme colour, alpha): one colour per meaning (studio_viewer_ui.SCENE; a test keeps them equal)
@@ -140,7 +140,7 @@ class _Group:
         return {'origin': [float(v) for v in self.origin], **self.meta, 'boxes': boxes, 'lines': lines, 'labels': self._labels}
 
 
-# --- the controls' decisions (studio_viewer_ui.py imports Tk through the theme; tests keep these equal to it) -------------
+# --- the controls' decisions (tests keep these equal to studio_viewer_ui) -------------
 
 def block_matrices(names, layer):
     """The matrices the menu offers: the selected block's, plus the ones outside any block (token, position embeddings)."""

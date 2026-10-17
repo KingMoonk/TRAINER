@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from studio_ia.pages.training_run import sample_rows
 from studio_ia.services import WorkspaceServices
 from studio_model import LocalModel, train
 
@@ -32,14 +31,6 @@ class Samples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             train(dict(CONFIG, sample_every=0), EXAMPLES, Path(d) / "r", telemetry_every=0)
             self.assertFalse((Path(d) / "r" / "samples.jsonl").exists())
-
-
-class Rows(unittest.TestCase):
-    def test_waiting_then_latest_marked_now(self):
-        self.assertEqual(sample_rows({}, 3, 4)[-1][1], "the first sample appears at the next checkpoint")
-        rows = sample_rows({"samples": [{"step": 4, "text": "a"}, {"step": 8, "text": "b"}]}, 8, 4)
-        self.assertEqual([r[1] for r in rows][1:], ["a", "b"])
-        self.assertEqual(rows[-1][0], "now · step 8")
 
 
 if __name__ == "__main__":

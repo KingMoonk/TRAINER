@@ -3,7 +3,6 @@ import unittest
 from unittest import mock
 
 from studio_ia import pieces as cut
-from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices
 from studio_modules.tokenizer.bpe_custom import CustomBPETokenizer
 from studio_modules.tokenizer.bpe_gpt2 import GPT2Tokenizer, bytes_to_unicode
@@ -75,31 +74,6 @@ class Pieces(unittest.TestCase):
         lists = FakeServices().word_lists()
         self.assertIsNone(lists["tokenizers"][2])
         self.assertIsInstance(lists["tokenizers"][1], CustomBPETokenizer)
-
-
-class Card(unittest.TestCase):
-    def test_counts_sit_side_by_side_in_button_order(self):
-        lists = cut.word_lists(TEXT, tiny_gpt2())
-        n = cut.counts(lists)
-        self.assertEqual(B.pieces_for(0, lists)[1], " · ".join(map(str, n)) + " pieces")
-        chips, _ = B.pieces_for(2, lists)
-        self.assertEqual(joined(chips), lists["sentence"])
-
-    def test_while_reading_and_without_text_it_says_so(self):
-        chips, line = B.pieces_for(0, None)
-        self.assertEqual(joined(chips), cut.EXAMPLE)
-        self.assertEqual(line, f"{len(cut.EXAMPLE)} · – · – · – pieces")
-        self.assertEqual(B.pieces_for(1, None)[0], [("Reading your text…", "neutral")])
-        empty = cut.word_lists([])
-        self.assertEqual(B.pieces_for(3, empty)[0], [(B.MISSING[3], "neutral")])
-        self.assertEqual(B.pieces_for(2, empty)[0], [(B.MISSING[2], "neutral")])
-
-    def test_lost_words_are_counted(self):
-        words = WordTokenizer.fit([{"text": "the cat"}], 7 + 2)
-        lists = {"tokenizers": (cut.Tokenizer("byte"), None, None, words), "sentence": "the dog"}
-        chips, line = B.pieces_for(3, lists)
-        self.assertEqual(chips, [("the", "pieces"), ("␣dog", "attention")])
-        self.assertEqual(line, "7 · – · – · 2 pieces, 1 word lost to “unknown”")
 
 
 if __name__ == "__main__":

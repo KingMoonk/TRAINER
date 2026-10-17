@@ -21,9 +21,15 @@ import time
 from typing import Any, Callable
 
 import studio_ui_guard as ui_guard
-from studio_ia import threads
 
 _log = logging.getLogger(__name__)
+
+
+def start_thread(target, *args):
+    """Run target(*args) on a daemon thread and return it."""
+    thread = threading.Thread(target=target, args=args, daemon=True)
+    thread.start()
+    return thread
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,7 +71,7 @@ class Topic:
     make: Callable  # make(services) -> the snapshot's value; runs on a worker
     events: tuple  # the event kinds after which it is computed again
     often: tuple = ()  # kinds that arrive several times a second: computed again at most once per `every` seconds for them
-    every: float = 1.0  # each worker that finishes costs the Tk thread a full collection (threads.release), about 25 ms
+    every: float = 1.0  # seconds between computations for the `often` kinds
 
 
 TOPICS = {
@@ -77,7 +83,7 @@ OWN_EVENTS = ("snapshot", "command")  # what this module emits; the shell keeps 
 
 class Worker:
     """Runs jobs in order on a thread started when the first job arrives, which ends once there are none left. submit() is safe
-    from any thread. The thread holds the collector while it runs (threads.start) and the Tk thread's settle() gives it back."""
+    from any thread."""
 
     def __init__(self):
         self._jobs, self._lock, self._running = collections.deque(), threading.Lock(), False
@@ -93,7 +99,7 @@ class Worker:
             if self._running:
                 return
             self._running = True
-        threads.start(self._drain)
+        start_thread(self._drain)
 
     def _drain(self):
         while True:
