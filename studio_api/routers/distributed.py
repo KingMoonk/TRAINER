@@ -1,0 +1,229 @@
+"""Distributed pretraining runs this computer owns, for the Cluster page's Training tab (docs/distributed.md): start one on chosen
+machines, read every run with its members and rounds, stop a run or one member.
+
+This is the owner's side. The members' wire protocol is `/collective` (studio_api.routers.collective), the node-to-node job calls are
+`/cluster`; nothing here is called by another machine.
+"""
+
+import os
+import time
+import uuid
+from dataclasses import asdict
+from typing import Annotated, Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+
+import studio_cluster
+import studio_distributed as runs
+import studio_diloco
+from studio_api.app import get_services
+from studio_api.routers.pretraining import _version
+from studio_api.version import app_version
+from studio_ia import pretraining_plan as plan
+from studio_ia.services import Job
+
+router = APIRouter(prefix="/distributed", tags=["distributed"])
+Services = Annotated[Any, Depends(get_services)]
+
+ROWS = 16  # rows per step and the share of text held back for testing: the Pretraining page's answers
+HOLD = 0.05
+DEFAULTS = studio_diloco.Settings()
+
+
+class Defaults(BaseModel):
+    rounds: int
+    inner_steps: int
+    outer_lr: float
+    outer_momentum: float
+    delta_dtype: str
+
+
+class StartRun(BaseModel):
+    """What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part."""
+
+    version: int | None = None  # None: the current version
+    dataset_ids: list[str] = Field(min_length=1)
+    machines: list[str] = []  # the other machines to invite: addresses from the Machines list
+    rounds: int = Field(DEFAULTS.rounds, ge=1, le=100_000)
+    inner_steps: int = Field(DEFAULTS.inner_steps, ge=1, le=1_000_000)
+    outer_lr: float = Field(DEFAULTS.outer_lr, gt=0)
+    outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
+
+
+class Member(BaseModel):
+    node: str  # the name it joins under
+    address: str  # "local" for this computer
+    local: bool
+    device: str  # cuda | mps | cpu, as the machine reported when the run started; "" when unknown
+    device_name: str
+    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "finished"]
+    note: str  # one sentence: why it is behind, dropped or unreachable
+    missed: int  # rounds in a row it has missed
+    sent: bool  # its change for the open round has arrived
+    rounds_done: int
+    steps: int
+    tokens_per_second: float | None  # in its last round
+    last_delta_bytes: int | None
+    last_delta_dtype: str
+    can_stop: bool
+
+
+class Round(BaseModel):
+    round: int
+    step: int
+    loss: float | None  # the members' training loss over the round, weighted by tokens
+    val_loss: float | None  # the shared weights on the held-back text
+    bytes_up: int  # the members' changes, as sent
+    bytes_down: int  # the weights the members took at the start of the round
+    seconds: float
+    members: int
+    contributed: int
+    dropped: list[str]
+
+
+class Run(BaseModel):
+    id: str
+    label: str
+    version: int | None
+    state: Literal["queued", "starting", "waiting", "running", "finished", "stopped", "failed"]
+    note: str
+    started_at: float
+    owner: str  # the computer that coordinates
+    round: int  # rounds finished
+    rounds: int
+    inner_steps: int
+    outer_lr: float
+    outer_momentum: float
+    delta_dtype: str
+    members: list[Member]
+    history: list[Round]
+    can_stop: bool
+
+
+@router.get("/defaults")
+def defaults() -> Defaults:
+    """The DiLoCo settings the form starts from."""
+    return Defaults(rounds=DEFAULTS.rounds, inner_steps=DEFAULTS.inner_steps, outer_lr=DEFAULTS.outer_lr,
+                    outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype)
+
+
+def _jobs(services):
+    runner = getattr(services, "runner", None)
+    if runner is not None:
+        return list(runner.jobs)
+    state = services.queue()
+    return [*([state.job] if state.job is not None else []), *state.up_next]
+
+
+def _owned(services, create=False):
+    """(run, job) for every run this node knows: its remembered ones, and an owner job in the queue that has no record yet."""
+    jobs = {job.id: job for job in _jobs(services) if job.kind == "pretrain_distributed"}
+    if create:
+        for job in jobs.values():
+            runs.run_of(job)
+    return [(run, jobs.get(run.id)) for run in runs.RUNS.values()]
+
+
+def _read(run, job):
+    coordinator = studio_diloco.COORDINATORS.get(run.id)
+    if coordinator is not None and job is not None and job.status in ("failed", "stopped", "done"):
+        coordinator.stop()  # its own member is gone: the run cannot go on
+    return runs.view(run, coordinator, job), coordinator
+
+
+def _find(services, run_id):
+    found = next(((run, job) for run, job in _owned(services, create=True) if run.id == run_id), None)
+    if found is None:
+        raise HTTPException(404, f"No run {run_id}.")
+    return found
+
+
+@router.get("/runs")
+def list_runs(services: Services) -> list[Run]:
+    """Every run this computer owns, newest first, each with its members and rounds. A machine that is offline or refuses is a
+    member row with a reason; the rest of the run still reads."""
+    rows = [_read(run, job)[0] for run, job in _owned(services, create=True)]
+    return [Run.model_validate(row) for row in sorted(rows, key=lambda row: row["started_at"], reverse=True)]
+
+
+@router.get("/runs/{run_id}")
+def get_run(run_id: str, services: Services) -> Run:
+    return Run.model_validate(_read(*_find(services, run_id))[0])
+
+
+def _address_for_peers(request):
+    """How the other machines reach this one: TRAINER_NODE_ADDRESS, else its tailnet name on the port this app listens on, else
+    the address this request came to (which only a machine on the same computer can use)."""
+    named = (os.environ.get("TRAINER_NODE_ADDRESS") or "").strip()
+    if named:
+        return named
+    tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
+    if tailnet:
+        return f"{tailnet}:{request.url.port or studio_cluster.DEFAULT_PORT}"
+    return str(request.base_url).rstrip("/")
+
+
+@router.post("/runs", status_code=201)
+def start_run(body: StartRun, request: Request, services: Services) -> Run:
+    """Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen
+    machines are invited when the run starts, and the form's settings are checked here (400 with a sentence)."""
+    version = services.current_version() if body.version is None else _version(services, body.version)
+    if version is None:
+        raise HTTPException(409, "Save a design in the Network designer first.")
+    known = {s["id"] for s in plan.sets_of(services.data("text"))}
+    unknown = [d for d in body.dataset_ids if d not in known]
+    if unknown:
+        raise HTTPException(400, f"No text set {', '.join(unknown)}.")
+    settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
+                                      outer_momentum=body.outer_momentum)  # ValueError -> 400
+    own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
+    listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
+    for address in body.machines:
+        if address not in listed:
+            raise HTTPException(400, f"{address} is not on the Machines tab.")
+    peers = studio_cluster.survey({"studioConfig": {"nodes": [a for a in listed if a in body.machines]}}, own)[1:]
+    machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
+                *({"node": peer.hostname or peer.address, "address": peer.address, "device": peer.device if peer.online else "",
+                   "device_name": peer.device_name, "error": "" if peer.online else peer.error} for peer in peers)]
+    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+    label = f"Version {version.number} across {len(machines)} machine{'s' if len(machines) != 1 else ''}"
+    job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
+        "config": config, "datasets": list(dict.fromkeys(body.dataset_ids)), "mode": "from_scratch", "version": version.number,
+        "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
+        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), "machines": machines, "owner": own.hostname,
+        "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT})
+    runs.open_run(job)
+    services.enqueue(job)
+    services.start_queue()
+    return get_run(job.id, services)
+
+
+@router.post("/runs/{run_id}/stop")
+def stop_run(run_id: str, services: Services) -> Run:
+    """End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The
+    weights of the last finished round stay in the run's folder."""
+    run, job = _find(services, run_id)
+    runs.stop_run(run, studio_diloco.COORDINATORS.get(run.id))
+    if job is not None and job.status in ("waiting", "held", "running"):
+        services.remove(run.id)
+    return Run.model_validate(_read(run, job)[0])
+
+
+@router.post("/runs/{run_id}/members/{node}/stop")
+def stop_member(run_id: str, node: str, services: Services) -> Run:
+    """Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)
+    and for a node that is not a member."""
+    run, job = _find(services, run_id)
+    coordinator = studio_diloco.COORDINATORS.get(run.id)
+    machine = next((m for m in run.machines if m.node == node), None)
+    if machine is not None and machine.local:
+        raise HTTPException(409, "This computer coordinates the run. Stop the run instead.")
+    if coordinator is None:
+        raise HTTPException(409, "The run is not active.")
+    try:
+        coordinator.drop(node)
+    except studio_diloco.Stale as exc:
+        raise HTTPException(409, str(exc)) from None
+    runs.release_member(run, node)
+    return Run.model_validate(_read(run, job)[0])

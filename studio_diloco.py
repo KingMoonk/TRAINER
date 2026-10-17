@@ -272,6 +272,7 @@ class Coordinator:
         self.next_round, self.generation, self.history, self.step_time = 0, 0, [], None
         self.members, self.pending, self.leaving, self.last_members, self.sequence = {}, {}, set(), [], 0
         self.current, self.finished, self.touched, self.deal = None, False, time.monotonic(), {}
+        self.stopped, self.banned, self.gone = False, set(), {}  # stopped by the owner; nodes the owner removed; node -> (state, sentence) of those out
         self.split, self.split_hash, self.state_file, self.record = {"strategy": "lineage-v1"}, "", None, {}
         self.shard_count = max(1, min(settings.shards, len(train)))
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
@@ -369,6 +370,9 @@ class Coordinator:
             self._advance()
             if self.finished:
                 raise Stale("The run is finished.")
+            if node in self.banned:
+                raise Stale(f"{node} was stopped by the run's owner.")
+            self.gone.pop(node, None)
             known = self.members.get(node) or self.pending.get(node)
             if known:
                 if epoch < known["epoch"]:
@@ -435,10 +439,12 @@ class Coordinator:
         entry["missed"] += 1
         if entry["missed"] >= self.settings.missed_limit:
             del self.members[node]  # it must join again
+            self.gone[node] = ("dropped", f"Missed {entry['missed']} rounds in a row, so the run dropped it. It can rejoin when it is back.")
 
     def _boundary(self):
         for node in self.leaving:
             self.members.pop(node, None)
+            self.gone.setdefault(node, ("left", "Left the run."))
         self.leaving.clear()
 
     def _open(self, now):
@@ -479,6 +485,9 @@ class Coordinator:
                "loss": sum(t * loss for t, loss in losses) / sum(t for t, _ in losses) if losses else None,
                "val_loss": self.evaluate(self.theta), "seconds": now - current.opened,
                "delta_bytes": sum(current.uploaded.get(node, 0) for node in sent), "delta_dtype": self.settings.delta_dtype, "deadline_seconds": current.window,
+               "theta_bytes": sum(value.nbytes for value in self.theta.values()) * len(current.members),  # what the members downloaded
+               "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
+               "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
                "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.}
         self.history.append(row)
         self.deal = current.deal
@@ -565,6 +574,56 @@ class Coordinator:
             self._advance()
             self.cond.notify_all()
 
+    # -- the owner's view and controls
+    def snapshot(self):
+        """What the Training tab shows, from this process: the run's state and round, each node the run knows and the rounds so far."""
+        with self.cond:
+            self._advance()
+            current = self.current
+            nodes = {}
+            for node, entry in self.members.items():
+                behind = entry["missed"]
+                nodes[node] = {"state": "behind" if behind else "training", "missed": behind,
+                               "sent": current is not None and node in current.contributions,
+                               "note": f"Missed {behind} round{'s' if behind != 1 else ''} in a row; the run drops it after {self.settings.missed_limit}." if behind else ""}
+            for node in self.pending:
+                nodes[node] = {"state": "joining", "missed": 0, "sent": False, "note": "Joins at the start of the next round."}
+            for node, (state, note) in self.gone.items():
+                nodes[node] = {"state": state, "missed": 0, "sent": False, "note": note}
+            state = "stopped" if self.stopped else "finished" if self.finished else "running" if current is not None else "waiting"
+            return {"state": state, "round": self.next_round, "rounds": self.settings.rounds, "generation": self.generation,
+                    "settings": dict(self.settings.__dict__), "nodes": nodes, "history": [dict(row) for row in self.history]}
+
+    def drop(self, node):
+        """Stop one member: it leaves at once (the round stops waiting for it) and cannot rejoin this run. Stale if it is not a member."""
+        with self.cond:
+            self._touch()
+            if node not in self.members and node not in self.pending:
+                raise Stale(f"{node} is not a member of this run.")
+            self.banned.add(node)
+            self.gone[node] = ("stopped", "Stopped by you.")
+            if node in self.pending:
+                del self.pending[node]
+            elif self.current is None:
+                del self.members[node]
+            else:
+                self.leaving.add(node)
+            self._advance()
+            self.cond.notify_all()
+
+    def stop(self):
+        """End the run now: every member is told it is finished at its next call. The weights of the last finished round stay on disk."""
+        with self.cond:
+            self._touch()
+            if self.finished:
+                return
+            from studio_core import atomic_json
+            self.stopped = self.finished = True
+            if self.record:
+                self.record["status"] = "stopped"
+                atomic_json(self.directory / "run.json", self.record)
+            self.cond.notify_all()
+
     # -- durability
     def _touch(self):
         self.touched = time.monotonic()
@@ -649,6 +708,8 @@ def register(run, coordinator):
     with _LOCK:
         for key, other in list(COORDINATORS.items()):
             if other.finished or time.monotonic() - other.touched > IDLE_RELEASE:
+                import studio_distributed
+                studio_distributed.archive(key, other)  # the Training tab keeps what it showed
                 other.release()
                 del COORDINATORS[key]
         COORDINATORS[run] = coordinator
@@ -657,6 +718,7 @@ def register(run, coordinator):
 def prepare(job, services, directory, port):
     """App side, before the owner's job starts its worker: build the coordinator (tokenizing the data once), register it for the
     routes, and tell the worker where it is. A folder with diloco.json continues that run."""
+    import studio_distributed
     p = job.params
     config = dict(p["config"])
     settings = Settings.from_params(p, steps=config.get("steps"))
@@ -664,6 +726,7 @@ def prepare(job, services, directory, port):
     coordinator = Coordinator.build(job.id, directory, config, examples, settings)
     register(job.id, coordinator)
     p.update(run=job.id, coordinator_url=f"http://127.0.0.1:{port}", settings=dict(settings.__dict__))
+    studio_distributed.invite(job)  # the peers the person chose: a member job on each, which joins at the coordinator
     return coordinator
 
 

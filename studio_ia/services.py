@@ -836,7 +836,32 @@ class FakeServices(Services):
                 if job is None:
                     self._worker = None
 
+    def _run_distributed(self, job):
+        """A distributed pretraining run with a made-up coordinator (studio_ia.fake_distributed): a round every eight steps' time."""
+        import studio_diloco
+        import studio_distributed
+        from studio_ia.fake_distributed import FakeCoordinator
+        q = self._queue
+        coordinator = FakeCoordinator(studio_distributed.run_of(job), job.params.get("settings") or {})
+        studio_diloco.register(job.id, coordinator)
+        studio_distributed.invite(job)
+        coordinator.start()
+        q.total = coordinator.rounds
+        self.emit("job", {"job": job.id, "status": "running"})
+        self.emit("queue", q)
+        while not coordinator.finished:
+            self._sleep(self.step_seconds * 8)
+            coordinator.advance()
+            q.step = coordinator.round
+            self.emit("queue", q)
+        job.status = "stopped" if coordinator.stopped else "done"
+        q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
+        self.emit("job", {"job": job.id, "status": job.status, "error": ""})
+        self.emit("queue", q)
+
     def _run_job(self, job):
+        if job.kind == "pretrain_distributed":
+            return self._run_distributed(job)
         total, q = self.job_steps, self._queue
         self.emit("job", {"job": job.id, "status": "running"})
         self.emit("queue", q)
