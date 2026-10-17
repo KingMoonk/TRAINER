@@ -2,7 +2,7 @@
 
 import { TRAINING as T } from "@/lib/copy/training";
 import { laneSegments, percent, recentTimeline, timelineEnd, timelineExtent, type Segment } from "./live";
-import type { Run } from "./logic";
+import type { Run } from "@/app/cluster/training/logic";
 
 const COLOURS: Record<Segment["kind"], string> = {
   download: "var(--chart-3)",

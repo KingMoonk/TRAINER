@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TRAINING as T } from "@/lib/copy/training";
-import { otherRuns } from "./live";
+import { otherRuns } from "@/app/runs/view/live";
 import type { Run } from "./logic";
 
 /** The other runs, a short list under the live one. Choosing one makes it the live run. */

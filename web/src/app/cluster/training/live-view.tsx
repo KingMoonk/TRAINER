@@ -4,12 +4,12 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SeriesChart, type Series } from "@/components/series-chart";
 import { TRAINING as T } from "@/lib/copy/training";
-import { EventLog } from "./event-log";
-import { liveLossSeries, tokensSeries } from "./live";
+import { EventLog } from "@/app/runs/view/event-log";
+import { liveLossSeries, tokensSeries } from "@/app/runs/view/live";
 import { bytesText, lossSeries, trafficSeries, type Run } from "./logic";
-import { RoundBanner } from "./round-banner";
-import { Timeline } from "./timeline";
-import { Topology } from "./topology";
+import { RoundBanner } from "@/app/runs/view/round-banner";
+import { Timeline } from "@/app/runs/view/timeline";
+import { Topology } from "@/app/runs/view/topology";
 
 const CELL = "px-2 py-1.5 text-left align-top";
 

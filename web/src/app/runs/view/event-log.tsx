@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { TRAINING as T } from "@/lib/copy/training";
 import { eventAge, eventsNewestFirst } from "./live";
-import type { Run } from "./logic";
+import type { Run } from "@/app/cluster/training/logic";
 
 /** What happened in the run, newest first: machines joining, leaving, dropped or late, changes refused, each outer step and each checkpoint. */
 export function EventLog({ run }: { run: Run }) {

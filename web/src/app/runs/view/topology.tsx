@@ -6,7 +6,7 @@ import { TRAINING as T } from "@/lib/copy/training";
 import {
   deviceBadge, edges, liveLossText, liveSpeedText, progressFraction, reportedText, shardsText, stateColor, stepsText, type Edge,
 } from "./live";
-import { isActive, memberDevice, needsReason, reasonText, type Member, type Run } from "./logic";
+import { isActive, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
 
 /** One edge between the coordinator and a member: θ goes down at the start of a round, Δ comes up at its end. It moves while the transfer runs. */
 function EdgeView({ edge, node }: { edge: Edge; node: string }) {

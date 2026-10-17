@@ -2,7 +2,7 @@
 
 import { TRAINING as T } from "@/lib/copy/training";
 import { collectingText, countdownText, roundNumber, STAGES, stageIndex } from "./live";
-import type { Run } from "./logic";
+import type { Run } from "@/app/cluster/training/logic";
 
 /** "Round 3 of 10" with the phase it is in (members training, collecting changes, outer step, checking held-back text, next round) and the time to its deadline. */
 export function RoundBanner({ run }: { run: Run }) {

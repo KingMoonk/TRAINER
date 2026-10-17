@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { problem } from "@/lib/cluster";
 import { TRAINING as T } from "@/lib/copy/training";
 import { LiveView } from "./live-view";
-import { liveRun } from "./live";
+import { liveRun } from "@/app/runs/view/live";
 import { RunsList } from "./runs-list";
 import { StartForm } from "./start-form";
 import { useRuns, useStopMember, useStopRun } from "./use-training";
