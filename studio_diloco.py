@@ -14,6 +14,11 @@ theta (fp32), the outer momentum, the validation windows and the shard deal; a m
 The coordinator is plain logic with an injected clock: every rule (deadline, drop, stale 409, elastic membership, restart) is a
 window-free test. Its wire protocol is studio_api.routers.collective; members reach it through any client with
 studio_peer.PeerClient's methods. `python -m studio_diloco member --coordinator URL --run ID` runs a member by hand.
+
+A member can also overlap its communication with its compute (`overlap=True`, `--overlap`; the "overlapping" variant of Streaming
+DiLoCo, arXiv:2501.18512): the delta of round r uploads, and the weights of round r + 1 download, on a background thread while the
+next H inner steps already run, and the outer result is applied one round late: when the new theta arrives the member keeps the
+work it did meanwhile, theta' + (w - w_start), instead of throwing it away. The coordinator is not told and does not change.
 """
 from __future__ import annotations
 
@@ -55,6 +60,43 @@ PROGRESS_WAIT = .25  # seconds a progress report or a snapshot waits for a round
 EVENTS_KEPT = 200  # the coordinator's event log is bounded
 TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished round's also goes to metrics.jsonl)
 SAMPLES_KEPT = 240  # progress samples kept per member for the open round
+
+
+class Background:
+    """`fn` running on a daemon thread. result() waits for it and returns what it returned, or raises what it raised."""
+
+    def __init__(self, fn, name="diloco-exchange"):
+        self.value, self.error = None, None
+        self.thread = threading.Thread(target=self._run, args=(fn,), name=name, daemon=True)
+        self.thread.start()
+
+    def _run(self, fn):
+        try:
+            self.value = fn()
+        except BaseException as exc:  # noqa: BLE001 - handed to whoever asks for the result
+            self.error = exc
+
+    def result(self):
+        self.thread.join()
+        if self.error is not None:
+            raise self.error
+        return self.value
+
+    def abandon(self, timeout):
+        self.thread.join(timeout)
+
+
+@dataclass
+class Entered:
+    """A round a member has taken: its theta, the member's place in it and the shards it deals. `skipped`: the round it asked
+    for had closed without it, so this is a later one."""
+    round: int
+    theta: dict
+    generation: int
+    rank: int
+    deadline_s: float
+    shards: list
+    skipped: bool = False
 
 
 class Stale(RuntimeError):
@@ -1018,10 +1060,12 @@ def prepare(job, services, directory, port):
 
 class Member:
     """One node's side of a run. It is the `distributed=` hook of studio_model.train: before the first step it loads theta of
-    its round, after H steps (or at the round's deadline) it sends delta and waits for the next round, whose theta it loads."""
+    its round, after H steps (or at the round's deadline) it sends delta and waits for the next round, whose theta it loads.
+    With `overlap` it does not wait: the exchange (delta up, next theta down) runs through `spawn(fn)` (a Background thread; tests
+    inject their own) while the next round's steps run, and is joined at the end of that round, where its theta is applied."""
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
-                 progress=True, replica_dir=None):
+                 progress=True, overlap=False, spawn=Background, replica_dir=None):
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
@@ -1038,6 +1082,7 @@ class Member:
         self.reported_phase = None
         self.live = {"loss": None, "tokens_per_second": None}
         self.wake, self.halt, self.reporter = threading.Event(), threading.Event(), None
+        self.overlap, self.spawn, self.pending, self.entered, self.anchor = overlap, spawn, None, None, None
 
     # -- the train() hook
     @property
@@ -1054,6 +1099,8 @@ class Member:
         return step > self.first_step and (step - self.first_step >= self.info["inner_steps"] or self.clock() >= self.deadline)
 
     def sync(self, step, trained_tokens, model):
+        if self.overlap:
+            return self._sync_overlapped(step, trained_tokens, model)
         if self.started:
             self._send(step, trained_tokens, model)
             if not (self.finished or self.fenced):
@@ -1065,10 +1112,69 @@ class Member:
             self.stop.set()
             return
         model.load_weights(self.theta)
+        self._begin(step, trained_tokens)
+
+    def _begin(self, step, trained_tokens):
+        """Start the steps of self.round, from the weights the model now holds."""
         self.first_step, self.first_tokens, self.began, self.deadline = step, trained_tokens, self.clock(), self.clock() + self.deadline_s
         self.sampler.seed(sampler_seed(self.info["seed"], self.rank, self.round))
         self.round_step, self.reported_step = 0, 0
+        self.report_round = self.round
         self._phase("training")
+
+    def _sync_overlapped(self, step, trained_tokens, model):
+        """The end of a round's steps without waiting for the network. The exchange begun at the end of the last round (its delta up,
+        this round's theta down) is joined here, which takes no time when it was faster than the steps. Its theta then replaces
+        the one the round started from, and the work done since is kept: w' = theta + (w - w_start) = theta - delta. This round's
+        delta goes out on a new exchange, and the next round's steps start from w' at once."""
+        if not self.started:
+            self.started = True
+            self.anchor = self.theta
+            model.load_weights(self.theta)
+            self._begin(step, trained_tokens)
+            return
+        entered = self._join() if self.pending is not None else self.entered
+        if entered is None or self.finished or self.fenced:
+            self._phase("waiting")
+            self.stop.set()
+            return
+        self._apply(entered)
+        if entered.round != self.round:  # this round closed without the member: its work counts for nothing, so start over from the new weights
+            self.emit({"type": "info", "text": f"Round {self.round} closed without this member; continuing from round {entered.round}."})
+            self.round, self.anchor = entered.round, entered.theta
+            model.load_weights(entered.theta)
+            self._begin(step, trained_tokens)
+            return
+        number, weights = self.round, {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
+        delta = {name: self.anchor[name] - weights[name] for name in self.anchor}
+        params = {"term": self.term, "node": self.node, "generation": entered.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
+                  "steps": step - self.first_step, "seconds": self.clock() - self.began}
+        if self.loss is not None:
+            params["loss"] = self.loss
+        self.pending = self.spawn(lambda: self._exchange(number, delta, params))
+        if number + 1 >= self.info["rounds"]:  # the last round: nothing to train after it, so wait for the run's end
+            self._phase("waiting")
+            self.entered = self._join()
+            if self.entered is None or self.finished or self.fenced:
+                self.stop.set()
+                return
+        renewed = {name: entered.theta[name] - delta[name] for name in delta}
+        model.load_weights(renewed)
+        self.round, self.anchor = number + 1, renewed
+        self._begin(step, trained_tokens)
+
+    def _join(self):
+        """The result of the exchange in flight (an Entered, or None when the run finished, the member was fenced out or stop was set)."""
+        pending, self.pending = self.pending, None
+        return pending.result()
+
+    def _exchange(self, number, delta, params):
+        """On the background thread: send round `number`'s delta, then take round number + 1."""
+        body = encode_arrays(delta, self.info["delta_dtype"])
+        self._post(number, body, params, overlapped=True)
+        if self.fenced:
+            return None
+        return self._take(number + 1, quiet=True)
 
     # -- telling the coordinator where it is
     def _phase(self, phase):
@@ -1157,10 +1263,25 @@ class Member:
 
     def _enter(self, want):
         """Wait until round `want` (or the current one, when it has moved on) is open for this member, then take its theta and shards."""
+        entered = self._take(want)
+        if entered is not None:
+            self._apply(entered)
+            self.round = entered.round
+
+    def _apply(self, entered):
+        """Make a taken round the member's own: its theta, place and shards (the sampler's windows swap here, never mid-round)."""
+        self.theta, self.generation, self.rank, self.deadline_s, self.entered = entered.theta, entered.generation, entered.rank, entered.deadline_s, entered
+        self.train.set([self.shards[s] for s in entered.shards])
+
+    def _take(self, want, quiet=False):
+        """Like _enter, but returns what it took (an Entered) instead of applying it; None when the run finished, the member was fenced
+        out or stop was set. `quiet`, for the background exchange, leaves the phase and round the reporter says alone."""
         from studio_peer import PeerError
+        asked = want
         while not self.stop.is_set():
-            self.report_round = want
-            self._phase("waiting")
+            if not quiet:
+                self.report_round = want
+                self._phase("waiting")
             try:
                 view = self._call(lambda: self.client.get_json(f"{self.base}/rounds/{want}", self._q({"node": self.node, "wait": self.wait}),
                                                                timeout=self.wait + 15))
@@ -1168,38 +1289,39 @@ class Member:
                 if exc.status == 409:
                     self.emit({"type": "info", "text": f"Left the run: {exc.detail}"})
                     self.fenced = True
-                    return
+                    return None
                 raise
             if view["state"] == "finished":
                 self.finished = True
-                return
+                return None
             if view["state"] == "closed":
                 want = view["current"]
             elif view["state"] == "pending" and not view["member"]:
                 self.join()
                 want = self.info["round"]
             elif view["state"] == "open":
-                self._phase("downloading")
+                if not quiet:
+                    self._phase("downloading")
                 try:
                     body = self._call(lambda: self.client.get_bytes(f"{self.base}/params", self._q({"round": want, "node": self.node})))
-                    self.theta = decode_arrays(body)
+                    theta = decode_arrays(body)
                     if view.get("replica") and self.replica_dir is not None:
                         self._replicate(want, body)
                     elif self.replica_dir is not None:
                         self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
-                    self._fetch([int(s) for s in view["shards"]])
+                    shards = [int(s) for s in view["shards"]]
+                    self._fetch(shards)
                 except PeerError as exc:
                     if exc.status == 409:  # the round moved on while this member was downloading
                         want = self.info["round"]
                         continue
                     raise
-                self.round, self.generation, self.rank, self.deadline_s = want, view["generation"], view["rank"], view["deadline_s"]
-                return
+                return Entered(want, theta, view["generation"], view["rank"], view["deadline_s"], shards, want != asked)
+        return None
 
     def _fetch(self, wanted):
         for shard in wanted:
             self._shard(shard)
-        self.train.set([self.shards[s] for s in wanted])
 
     def _shard(self, shard):
         """Download and install one shard unless it is held; the training thread and a replica's prefetch may both want it."""
@@ -1271,7 +1393,6 @@ class Member:
             return
 
     def _send(self, step, trained_tokens, model):
-        from studio_peer import PeerError
         self.round_step = step - self.first_step
         self._phase("uploading")
         weights = model.state_arrays()
@@ -1281,12 +1402,17 @@ class Member:
                   "steps": step - self.first_step, "seconds": self.clock() - self.began}
         if self.loss is not None:
             params["loss"] = self.loss
+        self._post(self.round, body, params)
+
+    def _post(self, number, body, params, overlapped=False):
+        from studio_peer import PeerError
         began = self.clock()
         try:
-            self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{self.round}/delta", body, params, timeout=self.wait + 120))
+            self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{number}/delta", body, params, timeout=self.wait + 120))
             upload, trained = self.clock() - began, params["seconds"]
-            self.emit({"type": "info", "text": f"Round {self.round}: sent {len(body)} bytes of {self.info['delta_dtype']} delta in {upload:.2f} s "
-                                               f"({upload / max(1e-9, trained + upload):.0%} of the member's {trained + upload:.2f} s round)."})
+            text = (f"in {upload:.2f} s, while the next round trained." if overlapped
+                    else f"in {upload:.2f} s ({upload / max(1e-9, trained + upload):.0%} of the member's {trained + upload:.2f} s round).")
+            self.emit({"type": "info", "text": f"Round {number}: sent {len(body)} bytes of {self.info['delta_dtype']} delta {text}"})
         except PeerError as exc:
             if exc.status != 409:
                 raise
@@ -1294,7 +1420,7 @@ class Member:
                 self.emit({"type": "info", "text": f"Fenced: {exc.detail}"})
                 self.fenced = True
             else:  # late, or the membership moved on: this round's work is dropped; take the new theta and carry on
-                self.emit({"type": "info", "text": f"Round {self.round} was not accepted ({exc.detail}); continuing from the new weights."})
+                self.emit({"type": "info", "text": f"Round {number} was not accepted ({exc.detail}); continuing from the new weights."})
 
     def leave(self):
         from studio_peer import PeerError
@@ -1338,6 +1464,9 @@ class Member:
         finally:
             self.halt.set()
             self.wake.set()
+            if self.pending is not None and hasattr(self.pending, "abandon"):
+                self.pending.abandon(self.wait + 20)  # the exchange in flight ends with stop; it must not write the shard cache removed below
+                self.pending = None
             self.leave()
             if self.prefetch is not None:
                 self.prefetch.join(60)
@@ -1366,6 +1495,8 @@ def main(argv=None):
     member.add_argument("--run", required=True, help="the run id: the pretrain_distributed job's id")
     member.add_argument("--node", default="", help="this member's name (default: the hostname)")
     member.add_argument("--epoch", type=int, default=0, help="lease epoch (default 0)")
+    member.add_argument("--overlap", action="store_true",
+                        help="train the next round while this round's delta uploads and the next weights download (applied a round late)")
     member.add_argument("--root", default="", help="folder that holds data/remote_shards (default: the workspace root)")
     args = parser.parse_args(argv)
     import socket
@@ -1379,7 +1510,7 @@ def main(argv=None):
             if event.get("type") in ("metric", "info"):
                 print(json.dumps({key: event[key] for key in ("type", "step", "loss", "val_loss", "text") if key in event}), flush=True)
         run_member(PeerClient(args.coordinator), args.run, args.node or socket.gethostname(), args.epoch, root,
-                   Path(scratch) / "member", show, stop)
+                   Path(scratch) / "member", show, stop, overlap=args.overlap)
     except KeyboardInterrupt:
         stop.set()
     finally:
