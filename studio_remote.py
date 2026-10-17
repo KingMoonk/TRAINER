@@ -94,6 +94,10 @@ class Cluster:
         self.guests = {}  # owner's job id -> GuestRun
         self.waiting = {}  # job id -> why it is waiting
         self._removed = {}  # job id -> checkpoint keys of a job taken out of the queue, still to be deleted from the store
+        self._results = set()  # result keys of jobs taken out of the queue: a result can be the bytes of a checkpoint, and stays
+        self._begun = set()  # keys a delete was started for: a half-finished one (its listing gone) is finished, no other unlisted key is
+        self._keep_lock = threading.Lock()  # guards _removed and _results only; a leaf lock (held with nothing else taken), so the queue may call in under its own
+        self._delete_lock = threading.Lock()  # a sweep checks a key is free and deletes it under this; `finished` records a result under it
         self._sweeping, self._sweep_at = False, 0.  # a sweep of checkpoints is running; the clock time the next may start
         self._known = {}  # peer address -> its last NodeInfo
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
@@ -186,7 +190,7 @@ class Cluster:
         if away:
             with self.runner.lock:
                 for job in away:
-                    job.status, job.node = "waiting", ""
+                    sched.interrupt(job)  # (steps, offset and the key to start from stay together, as when a lease lapses)
                 self.runner._save()
         for run in list(self.guests.values()):
             run.ended = True
@@ -277,6 +281,8 @@ class Cluster:
             params["examples"] = studio_worker.JobContext(self.runner.root, self.runner.root / "runs").examples(params)
         if not fetch and params.get("mode") == "catch_up" and params.get("init_from"):
             fetch["init_from"] = store.publish({"number": 0, "name": f"start of job {job.id}"}, params["init_from"])
+            with self.runner.lock:  # recorded on the job, so a sweep sees the key the runner is about to pull
+                job.params = {**job.params, "fetch": dict(fetch)}
         params.pop("init_from", None)
         notes.setdefault("steps", int((params.get("config") or {}).get("steps") or 0))
         notes.setdefault("offset", 0)
@@ -299,24 +305,28 @@ class Cluster:
         job = self._remote(job_id)
         if job is None:
             raise sched.StaleEpoch(job_id, epoch)
-        notes = dict(sched.attempt_state(job.params))
         problem = (body.get("problem") or "").strip()
-        if problem != notes.get("problem", ""):  # a refused checkpoint is said once on the job, and again only if the reason changes
-            with self.runner.lock:
+        checkpoint = body.get("checkpoint")
+        with self.runner.lock:  # (read and written under the lock: `_reassign` may have changed the notes since `_remote` looked)
+            if self._remote(job_id) is not job or job.epoch != epoch:
+                raise sched.StaleEpoch(job_id, epoch)
+            notes = dict(sched.attempt_state(job.params))
+            said = problem != notes.get("problem", "")  # a refused checkpoint is said once on the job, and again only if the reason changes
+            changed = said
+            if said:
                 notes = {**notes, "problem": problem} if problem else {k: v for k, v in notes.items() if k != "problem"}
-                job.params = {**job.params, "cluster": notes}
                 if problem:
                     job.note = f"{job.note} {problem}".strip()
-                self.runner._save()
-            if problem:
-                self.runner._emit("cluster", {"job": job_id, "state": "checkpoint_refused", "node": lease.node, "detail": problem})
-        checkpoint = body.get("checkpoint")
-        if checkpoint and checkpoint.get("key") and (notes.get("checkpoint") or {}).get("key") != checkpoint["key"]:
-            with self.runner.lock:
+            if checkpoint and checkpoint.get("key") and (notes.get("checkpoint") or {}).get("key") != checkpoint["key"]:
                 notes["checkpoint"] = {"key": checkpoint["key"], "step": int(notes.get("offset", 0)) + int(checkpoint.get("step") or 0)}
                 notes["checkpoints"] = [*(k for k in notes.get("checkpoints") or () if k != checkpoint["key"]), checkpoint["key"]]
+                job.params = {k: v for k, v in job.params.items() if k != "fetch"}  # a new checkpoint: it has pulled the one it started from
+                changed = True
+            if changed:
                 job.params = {**job.params, "cluster": notes}
                 self.runner._save()
+        if said and problem:
+            self.runner._emit("cluster", {"job": job_id, "state": "checkpoint_refused", "node": lease.node, "detail": problem})
         for event in body.get("events") or ():
             shifted = sched.relayed(event, int(notes.get("offset", 0)))
             if shifted is not None:
@@ -333,15 +343,33 @@ class Cluster:
         job = self._remote(job_id)
         if job is None:
             raise sched.StaleEpoch(job_id, epoch)
-        notes = sched.attempt_state(job.params)
-        with self.runner.lock:
-            job.status, job.error = body["status"], body.get("error") or ""
-            if body.get("key"):
-                job.params = {**job.params, "remote_result": {"key": body["key"], "node": job.node,
-                                                              "step": int(notes.get("offset", 0)) + int(body.get("step") or 0)}}
-            self.runner._save()
+        key = body.get("key")
+        with self._delete_lock:  # a sweep is never between "this key is free" and deleting it while the result is being recorded
+            lost = bool(key) and self._missing(key)
+            with self.runner.lock:
+                if self._remote(job_id) is not job or job.epoch != epoch:
+                    raise sched.StaleEpoch(job_id, epoch)
+                notes = sched.attempt_state(job.params)
+                job.status, job.error = body["status"], body.get("error") or ""
+                if lost:  # the result has the bytes of an older checkpoint and a cleanup took that key before it was recorded
+                    if job.status == "done":
+                        job.status = "failed"
+                    job.error = (f"{job.error} " if job.error else "") + (f"The result ({key}) is gone from the version store: a cleanup of "
+                                                                          "old checkpoints removed it before this machine recorded it. Run the job again.")
+                elif key:
+                    job.params = {**job.params, "remote_result": {"key": key, "node": job.node,
+                                                                  "step": int(notes.get("offset", 0)) + int(body.get("step") or 0)}}
+                self.runner._save()
         self.runner._emit("job", {"job": job_id, "status": job.status, "error": job.error})
         self.runner.wake.set()
+
+    def _missing(self, key):
+        """True only when the store says `key` is not there; a store that cannot say (no `exists`, or it fails) is believed."""
+        exists = getattr(self.store(), "exists", None)
+        try:
+            return exists is not None and not exists(key)
+        except Exception:  # noqa: BLE001 - could not look: the runner said it published it
+            return False
 
     def cancel(self, job):
         """The user removed a job that is running on a peer: tell the peer, drop the lease, keep the record as stopped."""
@@ -372,15 +400,9 @@ class Cluster:
             return
         node = job.node
         with self.runner.lock:
-            params, note, finished = sched.resume_params(job.params, node)
-            job.params, job.node = params, ""
-            if finished:
-                checkpoint = sched.attempt_state(job.params)["checkpoint"]
-                job.status = "done"
-                job.params["remote_result"] = {"key": checkpoint["key"], "node": node, "step": checkpoint["step"]}
-            else:
-                job.status = "waiting"
-                job.note = f"{job.note} {note}".strip()
+            if self._remote(job_id) is not job:  # it ended, or was cancelled or placed again, since it was looked up: leave it as it is
+                return
+            note, finished = sched.interrupt(job)
             self.runner._save()
         self.runner._emit("cluster", {"job": job_id, "state": "interrupted", "node": node, "detail": note})
         if finished:
@@ -409,36 +431,56 @@ class Cluster:
     # ---- owner: the checkpoints of jobs that cannot resume ----------------------------------------------------------
     def removed(self, job):
         """A job was taken out of the queue (`Runner.remove`): whatever checkpoints it had recorded can never be resumed from now, but the
-        record that held them is gone, so they are kept here until the store has let them go. A restart forgets them (`--check` lists them)."""
+        record that held them is gone, so they are kept here until the store has let them go (and so is its result's key, which can be the
+        bytes of one of them). A restart forgets both (`--check` lists what is left). No store I/O: this runs on the UI thread."""
         keys = self._checkpoint_keys(job)
-        if job.owner or not keys:
+        result = (job.params.get("remote_result") or {}).get("key")
+        if job.owner or not (keys or result):
             return
-        with self._lock:
-            self._removed[job.id] = [*self._removed.get(job.id, ()), *(k for k in keys if k not in self._removed.get(job.id, ()))]
+        with self._keep_lock:
+            if isinstance(result, str):
+                self._results.add(result)
+            if keys:
+                self._removed[job.id] = [*self._removed.get(job.id, ()), *(k for k in keys if k not in self._removed.get(job.id, ()))]
+
+    def trimmed(self, jobs):
+        """Jobs the queue dropped from its record of finished ones (`Runner._save` keeps 50): their result keys stay protected. No I/O."""
+        with self._keep_lock:
+            self._results.update(r for r in ((j.params.get("remote_result") or {}).get("key") for j in jobs if not j.owner)
+                                 if isinstance(r, str))
 
     @staticmethod
     def _checkpoint_keys(job):
         return [k for k in sched.attempt_state(job.params).get("checkpoints") or () if isinstance(k, str)]
 
+    def _protected(self):
+        """The keys that must not be deleted now: the result of any job (a result can be the bytes of a checkpoint), and for every job that
+        has not ended the key it resumes from (`fetch`, which the next runner pulls), the one its notes name and the newest it reported."""
+        with self.runner.lock:
+            keep = {(j.params.get("remote_result") or {}).get("key") for j in self.runner.jobs}
+            for job in self.runner.jobs:
+                if job.status not in TERMINAL:
+                    keep.update((job.params.get("fetch") or {}).values())
+                    keep.add((sched.attempt_state(job.params).get("checkpoint") or {}).get("key"))
+                    keep.update(self._checkpoint_keys(job)[-1:])
+        with self._keep_lock:
+            keep |= self._results
+        return {k for k in keep if isinstance(k, str)}
+
     def _doomed(self):
         """[(job id, [keys])] to delete now: every checkpoint a finished, failed or cancelled job reported, and all but the newest of a job
-        that can still resume (only the newest is resumed from). The result a job ended with, and any key another job still counts on,
-        stay. Only keys a runner reported for the job are ever listed."""
+        that can still resume (only the newest is resumed from). Anything `_protected` stays. Only keys a runner reported for the job are
+        ever listed."""
+        kept, doomed = self._protected(), []
         with self.runner.lock:
-            jobs = [j for j in self.runner.jobs if not j.owner]
-            kept = {(j.params.get("remote_result") or {}).get("key") for j in jobs}  # (the result can be the bytes of a checkpoint)
-            for job in jobs:
-                if job.status not in TERMINAL:
-                    kept.update(self._checkpoint_keys(job)[-1:])
-            doomed = []
-            for job in jobs:
+            for job in (j for j in self.runner.jobs if not j.owner):
                 keys = self._checkpoint_keys(job)
                 if job.status not in TERMINAL:
                     keys = keys[:-1]
                 keys = [k for k in keys if k not in kept]
                 if keys:
                     doomed.append((job.id, keys))
-        with self._lock:
+        with self._keep_lock:
             held = {k for _, keys in doomed for k in keys}
             for job_id, keys in self._removed.items():
                 keys = [k for k in keys if k not in kept and k not in held]
@@ -452,19 +494,27 @@ class Cluster:
         if self._sweeping or self.clock() < self._sweep_at:
             return
         doomed = self._doomed()
-        if not doomed or getattr(self.store(), "delete", None) is None:  # (a store that cannot delete: nothing to do, nothing to repeat)
-            return
+        store = self.store() if doomed else None
+        if store is None or getattr(store, "delete", None) is None or getattr(store, "metadata", None) is None:
+            return  # (a store that cannot delete, or cannot say what a key is: nothing is deleted, nothing to repeat)
         self._sweeping = True
         if not self.threads:
             return self._sweep_now(doomed)
         threading.Thread(target=self._sweep_now, args=(doomed,), daemon=True, name="sweep checkpoints").start()
 
+    # Lock order: `_delete_lock` is taken before `runner.lock`, never the other way round. `renewed` and `_reassign` do not take it, and need
+    # not: they only add checkpoint keys, or point `fetch` at the newest one, which `_protected` already counts; the one key they stop
+    # protecting is a `fetch` the runner has pulled. So a sweep that checked a key is free cannot have it taken by them before it deletes.
     def _sweep_now(self, doomed):
         try:
             store, failed = self.store(), False
             for job_id, keys in doomed:
                 for key in keys:
-                    if self._delete_checkpoint(store, job_id, key):
+                    with self._delete_lock:  # (what the list said was free may have been taken since: look again, and delete before anyone can)
+                        if key in self._protected():
+                            continue
+                        done = self._delete_checkpoint(store, job_id, key)
+                    if done:
                         self._forgotten(job_id, key)
                     else:
                         failed = True
@@ -476,17 +526,21 @@ class Cluster:
         finally:
             self._sweeping = False
 
-    @staticmethod
-    def _delete_checkpoint(store, job_id, key):
-        """True when `key` is gone from the store or is not a checkpoint of job `job_id` (then it is left alone); False, logged, when the
-        store would not do it. A key whose listing is missing is deleted anyway: that is a delete this code began and the store cut short."""
+    def _delete_checkpoint(self, store, job_id, key):
+        """True when `key` is gone from the store or is left alone for good (not a checkpoint of job `job_id`, or not listed); False,
+        logged, when the store would not do it. Fails closed: a key with no listing is not deleted, unless a delete of it was begun here
+        and the store cut it short (the listing goes first)."""
         try:
-            describe = getattr(store, "metadata", None)
-            meta = describe(key) if describe is not None else None
+            meta = store.metadata(key)
+            if meta is None and key not in self._begun:
+                _log.warning("Not deleting %s: the store has no listing for it, so it is not known to be a checkpoint of job %s.", key, job_id)
+                return True
             if meta is not None and studio_publish.checkpoint_job(meta) != job_id:
                 _log.warning("Not deleting %s: the store does not say it is a checkpoint of job %s.", key, job_id)
                 return True
+            self._begun.add(key)
             store.delete(key)
+            self._begun.discard(key)
             return True
         except Exception as exc:  # noqa: BLE001 - a checkpoint left behind costs space, not the job
             _log.warning("Could not delete checkpoint %s of job %s from the store: %s", key, job_id, exc)
@@ -494,7 +548,7 @@ class Cluster:
 
     def _forgotten(self, job_id, key):
         """`key` is deleted (or was never the job's): take it off the job's record, so it is not tried again."""
-        with self._lock:
+        with self._keep_lock:  # (a leaf lock: nothing else is taken while it is held)
             if job_id in self._removed:
                 self._removed[job_id] = [k for k in self._removed[job_id] if k != key]
                 if not self._removed[job_id]:

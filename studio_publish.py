@@ -716,41 +716,59 @@ _UNFINISHED = ("waiting", "held", "running")
 
 
 def queue_jobs(path):
-    """{job id: status} for the jobs in the queue file at `path`, or None when it cannot be read. A job this machine runs for another
-    node is listed under the owner's id (its own id is that and "-e<epoch>"), the one its checkpoints are published under."""
+    """(statuses, results, guests) for the queue file at `path`, or None when it cannot be read: {job id: status}, the set of result keys
+    of its jobs, and the set of ids of jobs this machine runs (or ran) for another node. Such a job is listed under the owner's id (its own
+    id is that and "-e<epoch>"), the one its checkpoints are published under."""
     try:
         jobs = json.loads(Path(path).read_text(encoding="utf-8"))["jobs"]
-        known = {}
+        known, results, guests = {}, set(), set()
         for job in jobs:
             job_id = str(job["id"])
             if job.get("owner"):
                 job_id = job_id.rsplit("-e", 1)[0]
+                guests.add(job_id)
             known[job_id] = job["status"]
-        return known
+            result = ((job.get("params") or {}).get("remote_result") or {}).get("key")
+            if isinstance(result, str):
+                results.add(result)
+        return known, results, guests
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
 def report_checkpoints(store, queue, out):
     """Say which of the job checkpoints in `store` no unfinished job of the queue at `queue` can resume from: the job is not in the queue
-    at all, or it ended. Only lists them; deleting is by hand. Checkpoints of a job another machine owns show here too: check there."""
+    at all, or it ended. The key a done job ends with (its result can be the bytes of a checkpoint) is not one. Only lists them; deleting
+    is by hand. A job this machine ran for another node is marked: its owner may still resume it. Checkpoints of a job another machine owns
+    and this one never ran show here too: check there."""
     entries = [(entry, checkpoint_job(entry)) for entry in store.list()]
     entries = [(entry, job_id) for entry, job_id in entries if job_id]
-    known = queue_jobs(queue)
-    if known is None:
-        out(f"Checkpoints: {len(entries)} job checkpoint object{'s' if len(entries) != 1 else ''}. The queue at {queue} could not be read, "
-            "so which of them are left over is not known. Run this from the TRAINER folder, or pass --queue.")
+    noun = f"{len(entries)} job checkpoint object{'s' if len(entries) != 1 else ''}"
+    queue_state = queue_jobs(queue)
+    if queue_state is None:
+        out(f"Checkpoints: {noun}. The queue at {queue} could not be read, so which of them are left over is not known. "
+            "Run this from the TRAINER folder, or pass --queue.")
         return
-    left = [(entry, job_id) for entry, job_id in entries if known.get(job_id) not in _UNFINISHED]
+    known, results, guests = queue_state
+    free = [(entry, job_id) for entry, job_id in entries if known.get(job_id) not in _UNFINISHED and entry["key"] not in results]
+    left = [(entry, job_id) for entry, job_id in free if job_id not in guests]
+    foreign = [(entry, job_id) for entry, job_id in free if job_id in guests]
+
+    def line(entry, job_id, why):
+        return (f"  {store.prefix}{entry['key']}  {why}, job {job_id}, {entry.get('change') or ''}, {size_text(int(entry.get('size') or 0))}, "
+                f"published {entry.get('published_at') or 'at an unknown time'}")
+
     if not left:
-        out(f"Checkpoints: {len(entries)} job checkpoint object{'s' if len(entries) != 1 else ''}, none left over.")
-        return
-    out(f"Checkpoints left over: {len(left)} of {len(entries)}, {size_text(sum(int(e.get('size') or 0) for e, _ in left))}. No unfinished job "
-        f"in {queue} can resume from them. Delete each one's .npz and .json from the bucket by hand if no other machine's job needs it:")
-    for entry, job_id in left:
-        why = f"job ended here ({known[job_id]})" if job_id in known else "job not in this queue"
-        out(f"  {store.prefix}{entry['key']}  {why}, job {job_id}, {entry.get('change') or ''}, {size_text(int(entry.get('size') or 0))}, "
-            f"published {entry.get('published_at') or 'at an unknown time'}")
+        out(f"Checkpoints: {noun}, none left over.")
+    else:
+        out(f"Checkpoints left over: {len(left)} of {len(entries)}, {size_text(sum(int(e.get('size') or 0) for e, _ in left))}. No unfinished job "
+            f"in {queue} can resume from them. Delete each one's .npz and .json from the bucket by hand if no other machine's job needs it:")
+        for entry, job_id in left:
+            out(line(entry, job_id, f"job ended here ({known[job_id]})" if job_id in known else "job not in this queue"))
+    if foreign:
+        out(f"Owned by another machine, do not delete: {len(foreign)}. This machine only ran these jobs; their owner may still resume them:")
+        for entry, job_id in foreign:
+            out(line(entry, job_id, "owned by another machine, do not delete"))
 
 
 def check(environ=None, write=False, out=print, queue=QUEUE_FILE):

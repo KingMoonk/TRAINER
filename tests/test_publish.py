@@ -940,6 +940,41 @@ class Check(Checkpoints):
         self.assertIn("trainer/gpu-box/v0-", said)
         self.assertEqual([c[0] for c in client.log[before:] if c[0] in UPLOADS + ("delete_object",)], [])  # it only lists
 
+    def test_a_done_jobs_result_is_not_left_over_even_with_the_bytes_of_a_checkpoint(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        client, path = self.bucket_with_checkpoints([], {"finished": 1, "failed": 2})
+        keys = {entry["name"]: entry["key"] for entry in S3Store(CONFIG, client=client, origin="gpu-box").list()}
+        queue = [{"id": "finished", "status": "done", "params": {"remote_result": {"key": keys["job:finished"], "node": "x", "step": 1}}},
+                 {"id": "failed", "status": "failed", "params": {}}]
+        path.write_text(json.dumps({"jobs": queue}), encoding="utf-8")
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--queue", str(path)))
+        self.assertIn("Checkpoints left over: 1 of 2", said)
+        self.assertIn("job failed,", said)
+        self.assertNotIn("job finished", said)
+
+    def test_a_job_a_restart_stopped_for_another_machine_is_marked_not_yours_to_delete(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        queue = [{"id": "theirs-e2", "status": "stopped", "owner": "other:1"}, {"id": "mine", "status": "failed"}]
+        client, path = self.bucket_with_checkpoints(queue, {"theirs": 1, "mine": 2})
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--queue", str(path)))
+        self.assertIn("Checkpoints left over: 1 of 2", said)
+        self.assertIn("Delete each one's", said)
+        self.assertIn("Owned by another machine, do not delete: 1", said)
+        mine, theirs = (next(line for line in said.splitlines() if f"job {job}," in line) for job in ("mine", "theirs"))
+        self.assertNotIn("do not delete", mine)
+        self.assertIn("owned by another machine, do not delete", theirs)
+
+    def test_with_only_another_machines_jobs_nothing_is_left_over_to_delete(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        client, path = self.bucket_with_checkpoints([{"id": "theirs-e2", "status": "stopped", "owner": "other:1"}], {"theirs": 1})
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--queue", str(path)))
+        self.assertIn("none left over", said)
+        self.assertNotIn("Delete each", said)
+        self.assertIn("owned by another machine, do not delete", said)
+
     def test_with_every_checkpoint_in_use_it_says_none_are_left_over(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)

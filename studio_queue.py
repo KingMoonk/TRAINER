@@ -204,12 +204,18 @@ class Runner:
         for job in self.jobs:          # a run cut short by a restart goes back to the front
             if job.owner and job.status in ("running", "waiting", "held"):  # another node's job cannot renew its lease now: its owner places it again
                 job.status, job.error = "stopped", "This machine restarted while it ran the job for another machine, which will place it again."
-            elif job.status == "running":  # a job that was running on a peer is placed again, at the next epoch, so the peer's copy is fenced
-                job.status, job.node = "waiting", ""
+            elif job.status == "running" and job.node:  # running on a peer: placed again, at the next epoch, so the peer's copy is fenced
+                import studio_scheduler
+                studio_scheduler.interrupt(job)  # from its last checkpoint, with the steps left and the offset that go with it
+            elif job.status == "running":
+                job.status = "waiting"
 
     def _save(self):
         done = [j for j in self.jobs if j.status not in ("waiting", "running", "held")][-50:]
         live = [j for j in self.jobs if j.status in ("waiting", "running", "held")]
+        dropped = [j for j in self.jobs if j.status not in ("waiting", "running", "held") and not any(j is d for d in done)]
+        if dropped and getattr(self, "cluster", None) is not None:
+            self.cluster.trimmed(dropped)  # (no I/O: it only remembers their result keys, which a sweep must not delete)
         self.jobs = done + live
         atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused,
                                 "jobs": [dataclasses.asdict(j) for j in self.jobs]})
@@ -283,7 +289,7 @@ class Runner:
         self._emit("queue", {"job": job_id})
 
     def remove(self, job_id):
-        remote = gone = None
+        remote = None
         with self.lock:
             job = next((j for j in self.jobs if j.id == job_id), None)
             if job is self.running:
@@ -292,12 +298,10 @@ class Runner:
                 remote = job           # running on a peer: it is told to stop, and the record is kept as stopped
             elif job:
                 self.jobs.remove(job)
-                gone = job
                 self._save()
+                self.cluster.removed(job)  # (under the lock, so a sweep never sees it gone before its result key is remembered; no I/O)
         if remote:
             self.cluster.cancel(remote)
-        if gone:
-            self.cluster.removed(gone)  # a job that waited to be placed again leaves checkpoints in the store that nothing can resume
         self.wake.set()
         self._emit("queue", {"job": job_id})
 

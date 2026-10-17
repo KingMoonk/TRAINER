@@ -4777,6 +4777,11 @@
             "title": "Node",
             "type": "string"
           },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
           "pinned": {
             "default": "",
             "title": "Pinned",
@@ -8766,7 +8771,7 @@
     },
     "/cluster/merged": {
       "get": {
-        "description": "The jobs of every machine, each with the machine it runs on or is pinned to. The peers are asked at the same time, for their\nnode and their queue, and answer within two seconds or not at all; a peer that does not keeps its last known rows, marked stale.\nSync, so the peers are asked off the event loop. Empty when no other machine is listed.",
+        "description": "The jobs of every machine, each with the machine it runs on or is pinned to. The peers are asked at the same time, for their\nnode and their queue, and answer within two seconds or not at all; a peer that does not keeps its last known rows, marked stale.\nSync, so the peers are asked off the event loop. Empty when no other machine is listed, except that a job still running on a machine\nthat was removed from the list keeps its row, so its note (for example, a refused checkpoint) is still said.",
         "operationId": "merged_queue_cluster_merged_get",
         "responses": {
           "200": {

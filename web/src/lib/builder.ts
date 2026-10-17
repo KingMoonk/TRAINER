@@ -2,7 +2,7 @@
 // localStorage so a reload keeps it); every sum comes from the stateless /design routes (studio_api/routers/design.py).
 // Nothing here touches the DOM: the component (components/builder) renders what these functions return.
 
-import { api, ApiError, apiUrl, unwrap } from "@/lib/api";
+import { api, apiFetch, ApiError, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 import { BUILDER, fill } from "@/lib/copy/builder";
 
@@ -71,7 +71,7 @@ export const versions = {
   importPretrained: async (name: string): Promise<Version> => {
     const form = new FormData();
     form.set("name", name);
-    const res = await fetch(apiUrl("/post-training/imports"), { method: "POST", body: form });
+    const res = await apiFetch("/post-training/imports", { method: "POST", body: form });
     if (!res.ok) throw new ApiError(res.status, "/post-training/imports", await res.text());
     return (await res.json()) as Version;
   },

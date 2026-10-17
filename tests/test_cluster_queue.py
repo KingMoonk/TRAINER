@@ -1,6 +1,7 @@
 """studio_cluster_queue (the merged queue) and GET /cluster/merged, POST /queue/jobs/{id}/pin over FakeServices and fake peers."""
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import studio_cluster_queue as cq
@@ -53,6 +54,12 @@ class Merge(unittest.TestCase):
                           ("", "", "here-box", True), ("", "ghost", "here-box", True)])
         self.assertEqual((rows["c"].pinned, rows["d"].pinned, rows["e"].waiting_reason), ("GPU-box", "", "It is pinned to ghost."))
         self.assertFalse(any(r.stale for r in rows.values()))
+
+    def test_a_job_note_comes_with_its_row_for_a_job_here_and_a_peers_job(self):
+        note = "The checkpoint was not stored: the bucket is full."
+        net = Net(gpu=peer("gpu-box", job("p1", "running", note="peer note"), job("p2", "running")))
+        rows = self.merge(net, [Job("pretrain", "away", status="running", id="b", node="gpu", note=note), Job("pretrain", "plain", id="c")])[1]
+        self.assertEqual([(r.id, r.note) for r in rows.values()], [("b", note), ("c", ""), ("p1", "peer note"), ("p2", "")])
 
     def test_a_peers_jobs_are_rows_on_that_peer(self):
         net = Net(gpu=peer("gpu-box", job("p1", "running"), job("p2", params={"pinned": "here-box"}), job("p3", "held")))
@@ -171,6 +178,20 @@ class QueueRoute(ApiCase):
                          [("local", "here-box", "here-box", True, True), ("gpu", "gpu-box", "gpu", False, True)])
         self.assertEqual([(r["id"], r["status"], r["hostname"], r["queued_on"], r["queued_here"], r["stale"]) for r in body["jobs"]],
                          [(mine["id"], "waiting", "", "here-box", True, False), ("p1", "running", "gpu-box", "gpu-box", False, False)])
+
+    def test_a_note_on_a_job_running_on_a_peer_is_in_its_row(self):
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        away = Job("pretrain", "away", status="running", id="far1", node="gpu", note="the bucket is full")
+        self.services.runner = SimpleNamespace(jobs=[away], cluster=None)
+        rows = {r["id"]: r for r in self.call("GET", "/cluster/merged")["jobs"]}
+        self.assertEqual((rows["far1"]["note"], rows["far1"]["queued_here"], rows["p1"]["note"]), ("the bucket is full", True, ""))
+
+    def test_a_job_still_running_on_a_removed_peer_keeps_its_row_and_note(self):
+        self.services.runner = SimpleNamespace(jobs=[Job("pretrain", "away", status="running", id="far1", node="gpu", note="the bucket is full")], cluster=None)
+        body = self.call("GET", "/cluster/merged")
+        self.assertEqual([(n["address"], n["local"]) for n in body["nodes"]], [("local", True)])
+        self.assertEqual([(r["id"], r["hostname"], r["note"]) for r in body["jobs"]], [("far1", "gpu", "the bucket is full")])
+        self.assertEqual(self.net.calls, [])
 
     def test_this_machines_pin_is_its_address_when_a_peer_shares_its_hostname(self):
         self.net.peers["gpu"]["node"] = node_payload("HERE-box")

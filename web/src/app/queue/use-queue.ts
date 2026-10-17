@@ -5,10 +5,9 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, subscribe, unwrap, type ApiEvent } from "@/lib/api";
 import { T } from "./copy";
-import { awayJobs, errorText, type Job, type Plan, type Queue } from "./logic";
+import { errorText, type Plan, type Queue } from "./logic";
 
 const QUEUE = ["queue"] as const;
-const JOBS = ["queue-jobs"] as const;
 const TICK_MS = 500;
 
 /** Call `handler` for every event on the stream. The shell holds its own stream; this one is the page's, for `queue` and `train`. */
@@ -42,19 +41,6 @@ export function useQueue() {
     }
   });
   return query;
-}
-
-/**
- * The jobs running on other machines, from GET /queue/jobs (the queue state has only this machine's own). A `cluster` event (a
- * peer took a job, or said its checkpoint or result could not be stored) and a `queue` event re-read them.
- */
-export function useAwayJobs() {
-  const client = useQueryClient();
-  const query = useQuery({ queryKey: JOBS, queryFn: ({ signal }) => unwrap(api.GET("/queue/jobs", { signal })) });
-  useEventStream((event) => {
-    if (event.kind === "queue" || event.kind === "cluster") client.invalidateQueries({ queryKey: JOBS });
-  });
-  return { ...query, away: awayJobs((query.data ?? []) as Job[]) };
 }
 
 /** When a waiting job starts, from GET /queue/jobs/{id}/outlook. Empty once it has left the queue. */

@@ -7,7 +7,7 @@ import { emit, fakeEvents, mockApi } from "./qp-mock";
 
 type Row = {
   id: string; kind: string; label: string; status: string; node: string; hostname: string; queued_on: string; queued_here: boolean;
-  pinned: string; waiting_reason: string; stale: boolean;
+  pinned: string; waiting_reason: string; stale: boolean; note: string;
 };
 const NODES = {
   me: { address: "local", hostname: "mac-mini", pin: "mac-mini", local: true, online: true, error: "", seen_at: 0 },
@@ -15,7 +15,7 @@ const NODES = {
 };
 const job = (id: string, label: string, over: Record<string, unknown> = {}) => ({ id, kind: "pretrain", label, note: "", params: {}, status: "waiting", eta_s: null, created_at: 0, error: "", ...over });
 const row = (id: string, label: string, over: Partial<Row> = {}): Row => ({
-  id, kind: "pretrain", label, status: "waiting", node: "", hostname: "", queued_on: "mac-mini", queued_here: true, pinned: "", waiting_reason: "", stale: false, ...over,
+  id, kind: "pretrain", label, status: "waiting", node: "", hostname: "", queued_on: "mac-mini", queued_here: true, pinned: "", waiting_reason: "", stale: false, note: "", ...over,
 });
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
 const published = (number: number, over: Record<string, unknown> = {}) => ({
@@ -102,6 +102,33 @@ test("the Queue page shows every machine's jobs with the node on each row", asyn
   await expect(other.getByTestId("other-g1")).not.toHaveAttribute("data-stale", "true");
   // This machine's own jobs are not repeated in the other machines' card.
   await expect(other.getByTestId("other-w1")).toHaveCount(0);
+});
+
+test("a job running on another machine shows the note about its checkpoint in the other machines card, once", async ({ page }) => {
+  const state = twoMachines();
+  const note = "The checkpoint was not stored: the bucket is full.";
+  state.jobs.push(row("far1", "Version 4 pretraining", { status: "running", node: "gpu-box:8000", hostname: "gpu-box", note }));
+  await setup(page, state);
+  await page.goto("/queue/");
+
+  const other = page.getByTestId("other-machines");
+  await expect(other.getByTestId("other-far1")).toContainText("Version 4 pretraining");
+  await expect(other.getByTestId("other-far1")).toContainText("Running on gpu-box");
+  await expect(other.getByTestId("other-far1")).toContainText(note);
+  await expect(page.getByText(note)).toHaveCount(1);
+  await expect(page.getByTestId("other-g1")).not.toContainText("bucket");
+});
+
+test("a job still running on a machine that was removed from the list keeps its row and note", async ({ page }) => {
+  const state = twoMachines();
+  const note = "The checkpoint was not stored: the bucket is full.";
+  state.nodes = [NODES.me];
+  state.jobs = [row("far1", "Version 4 pretraining", { status: "running", node: "", hostname: "gpu-box:8000", note })];
+  await setup(page, state);
+  await page.goto("/queue/");
+
+  await expect(page.getByTestId("other-far1")).toContainText("Running on gpu-box:8000");
+  await expect(page.getByTestId("other-far1")).toContainText(note);
 });
 
 test("pinning a waiting job to the other machine changes where its row says it will run", async ({ page }) => {

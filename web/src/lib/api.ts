@@ -5,27 +5,16 @@
 
 import createClient from "openapi-fetch";
 import type { paths } from "@/lib/api-schema";
+import { toast } from "sonner";
+import { ApiError, apiFetch, apiUrl, BASE } from "@/lib/api-core";
+import { getStream } from "@/lib/sse-post";
+import { apiToken, TOKEN_HEADER } from "@/lib/token";
 
-const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly path: string,
-    readonly body: string,
-  ) {
-    super(`${status} from ${path}`);
-    this.name = "ApiError";
-  }
-}
-
-export function apiUrl(path: string): string {
-  return `${BASE}${path.startsWith("/") ? path : `/${path}`}`;
-}
+export { ApiError, apiFetch, apiUrl } from "@/lib/api-core";
 
 /** GET (or `init.method`) `path` and parse the JSON reply as `T`. Throws ApiError on a non-2xx status. */
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(path), {
+  const res = await apiFetch(path, {
     ...init,
     headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
   });
@@ -36,6 +25,13 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
 
 /** The typed client: `api.GET("/jobs/{job_id}", { params: { path: { job_id } } })`. Wrap a call in `unwrap` for its data or an ApiError. */
 export const api = createClient<paths>({ baseUrl: BASE });
+api.use({
+  onRequest({ request }) {
+    const token = apiToken();
+    if (token) request.headers.set(TOKEN_HEADER, token);
+    return request;
+  },
+});
 
 /** The data of a typed `api` call, or an ApiError for a non-2xx reply (the same error `fetchJson` throws). */
 export async function unwrap<T>(request: Promise<{ data?: T; error?: unknown; response: Response }>): Promise<T> {
@@ -49,12 +45,25 @@ export async function unwrap<T>(request: Promise<{ data?: T; error?: unknown; re
 /** Every `Services.emit(kind, payload)` on the server, as the API's `GET /events` SSE stream will send it. */
 export type ApiEvent = { kind: string; payload: unknown };
 
-/** Open the event stream and call `onEvent` for each event. Returns the function that closes it. */
+const RECONNECT_MS = 3000;
+let refused = false;
+
+/** Whether the node answered 401 to the stored token. Until the page reloads no stream is opened or retried (a retry cannot help). */
+export function tokenRefused(): boolean {
+  return refused;
+}
+
+/**
+ * Open the event stream and call `onEvent` for each event. Returns the function that closes it.
+ * With a stored token (token.ts) the stream is read with fetch so `X-Groundwork-Token` can go in a header, which an EventSource
+ * cannot send; it reconnects on its own like an EventSource does. Without one, a plain EventSource is used.
+ */
 export function subscribe(
   onEvent: (event: ApiEvent) => void,
   onError?: (error: Event) => void,
   onOpen?: () => void,
 ): () => void {
+  if (apiToken()) return subscribeWithHeaders(onEvent, onError, onOpen);
   const source = new EventSource(apiUrl("/events"));
   if (onOpen) source.onopen = onOpen;
   source.onmessage = (message: MessageEvent<string>) => {
@@ -66,4 +75,30 @@ export function subscribe(
   };
   if (onError) source.onerror = onError;
   return () => source.close();
+}
+
+function subscribeWithHeaders(onEvent: (event: ApiEvent) => void, onError?: (error: Event) => void, onOpen?: () => void): () => void {
+  if (refused) return () => {};
+  const abort = new AbortController();
+  void (async () => {
+    while (!abort.signal.aborted) {
+      try {
+        await getStream("/events", onEvent, abort.signal, onOpen);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {  // the server refused the stored token: retrying cannot help
+          if (!abort.signal.aborted) {
+            const first = !refused;
+            refused = true;
+            onError?.(new Event("error"));
+            if (first) toast.error("The node refused the stored token, so live updates are off. Fix it (docs/node.md) and reload the page.", { id: "token-refused" });
+          }
+          return;
+        }
+      }
+      if (abort.signal.aborted) return;
+      onError?.(new Event("error"));
+      await new Promise((resolve) => setTimeout(resolve, RECONNECT_MS));
+    }
+  })();
+  return () => abort.abort();
 }
