@@ -1,4 +1,5 @@
 """tasks.py dev: the commands it starts, the device notice and the wait for GET /node. No server is started."""
+import json
 import socket
 import unittest
 from pathlib import Path
@@ -36,16 +37,84 @@ class DevCommandsTest(unittest.TestCase):
         self.assertEqual(web[web.index("--port") + 1], str(tasks.WEB_PORT))
         self.assertEqual(api[:3], [tasks.PY, "-m", "studio_api"])  # the venv that runs tasks.py, so its torch
 
-    def test_serve_commands_name_the_loopback_ports(self):
-        page, api = tasks.SERVE
-        self.assertTrue(page.endswith(f"http://127.0.0.1:{tasks.WEB_PORT}"))
-        self.assertTrue(api.endswith(f"--set-path=/api/ http://127.0.0.1:{tasks.API_PORT}"))
+    def test_serve_maps_name_the_loopback_ports(self):
+        self.assertEqual(tasks.DEV_SERVE, {"/": f"http://127.0.0.1:{tasks.WEB_PORT}", "/api/": f"http://127.0.0.1:{tasks.API_PORT}"})
+        self.assertEqual(tasks.APP_SERVE, {"/": f"http://127.0.0.1:{tasks.API_PORT}"})
 
     def test_a_listening_port_is_busy(self):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen()
             self.assertTrue(tasks.port_busy(listener.getsockname()[1]))
+
+
+def serve_status(handlers, host="box.tail1234.ts.net:443"):
+    return {"TCP": {"443": {"HTTPS": True}}, "Web": {host: {"Handlers": {p: {"Proxy": t} for p, t in handlers.items()}}}}
+
+
+class FakeTailscale:
+    """`tailscale serve`: status --json reports the handlers; the other commands change them as the real one does."""
+    def __init__(self, handlers):
+        self.handlers, self.changes = dict(handlers), []
+
+    def __call__(self, cmd, **_):
+        args = cmd[1:]
+        if args == ["serve", "status", "--json"]:
+            return mock.Mock(returncode=0, stdout=json.dumps(serve_status(self.handlers)))
+        self.changes.append(args)
+        path = next((a.split("=", 1)[1] for a in args if a.startswith("--set-path=")), "/")
+        if args[-1] == "off":
+            self.handlers.pop(path, None)
+        else:
+            self.handlers[path] = args[-1]
+        return mock.Mock(returncode=0, stdout="")
+
+
+class TailnetServeTest(unittest.TestCase):
+    def ensure(self, fake, want, url="https://box.tail1234.ts.net/"):
+        said = []
+        tasks.ensure_serve(want, "/bin/tailscale", url, run=fake, say=said.append)
+        return said
+
+    def test_the_handlers_come_from_the_443_entry(self):
+        status = serve_status({"/": "http://127.0.0.1:3000"})
+        status["Web"]["box.tail1234.ts.net:8443"] = {"Handlers": {"/x": {"Proxy": "http://127.0.0.1:9"}}}
+        self.assertEqual(tasks.serve_handlers(status), {"/": "http://127.0.0.1:3000"})
+        self.assertEqual(tasks.serve_handlers({}), {})
+
+    def test_dev_from_the_built_app_moves_the_root_and_adds_the_api(self):
+        fake = FakeTailscale(tasks.APP_SERVE)
+        said = self.ensure(fake, tasks.DEV_SERVE)
+        self.assertEqual(fake.handlers, tasks.DEV_SERVE)
+        self.assertEqual(said[-1], "Tailnet: https://box.tail1234.ts.net/")
+
+    def test_run_from_dev_drops_the_api_path(self):
+        fake = FakeTailscale(tasks.DEV_SERVE)
+        self.ensure(fake, tasks.APP_SERVE)
+        self.assertEqual(fake.handlers, tasks.APP_SERVE)
+        self.assertIn(["serve", "--https=443", "--set-path=/api/", "off"], fake.changes)
+
+    def test_a_second_start_changes_nothing(self):
+        for want in (tasks.DEV_SERVE, tasks.APP_SERVE):
+            fake = FakeTailscale(want)
+            said = self.ensure(fake, want)
+            self.assertEqual(fake.changes, [])
+            self.assertIn("already", said[-1])
+
+    def test_no_tailscale_changes_nothing(self):
+        fake = FakeTailscale({})
+        for binary, url in ((None, "https://box.tail1234.ts.net/"), ("/bin/tailscale", "")):
+            said = []
+            tasks.ensure_serve(tasks.DEV_SERVE, binary, url, run=fake, say=said.append)
+            self.assertIn("not running", said[0])
+        self.assertEqual(fake.changes, [])
+
+    def test_a_change_that_does_not_stick_warns(self):
+        fake = FakeTailscale({})
+        stuck = mock.Mock(side_effect=lambda cmd, **kw: fake(cmd, **kw) if cmd[1:3] == ["serve", "status"] else mock.Mock(returncode=1))
+        said = []
+        tasks.ensure_serve(tasks.DEV_SERVE, "/bin/tailscale", "https://box/", run=stuck, say=said.append)
+        self.assertTrue(any(s.startswith("WARNING") for s in said))
 
 
 class SetupTest(unittest.TestCase):

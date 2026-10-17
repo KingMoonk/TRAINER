@@ -156,14 +156,17 @@ Ctrl+C stops both. It prints the tailnet URL, and the device once the API answer
 seconds (open `/events` streams are cut after 2 seconds, `GRACEFUL_SHUTDOWN` in `studio_api/__main__.py`); a saved file under
 `web/` hot-reloads. It takes no arguments, so neither server can be bound beyond loopback from there.
 
-To reach `dev` from the tailnet, run this **once** in another terminal. `dev` never runs it, and it changes what `tailscale serve`
-shows (undo with `tailscale serve reset`; to publish only the built app again, `tailscale serve --bg 8787`). The Tailscale
-CLI on a Mac is `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` is not on `PATH`:
+When Tailscale is running, `dev` points `tailscale serve` at the two servers before it starts them: `/` to `127.0.0.1:3000` and
+`/api/` to `127.0.0.1:8787` (the prefix is stripped, so the page and the API are one origin). `make run` points it back at the
+built app (`/` to `127.0.0.1:8787`, no `/api/`). Each reads `tailscale serve status --json` first and changes only the paths that
+differ, so starting either again changes nothing; other ports and Funnel settings are left alone. Without Tailscale both say so
+and serve on loopback only. To do it by hand (the CLI on a Mac is `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when
+`tailscale` is not on `PATH`):
 
 ```bash
 tailscale serve --bg http://127.0.0.1:3000
 tailscale serve --bg --set-path=/api/ http://127.0.0.1:8787
-tailscale serve status          # / -> 3000, /api/ -> 8787 (the prefix is stripped, so the page and the API are one origin)
+tailscale serve status          # / -> 3000, /api/ -> 8787
 ```
 
 Because the API stays on loopback, the only way to it from another machine is `tailscale serve`, which deletes any

@@ -37,7 +37,8 @@ macOS ships `make` with the Xcode command line tools; on Windows install it once
 `setup` creates `.venv`, installs the right PyTorch (the default wheel on a Mac, the CUDA wheel when `nvidia-smi` lists a GPU),
 the requirements and the web packages, prints the device PyTorch sees, and fails if the machine has a GPU PyTorch cannot use.
 The API refuses to start on the CPU when a GPU is present unless you pass `--allow-cpu`. `make dev` is the hot-reloading
-loop; `docs/node.md` ("Setup and development, per machine") has the one-time `tailscale serve` step that puts it on your tailnet.
+loop and `make run` the built app; when Tailscale is running, each points `tailscale serve` at itself as it starts
+(`docs/node.md`, "Setup and development, per machine").
 
 **3. Build the web UI and start the API.**
 

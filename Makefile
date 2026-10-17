@@ -1,7 +1,7 @@
 # The short commands. Each target calls tasks.py (or pnpm in web/), which holds the real logic.
 #   make setup      once per machine: .venv, the right torch (MPS / CUDA), requirements, web packages; prints the device
-#   make dev        the live loop: API (--reload) + Next dev server on 127.0.0.1; Ctrl+C stops both
-#   make run        the built app: API serving web/out, opens the browser (python app.py)
+#   make dev        the live loop: API (--reload) + Next dev server on 127.0.0.1; Ctrl+C stops both; tailnet / -> page, /api/ -> API
+#   make run        the built app: API serving web/out, opens the browser (python app.py); tailnet / -> API
 #   make test       ruff + all unit tests; `make test T="tests.test_x tests.test_y"` for just those modules
 #   make web-check  web/: Vitest, lint, typecheck, build
 # Windows: install make once (`winget install ezwinports.make`), then the same commands work in PowerShell.
@@ -28,7 +28,7 @@ dev:
 	$(VENV_PY) tasks.py dev
 
 run:
-	$(VENV_PY) app.py
+	$(VENV_PY) tasks.py run
 
 test:
 	$(VENV_PY) tasks.py test $(T)
