@@ -40,7 +40,10 @@ def wait(condition, timeout=30):
 def write_checkpoint(path, step):
     """The smallest file studio_publish accepts as a checkpoint."""
     meta = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "step": step}
-    np.savez(path, metadata=np.array(json.dumps(meta)), **{"weight::w": np.arange(4, dtype=np.float32)})  # (the step is in the bytes, so the key)
+    path = Path(path)
+    partial = path.with_name(f"{path.stem}.partial.npz")  # written aside and renamed in, so a concurrent publish never reads a half-written zip
+    np.savez(partial, metadata=np.array(json.dumps(meta)), **{"weight::w": np.arange(4, dtype=np.float32)})  # (the step is in the bytes, so the key)
+    os.replace(partial, path)
 
 
 def trainish(job, context, emit, stop, pause):
