@@ -1277,6 +1277,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Defaults
+         * @description The DiLoCo settings the form starts from.
+         */
+        get: operations["defaults_distributed_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runs
+         * @description Every run this computer owns, newest first, each with its members and rounds. A machine that is offline or refuses is a
+         *     member row with a reason; the rest of the run still reads.
+         */
+        get: operations["list_runs_distributed_runs_get"];
+        put?: never;
+        /**
+         * Start Run
+         * @description Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen
+         *     machines are invited when the run starts, and the form's settings are checked here (400 with a sentence).
+         */
+        post: operations["start_run_distributed_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_distributed_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/members/{node}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Member
+         * @description Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)
+         *     and for a node that is not a member.
+         */
+        post: operations["stop_member_distributed_runs__run_id__members__node__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Run
+         * @description End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The
+         *     weights of the last finished round stay in the run's folder.
+         */
+        post: operations["stop_run_distributed_runs__run_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -3568,6 +3673,19 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** Defaults */
+        Defaults: {
+            /** Delta Dtype */
+            delta_dtype: string;
+            /** Inner Steps */
+            inner_steps: number;
+            /** Outer Lr */
+            outer_lr: number;
+            /** Outer Momentum */
+            outer_momentum: number;
+            /** Rounds */
+            rounds: number;
+        };
         /** Dispatch */
         Dispatch: {
             /**
@@ -4337,6 +4455,42 @@ export interface components {
             measured: boolean;
             /** Way */
             way: string | null;
+        };
+        /** Member */
+        Member: {
+            /** Address */
+            address: string;
+            /** Can Stop */
+            can_stop: boolean;
+            /** Device */
+            device: string;
+            /** Device Name */
+            device_name: string;
+            /** Last Delta Bytes */
+            last_delta_bytes: number | null;
+            /** Last Delta Dtype */
+            last_delta_dtype: string;
+            /** Local */
+            local: boolean;
+            /** Missed */
+            missed: number;
+            /** Node */
+            node: string;
+            /** Note */
+            note: string;
+            /** Rounds Done */
+            rounds_done: number;
+            /** Sent */
+            sent: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "finished";
+            /** Steps */
+            steps: number;
+            /** Tokens Per Second */
+            tokens_per_second: number | null;
         };
         /** Message */
         Message: {
@@ -5658,6 +5812,29 @@ export interface components {
             /** Keep */
             keep: boolean;
         };
+        /** Round */
+        Round: {
+            /** Bytes Down */
+            bytes_down: number;
+            /** Bytes Up */
+            bytes_up: number;
+            /** Contributed */
+            contributed: number;
+            /** Dropped */
+            dropped: string[];
+            /** Loss */
+            loss: number | null;
+            /** Members */
+            members: number;
+            /** Round */
+            round: number;
+            /** Seconds */
+            seconds: number;
+            /** Step */
+            step: number;
+            /** Val Loss */
+            val_loss: number | null;
+        };
         /** RoundQueued */
         RoundQueued: {
             /** Id */
@@ -5751,6 +5928,44 @@ export interface components {
              * @enum {string}
              */
             kind: "conversations" | "problems" | "pairs" | "corrections" | "heldout_docs" | "heldout_problems";
+        };
+        /** Run */
+        Run: {
+            /** Can Stop */
+            can_stop: boolean;
+            /** Delta Dtype */
+            delta_dtype: string;
+            /** History */
+            history: components["schemas"]["Round"][];
+            /** Id */
+            id: string;
+            /** Inner Steps */
+            inner_steps: number;
+            /** Label */
+            label: string;
+            /** Members */
+            members: components["schemas"]["Member"][];
+            /** Note */
+            note: string;
+            /** Outer Lr */
+            outer_lr: number;
+            /** Outer Momentum */
+            outer_momentum: number;
+            /** Owner */
+            owner: string;
+            /** Round */
+            round: number;
+            /** Rounds */
+            rounds: number;
+            /** Started At */
+            started_at: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "starting" | "waiting" | "running" | "finished" | "stopped" | "failed";
+            /** Version */
+            version: number | null;
         };
         /** RunPageModel */
         RunPageModel: {
@@ -5997,6 +6212,41 @@ export interface components {
             level?: string | null;
             /** Mode */
             mode?: string | null;
+        };
+        /**
+         * StartRun
+         * @description What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.
+         */
+        StartRun: {
+            /** Dataset Ids */
+            dataset_ids: string[];
+            /**
+             * Inner Steps
+             * @default 100
+             */
+            inner_steps: number;
+            /**
+             * Machines
+             * @default []
+             */
+            machines: string[];
+            /**
+             * Outer Lr
+             * @default 0.7
+             */
+            outer_lr: number;
+            /**
+             * Outer Momentum
+             * @default 0.9
+             */
+            outer_momentum: number;
+            /**
+             * Rounds
+             * @default 10
+             */
+            rounds: number;
+            /** Version */
+            version?: number | null;
         };
         /** StatusRequest */
         StatusRequest: {
@@ -8711,6 +8961,173 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    defaults_distributed_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Defaults"];
+                };
+            };
+        };
+    };
+    list_runs_distributed_runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"][];
+                };
+            };
+        };
+    };
+    start_run_distributed_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartRun"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_distributed_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_member_distributed_runs__run_id__members__node__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                node: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_run_distributed_runs__run_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */

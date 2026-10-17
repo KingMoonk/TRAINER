@@ -1275,6 +1275,39 @@
         "title": "DataSet",
         "type": "object"
       },
+      "Defaults": {
+        "properties": {
+          "delta_dtype": {
+            "title": "Delta Dtype",
+            "type": "string"
+          },
+          "inner_steps": {
+            "title": "Inner Steps",
+            "type": "integer"
+          },
+          "outer_lr": {
+            "title": "Outer Lr",
+            "type": "number"
+          },
+          "outer_momentum": {
+            "title": "Outer Momentum",
+            "type": "number"
+          },
+          "rounds": {
+            "title": "Rounds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rounds",
+          "inner_steps",
+          "outer_lr",
+          "outer_momentum",
+          "delta_dtype"
+        ],
+        "title": "Defaults",
+        "type": "object"
+      },
       "Dispatch": {
         "properties": {
           "fetch": {
@@ -3084,6 +3117,114 @@
           "measured"
         ],
         "title": "Measurement",
+        "type": "object"
+      },
+      "Member": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "can_stop": {
+            "title": "Can Stop",
+            "type": "boolean"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "last_delta_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Delta Bytes"
+          },
+          "last_delta_dtype": {
+            "title": "Last Delta Dtype",
+            "type": "string"
+          },
+          "local": {
+            "title": "Local",
+            "type": "boolean"
+          },
+          "missed": {
+            "title": "Missed",
+            "type": "integer"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "rounds_done": {
+            "title": "Rounds Done",
+            "type": "integer"
+          },
+          "sent": {
+            "title": "Sent",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "invited",
+              "joining",
+              "training",
+              "behind",
+              "dropped",
+              "left",
+              "stopped",
+              "unreachable",
+              "finished"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          }
+        },
+        "required": [
+          "node",
+          "address",
+          "local",
+          "device",
+          "device_name",
+          "state",
+          "note",
+          "missed",
+          "sent",
+          "rounds_done",
+          "steps",
+          "tokens_per_second",
+          "last_delta_bytes",
+          "last_delta_dtype",
+          "can_stop"
+        ],
+        "title": "Member",
         "type": "object"
       },
       "Message": {
@@ -6212,6 +6353,81 @@
         "title": "Review",
         "type": "object"
       },
+      "Round": {
+        "properties": {
+          "bytes_down": {
+            "title": "Bytes Down",
+            "type": "integer"
+          },
+          "bytes_up": {
+            "title": "Bytes Up",
+            "type": "integer"
+          },
+          "contributed": {
+            "title": "Contributed",
+            "type": "integer"
+          },
+          "dropped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dropped",
+            "type": "array"
+          },
+          "loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss"
+          },
+          "members": {
+            "title": "Members",
+            "type": "integer"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Val Loss"
+          }
+        },
+        "required": [
+          "round",
+          "step",
+          "loss",
+          "val_loss",
+          "bytes_up",
+          "bytes_down",
+          "seconds",
+          "members",
+          "contributed",
+          "dropped"
+        ],
+        "title": "Round",
+        "type": "object"
+      },
       "RoundQueued": {
         "properties": {
           "id": {
@@ -6462,6 +6678,116 @@
           "kind"
         ],
         "title": "RowsRequest",
+        "type": "object"
+      },
+      "Run": {
+        "properties": {
+          "can_stop": {
+            "title": "Can Stop",
+            "type": "boolean"
+          },
+          "delta_dtype": {
+            "title": "Delta Dtype",
+            "type": "string"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/Round"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inner_steps": {
+            "title": "Inner Steps",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "outer_lr": {
+            "title": "Outer Lr",
+            "type": "number"
+          },
+          "outer_momentum": {
+            "title": "Outer Momentum",
+            "type": "number"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "rounds": {
+            "title": "Rounds",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "starting",
+              "waiting",
+              "running",
+              "finished",
+              "stopped",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "version",
+          "state",
+          "note",
+          "started_at",
+          "owner",
+          "round",
+          "rounds",
+          "inner_steps",
+          "outer_lr",
+          "outer_momentum",
+          "delta_dtype",
+          "members",
+          "history",
+          "can_stop"
+        ],
+        "title": "Run",
         "type": "object"
       },
       "RunPageModel": {
@@ -7061,6 +7387,70 @@
           }
         },
         "title": "StartRequest",
+        "type": "object"
+      },
+      "StartRun": {
+        "description": "What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.",
+        "properties": {
+          "dataset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "inner_steps": {
+            "default": 100,
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Inner Steps",
+            "type": "integer"
+          },
+          "machines": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Machines",
+            "type": "array"
+          },
+          "outer_lr": {
+            "default": 0.7,
+            "exclusiveMinimum": 0.0,
+            "title": "Outer Lr",
+            "type": "number"
+          },
+          "outer_momentum": {
+            "default": 0.9,
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Outer Momentum",
+            "type": "number"
+          },
+          "rounds": {
+            "default": 10,
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Rounds",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "dataset_ids"
+        ],
+        "title": "StartRun",
         "type": "object"
       },
       "StatusRequest": {
@@ -11527,6 +11917,231 @@
         "summary": "Write",
         "tags": [
           "design"
+        ]
+      }
+    },
+    "/distributed/defaults": {
+      "get": {
+        "description": "The DiLoCo settings the form starts from.",
+        "operationId": "defaults_distributed_defaults_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Defaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Defaults",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs": {
+      "get": {
+        "description": "Every run this computer owns, newest first, each with its members and rounds. A machine that is offline or refuses is a\nmember row with a reason; the rest of the run still reads.",
+        "operationId": "list_runs_distributed_runs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Run"
+                  },
+                  "title": "Response List Runs Distributed Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "distributed"
+        ]
+      },
+      "post": {
+        "description": "Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen\nmachines are invited when the run starts, and the form's settings are checked here (400 with a sentence).",
+        "operationId": "start_run_distributed_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}": {
+      "get": {
+        "operationId": "get_run_distributed_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/members/{node}/stop": {
+      "post": {
+        "description": "Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)\nand for a node that is not a member.",
+        "operationId": "stop_member_distributed_runs__run_id__members__node__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node",
+            "required": true,
+            "schema": {
+              "title": "Node",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Member",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/stop": {
+      "post": {
+        "description": "End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The\nweights of the last finished round stay in the run's folder.",
+        "operationId": "stop_run_distributed_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Run",
+        "tags": [
+          "distributed"
         ]
       }
     },

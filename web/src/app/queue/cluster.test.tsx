@@ -113,7 +113,8 @@ describe("Queue page with several machines", () => {
     // This machine's own jobs are not repeated in the other machines' card.
     expect(other.queryByTestId("other-w1")).toBeNull();
     // The card stays; each machine's state and its controls live on the Cluster page (#319).
-    expect(other.getByTestId("queue-cluster-link")).toHaveAttribute("href", "/cluster");
+    expect(other.getByTestId("queue-cluster-link")).toHaveAttribute("href", "/cluster/machines");
+    expect(screen.getByTestId("queue-training-link")).toHaveAttribute("href", "/cluster/training");
   });
 
   test("a job running on another machine shows the note about its checkpoint in the other machines card, once", async () => {
@@ -226,6 +227,7 @@ describe("Queue page with several machines", () => {
     expect(await screen.findByText("Nothing is training.")).toBeVisible();
     await waitFor(() => expect(strip()).toHaveTextContent("Nothing is training"));
     expect(screen.queryByTestId("other-machines")).toBeNull();
+    expect(screen.queryByTestId("queue-training-link")).toBeNull();
     expect(screen.queryByTestId("now-place")).toBeNull();
     expect(screen.queryAllByText(/ON OTHER MACHINES|Run on|machine/i)).toHaveLength(0);
     expect(strip()).toHaveTextContent("Queue");
