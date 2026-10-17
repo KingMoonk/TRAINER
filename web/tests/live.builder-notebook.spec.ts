@@ -3,6 +3,12 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 // Real fake services (python -m studio_api --fake), no intercepted responses: the Builder's lab notebook lists each saved
 // version with its change, the guess and the question it was made to ask; the explain panel works a part through the
 // example sentence; a starting question sets up one change. The draft is seeded as live.builder-guess.spec.ts does.
+// The number the Builder's own save was given, read off its POST /versions response, so a row is never guessed from the seed's number.
+const savedNumber = (page: Page) =>
+  page
+    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/versions")
+    .then(async (r) => (await r.json()).number as number);
+
 async function seed(page: Page, request: APIRequestContext, more = 1) {
   const presets = await (await request.get("/design/presets")).json();
   const spec = presets[0].spec;
@@ -22,27 +28,31 @@ test("the notebook lists each change with its guess and updates its rows in plac
 
   await page.getByTestId("save").click();
   await page.getByTestId("guess-error").getByRole("radio", { name: "Lower" }).click();
+  const saved = savedNumber(page);
   await page.getByTestId("guess-save").click();
+  const number = await saved;
 
-  const row = page.getByTestId(`notebook-${base + 1}`);
-  await expect(row).toContainText(`Version ${base + 1} ·`);
+  const row = page.getByTestId(`notebook-${number}`);
+  await expect(row).toContainText(`Version ${number} ·`);
   await expect(row.getByTestId("notebook-effects")).toContainText("not trained yet");
   await expect(row.getByTestId("notebook-guess")).toHaveText("you guessed lower error");
   await expect(first).toHaveAttribute("data-original-row", "yes"); // the earlier row was kept, not rebuilt
   await expect(page.getByRole("list", { name: "Lab notebook · one line per version" }).getByRole("listitem").last()).toHaveAttribute(
     "data-testid",
-    `notebook-${base + 1}`,
+    `notebook-${number}`,
   );
 });
 
-test("a skipped guess leaves no guess in the notebook", async ({ page, request }) => {
-  const { base } = await seed(page, request);
+test("a skipped guess is recorded as no guess in the notebook", async ({ page, request }) => {
+  await seed(page, request);
   await page.goto("/builder/");
   await page.getByTestId("save").click();
+  const saved = savedNumber(page);
   await page.getByTestId("guess-skip").click();
-  const row = page.getByTestId(`notebook-${base + 1}`);
+  const row = page.getByTestId(`notebook-${await saved}`);
   await expect(row).toBeVisible();
-  await expect(row.getByTestId("notebook-guess")).toHaveCount(0);
+  await expect(row.getByTestId("notebook-guess")).toHaveText("no guess"); // the Tk page's line for a version saved without one
+  await expect(row.getByTestId("notebook-guess")).not.toContainText("guessed");
 });
 
 test("clicking a part explains it on the example sentence", async ({ page, request }) => {
@@ -62,16 +72,18 @@ test("clicking a part explains it on the example sentence", async ({ page, reque
 });
 
 test("a starting question sets up one change and goes with the version", async ({ page, request }) => {
-  const { base, blocks } = await seed(page, request, 0);
+  const { blocks } = await seed(page, request, 0);
   await page.goto("/builder/");
   await page.getByTestId("try-depth").click();
   await expect(page.getByTestId("block-count")).toHaveText(String(blocks + 1));
   await expect(page.getByTestId("experiment-asking")).toContainText("Is depth or width better?");
   await page.getByTestId("save").click();
   await expect(page.getByTestId("guess-question")).toContainText("Your question: “Is depth or width better?”");
+  const saved = savedNumber(page);
   await page.getByTestId("guess-skip").click();
-  const row = page.getByTestId(`notebook-${base + 1}`);
+  const number = await saved;
+  const row = page.getByTestId(`notebook-${number}`);
   await expect(row.getByTestId("notebook-question")).toHaveText("asked “Is depth or width better?”");
   const list = await (await request.get("/versions")).json();
-  expect(list[list.length - 1].prediction).toEqual({ question: "Is depth or width better?" });
+  expect(list.find((v: { number: number }) => v.number === number).prediction).toEqual({ question: "Is depth or width better?" });
 });

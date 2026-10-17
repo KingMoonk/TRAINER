@@ -418,9 +418,10 @@ export function Builder() {
             </p>
           )}
           {current && <GuessCheck before={checkBefore} version={current} />}
-          <LabNotebook versions={versionsQ.data} />
         </>
       )}
+      {/* Outside the ready branch: a save moves the current version and the page reads its design again; the notebook keeps its rows. */}
+      {!failed && <LabNotebook versions={versionsQ.data} />}
       <VersionTray />
     </main>
   );
