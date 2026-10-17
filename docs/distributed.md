@@ -147,8 +147,15 @@ Lease(job_id, node, epoch, duration_s)
   the last published checkpoint with a fresh optimizer, and its record says so.
 
 Placement stays `studio_cluster.place()`. A job that needs several nodes (a distributed run) is **gang-placed**: the
-scheduler takes leases on `min_nodes` to `max_nodes` free nodes in one decision, or none, so two half-placed runs never
-deadlock each other waiting for the last node.
+scheduler takes leases on `min_members` to `max_members` free nodes in one decision (`studio_scheduler.decide_gang`,
+`Gangs.place`), or none, so two half-placed runs never deadlock each other waiting for the last node. The nodes are the
+ones the run was given, this one included (it coordinates); the run waits in the queue, with the reason, until enough of
+them are free at once. Each member slot is a lease. The owner renews a slot while the coordinator hears from that member,
+and a slot silent for longer than its lease (more for a member that has not joined yet) is freed: the coordinator lets
+the member go at the round boundary (`Coordinator.lose`), its member job leaves the node's queue, and a node that is free
+then is leased the slot and invited, joining at the round after. A node that frees up later fills an open slot the same way,
+up to `max_members`. Two runs owned by different nodes decide on their own polls, so they can still pick the same free node
+in the same few seconds; the second member job then waits on that node's queue.
 
 ## Training runtime: DiLoCo (#132)
 

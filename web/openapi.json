@@ -7957,6 +7957,32 @@
             "title": "Machines",
             "type": "array"
           },
+          "max_members": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Members"
+          },
+          "min_members": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Members"
+          },
           "outer_lr": {
             "default": 0.7,
             "exclusiveMinimum": 0.0,
