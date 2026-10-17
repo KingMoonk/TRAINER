@@ -9,6 +9,7 @@ export const AREAS: Area[] = [
   { id: "post", title: "Post-training" },
   { id: "chat", title: "Chat" },
   { id: "queue", title: "Queue", utility: true },
+  { id: "cluster", title: "Cluster", utility: true },
   { id: "resources", title: "Resources", utility: true },
 ];
 
@@ -31,6 +32,7 @@ export const ROUTES: Route[] = [
   { route: "chat", href: "/chat", area: "chat", title: "Chat", lead: "Talk to any trained version. Compare two to see what a change really did." },
   { route: "benchmark", href: "/benchmark", area: "chat", title: "Benchmark", lead: "Score a version on a fixed set of questions." },
   { route: "queue", href: "/queue", area: "queue", title: "Queue", lead: "What it's training now, what's waiting, and when it's allowed to work." },
+  { route: "cluster", href: "/cluster", area: "cluster", title: "Cluster", lead: "The machines this one works with, what each is doing, and who may call this computer." },
   { route: "your_data", href: "/your-data", area: "resources", title: "Your data", lead: "Three kinds, because each one trains a different stage." },
   { route: "make_data", href: "/make-data", area: "resources", title: "Make extra data", lead: "Optional. Generate more, then keep what passes review." },
   { route: "storage", href: "/storage", area: "resources", title: "Storage", lead: "What the app keeps on this computer's disk, and what you can delete to free space." },

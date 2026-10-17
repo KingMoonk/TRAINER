@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAccent } from "@/components/theme";
 import { APPEARANCE } from "@/lib/copy/appearance";
-import { MachinesSection } from "./machines";
+import Link from "next/link";
 import { ACCENTS, MODES, type Accent, type Mode } from "@/lib/theme";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
@@ -63,7 +63,15 @@ export default function Page() {
         </CardContent>
       </Card>
       </section>
-      <MachinesSection />
+      <Card data-testid="settings-cluster">
+        <CardHeader>
+          <CardTitle>{APPEARANCE.clusterTitle}</CardTitle>
+          <CardDescription>{APPEARANCE.clusterDesc}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link href="/cluster" className="text-sm underline underline-offset-2">{APPEARANCE.clusterLink}</Link>
+        </CardContent>
+      </Card>
     </main>
   );
 }

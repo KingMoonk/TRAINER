@@ -194,9 +194,8 @@ def pin(job_id: str, body: Pin, services: Services) -> QueueStateModel:
 
 @router.delete("/jobs/{job_id}")
 def remove(job_id: str, services: Services) -> QueueStateModel:
-    """Services.remove: drop a waiting job, or stop the running one."""
-    state = services.queue()
-    if job_id not in {j.id for j in [state.job, *state.up_next] if j is not None}:
+    """Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop)."""
+    if job_id not in {j.id for j in local_jobs(services)}:
         raise HTTPException(404, f"No job {job_id}")
     services.remove(job_id)
     return _state(services)

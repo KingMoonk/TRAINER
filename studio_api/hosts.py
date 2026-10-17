@@ -94,14 +94,37 @@ def tailscale_names(run=subprocess.run, binary=tailscale_binary):
     return tuple(dict.fromkeys(n for n in (host_name(v) for v in values if isinstance(v, str)) if n))
 
 
+def tailscale_login(run=subprocess.run, binary=tailscale_binary):
+    """The Tailscale login of the user who owns this node (me@example.com), from `tailscale status --json`: another machine's
+    studioConfig.cluster.allowUsers needs it before it lets this machine in. "" for a tagged node (it has no user), or when tailscale
+    is missing, slow or answers nonsense."""
+    path = binary()
+    if not path:
+        return ""
+    try:
+        done = run([path, "status", "--json"], capture_output=True, timeout=STATUS_TIMEOUT, check=False)
+        status = json.loads(done.stdout.decode("utf-8")) if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    me = status.get("Self") if isinstance(status, dict) else None
+    users = status.get("User") if isinstance(status, dict) else None
+    if not isinstance(me, dict) or not isinstance(users, dict) or me.get("Tags"):
+        return ""
+    profile = users.get(str(me.get("UserID")))
+    login = profile.get("LoginName") if isinstance(profile, dict) else ""
+    return login if isinstance(login, str) else ""
+
+
 class HostNames:
     """The names a node answers to. `fixed` never changes; the Tailscale names are replaced by `refresh`."""
 
-    def __init__(self, fixed=(), tailscale=tailscale_names, binary=tailscale_binary):
+    def __init__(self, fixed=(), tailscale=tailscale_names, binary=tailscale_binary, login=None):
         names = [n for n in (host_name(v) for v in fixed) if n]
         self.exact = frozenset(n for n in names if "*" not in n) | {"localhost"}
         self.patterns = tuple(re.compile(r"[^.]+".join(map(re.escape, n.split("*")))) for n in names if "*" in n)
         self.tailscale, self.read, self.binary = frozenset(), tailscale, binary
+        self.read_login = login or (lambda: "")
+        self.login = ""  # the Tailscale login that owns this node, for another machine's allowUsers; "" until known, or when tagged
         self.tailnet_name = ""  # this node's MagicDNS name (box.tail1234.ts.net), for another machine to list; "" until known
         self.stop, self.warned = threading.Event(), False
 
@@ -114,6 +137,7 @@ class HostNames:
         """Read the Tailscale names now; warns once each time they go from known to empty."""
         read = tuple(self.read())
         names = frozenset(read)
+        self.login = self.read_login() or self.login
         if not names and (self.tailscale or not self.warned):
             if self.binary():
                 log.warning("No Tailscale name known for this node: requests through `tailscale serve` or Funnel are refused until "
@@ -146,7 +170,7 @@ def own_names(bind="", extra=(), tailscale=tailscale_names, hostname=socket.geth
         fixed += [name, name.partition(".")[0]]
     except OSError:
         pass
-    return HostNames(fixed, tailscale, binary)
+    return HostNames(fixed, tailscale, binary, lambda: tailscale_login(binary=binary))
 
 
 class HostCheck:

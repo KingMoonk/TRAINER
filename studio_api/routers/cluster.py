@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import studio_cluster
 import studio_cluster_queue
+import studio_peer
 import studio_scheduler as sched
 from studio_api.app import get_services
 from studio_api.routers.queue import local_jobs
@@ -90,6 +91,27 @@ class QueueRow(BaseModel):
     waiting_reason: str = ""
     stale: bool = False  # the machine is not answering: this is its last known queue
     note: str = ""  # the job's note, such as a checkpoint a peer could not store because its bucket is full
+    queued_address: str = ""  # the address of the machine whose queue holds it ("local" for this one): POST /cluster/remote/{id}/stop needs it
+    step: int = 0  # a running job's progress as its machine reports it; 0 when unknown
+    total: int = 0
+    eta_s: float | None = None
+
+
+class Access(BaseModel):
+    """Who may call this node's API straight over the tailnet (studioConfig.cluster, docs/cluster.md, "ACL")."""
+
+    allow_users: list[str]  # Tailscale logins of people whose own (untagged) machines are let in
+    allow_tags: list[str]  # tags of machines that are let in; tag:trainer unless changed
+    login: str = ""  # the Tailscale login of this node's owner: what another machine adds to its allow_users; "" when tagged or unknown
+
+
+class AccessBody(BaseModel):
+    allow_users: list[str]
+    allow_tags: list[str]
+
+
+class RemoteStop(BaseModel):
+    address: str  # the peer whose queue holds the job: a row's queued_address
 
 
 class ClusterQueue(BaseModel):
@@ -197,13 +219,56 @@ def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQue
     cluster = getattr(getattr(services, "runner", None), "cluster", None)
     own = studio_cluster_queue.own_node(cluster)
     peers = state.peer_queues.survey(addresses)
-    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None))
+    running = services.queue()
+    progress = ({"job_id": running.job.id, "step": running.step, "total": running.total, "eta_s": running.eta_s}
+                if running.job is not None else None)
+    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None), progress)
     shared = any(p.info.hostname.lower() == own.hostname.lower() for p in peers)  # a hostname pin would name two machines
     own_pin = own.address if shared or not own.hostname else own.hostname
     nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own_pin, local=True, online=True),
              *(QueueNode(address=p.info.address, hostname=p.info.hostname, pin=p.info.address, local=False,
                          online=p.info.online, error=p.info.error, seen_at=p.seen_at) for p in peers)]
     return ClusterQueue(nodes=nodes, jobs=[QueueRow(**asdict(r)) for r in rows])
+
+
+@router.get("/access")
+def get_access(request: Request, services=Depends(get_services)) -> Access:
+    """The allow lists of this node and its owner's Tailscale login. The login is what a machine that answers 401 to this one must
+    add to its own allow_users. The funnel token and any other key of studioConfig.cluster are never returned."""
+    try:
+        tags, users = studio_cluster.allowed_callers({"studioConfig": {"cluster": services.setting("cluster", {})}})
+    except ValueError as exc:  # edited by hand since the API started
+        raise HTTPException(409, str(exc)) from None
+    return Access(allow_users=list(users), allow_tags=list(tags), login=getattr(getattr(request.app.state, "hosts", None), "login", ""))
+
+
+@router.put("/access")
+def save_access(body: AccessBody, request: Request, services=Depends(get_services)) -> Access:
+    """Save the allow lists in the workspace config, keeping every other key of studioConfig.cluster. Entries are stripped and repeats
+    dropped. 400 with a sentence for a bad entry. The API reads the lists when it starts: a change counts after it is restarted."""
+    stored = services.setting("cluster", {})
+    wanted = {"allowUsers": [u.strip() for u in body.allow_users], "allowTags": [t.strip() for t in body.allow_tags]}
+    try:
+        studio_cluster.allowed_callers({"studioConfig": {"cluster": wanted}})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    kept = {k: list(dict.fromkeys(v)) for k, v in wanted.items()}
+    services.set_setting("cluster", {**(stored if isinstance(stored, dict) else {}), **kept})
+    return get_access(request, services)
+
+
+@router.post("/remote/{job_id}/stop", status_code=204)
+def stop_remote(job_id: str, body: RemoteStop, services=Depends(get_services)) -> None:
+    """Stop, or drop, a job that another machine queued, by asking that machine (DELETE /queue/jobs/{id} there). The machine must be
+    one of the listed peers. A job queued here is stopped with DELETE /queue/jobs/{id} on this node. The peer's own refusal (401,
+    404, a timeout) comes back as 502 with its sentence."""
+    addresses = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
+    if body.address not in addresses:
+        raise HTTPException(404, f"{body.address} is not one of this cluster's machines.")
+    try:
+        studio_peer.PeerClient(body.address, retries=0).delete_json(f"queue/jobs/{job_id}")
+    except studio_peer.PeerError as exc:
+        raise HTTPException(502, str(exc)) from None
 
 
 @router.get("/jobs")
