@@ -93,6 +93,14 @@ class OpenNodeCors(App):
             self.assertFalse([h for h in response.headers if h.startswith("access-control")], origin)
             self.assertGreaterEqual(response.status_code, 400)
 
+    def test_a_localhost_page_gets_no_cors_headers_even_with_the_token(self):
+        for origins in ([SITE], []):
+            client = super().client(open=True, origins=origins, token=TOKEN)
+            response = client.get("/jobs", headers={"Origin": "http://localhost:3000", "X-Groundwork-Token": TOKEN})
+            self.assertEqual(response.status_code, 200, origins)
+            self.assertFalse([h for h in response.headers if h.startswith("access-control")], origins)
+            self.assertFalse([h for h in preflight(client, "http://localhost:3000").headers if h.startswith("access-control")], origins)
+
     def test_an_authenticated_response_has_one_vary_and_one_allow_origin(self):
         response = self.client().get("/jobs", headers={"Origin": SITE, "X-Groundwork-Token": TOKEN})
         self.assertEqual(response.status_code, 200)
@@ -261,6 +269,20 @@ class Config(unittest.TestCase):
                       "--allow-origin", "https://x.example.com", "--allow-origin", "http://[::1]:80", "--allow-origin", "https://[::1]:8443"])
         self.assertEqual(args.allow_origin, ["https://x.example.com", "http://x.example.com", "https://x.example.com:8443",
                                              "http://localhost:3000", "http://[::1]", "https://[::1]:8443"])
+
+    def test_junk_origins_are_refused_and_the_scheme_is_lowercased(self):
+        for bad in ("https://a.com\\", "https://a .com", "https://a.com:0", "https://a.com:", "https://a.com:99999", "https://a.com:80:80",
+                    "https://-a.com", "https://a..com", "https://a.com\n.evil.com", "https://[::1", "https://[zz]", "https://a.com:٣", "https://a.com//",
+                    "http://[::ffff:1.2.3.4]", "http://[::ffff:102:304]"):
+            with mock.patch("sys.stderr"), self.assertRaises(SystemExit, msg=bad):
+                parse(["--fake", "--allow-origin", bad])
+        args = parse(["--fake", "--allow-origin", "HTTPS://A.Example.com:8443/", "--allow-origin", "HTTP://[::1]:3000"])
+        self.assertEqual(args.allow_origin, ["https://a.example.com:8443", "http://[::1]:3000"])
+
+    def test_ipv6_literals_are_written_in_their_compressed_form(self):
+        args = parse(["--fake", "--allow-origin", "http://[0:0:0:0:0:0:0:1]:3000", "--allow-origin", "http://[0:0:0:0:0:0:0:1]",
+                      "--allow-origin", "https://[2001:0DB8:0:0:0:0:0:1]"])
+        self.assertEqual(args.allow_origin, ["http://[::1]:3000", "http://[::1]", "https://[2001:db8::1]"])
 
     def test_a_malformed_origin_is_refused(self):
         for bad in ("*", "https://*.example.com", "example.com", "https://a.example.com/path", "ftp://a.example.com", "https://",

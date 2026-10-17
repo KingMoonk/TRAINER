@@ -41,10 +41,11 @@ def create_app(services, open=False, origins=(), **auth):
     app.state.jobs = jobs.Jobs(services)
     origins = tuple(origins)
     cors = dict(allow_methods=["*"], allow_headers=["*"])
+    local_pages = open and not auth.get("token")  # a node with a token is not open: a localhost page could forge Tailscale-User-Login
     if origins:  # ONE CORS layer, inside the auth layer: a response the auth layer refused carries no CORS headers
-        app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_origin_regex=LOCAL_ORIGIN if open else None, **cors)
+        app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_origin_regex=LOCAL_ORIGIN if local_pages else None, **cors)
     app.add_middleware(TailscaleAuth, open=open, origins=origins, **auth)
-    if open and not origins:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
+    if local_pages and not origins:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
         app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, **cors)
 
     @app.exception_handler(ValueError)

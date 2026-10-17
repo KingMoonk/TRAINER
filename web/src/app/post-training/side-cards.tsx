@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { ApiError, api, apiUrl, unwrap } from "@/lib/api";
+import { ApiError, api, apiFetch, unwrap } from "@/lib/api";
 import { ROW_KINDS } from "./copy";
 import { errorText, rowText, type VersionRow } from "./logic";
 import { useJob } from "./use-events";
@@ -66,7 +66,7 @@ export function ImportCard({ ranks, onImported }: { ranks: number[]; onImported:
       form.set("lora", String(lora));
       form.set("lora_rank", String(rank));
       if (file) form.set("weights", file);
-      const res = await fetch(apiUrl("/post-training/imports"), { method: "POST", body: form });
+      const res = await apiFetch("/post-training/imports", { method: "POST", body: form });
       if (!res.ok) throw new ApiError(res.status, "/post-training/imports", await res.text());
       return (await res.json()) as VersionRow;
     },
