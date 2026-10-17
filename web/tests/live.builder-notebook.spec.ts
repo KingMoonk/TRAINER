@@ -74,8 +74,11 @@ test("clicking a part explains it on the example sentence", async ({ page, reque
 test("a starting question sets up one change and goes with the version", async ({ page, request }) => {
   const { blocks } = await seed(page, request, 0);
   await page.goto("/builder/");
-  await page.getByTestId("try-depth").click();
-  await expect(page.getByTestId("block-count")).toHaveText(String(blocks + 1));
+  // The shared workspace's earlier runs can still be finishing and move the current version, which starts a fresh draft; try again until the question holds.
+  await expect(async () => {
+    await page.getByTestId("try-depth").click();
+    await expect(page.getByTestId("block-count")).toHaveText(String(blocks + 1), { timeout: 2000 });
+  }).toPass({ timeout: 20_000 });
   await expect(page.getByTestId("experiment-asking")).toContainText("Is depth or width better?");
   await page.getByTestId("save").click();
   await expect(page.getByTestId("guess-question")).toContainText("Your question: “Is depth or width better?”");
