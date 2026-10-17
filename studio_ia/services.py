@@ -545,6 +545,14 @@ class Services:
         """{'tokens', 'pos', 'probabilities' [V], 'target' id, 'pieces' [str per id]}; trained=False uses fresh weights."""
         raise NotImplementedError
 
+    def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
+        """The loss on a grid of weights around a version's weights (studio_landscape): {mode, unit, grid, span, seed, axis [grid], loss
+        [grid][grid] (rows are the second direction), ceiling, current {x, y, loss, step}, minimum {x, y, loss, inside}, trajectory
+        [{step, x, y, loss}], center {step, name}, batch {rows, tokens}, cost {seconds, evaluations}, note, live}. snapshot picks the
+        centre from viewer_snapshots (default: the best checkpoint). live is a small, throttled frame with the same directions as the
+        last one (new_anchor starts them afresh). ValueError with a sentence when it cannot run. Slow: call it off the Tk thread."""
+        raise NotImplementedError
+
     def inspect_value_map(self, version, heads, block=0, head=0):
         """{'d_model', 'heads' (the real count), 'blocks' {block: heads}, 'singular' list | None}: singular values of W_V^h W_O^h when heads matches."""
         raise NotImplementedError
@@ -664,9 +672,10 @@ class FakeServices(Services):
     steps of `step_seconds` each (`sleep` is injectable, so a test needs no real wait), then the job's version is trained or,
     for a job with no version of its own, a new one is added. The events match studio_queue.Runner's."""
 
-    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep):
+    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep, snapshot_every=0):
         super().__init__()
         self.job_steps, self.step_seconds, self._sleep = job_steps, step_seconds, sleep
+        self.snapshot_every = snapshot_every  # > 0: also emit the training loop's viz_snapshot event every that many steps (--fake does)
         self._worker: threading.Thread | None = None
         self._started = False  # start_queue() was called: from then on a resume carries on, as the real runner's thread does
         self._worker_lock = threading.Lock()
@@ -703,6 +712,36 @@ class FakeServices(Services):
     def viewer_probe_step(self, text, number=None):
         self.viewer_log.append(("probe", text))
         return self.probe_path
+
+    def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
+        """A made-up bowl with two ripples and a path that walks into it one point longer per call, so a live page has something to show."""
+        import math
+
+        import studio_landscape
+        if mode not in studio_landscape.MODES:
+            raise ValueError(f"Directions are {' or '.join(studio_landscape.MODES)}.")
+        grid = studio_landscape.grid_size(min(grid, 15) if live else grid)
+        studio_landscape.check_size(5_000, grid)
+        self._landscape_frames = 0 if new_anchor else getattr(self, "_landscape_frames", 0) + (1 if live else 0)
+        shift = 0.15 * math.sin(self._landscape_frames / 3.0) if live else 0.0
+        axis = [span * (2 * i / (grid - 1) - 1) for i in range(grid)]
+
+        def height(x, y):
+            return 1.2 + 1.6 * ((x - shift) ** 2 + (y + 0.5 * shift) ** 2) / (span * span) + 0.15 * math.sin(5 * x / span) * math.cos(4 * y / span)
+
+        loss = [[height(x, y) for x in axis] for y in axis]
+        low = min(((loss[r][c], r, c) for r in range(grid) for c in range(grid)))
+        count = 6 + self._landscape_frames if live else 8
+        path = [{"step": 50 * (i + 1), "x": 0.9 * span * (1 - i / count) * math.cos(0.6 * i), "y": 0.9 * span * (1 - i / count) * math.sin(0.6 * i)} for i in range(count)]
+        for point in path:
+            point["loss"] = height(point["x"], point["y"])
+        return {"mode": mode, "unit": "filter" if mode == "random" else "trajectory", "grid": grid, "span": span, "seed": seed, "live": live,
+                "axis": axis, "loss": loss, "ceiling": sorted(v for row in loss for v in row)[int(0.95 * grid * grid)],
+                "current": {"x": 0.0, "y": 0.0, "loss": loss[grid // 2][grid // 2], "step": path[-1]["step"]},
+                "minimum": {"x": axis[low[2]], "y": axis[low[1]], "loss": low[0], "inside": 0 < low[1] < grid - 1 and 0 < low[2] < grid - 1},
+                "trajectory": path, "center": {"step": path[-1]["step"], "name": "best.npz"}, "batch": {"rows": 4, "tokens": 128},
+                "cost": {"seconds": 0.0, "evaluations": grid * grid + len(path)}, "note": "Made-up data for the fake studio."}
+
 
     def _heldout(self):
         return self.heldout_docs
@@ -800,6 +839,8 @@ class FakeServices(Services):
             q.eta_s = (total - step) * self.step_seconds
             self.emit("train", {"job": job.id, "type": "stats", "step": step, "total": total, "phase": phase, "lr": q.lr,
                                 "loss": round(5.0 - 3.0 * step / total, 4), "tokens_per_second": 1000.0})
+            if self.snapshot_every and step % self.snapshot_every == 0:
+                self.emit("train", {"job": job.id, "type": "viz_snapshot", "step": step, "path": f"viz/step_{step:08d}.npz", "markers": []})
         job.status = "done"
         q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
         self.emit("job", {"job": job.id, "status": "done", "error": ""})
@@ -1223,6 +1264,11 @@ def _run_docs(run, limit=RUN_DOC_CHARS):
                 if chars >= limit:
                     break
     return docs
+
+
+LANDSCAPE_LIVE_GRID = 11  # a live frame is at most this many cells a side: 121 evaluations of the held-back batch
+LANDSCAPE_LIVE_PATH = 6  # and draws at most this many of the newest snapshots as the path
+LANDSCAPE_LIVE_THROTTLE = 3.0  # it sleeps 3 s per second of work, so a live frame takes about a quarter of one core
 
 
 class _Cold(BaseException):
@@ -2791,6 +2837,59 @@ class WorkspaceServices(Services):
     def inspect_loss(self, version, text, pos=-1, trained=True):
         import studio_inspect
         return studio_inspect.loss_view(self._checkpoint(version), text, pos, trained)
+
+    def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
+        import numpy as np
+
+        import studio_landscape as landscape
+        v = self._as_version(version)
+        runs = [Path(self._abs(r)) for r in getattr(v, "runs", [])] if v is not None else []
+        run = next((r for r in reversed(runs) if r.is_dir()), None)
+        if run is None:
+            raise ValueError("This version has not trained yet, so there are no weights to look around.")
+        if live:
+            mode, grid = "random", min(grid, LANDSCAPE_LIVE_GRID)
+        mine = landscape.run_snapshots(run)  # the model is rebuilt from this run's own files, so only its snapshots share its shape
+        if snapshot is not None:
+            every = [Path(p) for p in self.viewer_snapshots(v.number)]
+            if not 0 <= snapshot < len(every) or every[snapshot] not in mine:
+                raise ValueError("Choose a snapshot of this version's latest run.")
+            center = every[snapshot]
+        elif live:
+            center = mine[-1] if mine else None
+        else:
+            center = next((p for p in (run / "best.npz", run / "last.npz") if p.exists()), mine[-1] if mine else None)
+        if center is None:
+            raise ValueError("Training has not saved any weights yet. The landscape appears at the first snapshot.")
+        others = [p for p in mine if p != center]
+        if live:
+            others = others[-LANDSCAPE_LIVE_PATH:]
+        docs = self._heldout()
+        if not docs:
+            raise ValueError("No held-back text yet, so there is nothing to measure the error on.")
+        stamp = lambda p: (str(p), p.stat().st_mtime_ns, p.stat().st_size)  # noqa: E731
+        key = ("landscape", stamp(center), tuple(stamp(p) for p in others), self._heldout_stamp(), mode, grid, span, seed)
+
+        def make():
+            model, tokenizer = landscape.run_model(run)
+            ids, targets = self._cached(("landscape-batch", str(run), self._heldout_stamp()), lambda: landscape.landscape_batch(tokenizer, docs, model.dims.n_ctx))
+            step, weights = landscape.read_weights(center)
+            norms = None
+            if live:
+                anchors = self.__dict__.setdefault("_landscape_anchor", {})
+                if new_anchor or str(run) not in anchors:
+                    anchors[str(run)] = landscape.filter_norms(weights, model.roles)
+                norms = anchors[str(run)]
+            trajectory = [landscape.read_weights(p) for p in others]
+            got = landscape.compute(model, ids, targets, weights, trajectory, mode=mode, grid=grid, span=span, seed=seed, norms=norms,
+                                    stop=stop, throttle=LANDSCAPE_LIVE_THROTTLE if live else 0.)
+            got["current"]["step"] = step
+            tokens = int((np.asarray(targets) >= 0).sum())
+            cost = {"seconds": got.pop("seconds"), "evaluations": got.pop("evaluations")}
+            return dict(got, mode=mode, grid=len(got["axis"]), span=span, seed=seed, live=live, cost=cost,
+                        center={"step": step, "name": center.name}, batch={"rows": int(len(ids)), "tokens": tokens},
+                        note="Held-back text, one fixed batch, so every frame is measured on the same words.")
+        return make() if live else self._cached(key, make)
 
     def inspect_value_map(self, version, heads, block=0, head=0):
         import studio_inspect

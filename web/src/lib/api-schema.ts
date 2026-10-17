@@ -2672,6 +2672,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/viewer/landscape": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Landscape
+         * @description The loss landscape around a version's weights (Li et al. 2018) as a job: the held-back loss on a grid of weights moved along
+         *     two directions. Cheap by design (one fixed small batch, a grid capped by model size) and, with `live`, throttled so training
+         *     keeps its speed. The result is a LandscapeResult.
+         */
+        post: operations["landscape_viewer_landscape_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/viewer/manifest": {
         parameters: {
             query?: never;
@@ -3970,6 +3992,47 @@ export interface components {
             H: boolean;
             /** W */
             W: boolean;
+        };
+        /**
+         * LandscapeRequest
+         * @description What to draw: the loss over a plane of weights. `live` asks for the cheap frame a training run can afford between steps.
+         */
+        LandscapeRequest: {
+            /**
+             * Grid
+             * @default 21
+             */
+            grid: number;
+            /**
+             * Live
+             * @default false
+             */
+            live: boolean;
+            /**
+             * Mode
+             * @default random
+             * @enum {string}
+             */
+            mode: "random" | "pca";
+            /**
+             * New Anchor
+             * @default false
+             */
+            new_anchor: boolean;
+            /**
+             * Seed
+             * @default 0
+             */
+            seed: number;
+            /** Snapshot */
+            snapshot?: number | null;
+            /**
+             * Span
+             * @default 1
+             */
+            span: number;
+            /** Version */
+            version?: number | null;
         };
         /** LearningCheck */
         LearningCheck: {
@@ -10477,6 +10540,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    landscape_viewer_landscape_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["LandscapeRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
                 };
             };
             /** @description Validation Error */
