@@ -29,6 +29,7 @@ import {
   type CompareRun,
   type CurvePoint,
 } from "./logic";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 type Setup = components["schemas"]["CompareSetup"];
 type Version = components["schemas"]["Version"];
@@ -147,10 +148,8 @@ export default function Page() {
   const names = streaming ? queuedNames : run?.names;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-8">
-      <p className="text-xs text-muted-foreground">Network designer</p>
-      <h1 className="text-2xl font-semibold tracking-tight">{COMPARE.h1}</h1>
-      <p className="max-w-prose text-muted-foreground">{COMPARE.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader breadcrumb="Network designer" title={COMPARE.h1} lead={COMPARE.lead} />
 
       <Card>
         <CardHeader>

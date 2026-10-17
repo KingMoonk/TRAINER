@@ -31,6 +31,7 @@ import {
   type Version,
   type VerdictResult,
 } from "./logic";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 type PaneState = { text: string; status: "idle" | "streaming" | "done" | "stopped" | "error"; error?: string };
 const IDLE: PaneState = { text: "", status: "idle" };
@@ -248,11 +249,8 @@ export default function Page() {
   const scored = compare ? left : answering !== null ? byNumber.get(answering) : undefined;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-        <p className="max-w-prose text-muted-foreground">{route.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={route.title} lead={route.lead} />
 
       {versionsQuery.isPending ? (
         <div className="flex flex-col gap-3" aria-label="Loading versions">

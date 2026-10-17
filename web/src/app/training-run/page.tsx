@@ -14,6 +14,7 @@ import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { fill, STATUS, T } from "./copy";
 import { bits, chartSeries, last, phaseBands, progressLine, sampleRows, switchText, type JobParams } from "./logic";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 const REFRESH_MS = 1500; // live events redraw at most this often, as the Tk page does
 
@@ -119,11 +120,8 @@ export default function Page() {
   ];
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-8">
-      <div className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="max-w-prose text-muted-foreground">{route.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={title} lead={route.lead} />
 
       {loading ? (
         <div className="flex flex-col gap-3" aria-label="Reading the run">

@@ -74,8 +74,8 @@ def allow_host(value):
 
 
 def tailscale_names(run=subprocess.run, binary=tailscale_binary):
-    """This node's Tailscale names from `tailscale status --json`: its MagicDNS name and short form, its host name and its
-    certificate domains; () when tailscale is missing, slow or answers nonsense."""
+    """This node's Tailscale names from `tailscale status --json`: its MagicDNS name (first, when Tailscale knows it) and short
+    form, its host name and its certificate domains; () when tailscale is missing, slow or answers nonsense."""
     path = binary()
     if not path:
         return ()
@@ -102,6 +102,7 @@ class HostNames:
         self.exact = frozenset(n for n in names if "*" not in n) | {"localhost"}
         self.patterns = tuple(re.compile(r"[^.]+".join(map(re.escape, n.split("*")))) for n in names if "*" in n)
         self.tailscale, self.read, self.binary = frozenset(), tailscale, binary
+        self.tailnet_name = ""  # this node's MagicDNS name (box.tail1234.ts.net), for another machine to list; "" until known
         self.stop, self.warned = threading.Event(), False
 
     def allowed(self, value):
@@ -111,7 +112,8 @@ class HostNames:
 
     def refresh(self):
         """Read the Tailscale names now; warns once each time they go from known to empty."""
-        names = frozenset(self.read())
+        read = tuple(self.read())
+        names = frozenset(read)
         if not names and (self.tailscale or not self.warned):
             if self.binary():
                 log.warning("No Tailscale name known for this node: requests through `tailscale serve` or Funnel are refused until "
@@ -121,6 +123,7 @@ class HostNames:
         self.warned = True
         if names or not self.tailscale:
             self.tailscale = names  # a failed read after a good one keeps the good names
+            self.tailnet_name = read[0] if read and read[0].endswith(".ts.net") else ""
         return names
 
     def start_refresh(self, first=REFRESH_EMPTY, then=REFRESH_KNOWN):

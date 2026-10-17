@@ -23,6 +23,7 @@ import {
   type Pattern,
   type Version,
 } from "@/app/head-lab/inspect";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 /** A longer prompt is cut from the left, keeping the query at the end. */
 const MAX_TOKENS = 12;
@@ -381,10 +382,8 @@ function Row({ derived, step, row, token, selected, onPick }: { derived: Derived
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-8">
-      <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
-      <h1 className="text-2xl font-semibold tracking-tight">{HEAD_ZOOM.h1}</h1>
-      <p className="max-w-prose text-muted-foreground">{HEAD_ZOOM.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader breadcrumb="Network designer › Look inside" title={HEAD_ZOOM.h1} lead={HEAD_ZOOM.lead} />
       {children}
     </main>
   );

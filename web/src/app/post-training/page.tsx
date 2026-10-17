@@ -12,6 +12,8 @@ import { count, errorText, firstOpenRound, roundBlocker, type Gate, type JobOut,
 import { RoundCard, type Choices, type Live } from "./round-card";
 import { ImportCard, RowsCard, VersionsCard } from "./side-cards";
 import { useEventStream, useJob } from "./use-events";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { optionBox } from "@/components/option-box";
 
 const REFRESH_MS = 600;
 
@@ -137,11 +139,8 @@ export default function PostTrainingPage() {
   const running = queueQuery.data?.job?.kind === "post_round" ? queueQuery.data.job : null;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-8">
-      <div className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Post-training</h1>
-        <p className="max-w-prose text-muted-foreground">Four rounds, always in this order. Same design throughout; only the weights shift.</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={T.title} lead={T.lead} />
 
       <div>
         <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{T.startsFrom}</div>
@@ -170,10 +169,7 @@ export default function PostTrainingPage() {
               role="tab"
               aria-selected={on}
               onClick={() => setPicked(r.n)}
-              className={cn(
-                "flex items-center gap-3 rounded-lg border-2 p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                on ? "selected-box" : "border-border hover:bg-muted/30",
-              )}
+              className={optionBox(on, "flex items-center gap-3 p-3")}
             >
               <span
                 className={cn(

@@ -11,7 +11,8 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ApiError, api, apiFetch, unwrap } from "@/lib/api";
-import { ROW_KINDS } from "./copy";
+import { EmptyState } from "@/components/empty-state";
+import { ROW_KINDS, T } from "./copy";
 import { errorText, rowText, type VersionRow } from "./logic";
 import { useJob } from "./use-events";
 
@@ -30,7 +31,7 @@ export function VersionsCard({ versions, startsFrom, loading }: { versions: Vers
             <Skeleton className="h-6 w-2/3" />
           </div>
         ) : !versions?.length ? (
-          <p className="text-sm text-muted-foreground">No versions yet. Build one in the Network designer, or start from a pretrained model below.</p>
+          <EmptyState>{T.noVersions}</EmptyState>
         ) : (
           <ul className="flex flex-col gap-2" aria-label="Versions">
             {[...versions].reverse().map((v) => (
