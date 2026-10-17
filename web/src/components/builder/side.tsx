@@ -6,7 +6,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,6 +17,10 @@ import {
   COST_ROWS,
   design,
   fitsText,
+  PARAM_PARTS,
+  paramBars,
+  paramNote,
+  paramShares,
   nextVersionName,
   say,
   specOf,
@@ -32,6 +37,7 @@ import {
   type Version,
 } from "@/lib/builder";
 import { BUILDER, fill, presetAbout } from "@/lib/copy/builder";
+import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const AMBER = "text-warning";
@@ -171,6 +177,40 @@ type CostsProps = {
   lines: Line[] | undefined;
 };
 
+/** "Where the size goes": the current design's parameters stacked faintly above the draft's, on one scale. */
+function ParamBar({ now, next }: { now: Sizes["parts"]; next: Sizes["parts"] }) {
+  const [a, b] = paramBars(now, next);
+  const note = paramNote(next);
+  const row = (widths: number[], faint: boolean, testId: string) => (
+    <div className="flex h-1.5 w-full" aria-hidden="true" data-testid={testId}>
+      {PARAM_PARTS.map((p, i) => (
+        <span key={p.key} className={cn("h-full", p.fill, faint && "opacity-40")} style={{ width: `${widths[i]}%` }} />
+      ))}
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-1 pt-1" data-testid="param-bar">
+      <span className="text-xs font-medium" title={BUILDER.params_where_tip}>
+        {BUILDER.params_where}
+      </span>
+      {row(a, true, "param-now")}
+      {row(b, false, "param-next")}
+      <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+        {paramShares(next).map((share) => {
+          const part = PARAM_PARTS.find((p) => p.key === share.key)!;
+          return (
+            <span key={share.key} className="inline-flex items-center gap-1">
+              <span className={cn("inline-block size-2 rounded-sm", part.fill)} aria-hidden="true" />
+              {share.text}
+            </span>
+          );
+        })}
+      </div>
+      {note ? <p className={cn("text-xs", AMBER)}>{note}</p> : null}
+    </div>
+  );
+}
+
 export function Costs({ now, next, warm, lines }: CostsProps) {
   return (
     <Panel title={BUILDER.what_costs} testId="costs">
@@ -195,6 +235,7 @@ export function Costs({ now, next, warm, lines }: CostsProps) {
       ) : (
         <Skeleton className="h-16 w-full" />
       )}
+      {now && next ? <ParamBar now={now.parts} next={next.parts} /> : null}
       <p className="pt-1 text-sm font-medium">{BUILDER.carry_over}</p>
       {warm ? (
         <p className="text-xs">
@@ -294,6 +335,11 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
       {fill(BUILDER.save_as, { version: nv })}
     </Button>
   );
+  const quickTest = (
+    <Link href={`${routeFor("quicktest").href}/`} className={buttonVariants({ variant: "outline", size: "sm" })} data-testid="quick-test-first">
+      {BUILDER.quick_test_first}
+    </Link>
+  );
   let kicker: string;
   let text: string;
   let actions: React.ReactNode = null;
@@ -310,6 +356,7 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
     text = fill(BUILDER.not_saved_text, { version: nv });
     actions = (
       <>
+        {quickTest}
         {saveButton}
         {splitCount > 1 && (
           <Button size="sm" variant="outline" onClick={onSplit} disabled={!canSave || saving} id="builder-split" data-testid="split">
@@ -324,7 +371,12 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
   } else if (base === null) {
     kicker = BUILDER.first_save;
     text = fill(BUILDER.first_save_text, { version: nv });
-    actions = saveButton;
+    actions = (
+      <>
+        {saveButton}
+        {quickTest}
+      </>
+    );
   } else {
     kicker = BUILDER.no_changes;
     text = fill(BUILDER.no_changes_text, { version: versionName(base) });
@@ -352,5 +404,19 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
       </div>
       <div className="flex flex-wrap gap-2">{actions}</div>
     </div>
+  );
+}
+
+/** Compare runs and Quick test, which read the staged draft; the look-inside pages hang off the parts and the versions below. */
+export function TryIt() {
+  return (
+    <section className="flex flex-wrap items-center gap-3" data-testid="try-it" aria-label={BUILDER.try_it}>
+      <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{BUILDER.try_it}</h2>
+      {(["compare", "quicktest"] as const).map((key) => (
+        <Link key={key} href={`${routeFor(key).href}/`} className="text-sm underline underline-offset-4">
+          {key === "compare" ? BUILDER.compare_runs : BUILDER.quick_test}
+        </Link>
+      ))}
+    </section>
   );
 }

@@ -10,11 +10,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Controls, Costs, Expect, StartFrom, Tray, VersionList } from "@/components/builder/side";
+import { Controls, Costs, Expect, StartFrom, Tray, TryIt, VersionList } from "@/components/builder/side";
 import { Experiments } from "@/components/builder/experiments";
+import { Answers } from "@/components/builder/answers";
 import { Explain } from "@/components/builder/explain";
 import { GuessCheck, GuessPanel, type GuessStep } from "@/components/builder/guess";
 import { LabNotebook } from "@/components/builder/notebook";
+import { LrCard } from "@/app/pretraining/lr-card";
 import { Tower } from "@/components/builder/tower";
 import {
   anchoredDraft,
@@ -26,6 +28,8 @@ import {
   jobFor,
   pretraining,
   queueJobs,
+  quicktest,
+  sameChoices,
   specBase,
   specOf,
   loadDraft,
@@ -107,6 +111,7 @@ export function Builder() {
     retry: false,
   });
   const draftSpec: Spec | null = writeQ.isError ? null : (writeQ.data ?? null);
+  const lrSpec: Spec | null = draftSpec ?? baseSpec;
   const cannotWrite = writeQ.isError ? detailOf(writeQ.error) : null;
 
   const curTowerQ = useQuery({ queryKey: ["design", "tower", cur], queryFn: () => design.tower(cur!), enabled: !!cur, staleTime: Infinity, retry: false });
@@ -162,6 +167,20 @@ export function Builder() {
   const lines: Line[] = recount ? [{ text: BUILDER.compute_recount, bad: false }] : (linesQ.data ?? []);
   const chips = draftSpec ? (changesQ.data?.chips ?? []) : [];
   const warm = draftSpec ? (changesQ.data?.warm ?? null) : null;
+
+  // An unsaved change is staged for Quick test and Compare runs, and taken back when the draft is discarded or saved.
+  const staged = useRef<string | null>(null);
+  const toStage = ready && !writeQ.isPlaceholderData && draftSpec && cur && draft && !sameChoices(cur, draft) ? draftSpec : null;
+  const stageKey = toStage ? JSON.stringify(toStage) : null;
+  useEffect(() => {
+    if (!ready || writeQ.isPlaceholderData || stageKey === staged.current) return;
+    staged.current = stageKey;
+    quicktest.stage(toStage).catch(() => {
+      staged.current = null; // not staged: try again on the next change
+    });
+    // toStage is stageKey's source; the key is what says it changed
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageKey, ready, writeQ.isPlaceholderData]);
 
   // Editing: every change is a new draft; the queries above re-run on it.
   const edit = (next: Choices) => setStore((s) => (s ? { ...s, draft: next } : s));
@@ -382,6 +401,7 @@ export function Builder() {
               <Experiments cur={cur} asking={heldQuestion} busy={save.isPending || saveSplit.isPending} onTry={tryQuestion} />
               <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
               <Costs now={sizesNowQ.data} next={draftSpec ? sizesNewQ.data : sizesNowQ.data} warm={warm} lines={lines} />
+              <LrCard version={lrSpec ? JSON.stringify(lrSpec) : null} spec={lrSpec} />
               <Expect expectations={expectQ.data} />
               <VersionList versions={versionsQ.data} current={base} />
             </div>
@@ -417,11 +437,13 @@ export function Builder() {
               {fill(BUILDER.text_sets_failed, { reason: detailOf(textSetsQ.error) })}
             </p>
           )}
+          <Answers versions={versionsQ.data} current={base} />
           {current && <GuessCheck before={checkBefore} version={current} />}
         </>
       )}
       {/* Outside the ready branch: a save moves the current version and the page reads its design again; the notebook keeps its rows. */}
       {!failed && <LabNotebook versions={versionsQ.data} />}
+      {!failed && <TryIt />}
       <VersionTray />
     </main>
   );
