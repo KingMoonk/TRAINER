@@ -327,15 +327,6 @@ class SelfLaunch(unittest.TestCase):
         self.assertEqual(module_command("studio_passive", "run", "id", "--root", "/r"), [sys.executable, "-m", "studio_passive", "run", "id", "--root", "/r"])
         self.assertEqual(module_command("studio_brain3d"), [sys.executable, "-m", "studio_brain3d"])
 
-    def test_module_command_frozen_dispatches_on_the_executable(self):
-        with patch.object(sys, "frozen", True, create=True):
-            self.assertEqual(module_command("studio_passive", "run", "id"), [sys.executable, "--run-module", "studio_passive", "run", "id"])
-
-    def test_app_dispatch_runs_a_module_with_its_own_arguments(self):
-        code = subprocess.run([sys.executable, str(ROOT / "app.py"), "--run-module", "studio_passive", "run", "--help"], cwd=ROOT, capture_output=True, text=True, timeout=60)
-        self.assertEqual(code.returncode, 0, code.stderr)
-        self.assertIn("usage: studio_passive run", code.stdout)
-
     def test_workspace_root_is_the_source_folder_but_a_user_folder_when_frozen(self):
         self.assertEqual(studio_core.ROOT, ROOT)
         with tempfile.TemporaryDirectory() as home, patch.object(sys, "frozen", True, create=True), patch("pathlib.Path.home", return_value=Path(home)), \

@@ -10,7 +10,6 @@ import numpy as np
 import studio_scene_json as sj
 import studio_viewer_ui as ui
 from studio_compile import CompiledModel
-from studio_ia.theme import C
 from studio_scene import MODES, SceneModel
 from studio_snapshot import one_step
 from studio_spec import default_spec, validate_spec
@@ -657,7 +656,7 @@ class ViewerParity(Scenes):
     def test_palette_is_the_viewers(self):
         self.assertEqual(sj.VIEWER_LEVELS, ui.LEVELS)
         for name, value in sj.THEME.items():
-            self.assertEqual(value, C[name], name)
+            self.assertEqual(value, ui.C[name], name)
         self.assertEqual(set(ui.SCENE) - set(sj.KINDS), set())
         for kind, colour in ui.SCENE.items():
             self.assertEqual(ui.rgba(sj.PALETTE[kind]['color'], sj.PALETTE[kind]['alpha']), colour, kind)

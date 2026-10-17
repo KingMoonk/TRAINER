@@ -1,6 +1,5 @@
 """The Builder's design maths, Tk-free: what a draft design is (read_spec/write_spec), which modules it can take and
-why not, what it costs and what to expect of it. The Tk page (studio_ia.pages.builder) and the API (studio_api.routers.design)
-both call these; nothing here touches a widget or holds state.
+why not, what it costs and what to expect of it. The API (studio_api.routers.design) calls these; nothing here touches a widget or holds state.
 """
 from __future__ import annotations
 
