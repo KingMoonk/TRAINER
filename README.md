@@ -6,28 +6,71 @@ A native Python desktop studio for creating datasets and training your own langu
 
 ## Quickstart
 
-Requires Python 3.12 or newer with Tkinter (the pinned NumPy 2.5 and pandas 3.0 need 3.12).
+From nothing to the web UI in your browser, on this machine and on any device on your tailnet.
+
+**1. Install the tools.**
+
+- Python 3.12 or newer (the pinned NumPy 2.5 and pandas 3.0 need 3.12). On macOS, `python3` from Xcode is 3.9 and will not
+  do: install one from python.org or Homebrew (`brew install python@3.13`).
+- Node 24 and pnpm (`npm install -g pnpm`).
+- [Tailscale](https://tailscale.com/download), only to reach the UI from other devices or to join a cluster.
+
+**2. Get the code and install the dependencies.**
 
 macOS / Linux:
 
 ```bash
+git clone https://github.com/KingMoonk/TRAINER.git && cd TRAINER
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-dev.txt
-python app.py
+.venv/bin/python -m pip install -r requirements-dev.txt
+cd web && pnpm install && cd ..
 ```
 
 Windows (PowerShell):
 
 ```powershell
+git clone https://github.com/KingMoonk/TRAINER.git; cd TRAINER
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe app.py
+cd web; pnpm install; cd ..
 ```
 
-On Windows you can instead double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
+`requirements-dev.txt` includes `requirements.txt` (PyTorch, the API server) plus ruff. For an NVIDIA GPU install the CUDA build of
+PyTorch first (`requirements-gpu.txt`, [GPU acceleration](#gpu-acceleration)); Apple GPUs need nothing extra.
+
+**3. Build the web UI and start the API.**
+
+```bash
+.venv/bin/python tasks.py web:build                         # writes web/out, which the API serves
+.venv/bin/python -m studio_api --bind 127.0.0.1 --port 8787
+```
+
+Open `http://127.0.0.1:8787`. The status strip says **Connected** when the event stream is up. Always use the `.venv` interpreter:
+a bare `python3` lacks the packages (`No module named 'uvicorn'`). The API reads `web/out` when it starts, so restart it after a
+rebuild. `[Errno 48] address already in use` means an API is already running on that port; stop it or use it.
+
+**4. Optional: open it from other devices on your tailnet.**
+
+Sign in to Tailscale on this machine (`tailscale status` should show it online), then bind the API to every interface and publish
+it over HTTPS:
+
+```bash
+.venv/bin/python -m studio_api --bind 0.0.0.0 --port 8787
+tailscale serve --bg 8787
+```
+
+The UI is at `https://<machine>.<tailnet>.ts.net/` (`tailscale serve status` prints it). The first `serve` may ask you to enable
+HTTPS certificates for the tailnet; follow its link. A `502` there means the API is not running. While the tailnet is only you,
+no tags or ACL are needed; `docs/cluster.md` covers adding machines and other people, `docs/node.md` running the API as a
+service so it survives reboots.
+
+**Troubleshooting Tailscale.** `requested tags [tag:trainer] are invalid or not permitted` means the tag is not in the
+policy's `tagOwners` (`docs/cluster.md`, ACL). The request stays pending and leaves the machine logged out (the `.ts.net` name
+stops resolving); `sudo tailscale up --reset` clears it and logs in again. `tailscale set` has no `--advertise-tags`; tag a
+machine with `tailscale up --advertise-tags=...` or from the admin console's **Machines** page.
+
+The Tk desktop app still runs until the web UI replaces it (`docs/rewrite.md`, Phase 5): `.venv/bin/python app.py`, or on
+Windows double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
 
 
 ## Lint and tests
@@ -44,7 +87,7 @@ python tasks.py test:ci:e2e                       # + a real training run (tests
 
 CI runs `test:ci:e2e` on each push and pull request. `test:ci` and `test:ci:e2e` refuse to run unless `CI` is set (GitHub Actions does), because the window tests open real Tk and 3D windows. Those tests live in `gui_*.py` and skip themselves unless `CI` is set or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
 
-## Web UI (in progress)
+## Web UI development
 
 `web/` is the browser front end that will replace the Tk app, phase by phase (`docs/rewrite.md`). It needs Node and pnpm:
 
@@ -64,9 +107,6 @@ cd web && NEXT_PUBLIC_API_URL=http://127.0.0.1:8787 pnpm dev   # terminal 2: htt
 `NEXT_PUBLIC_API_URL` is the API's origin; the dev page is on another origin, so it needs the API to allow it. For a single
 origin instead, build the export (`python tasks.py web:build`) and open the API's own URL, `http://127.0.0.1:8787`, which serves
 `web/out`. The status strip says **Connected** when the event stream is up. To keep the API running on a machine, see `docs/node.md`.
-
-Every page is a placeholder until its phase lands; the Tk app (`python app.py`) is still the one to use.
-
 ## Finding hot spots
 
 Measure before optimizing. Both tools are opt-in and work the same on macOS and Windows.
