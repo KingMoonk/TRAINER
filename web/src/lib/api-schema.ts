@@ -2513,6 +2513,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/state/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync
+         * @description Push-pull anti-entropy. An empty vector gets the whole state.
+         */
+        post: operations["sync_state_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storage": {
         parameters: {
             query?: never;
@@ -6488,6 +6508,23 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** StateEntry */
+        StateEntry: {
+            /** Age */
+            age: number;
+            /** Incarnation */
+            incarnation: number;
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Origin */
+            origin: string;
+            /** Seq */
+            seq: number;
+            /** Value */
+            value: unknown;
+        };
         /** StatusRequest */
         StatusRequest: {
             /** Version */
@@ -6618,6 +6655,36 @@ export interface components {
             key: "gate_few_docs" | "gate_better" | "gate_not_sure" | "gate_not_better" | "no_band_yet" | "held_back_below" | "held_back_inside";
             /** Need */
             need?: number | null;
+        };
+        /** SyncBody */
+        SyncBody: {
+            /**
+             * Entries
+             * @default []
+             */
+            entries: components["schemas"]["StateEntry"][];
+            /**
+             * Vector
+             * @default {}
+             */
+            vector: {
+                [key: string]: [
+                    number,
+                    number
+                ];
+            };
+        };
+        /** SyncReply */
+        SyncReply: {
+            /** Entries */
+            entries: components["schemas"]["StateEntry"][];
+            /** Vector */
+            vector: {
+                [key: string]: [
+                    number,
+                    number
+                ];
+            };
         };
         /** TeacherOut */
         TeacherOut: {
@@ -11123,6 +11190,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Version"];
+                };
+            };
+        };
+    };
+    sync_state_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

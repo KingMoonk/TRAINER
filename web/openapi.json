@@ -8006,6 +8006,51 @@
         "title": "StartRun",
         "type": "object"
       },
+      "StateEntry": {
+        "properties": {
+          "age": {
+            "minimum": 0.0,
+            "title": "Age",
+            "type": "number"
+          },
+          "incarnation": {
+            "minimum": 0.0,
+            "title": "Incarnation",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "origin",
+          "kind",
+          "key",
+          "incarnation",
+          "seq",
+          "age",
+          "value"
+        ],
+        "title": "StateEntry",
+        "type": "object"
+      },
       "StatusRequest": {
         "properties": {
           "version": {
@@ -8273,6 +8318,72 @@
           "key"
         ],
         "title": "SwitchNote",
+        "type": "object"
+      },
+      "SyncBody": {
+        "properties": {
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/StateEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "vector": {
+            "additionalProperties": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "default": {},
+            "title": "Vector",
+            "type": "object"
+          }
+        },
+        "title": "SyncBody",
+        "type": "object"
+      },
+      "SyncReply": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/StateEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "vector": {
+            "additionalProperties": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Vector",
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "vector"
+        ],
+        "title": "SyncReply",
         "type": "object"
       },
       "TeacherOut": {
@@ -15001,6 +15112,48 @@
         "summary": "Save Idea",
         "tags": [
           "quicktest"
+        ]
+      }
+    },
+    "/state/sync": {
+      "post": {
+        "description": "Push-pull anti-entropy. An empty vector gets the whole state.",
+        "operationId": "sync_state_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReply"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sync",
+        "tags": [
+          "state"
         ]
       }
     },
