@@ -1,0 +1,100 @@
+// The New run form's words. The tooltips are the design board's (NewRun.dc.html), trimmed to what the API does.
+
+export const NEW_RUN = {
+  back: "Runs",
+  title: "New run",
+  couldNotLoad: "Could not read the settings for a run: {why}",
+  loading: "Loading...",
+
+  stage: "Stage",
+  stageTip:
+    "Training stage, which sets the data source and loss. Pretrain: causal LM (next-token cross-entropy) on your text. SFT: cross-entropy on the answer tokens of instruction pairs. Ablation: a quick test of a staged design change for a few minutes; no version is kept.",
+  stages: [
+    { id: "pretrain", label: "Pretrain · causal LM" },
+    { id: "sft", label: "SFT · instruction pairs" },
+    { id: "ablation", label: "Ablation · short budget" },
+  ] as const,
+
+  version: "Version",
+  versionTip: "The saved design this run trains. Pretrain defaults to the newest; SFT to the best trained one.",
+  versionNewest: "Newest saved design",
+  versionBest: "Best trained version",
+  versionName: "Version {number}",
+  noVersions: "No design is saved yet. Save one in the Network designer first.",
+  start: "Start from",
+  startTip: "Random init trains from scratch. Continue picks up the checkpoint of the version before it. A run over several machines always starts from scratch.",
+  startScratch: "Random init",
+  startContinue: "Continue from the earlier training",
+
+  text: "Text",
+  textTip: "The text sets this run reads: the same text on every machine. At least one is required.",
+  noText: "There is no text yet. Add some in",
+  yourData: "Your data",
+  textSelected: "{count} selected",
+
+  workers: "Workers W",
+  workersTip: "Machines that run the training. More than one turns on DiLoCo: each trains on its own for a while, then they average what they learned. SFT and Ablation run on one machine.",
+  workersTipOne: "Machines that run the training. SFT and Ablation run on one machine.",
+  manageNodes: "Manage nodes",
+  thisComputer: "This computer",
+  ready: "Ready",
+  busy: "Busy",
+  notAnswering: "Not answering",
+  localRequired: "This computer coordinates every run over several machines, so it always takes part.",
+  noMachines: "No machine is listed. Add machines on the Machines page.",
+
+  coordinator: "Coordinator c",
+  coordinatorTip: "Owns the weights, the outer optimiser state, the held-out split and every checkpoint. It is always this computer; choosing another one is not possible yet.",
+  coordinatorValue: "This computer",
+
+  shapeInvalid: "Invalid",
+  shapeInvalidTip: "Pick at least one machine.",
+  shapeLocal: "Local",
+  shapeLocalTip: "{node} trains on its own: one device, no communication.",
+  shapeRemote: "Remote",
+  shapeRemoteTip: "{node} runs the job. It is pinned there: it runs there or waits.",
+  shapeDiloco: "DiLoCo · |W| = {count} · c = this computer",
+  shapeDilocoTip: "Each worker takes H inner steps on its own part of the text and returns its change. This computer averages the changes, applies an outer momentum step, checks held-out loss and checkpoints. It trains too.",
+
+  outerLoop: "Outer loop",
+  outerLoopTip: "Settings for how the machines average what they learned. Shown only when more than one machine is picked.",
+  innerSteps: "H · inner steps",
+  innerStepsTip:
+    "Inner optimiser steps each worker takes between averages. A larger H means less communication but more drift between machines. The DiLoCo paper uses 500; 50 to 100 is safer on small, uneven clusters.",
+  rounds: "R · rounds",
+  roundsTip: "Number of outer steps. Total inner steps per worker = H × R.",
+  outerLr: "η_outer",
+  outerLrTip: "Outer learning rate applied to the averaged change. DiLoCo default 0.7 with Nesterov momentum; 1.0 without momentum is plain parameter averaging.",
+  outerMomentum: "μ",
+  outerMomentumTip: "Outer Nesterov momentum. DiLoCo default 0.9; lower it if the held-out loss oscillates between rounds.",
+  deltaDtype: "Δ dtype",
+  deltaDtypeTip: "Number format of the change each machine sends back. Set by the server; it is not a per-run choice.",
+
+  quickDataset: "Tiny dataset",
+  quickMinutes: "Time each",
+  quickGuess: "Your guess first",
+  quickGuessTip: "Will your idea's error end lower, about the same, or higher than the current design's? The result shows next to your guess.",
+  quickNeedsDraft: "Needs a change staged in the Network designer.",
+  quickDesigner: "Network designer",
+
+  schedule: "Schedule",
+  scheduleTip: "Every run goes into the queue, and the queue's plan decides when jobs may work. There is no per-run schedule.",
+  allowedHours: "Allowed hours",
+  outlookLoading: "Reading the queue...",
+
+  cancel: "Cancel",
+  addToQueue: "Add to queue",
+  startNow: "Start",
+  working: "Working...",
+  startedNow: "Starts now",
+  couldNotStart: "Could not start the run: {why}",
+  pinFailed: "Added to the queue, but could not pin it to {node}: {why}",
+  needText: "Tick at least one text set.",
+  needGuess: "Pick your guess first.",
+  needWorker: "Pick at least one machine.",
+  needSettings: "Fill in the outer loop settings: whole numbers for H and R, η_outer above 0, μ from 0 up to 1.",
+} as const;
+
+export function fill(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_m, key: string) => String(values[key] ?? ""));
+}

@@ -12,7 +12,7 @@ import { useApiEvents } from "../your-data/events";
 import { runJob, type JobLike } from "../your-data/jobs";
 import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
-import { HOLD, LENGTHS, PREVIEW_ROWS, ROWS, chosenIds, errorText, type Length, type Preview } from "./logic";
+import { HOLD, PREVIEW_ROWS, ROWS, chosenIds, errorText, planBody, type Length, type Preview } from "./logic";
 import { LrCard } from "./lr-card";
 import { TrainCard } from "./train-card";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
@@ -30,7 +30,7 @@ export default function PretrainingPage() {
   const sets = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: () => unwrap(api.GET("/pretraining/text_sets")) });
   const ids = useMemo(() => chosenIds(sets.data, use), [sets.data, use]);
 
-  const body = { version: null, dataset_ids: ids, mode, rows: Number(rows), hold: Number(hold.slice(0, -1)) / 100, passes: LENGTHS[length], preview_rows: PREVIEW_ROWS };
+  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length });
   const plan = useQuery({
     queryKey: ["pretraining", "plan", body],
     queryFn: () => unwrap(api.POST("/pretraining/plan", { body })),

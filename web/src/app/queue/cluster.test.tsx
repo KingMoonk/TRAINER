@@ -272,7 +272,8 @@ describe("Queue page with several machines", () => {
     expect(screen.queryByTestId("other-machines")).toBeNull();
     expect(screen.queryByTestId("queue-training-link")).toBeNull();
     expect(screen.queryByTestId("now-place")).toBeNull();
-    expect(screen.queryAllByText(/ON OTHER MACHINES|Run on|machine/i)).toHaveLength(0);
+    // The sidebar's own "Machines" link is not machine state, so it is left out of the search.
+    expect(screen.queryAllByText(/ON OTHER MACHINES|Run on|machine/i).filter((el) => !el.closest("nav"))).toHaveLength(0);
     expect(strip()).toHaveTextContent("Queue");
     expect(strip()).not.toHaveTextContent("Machines");
     expect(strip()).not.toHaveTextContent("Elsewhere");
