@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { problem } from "@/lib/cluster";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type TextSet } from "./logic";
+import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./use-training";
 
 const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
@@ -23,12 +23,15 @@ function Setting({ id, label, help, value, onChange, step }: { id: string; label
 }
 
 /** The form fills itself from the server once the defaults and text sets have arrived, then belongs to the person. */
-function Fields({ defaults, sets }: { defaults: Defaults; sets: TextSet[] }) {
+function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextSet[]; onStarted: (run: Run) => void }) {
   const versions = useVersions().data ?? [];
   const nodes = otherMachines(useMachines().data);
   const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
   const [failure, setFailure] = useState("");
-  const start = useStart(() => setFailure(""), setFailure);
+  const start = useStart((run) => {
+    setFailure("");
+    onStarted(run);
+  }, setFailure);
   const set = (patch: Partial<Form>) => {
     setForm((f) => ({ ...f, ...patch }));
     setFailure("");
@@ -105,7 +108,7 @@ function Fields({ defaults, sets }: { defaults: Defaults; sets: TextSet[] }) {
   );
 }
 
-export function StartForm() {
+export function StartForm({ onStarted }: { onStarted: (run: Run) => void }) {
   const defaults = useDefaults();
   const sets = useTextSets();
   return (
@@ -116,7 +119,7 @@ export function StartForm() {
       </CardHeader>
       <CardContent>
         {defaults.data && sets.data ? (
-          <Fields defaults={defaults.data} sets={sets.data} />
+          <Fields defaults={defaults.data} sets={sets.data} onStarted={onStarted} />
         ) : (
           <p className="text-sm text-muted-foreground" role={defaults.isError || sets.isError ? "alert" : undefined}>
             {defaults.isError || sets.isError ? T.couldNotLoad.replace("{why}", problem(defaults.error ?? sets.error)) : T.loading}

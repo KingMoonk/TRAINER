@@ -1,0 +1,276 @@
+{
+  "body": {
+    "can_stop": true,
+    "contributed": 0,
+    "deadline_s": 4.25,
+    "delta_dtype": "float16",
+    "events": [
+      {
+        "kind": "joined",
+        "node": "mac-mini",
+        "round": 0,
+        "seq": 1,
+        "t": 0.0,
+        "text": "mac-mini joined."
+      },
+      {
+        "kind": "joined",
+        "node": "gpu-box",
+        "round": 0,
+        "seq": 2,
+        "t": 0.0,
+        "text": "gpu-box joined."
+      },
+      {
+        "kind": "outer_step",
+        "node": "",
+        "round": 0,
+        "seq": 3,
+        "t": 5.4,
+        "text": "Outer step applied for round 0: size 0.2, from 2 of 2 members."
+      },
+      {
+        "kind": "checkpoint",
+        "node": "",
+        "round": 0,
+        "seq": 4,
+        "t": 6.0,
+        "text": "Round 0 checkpoint written."
+      }
+    ],
+    "expected": 2,
+    "grace_s": 2.0,
+    "history": [
+      {
+        "bytes_down": 8000000,
+        "bytes_up": 4000000,
+        "contributed": 2,
+        "dropped": [],
+        "loss": 5.0509,
+        "members": 2,
+        "round": 0,
+        "seconds": 6.0,
+        "step": 100,
+        "val_loss": 5.1309
+      }
+    ],
+    "id": "demo-run",
+    "inner_steps": 100,
+    "label": "Demo run on a Mac mini and a GPU box",
+    "members": [
+      {
+        "address": "local",
+        "can_stop": false,
+        "device": "mps",
+        "device_name": "Apple M2",
+        "last_delta_bytes": 2000000,
+        "last_delta_dtype": "float16",
+        "live_tokens_per_second": 2439.996474404291,
+        "local": true,
+        "loss": 4.9182,
+        "missed": 0,
+        "node": "mac-mini",
+        "note": "",
+        "phase": "training",
+        "reported_ago": 0.0,
+        "round_steps": 100,
+        "rounds_done": 1,
+        "samples": [
+          {
+            "loss": 4.9761,
+            "step": 0,
+            "t": 0.8,
+            "tokens_per_second": 2400.0
+          },
+          {
+            "loss": 4.9814,
+            "step": 8,
+            "t": 1.088,
+            "tokens_per_second": 2439.5743298649354
+          },
+          {
+            "loss": 4.9698,
+            "step": 16,
+            "t": 1.3760000000000001,
+            "tokens_per_second": 2388.4838673333975
+          },
+          {
+            "loss": 4.9411,
+            "step": 24,
+            "t": 1.6640000000000001,
+            "tokens_per_second": 2363.776865519735
+          },
+          {
+            "loss": 4.9116,
+            "step": 32,
+            "t": 1.9520000000000002,
+            "tokens_per_second": 2422.057067249668
+          }
+        ],
+        "sent": false,
+        "shards": 4,
+        "state": "training",
+        "step_in_round": 33,
+        "steps": 100,
+        "tokens_per_second": 2400.0
+      },
+      {
+        "address": "gpu-box:8787",
+        "can_stop": true,
+        "device": "cuda",
+        "device_name": "NVIDIA GeForce RTX 4090",
+        "last_delta_bytes": 2000000,
+        "last_delta_dtype": "float16",
+        "live_tokens_per_second": 9806.694228012113,
+        "local": false,
+        "loss": 4.9013,
+        "missed": 0,
+        "node": "gpu-box",
+        "note": "",
+        "phase": "training",
+        "reported_ago": 0.0,
+        "round_steps": 100,
+        "rounds_done": 1,
+        "samples": [
+          {
+            "loss": 4.993,
+            "step": 0,
+            "t": 0.5,
+            "tokens_per_second": 9800.0
+          },
+          {
+            "loss": 4.9821,
+            "step": 8,
+            "t": 0.688,
+            "tokens_per_second": 9839.574329864936
+          },
+          {
+            "loss": 4.9537,
+            "step": 16,
+            "t": 0.876,
+            "tokens_per_second": 9788.483867333398
+          },
+          {
+            "loss": 4.9239,
+            "step": 24,
+            "t": 1.064,
+            "tokens_per_second": 9763.776865519734
+          },
+          {
+            "loss": 4.9101,
+            "step": 32,
+            "t": 1.252,
+            "tokens_per_second": 9822.057067249667
+          },
+          {
+            "loss": 4.9141,
+            "step": 40,
+            "t": 1.44,
+            "tokens_per_second": 9829.804526419173
+          },
+          {
+            "loss": 4.9204,
+            "step": 48,
+            "t": 1.6280000000000001,
+            "tokens_per_second": 9769.269813547053
+          },
+          {
+            "loss": 4.9111,
+            "step": 56,
+            "t": 1.8159999999999998,
+            "tokens_per_second": 9779.137959916523
+          }
+        ],
+        "sent": false,
+        "shards": 4,
+        "state": "training",
+        "step_in_round": 63,
+        "steps": 100,
+        "tokens_per_second": 9800.0
+      }
+    ],
+    "note": "",
+    "now_s": 8.0,
+    "outer_lr": 0.7,
+    "outer_momentum": 0.9,
+    "owner": "mac-mini",
+    "phase": "training",
+    "round": 1,
+    "rounds": 400,
+    "started_at": 1700000000.0,
+    "state": "running",
+    "theta_bytes": 4000000,
+    "timeline": [
+      {
+        "closed": 5.0,
+        "deadline": 6.25,
+        "lanes": [
+          {
+            "counted": true,
+            "delta_bytes": 2000000,
+            "delta_received": 5.0,
+            "delta_sent": 4.4,
+            "first_step": 0.8,
+            "node": "mac-mini",
+            "steps": 100,
+            "theta_taken": 0.0,
+            "tokens": 8640
+          },
+          {
+            "counted": true,
+            "delta_bytes": 2000000,
+            "delta_received": 3.45,
+            "delta_sent": 2.85,
+            "first_step": 0.5,
+            "node": "gpu-box",
+            "steps": 100,
+            "theta_taken": 0.0,
+            "tokens": 23030
+          }
+        ],
+        "open": false,
+        "round": 0,
+        "window": 6.25
+      },
+      {
+        "closed": null,
+        "deadline": 6.25,
+        "lanes": [
+          {
+            "counted": null,
+            "delta_bytes": 0,
+            "delta_received": null,
+            "delta_sent": null,
+            "first_step": 0.8,
+            "node": "mac-mini",
+            "steps": 0,
+            "theta_taken": 0.0,
+            "tokens": 0
+          },
+          {
+            "counted": null,
+            "delta_bytes": 0,
+            "delta_received": null,
+            "delta_sent": null,
+            "first_step": 0.5,
+            "node": "gpu-box",
+            "steps": 0,
+            "theta_taken": 0.0,
+            "tokens": 0
+          }
+        ],
+        "open": true,
+        "round": 1,
+        "window": 6.25
+      }
+    ],
+    "version": 1,
+    "window_s": 6.25
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/distributed/runs/demo-run"
+  },
+  "status": 200
+}

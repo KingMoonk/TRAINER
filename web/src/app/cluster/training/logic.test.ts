@@ -1,20 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
   bytesText, deltaText, initialForm, isActive, lossSeries, memberDevice, needsReason, reasonText, speedText, startBody, toggled, trafficSeries, trouble,
-  type Form, type Member, type Round, type Run,
+  type Form,
 } from "./logic";
+import { member as build, round, run } from "./test-data";
 
-const member = (over: Partial<Member> = {}): Member => ({
-  node: "gpu-box", address: "gpu-box", local: false, device: "cuda", device_name: "RTX 4090", state: "training", note: "", missed: 0, sent: false,
-  rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", can_stop: true, ...over,
-});
-const round = (n: number, over: Partial<Round> = {}): Round => ({
-  round: n, step: (n + 1) * 100, loss: 4 - n, val_loss: 4.5 - n, bytes_up: 2 ** 20, bytes_down: 2 * 2 ** 20, seconds: 2, members: 2, contributed: 2, dropped: [], ...over,
-});
-const run = (over: Partial<Run> = {}): Run => ({
-  id: "r1", label: "Run", version: 1, state: "running", note: "", started_at: 1, owner: "mac-mini", round: 1, rounds: 10, inner_steps: 100, outer_lr: 0.7,
-  outer_momentum: 0.9, delta_dtype: "float16", members: [], history: [], can_stop: true, ...over,
-});
+// the shared member, with the numbers these tests were written around
+const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
+
 const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], ...over });
 
 describe("the form", () => {

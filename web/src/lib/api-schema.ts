@@ -439,11 +439,32 @@ export interface paths {
         };
         /**
          * Params
-         * @description The open round's global weights, fp32, as an .npz.
+         * @description The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline.
          */
         get: operations["params_collective__run__params_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Progress
+         * @description A member's report of its phase, step in the round, inner loss and speed, about every 2 s. 409 when stale, as a delta is.
+         *     `accepted` is false when the coordinator was busy closing a round and took nothing: the next report says it all again.
+         */
+        post: operations["progress_collective__run__progress_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3628,7 +3649,7 @@ export interface components {
              * Samples
              * @default []
              */
-            samples: components["schemas"]["Sample"][];
+            samples: components["schemas"]["studio_api__routers__pretraining__Sample"][];
             /**
              * Smooth
              * @default []
@@ -4339,6 +4360,30 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /**
+         * Lane
+         * @description One member's round on the coordinator's clock: seconds since the round opened. A moment is null when it never reported it.
+         */
+        Lane: {
+            /** Counted */
+            counted: boolean | null;
+            /** Delta Bytes */
+            delta_bytes: number;
+            /** Delta Received */
+            delta_received: number | null;
+            /** Delta Sent */
+            delta_sent: number | null;
+            /** First Step */
+            first_step: number | null;
+            /** Node */
+            node: string;
+            /** Steps */
+            steps: number;
+            /** Theta Taken */
+            theta_taken: number | null;
+            /** Tokens */
+            tokens: number;
+        };
         /** LearningCheck */
         LearningCheck: {
             check: components["schemas"]["GuessCheck"] | null;
@@ -4470,23 +4515,39 @@ export interface components {
             last_delta_bytes: number | null;
             /** Last Delta Dtype */
             last_delta_dtype: string;
+            /** Live Tokens Per Second */
+            live_tokens_per_second: number | null;
             /** Local */
             local: boolean;
+            /** Loss */
+            loss: number | null;
             /** Missed */
             missed: number;
             /** Node */
             node: string;
             /** Note */
             note: string;
+            /** Phase */
+            phase: ("downloading" | "training" | "uploading" | "waiting") | null;
+            /** Reported Ago */
+            reported_ago: number | null;
+            /** Round Steps */
+            round_steps: number;
             /** Rounds Done */
             rounds_done: number;
+            /** Samples */
+            samples: components["schemas"]["studio_api__routers__distributed__Sample"][];
             /** Sent */
             sent: boolean;
+            /** Shards */
+            shards: number;
             /**
              * State
              * @enum {string}
              */
             state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "finished";
+            /** Step In Round */
+            step_in_round: number;
             /** Steps */
             steps: number;
             /** Tokens Per Second */
@@ -5218,6 +5279,34 @@ export interface components {
             rules: components["schemas"]["ProblemRule"][];
         };
         /**
+         * ProgressRequest
+         * @description Where a member is in its round: no weights. `round` is the round it is working on or about to work on.
+         */
+        ProgressRequest: {
+            /** Epoch */
+            epoch: number;
+            /** Generation */
+            generation: number;
+            /** Loss */
+            loss?: number | null;
+            /** Node */
+            node: string;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "downloading" | "training" | "uploading" | "waiting";
+            /** Round */
+            round: number;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+        };
+        /**
          * PublishedVersion
          * @description One version in the version store: what its machine published, and whether this workspace has it.
          */
@@ -5889,6 +5978,21 @@ export interface components {
              */
             status: string;
         };
+        /** RoundTimeline */
+        RoundTimeline: {
+            /** Closed */
+            closed: number | null;
+            /** Deadline */
+            deadline: number;
+            /** Lanes */
+            lanes: components["schemas"]["Lane"][];
+            /** Open */
+            open: boolean;
+            /** Round */
+            round: number;
+            /** Window */
+            window: number;
+        };
         /**
          * RoundView
          * @description state: open (this member's assignment is filled in), pending (not open yet, or this member joins at a later boundary),
@@ -5933,8 +6037,18 @@ export interface components {
         Run: {
             /** Can Stop */
             can_stop: boolean;
+            /** Contributed */
+            contributed: number;
+            /** Deadline S */
+            deadline_s: number | null;
             /** Delta Dtype */
             delta_dtype: string;
+            /** Events */
+            events: components["schemas"]["RunEvent"][];
+            /** Expected */
+            expected: number;
+            /** Grace S */
+            grace_s: number;
             /** History */
             history: components["schemas"]["Round"][];
             /** Id */
@@ -5947,12 +6061,19 @@ export interface components {
             members: components["schemas"]["Member"][];
             /** Note */
             note: string;
+            /** Now S */
+            now_s: number;
             /** Outer Lr */
             outer_lr: number;
             /** Outer Momentum */
             outer_momentum: number;
             /** Owner */
             owner: string;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "waiting" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "finished" | "stopped";
             /** Round */
             round: number;
             /** Rounds */
@@ -5964,8 +6085,32 @@ export interface components {
              * @enum {string}
              */
             state: "queued" | "starting" | "waiting" | "running" | "finished" | "stopped" | "failed";
+            /** Theta Bytes */
+            theta_bytes: number;
+            /** Timeline */
+            timeline: components["schemas"]["RoundTimeline"][];
             /** Version */
             version: number | null;
+            /** Window S */
+            window_s: number | null;
+        };
+        /** RunEvent */
+        RunEvent: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished";
+            /** Node */
+            node: string;
+            /** Round */
+            round: number;
+            /** Seq */
+            seq: number;
+            /** T */
+            t: number;
+            /** Text */
+            text: string;
         };
         /** RunPageModel */
         RunPageModel: {
@@ -6014,13 +6159,6 @@ export interface components {
         RunRequest: {
             /** Version */
             version: number;
-        };
-        /** Sample */
-        Sample: {
-            /** Step */
-            step: number;
-            /** Text */
-            text: string;
         };
         /**
          * SharedVersion
@@ -6842,6 +6980,17 @@ export interface components {
              */
             started: boolean;
         };
+        /** Sample */
+        studio_api__routers__distributed__Sample: {
+            /** Loss */
+            loss: number | null;
+            /** Step */
+            step: number;
+            /** T */
+            t: number;
+            /** Tokens Per Second */
+            tokens_per_second: number | null;
+        };
         /** ReplyRequest */
         studio_api__routers__inspect__ReplyRequest: {
             /**
@@ -6873,6 +7022,13 @@ export interface components {
             upper: number;
             /** Vs */
             vs: number;
+        };
+        /** Sample */
+        studio_api__routers__pretraining__Sample: {
+            /** Step */
+            step: number;
+            /** Text */
+            text: string;
         };
         /**
          * GateModel
@@ -7623,6 +7779,7 @@ export interface operations {
         parameters: {
             query: {
                 round: number;
+                node?: string;
             };
             header?: never;
             path: {
@@ -7640,6 +7797,42 @@ export interface operations {
                 };
                 content: {
                     "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    progress_collective__run__progress_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgressRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__collective__Accepted"];
                 };
             };
             /** @description Validation Error */

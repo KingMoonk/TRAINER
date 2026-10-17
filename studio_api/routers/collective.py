@@ -5,7 +5,7 @@ Weights, shards and pseudo-gradients are binary .npz bodies; a request from an e
 and changes nothing. Node-to-node authentication is the app's (studio_api.auth), not this router's.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -27,6 +27,19 @@ class LeaveRequest(BaseModel):
     node: str
     generation: int
     epoch: int
+
+
+class ProgressRequest(BaseModel):
+    """Where a member is in its round: no weights. `round` is the round it is working on or about to work on."""
+
+    node: str
+    generation: int
+    epoch: int
+    round: int
+    phase: Literal["downloading", "training", "uploading", "waiting"]
+    step: int = 0  # inner steps done in the round
+    loss: float | None = None
+    tokens_per_second: float | None = None
 
 
 class JoinInfo(BaseModel):
@@ -79,9 +92,9 @@ def join(run: str = Run, body: JoinRequest = ...):
 
 
 @router.get("/params", response_class=Response, responses=BINARY)
-def params(round: int, run: str = Run):
-    """The open round's global weights, fp32, as an .npz."""
-    return Response(coordinator(run).params_bytes(round), media_type="application/octet-stream")
+def params(round: int, node: str = "", run: str = Run):
+    """The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline."""
+    return Response(coordinator(run).params_bytes(round, node), media_type="application/octet-stream")
 
 
 @router.get("/shards/{shard}", response_class=Response, responses=BINARY)
@@ -105,6 +118,15 @@ async def delta(request: Request, round: int, node: str, generation: int, epoch:
         found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss, len(body))
     await run_in_threadpool(apply)
     return Accepted()
+
+
+@router.post("/progress", response_model=Accepted)
+def progress(run: str = Run, body: ProgressRequest = ...):
+    """A member's report of its phase, step in the round, inner loss and speed, about every 2 s. 409 when stale, as a delta is.
+    `accepted` is false when the coordinator was busy closing a round and took nothing: the next report says it all again."""
+    found = coordinator(run)
+    return Accepted(accepted=found.progress(body.round, body.node, body.generation, body.epoch, body.phase, body.step, body.loss,
+                                            body.tokens_per_second))
 
 
 @router.get("/rounds/{round}", response_model=RoundView)

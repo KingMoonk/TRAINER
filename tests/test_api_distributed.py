@@ -76,7 +76,8 @@ class CoordinatorControls(unittest.TestCase):
         coordinator.join("a")
         coordinator.join("b")
         coordinator.drop("b")
-        self.assertEqual(coordinator.snapshot()["nodes"]["b"], {"state": "stopped", "missed": 0, "sent": False, "note": "Stopped by you."})
+        stopped = coordinator.snapshot()["nodes"]["b"]
+        self.assertEqual({k: stopped[k] for k in ("state", "missed", "sent", "note")}, {"state": "stopped", "missed": 0, "sent": False, "note": "Stopped by you."})
         self.assertRaises(studio_diloco.Stale, coordinator.join, "b")
         self.assertRaises(studio_diloco.Stale, coordinator.drop, "nobody")
 
@@ -261,6 +262,22 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.client.post("/distributed/runs", json={"dataset_ids": []}).status_code, 422)
         self.assertEqual(self.start(version=9).status_code, 404)
         self.assertEqual(self.client.get("/distributed/runs/none").status_code, 404)
+
+    def test_the_demo_run_is_live_with_a_cuda_and_an_mps_member_and_one_can_be_stopped(self):
+        run = self.services.demo_run()
+        runs_now = self.client.get("/distributed/runs").json()
+        demo = next(r for r in runs_now if r["id"] == run.id)
+        self.assertEqual(demo["state"], "running")
+        self.assertEqual({m["node"]: m["device"] for m in demo["members"]}, {"mac-mini": "mps", "gpu-box": "cuda"})
+        self.assertIn(demo["phase"], ("next_round", "training", "collecting"))
+        self.assertTrue(all(m["phase"] for m in demo["members"]))
+        self.assertEqual(len(demo["timeline"]), 1)
+        self.assertEqual({lane["node"] for lane in demo["timeline"][0]["lanes"]}, {"mac-mini", "gpu-box"})
+        self.assertEqual([e["kind"] for e in demo["events"]], ["joined", "joined"])
+        stopped = self.client.post(f"/distributed/runs/{run.id}/members/gpu-box/stop")
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual({m["node"]: m["state"] for m in stopped.json()["members"]}["gpu-box"], "stopped")
+        self.assertEqual(self.client.post(f"/distributed/runs/{run.id}/stop").json()["state"], "stopped")
 
     def test_a_run_on_this_computer_and_a_machine_that_is_down_runs_and_finishes(self):
         self.services.set_setting("nodes", ["127.0.0.1:9"])

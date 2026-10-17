@@ -503,6 +503,10 @@
   }
 }
 
+/* Training live view: an edge between the coordinator and a machine moves while a transfer runs on it. */
+@keyframes edge-flow { to { stroke-dashoffset: -20; } }
+.edge-flow { stroke-dasharray: 6 4; animation: edge-flow 0.8s linear infinite; }
+
 @media (max-width: 767px) {
   main { padding: 1.25rem !important; }
 }

@@ -11,6 +11,7 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 import studio_diloco
+import studio_distributed
 import studio_jobs
 import studio_model
 from studio_queue import Job
@@ -101,6 +102,38 @@ class WireProtocol(Collective):
         self.assertEqual(self.post_delta("r1", 0, generation, epoch=5, body=body).status_code, 202)
         self.assertEqual(self.post_delta("r1", 0, generation, epoch=5, body=body).status_code, 409)  # a round takes one contribution each
 
+    def test_progress_is_taken_without_weights_and_a_stale_one_is_409(self):
+        coordinator = self.start(inner_steps=2, outer_lr=1.)
+        self.client.post("/collective/r1/join", json={"node": "a", "epoch": 5})
+        generation = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()["generation"]
+        body = {"node": "a", "generation": generation, "epoch": 5, "round": 0, "phase": "training", "step": 1, "loss": 3.5, "tokens_per_second": 800.}
+        taken = self.client.post("/collective/r1/progress", json=body)
+        self.assertEqual((taken.status_code, taken.json()), (200, {"accepted": True}))
+        self.assertEqual((coordinator.reports["a"]["step"], coordinator.reports["a"]["loss"]), (1, 3.5))
+        for why, change in {"generation": {"generation": generation + 1}, "epoch": {"epoch": 4}, "round": {"round": 1},
+                            "stranger": {"node": "b"}}.items():
+            with self.subTest(why):
+                answer = self.client.post("/collective/r1/progress", json={**body, **change})
+                self.assertEqual(answer.status_code, 409, answer.text)
+        self.assertEqual(self.client.post("/collective/r1/progress", json={**body, "phase": "sleeping"}).status_code, 422)
+        self.assertEqual(self.client.post("/collective/nope/progress", json=body).status_code, 404)
+        self.assertEqual(coordinator.reports["a"]["step"], 1)  # the refused ones changed nothing
+
+    def test_a_progress_report_for_a_closed_round_is_409_but_a_waiting_one_is_taken(self):
+        coordinator = self.start(inner_steps=2, outer_lr=1.)
+        self.client.post("/collective/r1/join", json={"node": "a", "epoch": 0})
+        generation = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()["generation"]
+        self.assertEqual(self.post_delta("r1", 0, generation, body=self.delta_body(coordinator)).status_code, 202)
+        body = {"node": "a", "generation": generation, "epoch": 0, "round": 0, "phase": "uploading", "step": 2}
+        self.assertEqual(self.client.post("/collective/r1/progress", json=body).status_code, 409)
+        self.assertEqual(self.client.post("/collective/r1/progress", json={**body, "phase": "waiting", "round": 1}).status_code, 200)
+
+    def test_the_params_route_notes_who_took_theta_on_the_timeline(self):
+        coordinator = self.start(inner_steps=2)
+        self.client.post("/collective/r1/join", json={"node": "a"})
+        self.client.get("/collective/r1/params", params={"round": 0, "node": "a"})
+        self.assertIn("theta_taken", coordinator.current.marks["a"])
+
     def test_a_malformed_delta_is_400(self):
         coordinator = self.start(inner_steps=2)
         self.client.post("/collective/r1/join", json={"node": "a"})
@@ -117,14 +150,14 @@ class WireProtocol(Collective):
 
 
 class Training(Collective):
-    def train(self, members, run, **changes):
+    def train(self, members, run, wrap=lambda peer: peer, **changes):
         """Run `members` member threads against the coordinator over the routes; return the finished coordinator."""
         coordinator = self.start(run, **changes)
         errors = []
 
         def member(index):
             try:
-                studio_diloco.run_member(support.Peer(self.client), run, f"node{index}", 0, self.dir / f"{run}-m{index}", self.dir / f"{run}-out{index}",
+                studio_diloco.run_member(wrap(support.Peer(self.client)), run, f"node{index}", 0, self.dir / f"{run}-m{index}", self.dir / f"{run}-out{index}",
                                          lambda event: None, threading.Event(), wait=.5)
             except Exception as exc:  # noqa: BLE001 - reported below
                 errors.append(exc)
@@ -136,6 +169,49 @@ class Training(Collective):
         self.assertEqual(errors, [])
         self.assertTrue(coordinator.finished)
         return coordinator
+
+    def test_members_report_their_progress_and_the_timeline_fills_in(self):
+        coordinator = self.train(1, "live", inner_steps=3, rounds=2)
+        report = coordinator.reports["node0"]
+        self.assertIn(report["phase"], studio_diloco.PHASES)
+        timeline = coordinator.snapshot()["timeline"]
+        self.assertEqual([line["round"] for line in timeline], [0, 1])
+        for line in timeline:
+            lane = line["lanes"]["node0"]
+            self.assertTrue(lane["counted"])
+            marks = [lane[name] for name in studio_diloco.MARKS if lane[name] is not None]  # a report is best effort: one may be missing
+            self.assertEqual(marks, sorted(marks))
+            self.assertIsNotNone(lane["delta_received"])
+        self.assertEqual(coordinator.snapshot()["nodes"]["node0"]["progress"]["steps"], 3)
+
+    def test_a_failing_progress_report_never_stops_a_member(self):
+        from studio_peer import PeerError
+
+        class Refusing:
+            """The routes, except that every progress report fails: refused, then unreachable."""
+
+            def __init__(self, peer):
+                self.peer, self.reports = peer, 0
+
+            def __getattr__(self, name):
+                return getattr(self.peer, name)
+
+            def post_json(self, path, body=None, params=None, timeout=None):
+                if path.endswith("/progress"):
+                    self.reports += 1
+                    raise PeerError("409 " + path, status=409, detail="refused") if self.reports % 2 else OSError("unreachable")
+                return self.peer.post_json(path, body, params, timeout)
+        peers = []
+        coordinator = self.train(1, "refused", wrap=lambda peer: peers.append(Refusing(peer)) or peers[-1], inner_steps=3, rounds=2)
+        self.assertTrue(coordinator.finished)
+        self.assertEqual(len(coordinator.history), 2)
+        self.assertGreater(peers[0].reports, 0)  # it did try
+        self.assertEqual(coordinator.reports, {})
+
+    def test_report_never_raises(self):
+        member = studio_diloco.Member(types.SimpleNamespace(post_json=lambda *a, **k: 1 / 0), "r", "n", 0, self.dir / "s", threading.Event())
+        member.info, member.report_round = {"generation": 1}, 0
+        self.assertFalse(member.report())
 
     def test_two_members_over_the_routes_beat_one_member_after_the_same_steps_per_member(self):
         shape = dict(inner_steps=4, rounds=6, outer_lr=.7, outer_momentum=.9, min_members=1, delta_dtype="float16")
@@ -184,6 +260,7 @@ class OwnerJob(unittest.TestCase):
             self.addCleanup(thread.join, 10)
             self.addCleanup(setattr, server, "should_exit", True)
             self.addCleanup(studio_diloco.COORDINATORS.clear)
+            self.addCleanup(studio_distributed.RUNS.clear)  # prepare() lists the run for the Cluster tab; other tests expect none
             services = types.SimpleNamespace(root=Path(tmp), workspace=types.SimpleNamespace(run_dir=Path(tmp) / "runs"), examples=lambda p: support.EXAMPLES)
             job = Job("pretrain_distributed", params={"config": support.CONFIG, "inner_steps": 3, "rounds": 2, "shards": 4, "api_port": port,
                                                       "outer_lr": .7, "outer_momentum": .9})

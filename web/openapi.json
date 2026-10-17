@@ -1169,7 +1169,7 @@
           "samples": {
             "default": [],
             "items": {
-              "$ref": "#/components/schemas/Sample"
+              "$ref": "#/components/schemas/studio_api__routers__pretraining__Sample"
             },
             "title": "Samples",
             "type": "array"
@@ -2761,6 +2761,95 @@
         "title": "LandscapeRequest",
         "type": "object"
       },
+      "Lane": {
+        "description": "One member's round on the coordinator's clock: seconds since the round opened. A moment is null when it never reported it.",
+        "properties": {
+          "counted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counted"
+          },
+          "delta_bytes": {
+            "title": "Delta Bytes",
+            "type": "integer"
+          },
+          "delta_received": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Received"
+          },
+          "delta_sent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Sent"
+          },
+          "first_step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Step"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "theta_taken": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Theta Taken"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node",
+          "theta_taken",
+          "first_step",
+          "delta_sent",
+          "delta_received",
+          "counted",
+          "tokens",
+          "steps",
+          "delta_bytes"
+        ],
+        "title": "Lane",
+        "type": "object"
+      },
       "LearningCheck": {
         "properties": {
           "check": {
@@ -3152,9 +3241,31 @@
             "title": "Last Delta Dtype",
             "type": "string"
           },
+          "live_tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Tokens Per Second"
+          },
           "local": {
             "title": "Local",
             "type": "boolean"
+          },
+          "loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss"
           },
           "missed": {
             "title": "Missed",
@@ -3168,13 +3279,56 @@
             "title": "Note",
             "type": "string"
           },
+          "phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "downloading",
+                  "training",
+                  "uploading",
+                  "waiting"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "reported_ago": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Ago"
+          },
+          "round_steps": {
+            "title": "Round Steps",
+            "type": "integer"
+          },
           "rounds_done": {
             "title": "Rounds Done",
             "type": "integer"
           },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/studio_api__routers__distributed__Sample"
+            },
+            "title": "Samples",
+            "type": "array"
+          },
           "sent": {
             "title": "Sent",
             "type": "boolean"
+          },
+          "shards": {
+            "title": "Shards",
+            "type": "integer"
           },
           "state": {
             "enum": [
@@ -3190,6 +3344,10 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "step_in_round": {
+            "title": "Step In Round",
+            "type": "integer"
           },
           "steps": {
             "title": "Steps",
@@ -3222,7 +3380,15 @@
           "tokens_per_second",
           "last_delta_bytes",
           "last_delta_dtype",
-          "can_stop"
+          "can_stop",
+          "phase",
+          "step_in_round",
+          "round_steps",
+          "loss",
+          "live_tokens_per_second",
+          "reported_ago",
+          "shards",
+          "samples"
         ],
         "title": "Member",
         "type": "object"
@@ -4991,6 +5157,73 @@
         "title": "ProblemRules",
         "type": "object"
       },
+      "ProgressRequest": {
+        "description": "Where a member is in its round: no weights. `round` is the round it is working on or about to work on.",
+        "properties": {
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "downloading",
+              "training",
+              "uploading",
+              "waiting"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          }
+        },
+        "required": [
+          "node",
+          "generation",
+          "epoch",
+          "round",
+          "phase"
+        ],
+        "title": "ProgressRequest",
+        "type": "object"
+      },
       "PublishedVersion": {
         "description": "One version in the version store: what its machine published, and whether this workspace has it.",
         "properties": {
@@ -6545,6 +6778,54 @@
         "title": "RoundState",
         "type": "object"
       },
+      "RoundTimeline": {
+        "properties": {
+          "closed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed"
+          },
+          "deadline": {
+            "title": "Deadline",
+            "type": "number"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/Lane"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "open": {
+            "title": "Open",
+            "type": "boolean"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "window": {
+            "title": "Window",
+            "type": "number"
+          }
+        },
+        "required": [
+          "round",
+          "open",
+          "deadline",
+          "window",
+          "closed",
+          "lanes"
+        ],
+        "title": "RoundTimeline",
+        "type": "object"
+      },
       "RoundView": {
         "description": "state: open (this member's assignment is filled in), pending (not open yet, or this member joins at a later boundary),\nclosed (`current` is the round to ask about) or finished. member false means the member must POST /join again.",
         "properties": {
@@ -6686,9 +6967,39 @@
             "title": "Can Stop",
             "type": "boolean"
           },
+          "contributed": {
+            "title": "Contributed",
+            "type": "integer"
+          },
+          "deadline_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline S"
+          },
           "delta_dtype": {
             "title": "Delta Dtype",
             "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/RunEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "integer"
+          },
+          "grace_s": {
+            "title": "Grace S",
+            "type": "number"
           },
           "history": {
             "items": {
@@ -6720,6 +7031,10 @@
             "title": "Note",
             "type": "string"
           },
+          "now_s": {
+            "title": "Now S",
+            "type": "number"
+          },
           "outer_lr": {
             "title": "Outer Lr",
             "type": "number"
@@ -6730,6 +7045,20 @@
           },
           "owner": {
             "title": "Owner",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "waiting",
+              "next_round",
+              "training",
+              "collecting",
+              "outer_step",
+              "validating",
+              "finished",
+              "stopped"
+            ],
+            "title": "Phase",
             "type": "string"
           },
           "round": {
@@ -6757,6 +7086,17 @@
             "title": "State",
             "type": "string"
           },
+          "theta_bytes": {
+            "title": "Theta Bytes",
+            "type": "integer"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/RoundTimeline"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
           "version": {
             "anyOf": [
               {
@@ -6767,6 +7107,17 @@
               }
             ],
             "title": "Version"
+          },
+          "window_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window S"
           }
         },
         "required": [
@@ -6785,9 +7136,67 @@
           "delta_dtype",
           "members",
           "history",
-          "can_stop"
+          "can_stop",
+          "phase",
+          "deadline_s",
+          "grace_s",
+          "window_s",
+          "contributed",
+          "expected",
+          "theta_bytes",
+          "now_s",
+          "timeline",
+          "events"
         ],
         "title": "Run",
+        "type": "object"
+      },
+      "RunEvent": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "joined",
+              "left",
+              "late",
+              "dropped",
+              "stale",
+              "outer_step",
+              "checkpoint",
+              "finished"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "t": {
+            "title": "T",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "t",
+          "kind",
+          "node",
+          "round",
+          "text"
+        ],
+        "title": "RunEvent",
         "type": "object"
       },
       "RunPageModel": {
@@ -6917,24 +7326,6 @@
           "version"
         ],
         "title": "RunRequest",
-        "type": "object"
-      },
-      "Sample": {
-        "properties": {
-          "step": {
-            "title": "Step",
-            "type": "integer"
-          },
-          "text": {
-            "title": "Text",
-            "type": "string"
-          }
-        },
-        "required": [
-          "step",
-          "text"
-        ],
-        "title": "Sample",
         "type": "object"
       },
       "SharedVersion": {
@@ -8790,6 +9181,48 @@
         "title": "Started",
         "type": "object"
       },
+      "studio_api__routers__distributed__Sample": {
+        "properties": {
+          "loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "t": {
+            "title": "T",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          }
+        },
+        "required": [
+          "step",
+          "t",
+          "loss",
+          "tokens_per_second"
+        ],
+        "title": "Sample",
+        "type": "object"
+      },
       "studio_api__routers__inspect__ReplyRequest": {
         "properties": {
           "mode": {
@@ -8869,6 +9302,24 @@
           "vs"
         ],
         "title": "GateModel",
+        "type": "object"
+      },
+      "studio_api__routers__pretraining__Sample": {
+        "properties": {
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "text"
+        ],
+        "title": "Sample",
         "type": "object"
       },
       "studio_api__routers__queue__GateModel": {
@@ -9897,7 +10348,7 @@
     },
     "/collective/{run}/params": {
       "get": {
-        "description": "The open round's global weights, fp32, as an .npz.",
+        "description": "The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline.",
         "operationId": "params_collective__run__params_get",
         "parameters": [
           {
@@ -9919,6 +10370,16 @@
             "schema": {
               "title": "Round",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Node",
+              "type": "string"
             }
           }
         ],
@@ -9946,6 +10407,62 @@
           }
         },
         "summary": "Params",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/progress": {
+      "post": {
+        "description": "A member's report of its phase, step in the round, inner loss and speed, about every 2 s. 409 when stale, as a delta is.\n`accepted` is false when the coordinator was busy closing a round and took nothing: the next report says it all again.",
+        "operationId": "progress_collective__run__progress_post",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__collective__Accepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Progress",
         "tags": [
           "collective"
         ]

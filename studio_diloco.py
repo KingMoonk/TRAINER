@@ -28,6 +28,7 @@ import shutil
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,6 +40,17 @@ STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
+PHASES = ("downloading", "training", "uploading", "waiting")  # what a member says it is doing (POST /progress)
+WORK_PHASES = ("training", "uploading")  # the phases that belong to one open round: a report in them for a closed round is stale
+MARKS = ("theta_taken", "first_step", "delta_sent", "delta_received")  # a round's timeline per member, in the order they happen
+PROGRESS_SECONDS = 2.  # a member reports at least this often while it runs ...
+PROGRESS_STEPS = 20  # ... or after this many steps, whichever comes first (never twice within PROGRESS_GAP)
+PROGRESS_GAP = .5
+PROGRESS_TIMEOUT = 5.  # seconds a progress report may take; a slow or failing one is dropped
+PROGRESS_WAIT = .25  # seconds a progress report or a snapshot waits for a round that is closing before it answers without it
+EVENTS_KEPT = 200  # the coordinator's event log is bounded
+TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished round's also goes to metrics.jsonl)
+SAMPLES_KEPT = 240  # progress samples kept per member for the open round
 
 
 class Stale(RuntimeError):
@@ -258,6 +270,13 @@ class Round:
     contributions: dict = field(default_factory=dict)  # node -> (tokens, steps, seconds, loss, delta)
     uploaded: dict = field(default_factory=dict)  # node -> bytes of its delta body on the wire
     open: bool = True
+    marks: dict = field(default_factory=dict)  # node -> {MARKS name: coordinator clock time}
+    closed: float | None = None
+
+
+def step_size(delta, momentum, lr, mu):
+    """The L2 norm of the outer step just taken, lr * (delta + mu * v) over every tensor."""
+    return float(np.sqrt(sum(float(((lr * (gradient + mu * momentum[name])) ** 2).sum()) for name, gradient in delta.items())))
 
 
 class Coordinator:
@@ -277,7 +296,11 @@ class Coordinator:
         self.shard_count = max(1, min(settings.shards, len(train)))
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
         self._params = (None, b"")
-        self.cond = threading.Condition(threading.RLock())
+        self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
+        self.reports, self.events, self.timelines = {}, deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT)  # the live view's state
+        self.event_seq, self.stage, self._last = 0, "", None  # stage: "outer_step" or "validating" while a round closes (read without the lock)
+        self.lock = threading.RLock()
+        self.cond = threading.Condition(self.lock)
         if state:
             self.momentum = state["momentum"]
             self.next_round, self.generation = state["round"], state["generation"]
@@ -385,6 +408,7 @@ class Coordinator:
                 self.sequence += 1
                 entry = {"epoch": epoch, "seq": self.sequence, "missed": 0}
                 (self.pending if self.current is not None else self.members)[node] = entry  # a boundary is now, or at the round's end
+                self._event("joined", node, self.next_round, f"{node} joined" + (" and starts with the next round." if self.current is not None else "."))
             self._advance()
             self.cond.notify_all()
             return {**self.info(), "node": node}
@@ -397,8 +421,11 @@ class Coordinator:
                 raise Stale(f"{node} is not a member at lease epoch {epoch}.")
             if node in self.pending:
                 del self.pending[node]
+                self._event("left", node, self.next_round, f"{node} left before its first round.")
             elif self.current is None:
                 del self.members[node]
+                self.gone[node] = ("left", "Left the run.")
+                self._event("left", node, self.next_round, f"{node} left the run.")
             else:
                 self.leaving.add(node)  # leaves at the round boundary; the round stops waiting for it now
             self._advance()
@@ -407,6 +434,11 @@ class Coordinator:
     # -- rounds
     def _expected(self, current):
         return set(current.members) - self.leaving
+
+    def _event(self, kind, node, number, text):
+        """Append to the bounded event log the live view shows, on this coordinator's own clock (seconds since it started)."""
+        self.event_seq += 1
+        self.events.append({"seq": self.event_seq, "t": self.clock() - self.started, "kind": kind, "node": node, "round": number, "text": text})
 
     def _advance(self):
         while not self.finished:
@@ -437,14 +469,18 @@ class Coordinator:
         if entry is None:
             return
         entry["missed"] += 1
+        self._event("late", node, self.next_round, f"{node} sent nothing for round {self.next_round}; its work counted for nothing.")
         if entry["missed"] >= self.settings.missed_limit:
             del self.members[node]  # it must join again
             self.gone[node] = ("dropped", f"Missed {entry['missed']} rounds in a row, so the run dropped it. It can rejoin when it is back.")
+            self._event("dropped", node, self.next_round, f"{node} was dropped after missing {entry['missed']} rounds in a row.")
 
     def _boundary(self):
         for node in self.leaving:
             self.members.pop(node, None)
-            self.gone.setdefault(node, ("left", "Left the run."))
+            if node not in self.gone:
+                self.gone[node] = ("left", "Left the run.")
+                self._event("left", node, self.next_round, f"{node} left the run.")
         self.leaving.clear()
 
     def _open(self, now):
@@ -463,11 +499,23 @@ class Coordinator:
         return True
 
     def _close(self, current, now):
-        current.open = False
+        current.open, current.closed = False, now
         sent = current.contributions
+        self.stage = "outer_step"  # read without the lock by snapshot() while this holds it (the evaluation below can take seconds)
+        try:
+            self._finish(current, now, sent)
+        finally:
+            self.stage = ""
+
+    def _finish(self, current, now, sent):
         delta = token_average([(tokens, d) for tokens, _, _, _, d in sent.values()])
+        norm = 0.
         if delta is not None:
             outer_step(self.theta, self.momentum, delta, self.settings.outer_lr, self.settings.outer_momentum)
+            norm = step_size(delta, self.momentum, self.settings.outer_lr, self.settings.outer_momentum)
+            self._event("outer_step", "", current.number, f"Outer step applied for round {current.number}: size {norm:.4g}, "
+                                                          f"from {len(sent)} of {len(current.members)} members.")
+        self.stage = "validating"
         dropped = [node for node in current.members if node not in sent]
         for node in current.members:
             if node in sent:
@@ -488,14 +536,18 @@ class Coordinator:
                "theta_bytes": sum(value.nbytes for value in self.theta.values()) * len(current.members),  # what the members downloaded
                "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
-               "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.}
+               "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
+               "outer_step_norm": norm}
         self.history.append(row)
         self.deal = current.deal
         self.next_round += 1
         self.current = None
         self.finished = self.next_round >= self.settings.rounds
+        self.timelines.append(self._timeline(current))
         self._boundary()
         self._save(row, current)
+        if self.finished:
+            self._event("finished", "", current.number, f"The run finished after {self.next_round} rounds.")
         self.cond.notify_all()
 
     def _view(self, number, node):
@@ -530,7 +582,8 @@ class Coordinator:
                     return view
             return first
 
-    def params_bytes(self, number):
+    def params_bytes(self, number, node=""):
+        """Theta of the open round as an .npz body; `node` (who is asking) is noted on the round's timeline as having taken it."""
         with self.cond:
             self._touch()
             self._advance()
@@ -538,7 +591,48 @@ class Coordinator:
                 raise Stale(f"Round {number} is not the open round (the open one is {self.current.number if self.current else 'none'}).")
             if self._params[0] != number:
                 self._params = (number, encode_arrays(self.theta, "float32"))
+            if node in self.current.members:
+                self.current.marks.setdefault(node, {}).setdefault("theta_taken", self.clock())
             return self._params[1]
+
+    def progress(self, number, node, generation, epoch, phase, step=0, loss=None, tokens_per_second=None):
+        """Take a member's report of where it is in its round (no weights): the latest per member is kept for the live view, and a
+        training or uploading report also marks the round's timeline and adds a sample for its charts. Stale (409) for a node that
+        is not a member or a lease epoch that is not its own, and for a training or uploading report about a round that is closed
+        or of another generation, as a delta is. Returns False, taking nothing, when a closing round holds the lock for a while: a
+        report is never worth holding a request for."""
+        if phase not in PHASES:
+            raise ValueError(f"phase must be one of {', '.join(PHASES)}.")
+        if not self.lock.acquire(timeout=PROGRESS_WAIT):
+            return False
+        try:
+            self._touch()
+            entry = self.members.get(node) or self.pending.get(node)
+            if entry is None:
+                raise Stale(f"{node} is not a member of this run.")
+            if epoch != entry["epoch"]:
+                raise Stale(f"Stale lease epoch {epoch} for {node}: the current one is {entry['epoch']}.")
+            now, current = self.clock(), self.current
+            report = self.reports.setdefault(node, {"samples": [], "sample_round": None})
+            if phase in WORK_PHASES:
+                if current is None or current.number != number or not current.open:
+                    raise Stale(f"Round {number} is closed (the open round is {current.number if current else 'none'}).")
+                if node not in current.members:
+                    raise Stale(f"{node} is not a member of round {number}.")
+                if generation != current.generation:
+                    raise Stale(f"Stale generation {generation}: round {number} is generation {current.generation}.")
+                marks = current.marks.setdefault(node, {})
+                marks.setdefault("first_step", now)
+                if phase == "uploading":
+                    marks.setdefault("delta_sent", now)
+                if report["sample_round"] != number:
+                    report["samples"], report["sample_round"] = [], number
+                report["samples"].append({"step": int(step), "t": now - current.opened, "loss": loss, "tokens_per_second": tokens_per_second})
+                del report["samples"][:-SAMPLES_KEPT]
+            report.update(round=number, phase=phase, step=int(step), loss=loss, tokens_per_second=tokens_per_second, at=now)
+            return True
+        finally:
+            self.lock.release()
 
     def shard_bytes(self, shard):
         if not 0 <= shard < self.shard_count:
@@ -552,17 +646,11 @@ class Coordinator:
             self._touch()
             self._advance()
             current = self.current
-            if current is None or current.number != number or not current.open:
-                raise Stale(f"Round {number} is closed (the open round is {current.number if current else 'none'}).")
-            if generation != current.generation:
-                raise Stale(f"Stale generation {generation}: round {number} is generation {current.generation}.")
-            entry = self.members.get(node)
-            if node not in current.members or entry is None:
-                raise Stale(f"{node} is not a member of round {number}.")
-            if epoch != entry["epoch"]:
-                raise Stale(f"Stale lease epoch {epoch} for {node}: the current one is {entry['epoch']}.")
-            if node in current.contributions:
-                raise Stale(f"{node} already contributed to round {number}.")
+            try:
+                self._admit(current, number, node, generation, epoch)
+            except Stale as exc:
+                self._event("stale", node, number, f"A change from {node} for round {number} was refused: {exc}")
+                raise
             if set(delta) != set(self.theta) or any(delta[name].shape != self.theta[name].shape for name in delta):
                 raise ValueError("The delta does not match the model's parameters.")
             if not all(np.isfinite(value).all() for value in delta.values()):
@@ -571,28 +659,99 @@ class Coordinator:
                 raise ValueError("A contribution needs at least one step.")
             current.contributions[node] = (int(tokens), int(steps), float(seconds), loss, delta)
             current.uploaded[node] = int(size)
+            marks = current.marks.setdefault(node, {})
+            marks["delta_received"] = self.clock()
+            marks.setdefault("delta_sent", marks["delta_received"])
             self._advance()
             self.cond.notify_all()
 
+    def _admit(self, current, number, node, generation, epoch):
+        if current is None or current.number != number or not current.open:
+            raise Stale(f"Round {number} is closed (the open round is {current.number if current else 'none'}).")
+        if generation != current.generation:
+            raise Stale(f"Stale generation {generation}: round {number} is generation {current.generation}.")
+        entry = self.members.get(node)
+        if node not in current.members or entry is None:
+            raise Stale(f"{node} is not a member of round {number}.")
+        if epoch != entry["epoch"]:
+            raise Stale(f"Stale lease epoch {epoch} for {node}: the current one is {entry['epoch']}.")
+        if node in current.contributions:
+            raise Stale(f"{node} already contributed to round {number}.")
+
     # -- the owner's view and controls
+    def _timeline(self, found):
+        """Round `found` as the swimlane view needs it: offsets in seconds from its opening, per member, of the moments in MARKS."""
+        lanes = {}
+        for node in found.members:
+            sent = found.contributions.get(node)
+            lane = {name: (found.marks.get(node, {}).get(name) - found.opened if found.marks.get(node, {}).get(name) is not None else None) for name in MARKS}
+            lanes[node] = {**lane, "counted": True if sent else (None if found.open else False),
+                           "tokens": sent[0] if sent else 0, "steps": sent[1] if sent else 0, "delta_bytes": found.uploaded.get(node, 0)}
+        return {"round": found.number, "open": found.open, "deadline": found.deadline - found.opened, "window": found.window,
+                "closed": None if found.closed is None else found.closed - found.opened, "lanes": lanes}
+
+    def _phase(self, current):
+        """Where the run is in its cycle: waiting (for members), next_round (members are taking theta), training, collecting (some
+        change is in or on its way), outer_step, validating, or finished / stopped."""
+        if self.stopped or self.finished:
+            return "stopped" if self.stopped else "finished"
+        if self.stage:
+            return self.stage
+        if current is None:
+            return "waiting"
+        reports = [self.reports.get(node) for node in current.members]
+        working = [r for r in reports if r and r.get("round") == current.number and r.get("phase") in WORK_PHASES]
+        if current.contributions or any(r["phase"] == "uploading" for r in working):
+            return "collecting"
+        return "training" if working else "next_round"
+
     def snapshot(self):
-        """What the Training tab shows, from this process: the run's state and round, each node the run knows and the rounds so far."""
-        with self.cond:
-            self._advance()
-            current = self.current
-            nodes = {}
-            for node, entry in self.members.items():
-                behind = entry["missed"]
-                nodes[node] = {"state": "behind" if behind else "training", "missed": behind,
-                               "sent": current is not None and node in current.contributions,
-                               "note": f"Missed {behind} round{'s' if behind != 1 else ''} in a row; the run drops it after {self.settings.missed_limit}." if behind else ""}
-            for node in self.pending:
-                nodes[node] = {"state": "joining", "missed": 0, "sent": False, "note": "Joins at the start of the next round."}
-            for node, (state, note) in self.gone.items():
-                nodes[node] = {"state": state, "missed": 0, "sent": False, "note": note}
-            state = "stopped" if self.stopped else "finished" if self.finished else "running" if current is not None else "waiting"
-            return {"state": state, "round": self.next_round, "rounds": self.settings.rounds, "generation": self.generation,
-                    "settings": dict(self.settings.__dict__), "nodes": nodes, "history": [dict(row) for row in self.history]}
+        """What the Training tab shows, from this process: the run's state and round, each node the run knows, the rounds so far, and
+        the live view (phase, deadline, each member's latest report, the recent rounds' timelines and the event log). While a round
+        closes (it holds the lock for the validation) the last answer is returned with the closing phase, instead of waiting for it."""
+        if not self.lock.acquire(timeout=PROGRESS_WAIT):
+            if self._last is None:
+                self.lock.acquire()
+            else:
+                return {**self._last, "phase": self.stage or self._last["phase"]}
+        try:
+            return self._snapshot()
+        finally:
+            self.lock.release()
+
+    def _snapshot(self):
+        self._advance()
+        current, now = self.current, self.clock()
+        nodes = {}
+        for node, entry in self.members.items():
+            behind = entry["missed"]
+            nodes[node] = {"state": "behind" if behind else "training", "missed": behind,
+                           "sent": current is not None and node in current.contributions,
+                           "note": f"Missed {behind} round{'s' if behind != 1 else ''} in a row; the run drops it after {self.settings.missed_limit}." if behind else ""}
+        for node in self.pending:
+            nodes[node] = {"state": "joining", "missed": 0, "sent": False, "note": "Joins at the start of the next round."}
+        for node, (state, note) in self.gone.items():
+            nodes[node] = {"state": state, "missed": 0, "sent": False, "note": note}
+        deal = current.deal if current is not None else self.deal
+        for node, found in nodes.items():
+            report = self.reports.get(node)
+            live = bool(report) and report["round"] == self.next_round
+            found["progress"] = {
+                "phase": report["phase"] if report else "waiting", "step": report["step"] if live else 0, "steps": self.settings.inner_steps,
+                "loss": report["loss"] if live else None, "tokens_per_second": report["tokens_per_second"] if live else None,
+                "reported_ago": now - report["at"] if report else None,
+                "samples": [dict(s) for s in report["samples"] if report["sample_round"] == self.next_round and s["loss"] is not None] if report else []}
+            found["shards"] = len(deal.get(node, ()))
+        timelines = list(self.timelines) + ([self._timeline(current)] if current is not None else [])
+        state = "stopped" if self.stopped else "finished" if self.finished else "running" if current is not None else "waiting"
+        view = {"state": state, "phase": self._phase(current), "round": self.next_round, "rounds": self.settings.rounds, "generation": self.generation,
+                "settings": dict(self.settings.__dict__), "nodes": nodes, "history": [dict(row) for row in self.history],
+                "deadline_s": max(0., current.deadline - now) if current is not None else None, "grace_s": self.settings.grace_seconds,
+                "window_s": current.window if current is not None else None, "contributed": len(current.contributions) if current is not None else 0,
+                "expected": len(self._expected(current)) if current is not None else 0, "theta_bytes": self.theta_nbytes, "now_s": now - self.started,
+                "timeline": timelines, "events": [dict(event) for event in self.events]}
+        self._last = view
+        return view
 
     def drop(self, node):
         """Stop one member: it leaves at once (the round stops waiting for it) and cannot rejoin this run. Stale if it is not a member."""
@@ -602,6 +761,7 @@ class Coordinator:
                 raise Stale(f"{node} is not a member of this run.")
             self.banned.add(node)
             self.gone[node] = ("stopped", "Stopped by you.")
+            self._event("left", node, self.next_round, f"{node} was stopped by you.")
             if node in self.pending:
                 del self.pending[node]
             elif self.current is None:
@@ -619,6 +779,7 @@ class Coordinator:
                 return
             from studio_core import atomic_json
             self.stopped = self.finished = True
+            self._event("finished", "", self.next_round, "The run was stopped by you.")
             if self.record:
                 self.record["status"] = "stopped"
                 atomic_json(self.directory / "run.json", self.record)
@@ -653,7 +814,9 @@ class Coordinator:
         if old and old != self.state_file:
             (self.directory / old).unlink(missing_ok=True)
         with (self.directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps({k: row[k] for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")} | {"round": row["round"]}) + "\n")
+            stream.write(json.dumps({k: row[k] for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")}
+                                    | {"round": row["round"], "timeline": self._timeline(closed)}) + "\n")
+        self._event("checkpoint", "", row["round"], f"Round {row['round']} checkpoint written.")
         self.record.update({"step": step, "val_loss": row["val_loss"], "status": "completed" if self.finished else "training"})
         if row["loss"] is not None:
             self.record["loss"] = row["loss"]
@@ -736,7 +899,8 @@ class Member:
     """One node's side of a run. It is the `distributed=` hook of studio_model.train: before the first step it loads theta of
     its round, after H steps (or at the round's deadline) it sends delta and waits for the next round, whose theta it loads."""
 
-    def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep):
+    def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
+                 progress=True):
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.clock, self.emit, self.wait, self.patience, self.sleep = clock, emit or (lambda event: None), wait, patience, sleep
         self.base = f"/collective/{run}"
@@ -744,6 +908,11 @@ class Member:
         self.started, self.finished, self.fenced = False, False, False
         self.loss = None
         self.shards = {}
+        # what it tells the coordinator (POST /progress): the phase, its step in the round and the latest loss and speed
+        self.progress, self.phase, self.report_round, self.round_step, self.reported_step = progress, "waiting", None, 0, 0
+        self.reported_phase = None
+        self.live = {"loss": None, "tokens_per_second": None}
+        self.wake, self.halt, self.reporter = threading.Event(), threading.Event(), None
 
     # -- the train() hook
     @property
@@ -754,6 +923,9 @@ class Member:
         return self.round * self.info["inner_steps"] + (number - self.first_step)
 
     def due(self, step, trained_tokens):
+        self.round_step = step - self.first_step  # the reporter thread reads it; nothing here waits on the network
+        if self.round_step - self.reported_step >= PROGRESS_STEPS:
+            self.wake.set()
         return step > self.first_step and (step - self.first_step >= self.info["inner_steps"] or self.clock() >= self.deadline)
 
     def sync(self, step, trained_tokens, model):
@@ -764,11 +936,48 @@ class Member:
         else:
             self.started = True
         if self.finished or self.fenced:
+            self._phase("waiting")
             self.stop.set()
             return
         model.load_weights(self.theta)
         self.first_step, self.first_tokens, self.began, self.deadline = step, trained_tokens, self.clock(), self.clock() + self.deadline_s
         self.sampler.seed(sampler_seed(self.info["seed"], self.rank, self.round))
+        self.round_step, self.reported_step = 0, 0
+        self._phase("training")
+
+    # -- telling the coordinator where it is
+    def _phase(self, phase):
+        """Change the phase it reports and have the reporter say so now."""
+        self.phase = phase
+        self.wake.set()
+
+    def report(self):
+        """Send one progress report (no weights). A report that fails, for any reason, is dropped: it never raises, and never stops
+        the training."""
+        if not self.progress or self.report_round is None:
+            return False
+        step, phase = self.round_step, self.phase
+        body = {"node": self.node, "generation": getattr(self, "generation", self.info["generation"]), "epoch": self.epoch,
+                "round": self.report_round, "phase": phase, "step": step, "loss": self.live["loss"],
+                "tokens_per_second": self.live["tokens_per_second"]}
+        try:
+            self.client.post_json(f"{self.base}/progress", body, timeout=PROGRESS_TIMEOUT)
+        except Exception:  # noqa: BLE001 - a stale 409, an unreachable coordinator, a timeout: the report is only a courtesy
+            return False
+        self.reported_step, self.reported_phase = step, phase
+        return True
+
+    def _report_loop(self):
+        last = 0.
+        while not self.halt.is_set():
+            self.wake.wait(PROGRESS_SECONDS)
+            self.wake.clear()
+            if self.phase == self.reported_phase:  # a change of phase is said at once; the gap only spaces step reports
+                self.halt.wait(max(0., PROGRESS_GAP - (time.monotonic() - last)))
+            if self.halt.is_set():
+                return
+            self.report()
+            last = time.monotonic()
 
     # -- talking to the coordinator
     def _call(self, call):
@@ -787,12 +996,15 @@ class Member:
         self.info = self._call(lambda: self.client.post_json(f"{self.base}/join", {"node": self.node, "epoch": self.epoch}))
         from studio_modules.tokenizer.byte import Tokenizer
         self.tokenizer = Tokenizer.restore(self.info["tokenizer"])
+        self.report_round = self.info["round"]
         return self.info
 
     def _enter(self, want):
         """Wait until round `want` (or the current one, when it has moved on) is open for this member, then take its theta and shards."""
         from studio_peer import PeerError
         while not self.stop.is_set():
+            self.report_round = want
+            self._phase("waiting")
             try:
                 view = self._call(lambda: self.client.get_json(f"{self.base}/rounds/{want}", {"node": self.node, "wait": self.wait},
                                                                timeout=self.wait + 15))
@@ -811,8 +1023,9 @@ class Member:
                 self.join()
                 want = self.info["round"]
             elif view["state"] == "open":
+                self._phase("downloading")
                 try:
-                    self.theta = decode_arrays(self._call(lambda: self.client.get_bytes(f"{self.base}/params", {"round": want})))
+                    self.theta = decode_arrays(self._call(lambda: self.client.get_bytes(f"{self.base}/params", {"round": want, "node": self.node})))
                     self._fetch([int(s) for s in view["shards"]])
                 except PeerError as exc:
                     if exc.status == 409:  # the round moved on while this member was downloading
@@ -831,6 +1044,8 @@ class Member:
 
     def _send(self, step, trained_tokens, model):
         from studio_peer import PeerError
+        self.round_step = step - self.first_step
+        self._phase("uploading")
         weights = model.state_arrays()
         delta = {name: self.theta[name] - weights[name].astype(np.float32) for name in self.theta}
         body = encode_arrays(delta, self.info["delta_dtype"])
@@ -869,6 +1084,9 @@ class Member:
         self.emit = emit
         try:
             self.join()
+            if self.progress:
+                self.reporter = threading.Thread(target=self._report_loop, name=f"diloco-progress-{self.node}", daemon=True)
+                self.reporter.start()
             self.shard_dir.mkdir(parents=True, exist_ok=True)
             self._enter(self.info["round"])
             if self.finished or self.fenced or self.stop.is_set():
@@ -877,6 +1095,7 @@ class Member:
             def watch(event):
                 if event.get("type") == "metric" and event.get("step"):
                     self.loss = event.get("loss")
+                    self.live = {"loss": self.loss, "tokens_per_second": event.get("tokens_per_second")}
                 emit(event)
             cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": self.info["total_steps"]}
             self.first_step = 0
@@ -887,6 +1106,8 @@ class Member:
                 raise RuntimeError("This member used all its steps before the run finished (it missed rounds). Start it again to rejoin.")
             return self.round
         finally:
+            self.halt.set()
+            self.wake.set()
             self.leave()
             self.train.set([])
             self.shards.clear()
