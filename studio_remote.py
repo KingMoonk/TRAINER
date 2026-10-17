@@ -20,6 +20,7 @@ import dataclasses
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -28,9 +29,11 @@ from pathlib import Path
 import studio_cluster
 import studio_publish
 import studio_scheduler as sched
+import studio_state
 from studio_peer import PeerClient
 
 POLL_EVERY = 5.  # seconds between polls of the peers
+POLL_BACKOFF_MAX = 60.  # the longest wait between polls of a peer that does not answer; it doubles from 2 * POLL_EVERY
 TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
 LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result")  # not for the runner
@@ -100,8 +103,11 @@ class Cluster:
         self._delete_lock = threading.Lock()  # a sweep checks a key is free and deletes it under this; `finished` records a result under it
         self._sweeping, self._sweep_at = False, 0.  # a sweep of checkpoints is running; the clock time the next may start
         self._known = {}  # peer address -> its last NodeInfo
+        self._silent = {}  # peer address -> (polls in a row it did not answer, clock time of the next poll): it is left alone until then
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
         self._store, self._store_problem, self._store_mtime = None, "", object()  # object(): not yet read, equal to no mtime
+        self.state = studio_state.Replica(socket.gethostname(), studio_state.next_incarnation(runner.root / "data" / studio_state.INCARNATION_FILE),
+                                          clock)  # the observation store; nothing publishes into it yet
         self.polled = threading.Event()
         self._threads = []
         self._lock = threading.RLock()
@@ -205,15 +211,28 @@ class Cluster:
         def ask(address):
             try:
                 payload = self.client_for(address, retries=0, timeout=studio_cluster.POLL_TIMEOUT).get_json("node")
-                return address, studio_cluster.info_from_payload(address, payload), ""
+                info = studio_cluster.info_from_payload(address, payload)
             except Exception as exc:  # noqa: BLE001 - unreachable, slow or nonsense all mean "did not answer"
                 return address, None, f"{type(exc).__name__}: {exc}"
+            try:  # the observation store rides this poll; a peer without /state/sync (an older version) is still online
+                studio_state.sync_peer(self.state, self.client_for(address, retries=0, timeout=studio_cluster.POLL_TIMEOUT))
+            except Exception as exc:  # noqa: BLE001 - the next poll tries again
+                _log.debug("state sync with %s failed: %s", address, exc)
+            return address, info, ""
 
-        with ThreadPoolExecutor(max_workers=min(8, len(peers))) as pool:
-            results = list(pool.map(ask, peers))
+        now = self.clock()
+        self._silent = {a: v for a, v in self._silent.items() if a in peers}
+        due = [a for a in peers if a not in self._silent or now >= self._silent[a][1]]  # a silent peer is asked less and less often
+        with ThreadPoolExecutor(max_workers=min(8, len(due) or 1)) as pool:
+            results = list(pool.map(ask, due))
         for address, info, error in results:
             self.health.observe(address, info is not None)
             self._known[address] = info or studio_cluster.offline(address, error)
+            if info is not None:
+                self._silent.pop(address, None)
+            else:
+                count = self._silent.get(address, (0,))[0] + 1
+                self._silent[address] = (count, self.clock() + min(POLL_BACKOFF_MAX, 2 * POLL_EVERY * 2 ** (count - 1)))
         self.polled.set()
 
     def nodes(self):

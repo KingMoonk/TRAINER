@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import TrainingPage from "@/app/cluster/training/page";
 import StoragePage from "@/app/storage/page";
@@ -74,6 +75,16 @@ describe("pages on recorded responses", () => {
     replay(["passive", "queue-empty"]);
     renderPage(<PassivePage />);
     expect(await screen.findByRole("heading", { level: 1, name: "Passive training" })).toBeVisible();
+  });
+
+  test("the traffic console lists the alert rules the API shipped, each with a switch", async () => {
+    replay(["traffic-rules"]);
+    renderPage(<main />, { shell: true });
+    await userEvent.setup().click(screen.getAllByRole("button", { name: "API traffic console" })[0]);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Alert rules" }));
+    const rules = (fixtures["traffic-rules"].body as { rules: { label: string; enabled: boolean }[] }).rules;
+    expect(rules.length).toBeGreaterThan(5);
+    for (const rule of rules) expect(await screen.findByRole("switch", { name: rule.label })).toBeVisible();
   });
 
   test("Storage reads the free space and the use", async () => {

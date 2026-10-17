@@ -1,13 +1,15 @@
 """The DiLoCo wire protocol (docs/distributed.md, "Wire protocol"): what members of a distributed run call on the coordinator's node.
 
 The coordinator for a run (studio_diloco.Coordinator) lives in this process, registered by the owner's pretrain_distributed job.
-Weights, shards and pseudo-gradients are binary .npz bodies; a request from an earlier round, generation or lease epoch is 409
-and changes nothing. Node-to-node authentication is the app's (studio_api.auth), not this router's.
+Weights, shards and pseudo-gradients are binary .npz bodies; a request from an earlier round, generation, lease epoch or term is
+409 and changes nothing. Every call carries the run's `term` in its query (0 on the first join, before a member knows it); every
+answer carries the coordinator's term, in the X-Run-Term header and in its JSON body. A call with a higher term than the
+coordinator's tells it a later coordinator exists: it steps down (Coordinator.step_down) and refuses the call. Node-to-node authentication is the app's (studio_api.auth), not this router's.
 """
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -15,7 +17,12 @@ import studio_diloco
 
 router = APIRouter(prefix="/collective/{run}", tags=["collective"])
 Run = Path(pattern=studio_diloco.RUN_ID, description="the run id: the pretrain_distributed job's id")
+Term = Query(description="the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join", ge=0)
 BINARY = {200: {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
+
+
+class Versioned(BaseModel):
+    term: int = 1  # the coordinator's term, on every JSON answer
 
 
 class JoinRequest(BaseModel):
@@ -42,7 +49,7 @@ class ProgressRequest(BaseModel):
     tokens_per_second: float | None = None
 
 
-class JoinInfo(BaseModel):
+class JoinInfo(Versioned):
     """What a member needs to start: the config and tokenizer, and the run's shape. `round` is the round to ask GET /rounds/{r} about."""
 
     node: str
@@ -59,7 +66,7 @@ class JoinInfo(BaseModel):
     vocab_size: int
 
 
-class RoundView(BaseModel):
+class RoundView(Versioned):
     """state: open (this member's assignment is filled in), pending (not open yet, or this member joins at a later boundary),
     closed (`current` is the round to ask about) or finished. member false means the member must POST /join again."""
 
@@ -74,7 +81,7 @@ class RoundView(BaseModel):
     members: int | None = None
 
 
-class Accepted(BaseModel):
+class Accepted(Versioned):
     accepted: bool = True
 
 
@@ -85,23 +92,43 @@ def coordinator(run: str) -> "studio_diloco.Coordinator":
     return found
 
 
+def admit(run: str, term: int, response: Response, learning: bool = False) -> "studio_diloco.Coordinator":
+    """The run's coordinator, once the call's term is admitted; its term goes on the answer. A refused term is 409 with the term too."""
+    found = coordinator(run)
+    try:
+        found.check_term(term, learning)
+    except studio_diloco.StaleTerm as exc:
+        raise HTTPException(409, str(exc), headers={studio_diloco.TERM_HEADER: str(found.term)}) from None
+    response.headers[studio_diloco.TERM_HEADER] = str(found.term)
+    return found
+
+
+def member_call(response: Response, run: str = Run, term: int = Term) -> "studio_diloco.Coordinator":
+    return admit(run, term, response)
+
+
+def binary(found: "studio_diloco.Coordinator", content: bytes) -> Response:
+    return Response(content, media_type="application/octet-stream", headers={studio_diloco.TERM_HEADER: str(found.term)})
+
+
 @router.post("/join", response_model=JoinInfo)
-def join(run: str = Run, body: JoinRequest = ...):
-    """Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open."""
-    return coordinator(run).join(body.node, body.epoch)
+def join(response: Response, run: str = Run, term: int = Term, body: JoinRequest = ...):
+    """Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.
+    A member that does not know the term yet sends 0 and learns it from the answer."""
+    return admit(run, term, response, learning=True).join(body.node, body.epoch, term or None)
 
 
 @router.get("/params", response_class=Response, responses=BINARY)
-def params(round: int, node: str = "", run: str = Run):
+def params(round: int, node: str = "", found: "studio_diloco.Coordinator" = Depends(member_call)):
     """The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline."""
-    return Response(coordinator(run).params_bytes(round, node), media_type="application/octet-stream")
+    return binary(found, found.params_bytes(round, node))
 
 
 @router.get("/shards/{shard}", response_class=Response, responses=BINARY)
-def shard(shard: int, run: str = Run):
+def shard(shard: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """One training shard (tokens, target flags and offsets) as an .npz."""
     try:
-        return Response(coordinator(run).shard_bytes(shard), media_type="application/octet-stream")
+        return binary(found, found.shard_bytes(shard))
     except KeyError:
         raise HTTPException(404, f"No shard {shard}.") from None
 
@@ -109,34 +136,32 @@ def shard(shard: int, run: str = Run):
 @router.post("/rounds/{round}/delta", status_code=202, response_model=Accepted,
              openapi_extra={"requestBody": {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}})
 async def delta(request: Request, round: int, node: str, generation: int, epoch: int, tokens: int, steps: int,
-                seconds: float = 0., loss: float | None = None, run: str = Run):
+                seconds: float = 0., loss: float | None = None, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """A member's pseudo-gradient (theta - theta_k) as an .npz, with its target-token count and steps. 409 when stale."""
-    found = coordinator(run)
     body = await request.body()
 
     def apply():
-        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss, len(body))
+        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss, len(body), found.term)
     await run_in_threadpool(apply)
-    return Accepted()
+    return Accepted(term=found.term)
 
 
 @router.post("/progress", response_model=Accepted)
-def progress(run: str = Run, body: ProgressRequest = ...):
+def progress(found: "studio_diloco.Coordinator" = Depends(member_call), body: ProgressRequest = ...):
     """A member's report of its phase, step in the round, inner loss and speed, about every 2 s. 409 when stale, as a delta is.
     `accepted` is false when the coordinator was busy closing a round and took nothing: the next report says it all again."""
-    found = coordinator(run)
-    return Accepted(accepted=found.progress(body.round, body.node, body.generation, body.epoch, body.phase, body.step, body.loss,
-                                            body.tokens_per_second))
+    return Accepted(term=found.term, accepted=found.progress(body.round, body.node, body.generation, body.epoch, body.phase, body.step,
+                                                             body.loss, body.tokens_per_second, found.term))
 
 
 @router.get("/rounds/{round}", response_model=RoundView)
-def round_state(round: int, node: str = "", wait: float = 0., run: str = Run):
+def round_state(round: int, node: str = "", wait: float = 0., found: "studio_diloco.Coordinator" = Depends(member_call)):
     """Where a round stands for a member. With `wait` it long-polls (at most 30 s) until that changes."""
-    return coordinator(run).round_view(round, node, wait)
+    return found.round_view(round, node, wait)
 
 
 @router.post("/leave", status_code=204)
-def leave(run: str = Run, body: LeaveRequest = ...):
+def leave(found: "studio_diloco.Coordinator" = Depends(member_call), body: LeaveRequest = ...):
     """Leave at the next round boundary; the open round stops waiting for this member."""
-    coordinator(run).leave(body.node, body.generation, body.epoch)
-    return Response(status_code=204)
+    found.leave(body.node, body.generation, body.epoch, found.term)
+    return Response(status_code=204, headers={studio_diloco.TERM_HEADER: str(found.term)})

@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { AREAS, ROUTES, areaHome } from "../src/lib/routes";
-import { PENDING_ROUTES } from "./pending-routes";
 
-for (const route of ROUTES.filter((r) => !PENDING_ROUTES.includes(r.route))) {
+for (const route of ROUTES) {
   test(`${route.href}: shows its title and marks its area in the sidebar`, async ({ page }) => {
     await page.goto(`${route.href}/`);
     await expect(page.getByRole("heading", { level: 1, name: route.title })).toBeVisible();

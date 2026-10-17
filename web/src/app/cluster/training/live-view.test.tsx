@@ -88,6 +88,12 @@ describe("Training tab: the live view", () => {
     expect(gpu.getByText("1 shard")).toBeInTheDocument();
   });
 
+  test("a run links to its Run view", async () => {
+    server([midRound()]);
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    expect(await screen.findByTestId("open-run-view-r1")).toHaveAttribute("href", expect.stringMatching(/^\/runs\/view\/?\?id=r1$/));
+  });
+
   test("an edge moves while its transfer runs and says how many bytes in which format", async () => {
     server([midRound()]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
@@ -117,7 +123,7 @@ describe("Training tab: the live view", () => {
     const open = within(await screen.findByTestId("timeline-round-2"));
     expect(open.getByTestId("lane-2-mac-mini")).toBeInTheDocument();
     expect(open.getByTestId("deadline-2-mac-mini")).toBeInTheDocument();
-    expect(within(screen.getByTestId("lane-2-gpu-box")).getAllByTitle(/Download θ|Train|Upload Δ/)).toHaveLength(3);
+    expect(within(screen.getByTestId("lane-2-gpu-box")).getAllByLabelText(/Download θ|Train|Upload Δ/)).toHaveLength(3);
     expect(open.getByTestId("nothing-2-gpu-box")).toHaveTextContent("Counted for nothing this round");
     expect(open.queryByTestId("nothing-2-mac-mini")).toBeNull();
     expect(screen.queryByTestId("nothing-1-gpu-box")).toBeNull(); // the finished round was counted

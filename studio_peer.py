@@ -23,6 +23,21 @@ RETRIES = 2  # extra attempts after a connection failure
 BLOCK = 1 << 20  # bytes read at a time when a body goes to a file
 BACKOFF = .5  # seconds before the first retry; doubled each time, with up to half again of jitter
 API_PREFIX = "/api"  # where the API is on a node whose `/` is the dev web server
+_observers = []  # callables told about every call (observe); while empty, a call costs one truthiness check
+
+
+def observe(callback):
+    """Tell `callback(event)` about every call a PeerClient in this process makes, once it is answered or has failed (the API's
+    traffic console, studio_api.traffic). `event` is a dict: remote (the address as configured), method, path ("/..."), params,
+    request (the bytes sent, or None), request_type, status (None when the peer was not reached), seconds, response (the bytes
+    read, None when they went to a file or there was none), response_bytes, error (text, or ""), started (time.time()). The
+    callback runs on the calling thread and must not raise. Returns the function that stops the notifications."""
+    _observers.append(callback)
+
+    def stop():
+        if callback in _observers:
+            _observers.remove(callback)
+    return stop
 
 
 class PeerError(Exception):
@@ -104,17 +119,34 @@ class PeerClient:
         if content_type:
             request.add_header("Content-Type", content_type)
         delay = BACKOFF
+        started, clock = time.time(), time.perf_counter()
+        seen = dict(status=None, response=None, response_bytes=None, error="")
+
+        def note():
+            if _observers:
+                event = dict(remote=self.address, method=method, path=f"/{path.lstrip('/')}", params=params, request=data,
+                             request_type=content_type, seconds=time.perf_counter() - clock, started=started, **seen)
+                for callback in list(_observers):
+                    callback(event)
         for attempt in range(self.retries + 1):
             try:
                 with self._open(request, timeout=timeout or self.timeout) as response:
-                    return read(response) if read else response.read()
+                    result = read(response) if read else response.read()
+                    status = getattr(response, "status", 200)
+                seen.update(status=status, response=None if read else result, response_bytes=None if read else len(result))
+                note()
+                return result
             except urllib.error.HTTPError as exc:  # the peer answered: never retried
                 detail = _detail(exc)
+                seen.update(status=exc.code, error=detail)
+                note()
                 raise PeerError(f"{self.address} answered {exc.code} to {method} /{path.lstrip('/')}: {detail}",
                                 status=exc.code, detail=detail) from None
             except (urllib.error.URLError, OSError) as exc:  # not reached, refused, reset or timed out
                 if attempt == self.retries:
                     reason = getattr(exc, "reason", exc)
+                    seen.update(error=str(reason))
+                    note()
                     raise PeerError(f"{self.address} did not answer {method} /{path.lstrip('/')}: {reason}") from None
                 self._sleep(delay * (1 + self._rng.random() / 2))
                 delay *= 2

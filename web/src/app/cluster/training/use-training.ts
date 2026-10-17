@@ -53,6 +53,7 @@ function useRunWrite() {
   const client = useQueryClient();
   return (run: Run) => {
     client.setQueryData<Run[]>(RUNS, (runs) => [run, ...(runs ?? []).filter((r) => r.id !== run.id)].sort((a, b) => b.started_at - a.started_at));
+    client.setQueryData<Run | null>(["distributed", "run", run.id], run); // the Run view's own read of this run
     void client.invalidateQueries({ queryKey: RUNS });
     void client.invalidateQueries({ queryKey: ["queue"] });
   };

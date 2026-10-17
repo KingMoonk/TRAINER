@@ -106,6 +106,12 @@ describe("Training run page", () => {
     expect(within(svg as unknown as HTMLElement).getByText("Learning rate")).toBeInTheDocument();
   });
 
+  test("a run in progress links to its Run view by the queue job id", async () => {
+    server();
+    renderPage(<TrainingRunPage />);
+    expect(await screen.findByTestId("open-run-view")).toHaveAttribute("href", expect.stringMatching(/^\/runs\/view\/?\?id=j1$/));
+  });
+
   test("a run in progress shows step k of n, the phase, the chart and the samples, and updates in place", async () => {
     const state = server();
     renderPage(<TrainingRunPage />);

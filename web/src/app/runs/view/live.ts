@@ -3,7 +3,7 @@
 import type { components } from "@/lib/api-schema";
 import type { Series } from "@/components/series-chart";
 import { TRAINING as T } from "@/lib/copy/training";
-import { bytesText, deltaText, isActive, type Member, type Run } from "./logic";
+import { bytesText, deltaText, isActive, type Member, type Run } from "@/app/cluster/training/logic";
 
 export type Lane = components["schemas"]["Lane"];
 export type RoundTimeline = components["schemas"]["RoundTimeline"];

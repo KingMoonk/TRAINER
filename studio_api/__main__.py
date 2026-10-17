@@ -118,7 +118,7 @@ def build(args):
         tags, users = studio_cluster.allowed_callers(workspace.state)
         return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,
                           token=studio_cluster.funnel_token(workspace.state))
-    return create_app(services, open=True, origins=args.allow_origin, hosts=hosts)
+    return create_app(services, open=True, origins=args.allow_origin, hosts=hosts, fake_traffic=True)
 
 
 def make(argv=None):

@@ -1,5 +1,5 @@
 // Builders for the Training tab's tests: a member, a finished round, a run (with its live fields at rest), a timeline round and an event.
-import type { Lane, RoundTimeline, RunEvent } from "./live";
+import type { Lane, RoundTimeline, RunEvent } from "@/app/runs/view/live";
 import type { Member, Round, Run } from "./logic";
 
 export const member = (name: string, over: Partial<Member> = {}): Member => ({
