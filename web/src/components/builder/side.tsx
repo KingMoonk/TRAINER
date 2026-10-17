@@ -280,14 +280,17 @@ type TrayProps = {
   cannotWrite: string | null;
   saving: boolean;
   canSave: boolean;
+  /** How many versions the draft can be saved as, one change each; 0 when it cannot be split. */
+  splitCount: number;
   onSave: () => void;
+  onSplit: () => void;
   onDiscard: () => void;
 };
 
-export function Tray({ base, chips, cannotWrite, saving, canSave, onSave, onDiscard }: TrayProps) {
+export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, onSave, onSplit, onDiscard }: TrayProps) {
   const nv = nextVersionName(base);
   const saveButton = (
-    <Button size="sm" onClick={onSave} disabled={!canSave || saving} data-testid="save">
+    <Button size="sm" onClick={onSave} disabled={!canSave || saving} id="builder-save" data-testid="save">
       {fill(BUILDER.save_as, { version: nv })}
     </Button>
   );
@@ -308,6 +311,11 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, onSave, onDisc
     actions = (
       <>
         {saveButton}
+        {splitCount > 1 && (
+          <Button size="sm" variant="outline" onClick={onSplit} disabled={!canSave || saving} id="builder-split" data-testid="split">
+            {fill(BUILDER.split, { count: splitCount })}
+          </Button>
+        )}
         <Button size="sm" variant="outline" onClick={onDiscard}>
           {BUILDER.discard}
         </Button>
@@ -326,6 +334,12 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, onSave, onDisc
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className={cn("text-sm font-medium", (cannotWrite || chips.length > 0) && AMBER)}>{kicker}</p>
         <p className="text-xs text-muted-foreground">{text}</p>
+        {chips.length > 1 && base !== null && !cannotWrite && (
+          <p className="text-xs text-muted-foreground" data-testid="split-offer">
+            {fill(BUILDER.one_change, { count: chips.length })}{" "}
+            {splitCount > 1 ? fill(BUILDER.one_change_split, { count: splitCount }) : BUILDER.one_change_cannot}
+          </p>
+        )}
         {chips.length > 0 && !cannotWrite && (
           <div className="flex flex-wrap gap-1">
             {chips.map((chip) => (
@@ -336,7 +350,7 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, onSave, onDisc
           </div>
         )}
       </div>
-      <div className="flex gap-2">{actions}</div>
+      <div className="flex flex-wrap gap-2">{actions}</div>
     </div>
   );
 }

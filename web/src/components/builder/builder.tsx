@@ -6,19 +6,23 @@
 // makes a version (POST /versions); the `versions` event then moves the comparison to it.
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Controls, Costs, Expect, StartFrom, Tray, VersionList } from "@/components/builder/side";
+import { GuessCheck, GuessPanel, type GuessStep } from "@/components/builder/guess";
 import { Tower } from "@/components/builder/tower";
 import {
   anchoredDraft,
   changeText,
   design,
   detailOf,
+  guessOf,
   isVersion,
+  jobFor,
   pretraining,
+  queueJobs,
   specBase,
   specOf,
   loadDraft,
@@ -29,6 +33,7 @@ import {
   wordChanged,
   type Choices,
   type Draft,
+  type Guess,
   type Line,
   type Spec,
   type Version,
@@ -72,7 +77,9 @@ export function Builder() {
   // The draft: against the current version. A new current version (a save, here or elsewhere) starts a fresh draft from
   // it, as the Tk page's refresh does; a reload finds the one localStorage kept when it is against the same version.
   const [store, setStore] = useState<Draft | null>(null);
-  if (cur && (!store || store.base !== base)) {
+  // A split saves several versions one after another; each moves the current version, which must not reset the draft until it is done.
+  const [splitting, setSplitting] = useState(false);
+  if (cur && !splitting && (!store || store.base !== base)) {
     // Set during render, as React suggests for state that follows a prop: the next render has the draft.
     const kept = loadDraft();
     setStore(kept && kept.base === base ? kept : { base, draft: cur, anchor: null });
@@ -177,15 +184,131 @@ export function Builder() {
     });
   const discard = () => setStore({ base, draft: cur!, anchor: null });
 
+  // Saving: version 1 has nothing to compare, so it is saved at once. Any other save first asks for a guess at what the
+  // change will do (or Skip), as the Tk page does; a draft of several changes can instead be split into one version
+  // (and one queued job) per change. `asking` is only live while the draft is the one it was opened on.
+  const draftKey = JSON.stringify([base, store?.draft, store?.anchor]);
+  const [asked, setAsked] = useState<{ kind: "one" | "split"; key: string } | null>(null);
+  const [picks, setPicks] = useState<Guess[]>([]);
+  if (asked && asked.key !== draftKey) setAsked(null); // the draft moved on: the question is about a draft that is gone
+  const asking = asked ? asked.kind : null;
+  const ask = (kind: "one" | "split") => {
+    setPicks([]);
+    setAsked({ kind, key: draftKey });
+  };
+
+  const textSetsQ = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: queueJobs.textSets, retry: false });
+  const datasets = useMemo(() => (textSetsQ.data ?? []).filter((set) => set.on).map((set) => set.id), [textSetsQ.data]);
+  const questionsQ = useQuery({
+    queryKey: ["design", "questions", baseSpec, draftSpec],
+    queryFn: () => design.questions(baseSpec, draftSpec!),
+    enabled: asking === "one" && !!draftSpec,
+    staleTime: Infinity,
+    retry: false,
+  });
+  // One version per change: only for a draft written onto the current version (a design loaded from elsewhere is saved whole).
+  const splittable = ready && !!cur && !!draftSpec && !store?.anchor && base !== null && chips.length > 1 && textSetsQ.isSuccess;
+  const splitQ = useQuery({
+    queryKey: ["design", "split-plan", baseSpec, cur, draft, base, datasets],
+    queryFn: () => design.splitPlan(baseSpec, cur!, cur!, draft!, base, datasets),
+    enabled: splittable && !writeQ.isPlaceholderData,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const plan = splitQ.data?.steps.length ? splitQ.data : null;
+
+  const saved = (version: Version) => client.setQueryData<Version[]>(["versions"], (list) => upsertVersion(list, version));
   const save = useMutation({
-    mutationFn: () => versions.save(draftSpec!, changeText(chips, base)),
+    mutationFn: (guess: Guess) => versions.save(draftSpec!, changeText(chips, base), guess),
     onSuccess: (version) => {
-      client.setQueryData<Version[]>(["versions"], (list) => upsertVersion(list, version));
+      saved(version);
       void client.invalidateQueries({ queryKey: ["versions", "current"], exact: true });
+      setAsked(null);
       toast.success(fill(BUILDER.saved, { version: versionName(version.number) }));
     },
     onError: (reason) => toast.error(detailOf(reason)),
   });
+  const saveSplit = useMutation({
+    mutationFn: async (guesses: Guess[]) => {
+      if (!plan) throw new Error(BUILDER.one_change_cannot);
+      if (!datasets.length) throw new Error(BUILDER.no_text);
+      const made: Version[] = [];
+      let queued = 0;
+      try {
+        for (const [i, step] of plan.steps.entries()) {
+          const version = await versions.save(step.spec, step.chips.join(", "), guesses[i]);
+          saved(version);
+          made.push(version);
+        }
+        for (const [i, job] of plan.jobs.entries()) {
+          await queueJobs.enqueue(jobFor(job, Number(job.params?.version), made[i].number));
+          queued++;
+        }
+      } catch (reason) {
+        if (made.length) {
+          throw new Error(
+            fill(BUILDER.split_partial, {
+              saved: made.map((v) => versionName(v.number)).join(", "),
+              queued,
+              total: plan.jobs.length,
+              reason: detailOf(reason),
+            }),
+          );
+        }
+        throw reason;
+      }
+      return made;
+    },
+    onMutate: () => setSplitting(true),
+    onSettled: () => {
+      setSplitting(false);
+      void client.invalidateQueries({ queryKey: ["versions", "current"], exact: true });
+      void client.invalidateQueries({ queryKey: ["queue"] });
+    },
+    onSuccess: (made) => {
+      setAsked(null);
+      toast.success(fill(BUILDER.split_note, { first: made[0].number, last: made[made.length - 1].number }));
+    },
+    onError: (reason) => toast.error(detailOf(reason)),
+  });
+  // Back at the tray (Back, a save, or the draft moving on), keyboard focus returns to the button that opened the panel.
+  const opener = useRef<"one" | "split" | null>(null);
+  useEffect(() => {
+    if (asking) {
+      opener.current = asking;
+      return;
+    }
+    if (!opener.current) return;
+    const id = opener.current === "split" ? "builder-split" : "builder-save";
+    opener.current = null;
+    document.getElementById(id)?.focus();
+  }, [asking]);
+  const startSave = () => (base === null || !draftSpec ? save.mutate({}) : ask("one"));
+  const finish = (skip: boolean) => {
+    const guesses = (plan && asking === "split" ? plan.steps : [null]).map((_, i) => (skip ? {} : guessOf(picks[i])));
+    if (asking === "split") saveSplit.mutate(guesses);
+    else save.mutate(guesses[0]);
+  };
+  const guessSteps: GuessStep[] | null =
+    asking === "split"
+      ? plan
+        ? plan.steps.map((step, i) => ({
+            title: fill(BUILDER.predict_step_title, { n: (base ?? 0) + 1 + i, change: step.chips.join(", ") }),
+            questions: step.questions,
+          }))
+        : null
+      : questionsQ.data
+        ? [{ title: "", questions: questionsQ.data }]
+        : null;
+  const guessError = asking === "split" ? (splitQ.error ?? null) : questionsQ.error;
+  const pickGuess = (step: number, key: string, value: string) =>
+    setPicks((all) => {
+      const next = [...all];
+      next[step] = { ...next[step], [key]: value };
+      return next;
+    });
+  const before = current && (current.parent ?? current.number - 1) > 0 ? (current.parent ?? current.number - 1) : null;
+  const checkBefore = before !== null && (versionsQ.data ?? []).some((v) => v.number === before) ? before : null;
 
   const [note, setNote] = useState("");
   const importGpt2 = () => {
@@ -237,15 +360,37 @@ export function Builder() {
               <VersionList versions={versionsQ.data} current={base} />
             </div>
           </div>
-          <Tray
-            base={base}
-            chips={chips}
-            cannotWrite={cannotWrite}
-            saving={save.isPending}
-            canSave={!!draftSpec && !writeQ.isPlaceholderData}
-            onSave={() => save.mutate()}
-            onDiscard={discard}
-          />
+          {asking ? (
+            <GuessPanel
+              steps={guessSteps}
+              error={guessError ? detailOf(guessError) : null}
+              picks={picks}
+              saveLabel={asking === "split" && plan ? fill(BUILDER.predict_split_save, { count: plan.steps.length }) : BUILDER.predict_save}
+              saving={save.isPending || saveSplit.isPending}
+              onPick={pickGuess}
+              onSave={() => finish(false)}
+              onSkip={() => finish(true)}
+              onBack={() => setAsked(null)}
+            />
+          ) : (
+            <Tray
+              base={base}
+              chips={chips}
+              cannotWrite={cannotWrite}
+              saving={save.isPending || saveSplit.isPending}
+              canSave={!!draftSpec && !writeQ.isPlaceholderData}
+              splitCount={plan?.steps.length ?? 0}
+              onSave={startSave}
+              onSplit={() => ask("split")}
+              onDiscard={discard}
+            />
+          )}
+          {textSetsQ.isError && chips.length > 1 && base !== null && (
+            <p role="alert" className="text-xs text-destructive">
+              {fill(BUILDER.text_sets_failed, { reason: detailOf(textSetsQ.error) })}
+            </p>
+          )}
+          {current && <GuessCheck before={checkBefore} version={current} />}
         </>
       )}
       <VersionTray />
