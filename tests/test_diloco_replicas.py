@@ -189,5 +189,31 @@ class Replication(unittest.TestCase):
         self.assertEqual(self.client.get("/collective/nope/state", params={"round": 1}).status_code, 404)
 
 
+class LateWrites(unittest.TestCase):
+    def test_a_fetch_that_finishes_after_demotion_or_the_end_of_the_run_does_not_bring_the_folder_back(self):
+        for why in ("demoted", "ended"):
+            with self.subTest(why), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                inside, release = threading.Event(), threading.Event()
+
+                class Slow:
+                    def get_bytes(self, path, params=None, timeout=None):
+                        inside.set()
+                        release.wait(10)
+                        return b"validation"
+                replica = Path(tmp) / "replicas" / "run1"
+                member = studio_diloco.Member(Slow(), "run1", "n", 0, Path(tmp) / "shards", threading.Event(), replica_dir=replica)
+                member.info = {"shard_count": 0}
+                fetch = threading.Thread(target=member._prefetch, args=(member.replica_epoch,))
+                fetch.start()
+                self.assertTrue(inside.wait(10))
+                member._drop_replica()  # what a demotion does, and what the end of a run does
+                release.set()
+                fetch.join(10)
+                self.assertFalse(replica.exists())
+                self.assertFalse(member.prefetched)
+                self.assertTrue(member._write_replica(member.replica_epoch, "theta.npz", b"x"))  # a later epoch writes again
+                self.assertTrue(replica.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

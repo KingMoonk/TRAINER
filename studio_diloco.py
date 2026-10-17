@@ -953,6 +953,7 @@ class Member:
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
+        self.replica_epoch, self.replica_guard = 0, threading.Lock()  # a write to replica_dir is void once the epoch it began under is over
         self.clock, self.emit, self.wait, self.patience, self.sleep = clock, emit or (lambda event: None), wait, patience, sleep
         self.base = f"/collective/{run}"
         self.train, self.val, self.sampler = Windows(), Windows(), random.Random(0)
@@ -1081,7 +1082,7 @@ class Member:
                     if view.get("replica") and self.replica_dir is not None:
                         self._replicate(want, body)
                     elif self.replica_dir is not None:
-                        shutil.rmtree(self.replica_dir, ignore_errors=True)  # no longer a replica: a stale copy would pass for a round it is not
+                        self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
                     self._fetch([int(s) for s in view["shards"]])
                 except PeerError as exc:
                     if exc.status == 409:  # the round moved on while this member was downloading
@@ -1118,33 +1119,49 @@ class Member:
                 if exc.status not in (404, 409):
                     raise
                 return
-            self.replica_dir.mkdir(parents=True, exist_ok=True)
+            epoch = self.replica_epoch
             for name, data in (("theta.npz", theta), ("momentum.npz", encode_arrays(momentum)), (STATE_FILE, record)):
-                temporary = self.replica_dir / (name + ".tmp")
-                temporary.write_bytes(data)
-                temporary.replace(self.replica_dir / name)
+                self._write_replica(epoch, name, data)
             self.emit({"type": "info", "text": f"Holding round {number} as a replica."})
         if not self.prefetched and (self.prefetch is None or not self.prefetch.is_alive()):
-            self.prefetch = threading.Thread(target=self._prefetch, name=f"diloco-replica-{self.node}", daemon=True)
+            self.prefetch = threading.Thread(target=self._prefetch, args=(self.replica_epoch,), name=f"diloco-replica-{self.node}", daemon=True)
             self.prefetch.start()
 
-    def _prefetch(self):
+    def _write_replica(self, epoch, name, data):
+        """Write one file of the replica folder, unless that replica's epoch is over (demoted, or the run ended): checked and written
+        under the guard, so a late write cannot bring back a folder _drop_replica removed."""
+        with self.replica_guard:
+            if epoch != self.replica_epoch:
+                return False
+            self.replica_dir.mkdir(parents=True, exist_ok=True)
+            temporary = self.replica_dir / (name + ".tmp")
+            temporary.write_bytes(data)
+            temporary.replace(self.replica_dir / name)
+            return True
+
+    def _drop_replica(self):
+        """End the current replica epoch and delete the folder; writes begun under it are void from now on."""
+        with self.replica_guard:
+            self.replica_epoch += 1
+            self.prefetched = False
+            shutil.rmtree(self.replica_dir, ignore_errors=True)
+
+    def _prefetch(self, epoch):
         """The once-per-run part of a replica, off the training thread: the validation windows (kept, never trained on) and every shard
         not held. A failure ends it; the next round that finds this member a replica starts it again."""
         from studio_peer import PeerError
         try:
-            self.replica_dir.mkdir(parents=True, exist_ok=True)
-            target = self.replica_dir / "validation.npz"
-            if not target.is_file():
-                data = self._call(lambda: self.client.get_bytes(f"{self.base}/validation"))
-                temporary = target.with_suffix(".tmp")
-                temporary.write_bytes(data)
-                temporary.replace(target)
+            if not (self.replica_dir / "validation.npz").is_file():
+                if not self._write_replica(epoch, "validation.npz", self._call(lambda: self.client.get_bytes(f"{self.base}/validation"))):
+                    return
             for shard in range(self.info["shard_count"]):
-                if self.stop.is_set() or self.halt.is_set():
+                if self.stop.is_set() or self.halt.is_set() or epoch != self.replica_epoch:
                     return
                 self._shard(shard)
-            self.prefetched = True
+            with self.replica_guard:
+                if epoch != self.replica_epoch:
+                    return
+                self.prefetched = True
             self.emit({"type": "info", "text": "Replica holds the validation windows and every shard."})
         except (PeerError, OSError):
             return
@@ -1219,7 +1236,7 @@ class Member:
             if self.prefetch is not None:
                 self.prefetch.join(60)
             if self.replica_dir is not None:
-                shutil.rmtree(self.replica_dir, ignore_errors=True)
+                self._drop_replica()
             self.train.set([])
             self.shards.clear()
             gc.collect()  # a memory map keeps its file open (on Windows, undeletable) until it is collected
