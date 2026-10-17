@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { nodeName, seenText, type ClusterQueue, type QueueNode, type QueueRow } from "@/lib/cluster";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
-import { nodeLabel, pinChoice, placeText } from "./logic";
+import { ALL_MACHINES, canRunOnAll, memberLines, nodeLabel, pinChoice, placeText, type Job } from "./logic";
 import type { QueueActions } from "./use-queue";
 
 /** The line under a job that says where it runs, or where it will, and why it waits. Only for a cluster of several machines. */
@@ -19,8 +19,22 @@ export function PlaceLine({ row }: { row: QueueRow }) {
   );
 }
 
-/** Pin a waiting job to one machine, or let it go anywhere again. */
-export function PinSelect({ id, name, row, nodes, actions }: { id: string; name: string; row: QueueRow | undefined; nodes: QueueNode[]; actions: QueueActions }) {
+/** The machines a DiLoCo run trains on, and why any listed machine was left out. Nothing for another kind of job. */
+export function MembersLine({ job }: { job: Job }) {
+  const { members, leftOut } = memberLines(job);
+  if (!members) return null;
+  return (
+    <div className="text-xs text-muted-foreground" data-testid={`members-${job.id}`}>
+      {members}
+      {leftOut.map((line) => (
+        <div key={line}>{line}</div>
+      ))}
+    </div>
+  );
+}
+
+/** Pin a waiting job to one machine, or let it go anywhere again. A pretrain job can instead run on all machines at once (DiLoCo). */
+export function PinSelect({ job, name, row, nodes, actions }: { job: Job; name: string; row: QueueRow | undefined; nodes: QueueNode[]; actions: QueueActions }) {
   const pinned = row?.pinned ?? "";
   const value = pinChoice(nodes, pinned);
   return (
@@ -28,13 +42,16 @@ export function PinSelect({ id, name, row, nodes, actions }: { id: string; name:
       {T.runOn}
       <select
         aria-label={`${T.runOn}: ${name}`}
-        data-testid={`pin-${id}`}
+        data-testid={`pin-${job.id}`}
         value={value}
-        disabled={actions.pin.isPending}
-        onChange={(e) => actions.pin.mutate({ id, pinned: e.target.value || null })}
+        disabled={actions.pin.isPending || actions.allMachines.isPending}
+        onChange={(e) =>
+          e.target.value === ALL_MACHINES ? actions.allMachines.mutate(job) : actions.pin.mutate({ id: job.id, pinned: e.target.value || null })
+        }
         className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground"
       >
         <option value="">{T.anyMachine}</option>
+        {canRunOnAll(job.kind, nodes) && <option value={ALL_MACHINES}>{T.allMachines}</option>}
         {pinned && !nodes.some((n) => n.pin === value) && <option value={value}>{value}</option>}
         {nodes.map((node) => (
           <option key={node.address} value={node.pin}>

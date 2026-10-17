@@ -45,6 +45,8 @@ class StartRun(BaseModel):
     version: int | None = None  # None: the current version
     dataset_ids: list[str] = Field(min_length=1)
     machines: list[str] = []  # the other machines to invite: addresses from the Machines list
+    all_machines: bool | None = None  # true: invite every listed machine that answers on this app version instead; the rest are left out with a reason
+    replaces: str | None = None  # a waiting pretrain job this run takes the place of: its version, text and place in the queue win
     rounds: int = Field(DEFAULTS.rounds, ge=1, le=100_000)
     inner_steps: int = Field(DEFAULTS.inner_steps, ge=1, le=1_000_000)
     outer_lr: float = Field(DEFAULTS.outer_lr, gt=0)
@@ -165,17 +167,52 @@ def _address_for_peers(request):
     return str(request.base_url).rstrip("/")
 
 
+def _replaced(services, job_id):
+    """The waiting pretrain job a run takes the place of, and its place in Up next. 404 when it is not waiting, 409 for another kind."""
+    waiting = list(services.queue().up_next)
+    index = next((i for i, job in enumerate(waiting) if job.id == job_id), None)
+    if index is None:
+        raise HTTPException(404, f"No waiting job {job_id}.")
+    if waiting[index].kind != "pretrain":
+        raise HTTPException(409, "Only a pretraining job can run on all machines.")
+    return waiting[index], index
+
+
+def _answering(peers, own):
+    """(peers that join, machines left out with why) for "all machines": a machine joins when it answers and runs this app's version."""
+    joining, left_out = [], []
+    for peer in peers:
+        name = peer.hostname or peer.address
+        if not peer.online:
+            left_out.append({"node": name, "address": peer.address, "reason": peer.error or f"{name} did not answer."})
+        elif peer.version and own.version and peer.version != own.version:
+            left_out.append({"node": name, "address": peer.address,
+                             "reason": f"{name} runs app version {peer.version}; this computer runs {own.version}."})
+        else:
+            joining.append(peer)
+    if not joining:
+        raise HTTPException(409, " ".join(["No other machine can join, so there is nothing to train with.",
+                                           *(row["reason"] for row in left_out)]))
+    return joining, left_out
+
+
 @router.post("/runs", status_code=201)
 def start_run(body: StartRun, request: Request, services: Services) -> Run:
     """Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen
-    machines are invited when the run starts, and the form's settings are checked here (400 with a sentence)."""
-    version = services.current_version() if body.version is None else _version(services, body.version)
+    machines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`
+    every listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,
+    each with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the
+    pretrain job leaves the queue."""
+    replaced, index = _replaced(services, body.replaces) if body.replaces else (None, None)
+    number = replaced.params.get("version") if replaced is not None else body.version
+    dataset_ids = list(replaced.params.get("datasets") or []) if replaced is not None else body.dataset_ids
+    version = services.current_version() if number is None else _version(services, number)
     if version is None:
         raise HTTPException(409, "Save a design in the Network designer first.")
     known = {s["id"] for s in plan.sets_of(services.data("text"))}
-    unknown = [d for d in body.dataset_ids if d not in known]
-    if unknown:
-        raise HTTPException(400, f"No text set {', '.join(unknown)}.")
+    unknown = [d for d in dataset_ids if d not in known]
+    if unknown or not dataset_ids:
+        raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
                                       outer_momentum=body.outer_momentum)  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
@@ -183,19 +220,28 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     for address in body.machines:
         if address not in listed:
             raise HTTPException(400, f"{address} is not on the Machines tab.")
-    peers = studio_cluster.survey({"studioConfig": {"nodes": [a for a in listed if a in body.machines]}}, own)[1:]
+    chosen = listed if body.all_machines else [a for a in listed if a in body.machines]
+    peers = studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
+    left_out = []
+    if body.all_machines:
+        peers, left_out = _answering(peers, own)
     machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
                 *({"node": peer.hostname or peer.address, "address": peer.address, "device": peer.device if peer.online else "",
                    "device_name": peer.device_name, "error": "" if peer.online else peer.error} for peer in peers)]
     config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
     label = f"Version {version.number} across {len(machines)} machine{'s' if len(machines) != 1 else ''}"
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
-        "config": config, "datasets": list(dict.fromkeys(body.dataset_ids)), "mode": "from_scratch", "version": version.number,
+        "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
         "delta_dtype": settings.delta_dtype, "settings": asdict(settings), "machines": machines, "owner": own.hostname,
-        "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT})
+        "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
+        **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)
+    if replaced is not None:
+        services.remove(replaced.id)
     services.enqueue(job)
+    if index is not None:
+        services.move(job.id, index)
     services.start_queue()
     return get_run(job.id, services)
 

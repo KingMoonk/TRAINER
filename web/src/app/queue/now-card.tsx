@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { ClusterQueue } from "@/lib/cluster";
 import { T } from "./copy";
 import { placeText, progressLine, rowFor, stateLine, type Queue } from "./logic";
+import { MembersLine } from "./nodes";
 import type { QueueActions } from "./use-queue";
 
 /** `cluster` is set only when other machines are listed: a cluster of one shows no machine anywhere. */
@@ -66,6 +67,7 @@ function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActi
           {placeText(row)}
         </p>
       )}
+      <MembersLine job={job} />
       <p className="text-sm text-muted-foreground" data-testid="progress-line">
         {progressLine(queue)}
       </p>

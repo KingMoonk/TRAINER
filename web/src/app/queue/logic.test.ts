@@ -3,7 +3,10 @@ import { ApiError } from "@/lib/api";
 import type { ClusterQueue, QueueNode, QueueRow } from "@/lib/cluster";
 import { T, fill } from "./copy";
 import {
+  ALL_MACHINES,
   allDoneLine,
+  canRunOnAll,
+  memberLines,
   dropIndex,
   errorText,
   minutes,
@@ -17,6 +20,7 @@ import {
   stateLine,
   toggleState,
   totalHours,
+  type Job,
   type Queue,
 } from "./logic";
 
@@ -185,5 +189,31 @@ describe("pinChoice", () => {
     expect(pinChoice(nodes, "gone")).toBe("gone");
     expect(pinChoice(nodes, "")).toBe("");
     expect(pinChoice([], "x")).toBe("x");
+  });
+});
+
+describe("all machines (DiLoCo)", () => {
+  const node = (address: string) => ({ address, hostname: address, pin: address, local: address === "local", online: true, error: "", seen_at: 0 }) as QueueNode;
+
+  it("is offered only for a pretrain job in a cluster of two or more machines", () => {
+    expect(canRunOnAll("pretrain", [node("local"), node("box")])).toBe(true);
+    expect(canRunOnAll("pretrain", [node("local")])).toBe(false);
+    expect(canRunOnAll("quicktest", [node("local"), node("box")])).toBe(false);
+    expect(ALL_MACHINES).not.toBe("");
+  });
+
+  it("lists a run's members and one line for each machine left out", () => {
+    const run = {
+      id: "r1", kind: "pretrain_distributed", label: "", params: {
+        machines: [{ node: "mac" }, { node: "box" }],
+        left_out: [{ node: "old", reason: "old did not answer within 2 seconds." }],
+      },
+    } as unknown as Job;
+    expect(memberLines(run)).toEqual({
+      members: "Trains on mac, box together",
+      leftOut: ["Left out: old did not answer within 2 seconds."],
+    });
+    expect(memberLines({ ...run, kind: "pretrain" })).toEqual({ members: "", leftOut: [] });
+    expect(memberLines({ ...run, params: {} })).toEqual({ members: "", leftOut: [] });
   });
 });

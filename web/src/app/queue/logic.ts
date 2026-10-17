@@ -102,3 +102,24 @@ export function pinChoice(nodes: QueueNode[], pinned: string): string {
   const byName = nodes.filter((n) => n.hostname.toLowerCase() === lower);
   return byName.length === 1 ? byName[0].pin : pinned;
 }
+
+/** The "Run on" value that turns a waiting pretrain job into a DiLoCo run on every machine that answers. Never a machine's pin. */
+export const ALL_MACHINES = "*all*";
+
+/** Whether "All machines (DiLoCo)" is offered for a waiting job: a pretrain job, in a cluster of two or more machines. */
+export function canRunOnAll(kind: string, nodes: QueueNode[]): boolean {
+  return kind === "pretrain" && nodes.length >= 2;
+}
+
+type Named = { node?: unknown; reason?: unknown };
+const list = (value: unknown): Named[] => (Array.isArray(value) ? value.filter((v): v is Named => typeof v === "object" && v !== null) : []);
+
+/** A DiLoCo run's queue row: the machines that train together, then one line per machine left out with why. Empty for other jobs. */
+export function memberLines(job: Job): { members: string; leftOut: string[] } {
+  if (job.kind !== "pretrain_distributed") return { members: "", leftOut: [] };
+  const names = list(job.params?.machines).map((m) => String(m.node ?? "")).filter(Boolean);
+  return {
+    members: names.length ? fill(T.members, { nodes: names.join(", ") }) : "",
+    leftOut: list(job.params?.left_out).map((m) => fill(T.leftOut, { reason: String(m.reason ?? "") })),
+  };
+}

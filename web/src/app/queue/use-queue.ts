@@ -4,8 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, subscribe, unwrap, type ApiEvent } from "@/lib/api";
-import { T } from "./copy";
-import { errorText, type Plan, type Queue } from "./logic";
+import { T, fill } from "./copy";
+import { errorText, type Job, type Plan, type Queue } from "./logic";
 
 const QUEUE = ["queue"] as const;
 const TICK_MS = 500;
@@ -98,6 +98,24 @@ export function useQueueActions() {
     },
     onError: failed,
   });
+  // "All machines (DiLoCo)": the Cluster › Training form's own start, from its defaults, taking the waiting pretrain job's place.
+  const allMachines = useMutation({
+    mutationFn: async (waiting: Job) => {
+      const defaults = await unwrap(api.GET("/distributed/defaults"));
+      const datasets = Array.isArray(waiting.params?.datasets) ? waiting.params.datasets.map(String) : [];
+      const version = typeof waiting.params?.version === "number" ? waiting.params.version : null;
+      return unwrap(api.POST("/distributed/runs", {
+        body: { replaces: waiting.id, all_machines: true, machines: [], version, dataset_ids: datasets, rounds: defaults.rounds, inner_steps: defaults.inner_steps,
+                outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum },
+      }));
+    },
+    onSuccess: (run) => {
+      toast.success(fill(T.allStarted, { count: String(run.members.length) }));
+      client.invalidateQueries({ queryKey: QUEUE });
+      client.invalidateQueries({ queryKey: ["cluster", "queue"] });
+    },
+    onError: failed,
+  });
   const savePlan = useMutation({
     scope: { id: "queue-plan" },
     // Each edit carries only its changed fields. Read the last saved plan when
@@ -119,7 +137,7 @@ export function useQueueActions() {
       failed(error);
     },
   });
-  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, hold, move, pin, savePlan };
+  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, hold, move, pin, allMachines, savePlan };
 }
 
 export type QueueActions = ReturnType<typeof useQueueActions>;

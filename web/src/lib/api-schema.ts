@@ -1314,7 +1314,10 @@ export interface paths {
         /**
          * Start Run
          * @description Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen
-         *     machines are invited when the run starts, and the form's settings are checked here (400 with a sentence).
+         *     machines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`
+         *     every listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,
+         *     each with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the
+         *     pretrain job leaves the queue.
          */
         post: operations["start_run_distributed_runs_post"];
         delete?: never;
@@ -6218,6 +6221,8 @@ export interface components {
          * @description What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.
          */
         StartRun: {
+            /** All Machines */
+            all_machines?: boolean | null;
             /** Dataset Ids */
             dataset_ids: string[];
             /**
@@ -6240,6 +6245,8 @@ export interface components {
              * @default 0.9
              */
             outer_momentum: number;
+            /** Replaces */
+            replaces?: string | null;
             /**
              * Rounds
              * @default 10
