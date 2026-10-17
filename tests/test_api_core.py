@@ -271,12 +271,12 @@ class AuthTest(unittest.TestCase):
             shut(app)
         for host in LOCAL:
             with mock.patch("studio_core.Workspace"), mock.patch("studio_ia.services.WorkspaceServices", return_value=FakeServices()):
-                app, bound, _ = make(["--bind", host])
+                app, bound, _ = make(["--allow-cpu", "--bind", host])
             self.assertTrue(app.state.open, host)
             self.assertEqual(bound, host)
             shut(app)
         with mock.patch("studio_core.Workspace"), mock.patch("studio_ia.services.WorkspaceServices", return_value=FakeServices()):
-            app, _, _ = make(["--bind", "100.64.0.1"])
+            app, _, _ = make(["--allow-cpu", "--bind", "100.64.0.1"])
         self.assertFalse(app.state.open)
         shut(app)
 

@@ -9,13 +9,19 @@
     python tasks.py web:e2e                   Playwright e2e flows against web/out. CI only: run web:build first, and `pnpm exec playwright install chromium` once.
     python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
+    python tasks.py dev                       the API (--reload) and the Next dev server on this machine, so training keeps the GPU (MPS on a Mac). docs/dev-compose.md.
 
 Each level includes the one before it. Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
 """
+import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.request
 from pathlib import Path
 
 PY = sys.executable
@@ -102,9 +108,86 @@ def web_build():
     pnpm("build")
 
 
+API_PORT, WEB_PORT = 8787, 3000
+SERVE = (f"tailscale serve --bg http://127.0.0.1:{WEB_PORT}", f"tailscale serve --bg --set-path=/api/ http://127.0.0.1:{API_PORT}")  # `/` to the page, `/api/` to the API
+
+
+def dev_commands(pnpm_exe="pnpm"):
+    """(API command, web command, web env) for `dev`. Both bind 127.0.0.1 whatever happens: the API trusts the
+    Tailscale-User-Login header of a loopback peer (studio_api/auth.py), so only `tailscale serve`, which runs on this machine
+    and writes that header itself, may reach it. `dev` takes no arguments, so neither bind can be widened from here."""
+    api = [PY, "-m", "studio_api", "--reload", "--bind", "127.0.0.1", "--port", str(API_PORT)]
+    web = [pnpm_exe, "dev", "--hostname", "127.0.0.1", "--port", str(WEB_PORT)]
+    return api, web, {"NEXT_PUBLIC_API_URL": "/api"}  # same origin: `tailscale serve` sends /api/* to the API, prefix stripped
+
+
+def node_device(fetch, sleep=time.sleep, clock=time.monotonic, timeout=120., every=1.):
+    """The `device` the API reports, polled until it answers; None after `timeout` seconds. `fetch()` returns the /node payload
+    and raises while the API is not up."""
+    end = clock() + timeout
+    while True:
+        try:
+            return str(fetch().get("device") or "cpu")
+        except Exception:
+            if clock() >= end:
+                return None
+            sleep(every)
+
+
+def fetch_node(port=API_PORT):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/node", timeout=2) as answer:
+        return json.load(answer)
+
+
+def announce(fetch=fetch_node, say=print, **poll):
+    """Print the device GET /node reports. An API that finds a GPU unused by torch refuses to start (studio_api/accelerator.py)."""
+    reported = node_device(fetch, **poll)
+    say(f"GET /node reports device {reported}" if reported else "WARNING: the API did not answer GET /node; check its output above.")
+
+
+def port_busy(port):
+    with socket.socket() as probe:
+        probe.settimeout(.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def dev():
+    """The live dev loop on this machine: the API with --reload and the Next dev server, both on 127.0.0.1. Run on the host, not
+    in a container, so torch sees Metal (a Docker VM on a Mac has none) or CUDA. `tailscale serve` puts them on the tailnet."""
+    for name, port in (("API", API_PORT), ("web", WEB_PORT)):
+        if port_busy(port):
+            sys.exit(f"Port {port} ({name}) is in use. Stop what listens there first; a second API on the same data/ and runs/ is unsafe.")
+    exe = shutil.which("pnpm")
+    if not exe:
+        sys.exit("pnpm is not installed. See web/README.md.")
+    api, web, env = dev_commands(exe)
+    if not (WEB / "node_modules").is_dir():
+        run(exe, "install", "--frozen-lockfile", cwd=WEB)
+    print("Tailscale, once (this replaces what `tailscale serve` shows at / now; `tailscale serve reset` takes it down):", flush=True)
+    for line in SERVE:
+        print("  " + line, flush=True)
+    procs = [subprocess.Popen(api), subprocess.Popen(web, cwd=WEB, env={**os.environ, **env})]
+    threading.Thread(target=announce, name="device-notice", daemon=True).start()
+    code = 0
+    try:
+        while all(p.poll() is None for p in procs):
+            time.sleep(1)
+        code = next(p.returncode for p in procs if p.returncode is not None) or 1  # one stopped by itself: say so
+        print(f"+ a dev process exited with {code}; stopping the other", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+        for p in procs:
+            p.wait()
+    sys.exit(code)
+
+
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
          "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
-         "web:build": web_build}
+         "web:build": web_build, "dev": dev}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])

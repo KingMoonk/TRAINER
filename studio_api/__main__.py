@@ -1,4 +1,4 @@
-"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--allow-origin ORIGIN] [--allow-host NAME] [--reload] [--dump-openapi FILE]"""
+"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--allow-origin ORIGIN] [--allow-host NAME] [--allow-cpu] [--reload] [--dump-openapi FILE]"""
 
 import argparse
 import ipaddress
@@ -10,8 +10,10 @@ import sys
 from pathlib import Path
 
 import studio_cluster
+from studio_api import accelerator
 from studio_api.hosts import allow_host
 
+GRACEFUL_SHUTDOWN = 2  # seconds uvicorn waits for open connections (/events streams never end) before closing them on stop or reload
 LOCAL = ("127.0.0.1", "localhost", "::1")
 DEFAULT_PORTS = {"http": 80, "https": 443}
 ORIGINS = "STUDIO_API_ALLOW_ORIGINS"  # comma-separated web origins, added to every --allow-origin
@@ -76,6 +78,9 @@ def parse(argv=None):
     parser.add_argument("--allow-host", action="append", default=[], type=allow_host, metavar="NAME",
                         help="a host name besides localhost, an IP address, this machine's name and its Tailscale names that requests "
                              "may carry in Host (a custom DNS name or proxy; a * stands for one label); repeat for several")
+    parser.add_argument("--allow-cpu", action="store_true",
+                        help="run on the CPU even when this machine has a GPU; without it the API refuses to start when torch reports cpu "
+                             "on a machine with one (--fake is never checked)")
     parser.add_argument("--reload", action="store_true", help="restart when a .py file changes (development)")
     parser.add_argument("--dump-openapi", metavar="FILE", help="write the OpenAPI schema to FILE and exit (pnpm gen:api reads web/openapi.json)")
     args = parser.parse_args(argv)
@@ -96,6 +101,8 @@ def build(args):
     from studio_api.hosts import own_names
 
     hosts = own_names(args.bind, args.allow_host)
+    if not args.fake:
+        print("studio_api", accelerator.check(args.allow_cpu), flush=True)  # SystemExit before anything is served
     hosts.start_refresh()
     if args.fake:
         from studio_ia.services import FakeServices
@@ -132,12 +139,14 @@ def main(argv=None):
         with open(args.dump_openapi, "w", encoding="utf-8", newline="\n") as f:
             f.write(schema_json())
         return
+    if not args.fake:
+        accelerator.check(args.allow_cpu)  # once here, so a refusal is not repeated by every process --reload starts
     if args.reload:
         os.environ[ARGV] = json.dumps(argv)
         uvicorn.run("studio_api.__main__:reloaded", factory=True, reload=True, reload_dirs=[str(ROOT)],
-                    host=args.bind, port=args.port, proxy_headers=False)
+                    host=args.bind, port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
     else:
-        uvicorn.run(build(args), host=args.bind, port=args.port, proxy_headers=False)
+        uvicorn.run(build(args), host=args.bind, port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
 
 
 if __name__ == "__main__":

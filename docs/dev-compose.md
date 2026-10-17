@@ -1,4 +1,49 @@
-# Developing on the tailnet with Docker Compose
+# Development on the tailnet
+
+The live dev loop (hot reload, one HTTPS URL on the tailnet) always trains on the machine's GPU. There is no CPU-only dev
+variant: a Mac runs natively, because Docker cannot give a container Metal, and Docker is for NVIDIA machines.
+
+| Machine                                    | Command                                                                  | `GET /node` reports |
+| ------------------------------------------ | ------------------------------------------------------------------------ | ------------------- |
+| Apple Silicon Mac                          | `.venv/bin/python tasks.py dev`, plus the host `tailscale serve` (below)  | `mps`               |
+| Linux or Windows (WSL2) with an NVIDIA GPU | `docker compose up` (below)                                              | `cuda`              |
+| Any machine, UI work without a GPU         | `python -m studio_api --fake` (docs/node.md) and `pnpm dev` in `web/`     | no training         |
+
+A Mac does not run TRAINER in Docker. After starting, check the device: `/api/node` on the tailnet URL, or
+`http://127.0.0.1:8787/node` on the machine. The API also prints `device: ...` at startup, and refuses to start when the
+machine has a GPU (an Apple Silicon Mac, or `nvidia-smi` listing one) but torch reports `cpu`; `--allow-cpu` runs on the CPU
+anyway. The Apple Neural Engine is not used: PyTorch runs on the GPU (MPS), and the ANE would need a Core ML export.
+
+## Apple Silicon: `tasks.py dev`
+
+The API runs natively from `.venv` (device `mps`) next to the Next dev server, both on `127.0.0.1`, and only the host's
+`tailscale serve` (the Tailscale app on the Mac) puts them on the tailnet:
+
+```bash
+.venv/bin/python tasks.py dev      # API with --reload on 127.0.0.1:8787, `pnpm dev` on 127.0.0.1:3000
+# once, in another terminal (the CLI is /Applications/Tailscale.app/Contents/MacOS/Tailscale if `tailscale` is not on PATH):
+tailscale serve --bg http://127.0.0.1:3000
+tailscale serve --bg --set-path=/api/ http://127.0.0.1:8787
+tailscale serve status             # / -> :3000, /api/ -> :8787
+curl https://<machine>.<tailnet>.ts.net/api/node    # "device": "mps"
+```
+
+`tasks.py dev` prints the two `serve` commands, installs `web/node_modules` when missing, and prints the device once the API
+answers. Ctrl+C stops both processes. A saved `.py` restarts the API (open `/events` streams are cut after 2 seconds); a saved
+file under `web/` hot-reloads. `tailscale serve` remembers its config: if the machine also serves the built app
+(`tailscale serve --bg 8787`, docs/node.md), the commands above replace that `/` mapping; put it back with
+`tailscale serve reset` and `tailscale serve --bg 8787`. Ports 8787 and 3000 must be free: stop a running API first (two APIs
+on one `data/` and `runs/` is unsafe).
+
+Why the host's `tailscale serve`, and not the compose `tailscale` and `web` containers proxying to `host.docker.internal:8787`:
+the API trusts the `Tailscale-User-Login` header of a loopback peer (docs/node.md, "Who is allowed in"). A container reaches
+the host only through `host.docker.internal`, so the API would have to listen beyond `127.0.0.1` (the Docker VM's address, or
+`0.0.0.0` and with it the LAN), where it is no longer "open" by `open=args.bind in LOCAL` and a caller could type that header.
+With the host's `tailscale serve` the API stays on `127.0.0.1` (`tasks.py dev` takes no `--bind`), nothing is published on the
+LAN, and the only thing that adds the header is `tailscale serve`, which deletes any value the client sent. No bind, host or
+auth logic changed. As for any native node, other local processes can call a loopback API.
+
+## NVIDIA GPU: `docker compose up`
 
 `docker compose up` runs the API and the web dev server from this checkout and puts them on your tailnet as one HTTPS URL,
 so any device on the tailnet (a phone, another laptop) can open the app while you edit. The containers bind-mount the
@@ -35,10 +80,27 @@ After changing `requirements*.txt`, run `docker compose build api`. After changi
 The API refuses a request whose `Host` is not one of its names (docs/node.md, "Host names"). Its container has no `tailscale`
 command, so compose gives it `--allow-host` for `${TS_HOSTNAME}` and `${TS_HOSTNAME}.*.ts.net`, the name `tailscale serve` forwards. If you reach it under another name, add `--allow-host NAME` to `API_ARGS`.
 
+### Requirements
+
+`api` reserves every NVIDIA GPU (`deploy.resources.reservations.devices` in `compose.yaml`) and `docker/api.Dockerfile`
+installs the CUDA 12.6 build of torch (`requirements-gpu.txt`). The host needs a recent NVIDIA driver and:
+
+- **Linux:** the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
+  then `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`. `docker run --rm --gpus all ubuntu nvidia-smi` should list the card.
+- **Windows:** Docker Desktop with the WSL2 backend, and the NVIDIA driver for Windows (no driver inside WSL2). Run the
+  compose command from a WSL2 shell.
+
+Without the toolkit the container does not start (`could not select device driver "nvidia"`). Check the device after starting:
+
+```bash
+docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8787/node').read().decode())"   # "device":"cuda"
+```
+
+CI has no GPU, so this is checked by hand.
+
 ## Limits
 
-- The API container is Linux, so torch is the CPU build: no Metal on a Mac. Train on the host (`python app.py`, or the API run
-  natively as in `docs/node.md`) or on a CUDA node; use the container for UI and API work.
+- Docker is for NVIDIA machines only. On a Mac use `tasks.py dev`: Docker Desktop there runs a Linux VM with no Metal.
 - The container and a native API or Tk app on the same checkout share `data/` and `runs/`. Run one of them at a time.
 - `api` and `web` live in the `tailscale` container's network. Compose restarts them when it restarts `tailscale`; if Docker
   restarts `tailscale` on its own (it crashed), run `docker compose restart api web`.

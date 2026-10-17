@@ -19,6 +19,7 @@ the tailnet itself and listing nodes; this page covers one machine.
 | `--allow-origin ORIGIN` | A web origin (the Vercel site, `https://trainer.example.vercel.app`) allowed to call the API from a browser. Repeat it for several, or list them comma-separated in the `STUDIO_API_ALLOW_ORIGINS` environment variable. Default: none (below). |
 | `--allow-host NAME` | A host name the API answers to besides the defaults (below): a custom DNS name or a reverse proxy's name. Repeat it for several. |
 | `--fake` | Serve `FakeServices` (empty, in-memory data) instead of the workspace, for frontend work. Needs no workspace and is always open. |
+| `--allow-cpu` | Run on the CPU although this machine has a GPU. Without it the API prints its device at startup and refuses to start when the machine has a GPU (an Apple Silicon Mac, or `nvidia-smi` listing one) but torch reports `cpu`. `--fake` is never checked. |
 | `--dump-openapi FILE` | Write the OpenAPI schema to `FILE` and exit. This is how `web/openapi.json` is made (see `web/README.md`). |
 
 Install the requirements first (`python -m pip install -r requirements.txt`, as in the README); the API needs FastAPI,
