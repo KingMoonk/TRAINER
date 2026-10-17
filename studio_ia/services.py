@@ -963,6 +963,9 @@ class FakeServices(Services):
                 return "stopped"
         return None
 
+    def resume_passive_at_start(self):
+        pass  # a fake has no watchdog to bring back
+
     def keep_passive_going(self, session_id=None):
         active = [r for r in self.passive_sessions if r["status"] in ("queued", "running", "paused")]
         row = next((r for r in self.passive_sessions if r["id"] == session_id), None) if session_id else (active[0] if active else None)
