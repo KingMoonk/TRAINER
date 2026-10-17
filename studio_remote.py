@@ -97,6 +97,7 @@ class Cluster:
         self._own = None
         self.health = sched.Health(clock)
         self.owner = sched.Owner(client_for, clock, lease_s)
+        self.gangs = sched.Gangs(clock, lease_s)  # the member slots of the distributed runs queued here
         self.guests = {}  # owner's job id -> GuestRun
         self.waiting = {}  # job id -> why it is waiting
         self._removed = {}  # job id -> checkpoint keys of a job taken out of the queue, still to be deleted from the store
@@ -246,7 +247,11 @@ class Cluster:
     # ---- owner: placing and dispatching -----------------------------------------------------------------------------
     def place(self, job):
         """Where `job` goes: a Placement. Without peers, or for a job another node owns, always here."""
-        if job.owner or not self.peers():
+        if job.owner:
+            return sched.Placement("local")
+        if job.kind == "pretrain_distributed":
+            return self._place_gang(job)
+        if not self.peers():
             return sched.Placement("local")
         if self._threads and not self.polled.is_set():
             self.polled.wait(studio_cluster.POLL_TIMEOUT + 1)
@@ -257,6 +262,33 @@ class Cluster:
         else:
             self.waiting.pop(job.id, None)
         return placement
+
+    def _place_gang(self, job):
+        """A distributed run goes on this machine (it coordinates and is a member) once `min_members` of the machines it was given are
+        free at once; it then holds a slot on up to `max_members` of them (`job.params["gang"]`, the addresses), or on none and waits."""
+        import studio_diloco
+        if self.peers() and self._threads and not self.polled.is_set():
+            self.polled.wait(studio_cluster.POLL_TIMEOUT + 1)
+        here = sched.decide(job.kind, self.nodes(), self.health, job.params.get("pinned"))
+        if here.where != "local":
+            self.waiting[job.id] = here.reason
+            return here
+        try:
+            settings = studio_diloco.Settings.from_params(job.params)
+        except ValueError as exc:
+            self.waiting[job.id] = str(exc)
+            return sched.Placement("wait", reason=str(exc))
+        chosen = {m.get("address") for m in job.params.get("machines") or []}
+        nodes = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen]
+        gang = self.gangs.place(job.id, nodes, self.health, settings.min_members, settings.max_members)
+        if not gang.nodes:
+            self.waiting[job.id] = gang.reason
+            return sched.Placement("wait", reason=gang.reason)
+        self.waiting.pop(job.id, None)
+        if job.params.get("gang") != list(gang.nodes):
+            with self.runner.lock:
+                job.params = {**job.params, "gang": list(gang.nodes)}
+        return sched.Placement("local")
 
     def dispatch(self, job, address):
         """Hand `job` to the peer at `address`. On success the job is running there, under a lease; a peer that refuses it, or a job that
@@ -449,7 +481,59 @@ class Cluster:
                 self._reassign(job_id)
         for run in list(self.guests.values()):
             self._tick_guest(run)
+        self._tick_gangs()
         self._sweep_checkpoints()
+
+    def _tick_gangs(self):
+        """Owner: free the slots of runs that ended, renew the slots whose member the coordinator hears from, and for each slot that
+        lapsed let its member go at the round boundary and free the slot. Open slots are offered each tick to the machines that are free
+        then (`_refill`), so a machine that frees up joins the run at the round after it is invited."""
+        import studio_distributed
+        import studio_diloco
+        with self.runner.lock:
+            live = {j.id: j for j in self.runner.jobs if j.kind == "pretrain_distributed" and not j.owner and j.status in ("waiting", "running")}
+        for run_id in self.gangs.runs():
+            job = live.get(run_id)
+            coordinator = studio_diloco.COORDINATORS.get(run_id)
+            if job is None or (coordinator is not None and coordinator.finished):
+                self.gangs.end(run_id)
+            elif job.status == "running" and coordinator is not None:
+                run = studio_distributed.run_of(job)
+                nodes = coordinator.snapshot()["nodes"]
+                for address in self.gangs.held(run_id):
+                    machine = next((m for m in run.machines if m.address == address), None)
+                    known = nodes.get(machine.node) if machine is not None else None
+                    reported = ((known or {}).get("progress") or {}).get("reported_ago")
+                    if address == studio_cluster.LOCAL or (known is not None and known["state"] in ("training", "behind", "joining")
+                                                           and (reported is None or reported <= self.lease_s)):
+                        self.gangs.heard(run_id, address)
+                self._refill(job)
+        for run_id, address in self.gangs.lapsed():
+            job, coordinator = live.get(run_id), studio_diloco.COORDINATORS.get(run_id)
+            self.gangs.drop(run_id, address)
+            if job is None or coordinator is None:
+                continue
+            run = studio_distributed.run_of(job)
+            machine = next((m for m in run.machines if m.address == address), None)
+            if machine is not None:
+                coordinator.lose(machine.node)
+                studio_distributed.lapse(run, machine.node, self.client_for)
+                self.runner._emit("cluster", {"job": run_id, "state": "member_lapsed", "node": address, "detail": machine.node})
+
+    def _refill(self, job):
+        """Offer the open slots of a running distributed run to the machines that are free now, and invite them."""
+        import studio_distributed
+        import studio_diloco
+        try:
+            settings = studio_diloco.Settings.from_params(job.params)
+        except ValueError:
+            return
+        chosen = {m.get("address") for m in job.params.get("machines") or []}
+        nodes = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen]
+        added = self.gangs.fill(job.id, nodes, self.health, settings.max_members)
+        if added:
+            studio_distributed.invite(job, self.client_for, only=added)
+            self.runner._emit("cluster", {"job": job.id, "state": "member_added", "node": ",".join(added), "detail": ""})
 
     def _reassign(self, job_id):
         """The runner has been silent for two leases, so its self-fence has fired: the job is interrupted at its last checkpoint and

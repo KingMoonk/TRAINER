@@ -20,6 +20,7 @@ KEPT = 20  # runs remembered, newest last
 RESTARTED = "The app restarted while this run was going, so it was stopped."
 INVITE_TIMEOUT = 5.  # seconds a peer has to take its member job
 ACTIVE = ("queued", "starting", "waiting", "running")
+UNPLACED = "It was busy when the run was placed. It joins a later round if it is free by then."
 STATES = ("queued", "starting", "waiting", "running", "finished", "stopped", "failed")
 
 RUNS = {}  # run id -> Run
@@ -37,7 +38,7 @@ class Machine:
     device: str = ""
     device_name: str = ""
     error: str = ""
-    state: str = "invited"  # invited | unreachable
+    state: str = "invited"  # invited | unplaced (the scheduler did not give it a slot: busy, or past max_members) | unreachable
     reason: str = ""
     peer_job: str = ""  # the member job's id on that machine's queue
 
@@ -186,15 +187,22 @@ def loopback(address):
     return host in ("localhost", "127.0.0.1", "::1")
 
 
-def invite(job, client_for=PeerClient):
-    """Put a member job on each chosen machine's queue. A machine that cannot be reached, or refuses, is recorded with the reason and
-    the run goes on without it. Never raises: the run does not depend on the peers."""
+def invite(job, client_for=PeerClient, only=None):
+    """Put a member job on each machine the scheduler gave a slot (`gang` in the job's params: the addresses; every chosen machine when
+    absent) or, with `only`, on just those addresses. A machine that cannot be reached, or refuses, is recorded with the reason and
+    the run goes on without it; one without a slot is `unplaced` until a slot opens. Never raises: the run does not depend on the peers."""
     run, p = run_of(job), job.params
     url = p.get("peer_url")
+    gang = set(only) if only is not None else (set(p["gang"]) if p.get("gang") is not None else None)
 
     def ask(machine):
-        if machine.local or machine.state == "unreachable":
+        if machine.local or (machine.state == "unreachable" and only is None):
             return
+        if gang is not None and machine.address not in gang:
+            if only is None and not machine.peer_job:
+                machine.state, machine.reason = "unplaced", UNPLACED
+            return
+        machine.state, machine.reason = "invited", ""
         if not url or (loopback(url) and not loopback(machine.address)):
             machine.state, machine.reason = "unreachable", ("This computer's name on the network is not known, so " + machine.node
                                                              + " cannot be told where to join. Set TRAINER_NODE_ADDRESS to it.")
@@ -206,7 +214,7 @@ def invite(job, client_for=PeerClient):
         except Exception as exc:  # noqa: BLE001 - whatever went wrong is the machine's note
             machine.state, machine.reason = "unreachable", refusal(machine, exc)
 
-    todo = [m for m in run.machines if not m.local]
+    todo = [m for m in run.machines if not m.local and not (m.peer_job and m.state == "invited")]
     if todo:
         with ThreadPoolExecutor(max_workers=len(todo)) as pool:
             list(pool.map(ask, todo))
@@ -222,6 +230,15 @@ def release_member(run, node, client_for=PeerClient):
         client_for(machine.address, timeout=INVITE_TIMEOUT, retries=0).delete_json(f"/queue/jobs/{machine.peer_job}")
     except Exception:  # noqa: BLE001 - the member is already fenced out of the run
         pass
+
+
+def lapse(run, node, client_for=PeerClient):
+    """A member's slot lapsed: take its member job off its machine's queue, and show the machine as unplaced until a slot opens for it."""
+    release_member(run, node, client_for)
+    machine = next((m for m in run.machines if m.node == node), None)
+    if machine is not None and not machine.local:
+        machine.peer_job, machine.state = "", "unplaced"
+        machine.reason = "Its lease lapsed, so the run let it go. It joins a later round if it is free by then."
 
 
 # ---- the read model ---------------------------------------------------------------------------------------------------
@@ -296,10 +313,13 @@ def _member(node, machine, known, history, ended):
             state = "finished" if ended == "finished" else "stopped"
     elif ended:
         state, note = ("finished" if ended == "finished" else "stopped"), ""
+    elif machine is not None and machine.state == "unplaced":
+        state, note = "invited", machine.reason
     else:
         state, note = "invited", "Starting." if local else "Invited. It joins once its own queue gets to the member job."
     row["state"], row["note"] = state, note
-    row["can_stop"] = not ended and not local and state in ("invited", "training", "behind", "joining")
+    placed = machine is None or machine.state != "unplaced"
+    row["can_stop"] = not ended and not local and placed and state in ("invited", "training", "behind", "joining")
     return row
 
 

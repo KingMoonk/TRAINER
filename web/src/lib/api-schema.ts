@@ -6579,6 +6579,10 @@ export interface components {
              * @default []
              */
             machines: string[];
+            /** Max Members */
+            max_members?: number | null;
+            /** Min Members */
+            min_members?: number | null;
             /**
              * Outer Lr
              * @default 0.7
