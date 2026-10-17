@@ -56,6 +56,13 @@ export default function Page() {
     onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
     onSettled: () => client.invalidateQueries({ queryKey: ["passive"] }),
   });
+  const command = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "pause" | "resume" }) =>
+      unwrap(api.POST(action === "pause" ? "/passive/{session_id}/pause" : "/passive/{session_id}/resume", { params: { path: { session_id: id } } })),
+    onSuccess: (_, { action }) => setNote(action === "pause" ? PASSIVE.pausing : PASSIVE.resuming),
+    onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
+    onSettled: () => client.invalidateQueries({ queryKey: ["passive"] }),
+  });
   const keepGoing = useMutation({
     mutationFn: (id: string) => unwrap(api.POST("/passive/{session_id}/keep-going", { params: { path: { session_id: id } } })),
     onSuccess: () => setNote(PASSIVE.keptGoing),
@@ -112,6 +119,16 @@ export default function Page() {
                         </span>
                       ))}
                     </div>
+                    {(view.canPause || view.canResume) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={command.isPending}
+                        onClick={() => command.mutate({ id: row.id, action: view.canPause ? "pause" : "resume" })}
+                      >
+                        {view.canPause ? PASSIVE.pause : PASSIVE.resume}
+                      </Button>
+                    )}
                     {view.canKeepGoing && (
                       <Button size="sm" title={PASSIVE.keepGoingHint} disabled={keepGoing.isPending} onClick={() => keepGoing.mutate(row.id)}>
                         {PASSIVE.keepGoing}

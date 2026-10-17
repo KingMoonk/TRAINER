@@ -153,5 +153,46 @@ class KeepGoing(unittest.TestCase):
         WorkspaceServices.resume_passive_at_start(services, **self.hooks)  # prints, does not raise
 
 
+class PauseResume(unittest.TestCase):
+    """The page's Pause and Resume write the command the trainer takes and journals (tests.test_passive.test_pause_and_resume)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.services = SimpleNamespace(root=self.root)
+        self.store = PassiveStore(self.root)
+        self.id = self.store.create(merge_plan({}))
+        self.store.update(self.id, status="running")
+
+    def send(self, command, session_id=None):
+        return WorkspaceServices.command_passive(self.services, session_id or self.id, command)
+
+    def test_the_command_is_left_for_the_trainer(self):
+        self.assertEqual(self.send("pause"), "running")  # the trainer has not taken it yet
+        self.assertEqual(self.store.get(self.id)["command"], "pause")
+        self.store.update(self.id, status="paused", command="")
+        self.assertEqual(self.send("resume"), "paused")
+        self.assertEqual(self.store.get(self.id)["command"], "resume")
+
+    def test_unknown_and_never_used_are_none(self):
+        self.assertIsNone(self.send("pause", "nope"))
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertIsNone(WorkspaceServices.command_passive(SimpleNamespace(root=Path(empty)), "x", "pause"))
+            self.assertFalse((Path(empty) / "data" / "passive.sqlite").exists())
+
+    def test_an_ended_or_stopping_session_is_refused(self):
+        self.store.command(self.id, "stop")
+        with self.assertRaises(RuntimeError):
+            self.send("pause")
+        self.assertEqual(self.store.get(self.id)["command"], "stop")  # the stop is not replaced
+        for status in ("stopped", "finished", "failed"):
+            self.store.update(self.id, status=status)
+            with self.assertRaises(RuntimeError):
+                self.send("pause")
+        with self.assertRaises(ValueError):
+            self.send("stop")
+
+
 if __name__ == "__main__":
     unittest.main()
