@@ -378,6 +378,23 @@ def resume_params(params, node):
                  "because only the weights are published."), False
 
 
+def interrupt(job):
+    """Put a job whose runner is gone back on the owner: waiting for a new node, resuming from its last checkpoint (`resume_params`), or
+    done when that checkpoint was the last step. Sets `params`, `node`, `status` and `note`; returns (note, finished). The owner holds
+    its queue lock."""
+    node = job.node
+    params, note, finished = resume_params(job.params, node)
+    job.params, job.node = params, ""
+    if finished:
+        checkpoint = attempt_state(job.params)["checkpoint"]
+        job.status = "done"
+        job.params["remote_result"] = {"key": checkpoint["key"], "node": node, "step": checkpoint["step"]}
+    else:
+        job.status = "waiting"
+        job.note = f"{job.note} {note}".strip()
+    return note, finished
+
+
 def relayed(event, offset=0):
     """An event a runner sent, as the owner re-emits it: None for kinds that name files on the runner; steps shifted by `offset`
     (the steps an earlier attempt already did) so progress does not start over after a resume."""
