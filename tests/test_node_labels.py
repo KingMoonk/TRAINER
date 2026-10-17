@@ -19,7 +19,7 @@ class NodeLabels(unittest.TestCase):
                 own, peers = infos[0], [cq.Peer(info) for info in infos[1:]]
                 self.assertEqual(own.address, studio_cluster.LOCAL)
                 # a waiting job pinned by address reads its machine's label back from the row
-                jobs = [SimpleNamespace(id=n.address, kind="pretrain", label="", status="waiting", params={"pinned": n.address}, node="")
+                jobs = [SimpleNamespace(id=n.address, kind="pretrain", label="", status="waiting", params={"pinned": n.address}, node="", note="")
                         for n in infos]
                 rows = cq.merge(own, peers, jobs)
                 self.assertEqual({row.id: row.hostname for row in rows}, case["labels"])
