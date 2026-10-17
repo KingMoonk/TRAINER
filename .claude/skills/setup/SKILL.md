@@ -46,7 +46,7 @@ Call the found Tailscale binary `$TS` below.
 ## 3. Web build
 
 - `cd web && pnpm install` if `web/node_modules` is missing.
-- If `web/out/index.html` is missing or older than the newest file under `web/src`, run `.venv/bin/python tasks.py web:build`.
+- If `web/out/index.html` is missing or older than the newest file under `web/src`, run `make web-build`.
 - Remember whether you rebuilt: a running API only picks up `web/out` when it starts.
 
 ## 4. The API

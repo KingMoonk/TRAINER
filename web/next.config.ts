@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // /queue/ -> queue/index.html: any static server (the API's, Playwright's) serves a route without knowing about .html.
   trailingSlash: true,
   images: { unoptimized: true },
-  // `docker compose up` (docs/dev-compose.md) serves the dev server on the tailnet as <machine>.<tailnet>.ts.net.
+  // `python tasks.py dev` behind `tailscale serve` (docs/node.md) serves the dev server on the tailnet as <machine>.<tailnet>.ts.net.
   allowedDevOrigins: ["**.ts.net"],
   turbopack: {
     rules: {

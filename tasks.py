@@ -9,13 +9,21 @@
     python tasks.py web:e2e                   Playwright e2e flows against web/out. CI only: run web:build first, and `pnpm exec playwright install chromium` once.
     python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
+    python tasks.py setup                     once per machine: .venv, the right torch (MPS on a Mac, CUDA with nvidia-smi), requirements, pnpm install; prints the device. Any Python 3.12+.
+    python tasks.py dev                       the live loop: the API (--reload) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both. docs/node.md, "Developing".
 
 Each level includes the one before it. Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
 """
+import json
 import os
 import shutil
+import signal
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.request
 from pathlib import Path
 
 PY = sys.executable
@@ -102,9 +110,152 @@ def web_build():
     pnpm("build")
 
 
+VENV = Path(__file__).with_name(".venv")
+VENV_PY = VENV / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+TORCH = "torch>=2.14.1,<3"  # as in requirements-training.txt
+CUDA_INDEX = "https://download.pytorch.org/whl/cu126"  # requirements-gpu.txt
+MIN_PYTHON = (3, 12)
+API_PORT, WEB_PORT = 8787, 3000
+SERVE = (f"tailscale serve --bg http://127.0.0.1:{WEB_PORT}", f"tailscale serve --bg --set-path=/api/ http://127.0.0.1:{API_PORT}")  # `/` to the page, `/api/` to the API
+
+
+def find_python(current=sys.executable, version=sys.version_info, which=shutil.which, ask=None):
+    """An interpreter of Python 3.12 or newer (the pinned NumPy and pandas need it): the one running this, else the first on PATH."""
+    if tuple(version[:2]) >= MIN_PYTHON:
+        return current
+    ask = ask or (lambda exe: subprocess.run([exe, "-c", "import sys; print(sys.version_info >= (3, 12))"], capture_output=True,
+                                              text=True, check=False).stdout.strip() == "True")
+    for name in ("python3.14", "python3.13", "python3.12", "python3", "python"):
+        found = which(name)
+        if found and ask(found):
+            return found
+    sys.exit("Python 3.12 or newer is needed. On macOS install one from python.org or `brew install python@3.13`, on Windows from python.org.")
+
+
+def torch_install(nvidia):
+    """The pip arguments that install torch for this machine: the CUDA 12.6 build when nvidia-smi lists a GPU (Windows, Linux), the
+    default wheel otherwise (on macOS it includes Metal/MPS)."""
+    return ["install", TORCH, "--index-url", CUDA_INDEX] if nvidia and sys.platform != "darwin" else ["install", TORCH]
+
+
+def setup():
+    """One command per machine: .venv, the right torch, the requirements, pnpm install; then prints the device torch sees and fails
+    when the machine has a GPU torch cannot use (studio_api/accelerator.py). Run it with any Python 3.12+; safe to run again."""
+    from studio_api.accelerator import machine_accelerator
+
+    if not shutil.which("pnpm"):
+        sys.exit("pnpm is not installed. Install Node 24, then `npm install -g pnpm`.")
+    if not VENV_PY.exists():
+        run(find_python(), "-m", "venv", str(VENV))
+    pip = [str(VENV_PY), "-m", "pip"]
+    run(*pip, "install", "--upgrade", "pip")
+    run(*pip, *torch_install(machine_accelerator() == "cuda"))
+    run(*pip, "install", "-r", "requirements-dev.txt")
+    pnpm("install", "--frozen-lockfile")
+    run(str(VENV_PY), "-c", "from studio_api import accelerator; print('+', accelerator.check())")
+
+
+def dev_commands(pnpm_exe="pnpm"):
+    """(API command, web command, web env) for `dev`. Both bind 127.0.0.1 whatever happens: the API trusts the
+    Tailscale-User-Login header of a loopback peer (studio_api/auth.py), so only `tailscale serve`, which runs on this machine
+    and writes that header itself, may reach it. `dev` takes no arguments, so neither bind can be widened from here."""
+    api = [PY, "-m", "studio_api", "--reload", "--bind", "127.0.0.1", "--port", str(API_PORT)]
+    web = [pnpm_exe, "dev", "--hostname", "127.0.0.1", "--port", str(WEB_PORT)]
+    return api, web, {"NEXT_PUBLIC_API_URL": "/api"}  # same origin: `tailscale serve` sends /api/* to the API, prefix stripped
+
+
+def node_device(fetch, sleep=time.sleep, clock=time.monotonic, timeout=120., every=1.):
+    """The `device` the API reports, polled until it answers; None after `timeout` seconds. `fetch()` returns the /node payload
+    and raises while the API is not up."""
+    end = clock() + timeout
+    while True:
+        try:
+            return str(fetch().get("device") or "cpu")
+        except Exception:
+            if clock() >= end:
+                return None
+            sleep(every)
+
+
+def fetch_node(port=API_PORT):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/node", timeout=2) as answer:
+        return json.load(answer)
+
+
+def announce(fetch=fetch_node, say=print, **poll):
+    """Print the device GET /node reports. An API that finds a GPU unused by torch refuses to start (studio_api/accelerator.py)."""
+    reported = node_device(fetch, **poll)
+    say(f"GET /node reports device {reported}" if reported else "WARNING: the API did not answer GET /node; check its output above.")
+
+
+def tailnet_url(names=None):
+    """The https URL `tailscale serve` gives this machine, from `tailscale status` (read-only); "" when Tailscale is not running."""
+    if names is None:
+        from studio_api.hosts import tailscale_names
+        names = tailscale_names()
+    return next((f"https://{n}/" for n in names if n.endswith(".ts.net")), "")
+
+
+def port_busy(port):
+    with socket.socket() as probe:
+        probe.settimeout(.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def spawn(cmd, **kwargs):
+    """Start a dev process in its own process group (POSIX) or tree (Windows), so `stop` ends pnpm's node child as well."""
+    flags = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
+    return subprocess.Popen(cmd, **flags, **kwargs)
+
+
+def stop(proc):
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.call(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        os.killpg(proc.pid, signal.SIGTERM)
+
+
+def dev():
+    """The live dev loop on this machine: the API with --reload and the Next dev server, both on 127.0.0.1, with both outputs in
+    this terminal. Run it with the .venv interpreter (`python tasks.py setup` makes it), on the host so torch sees the GPU (Metal, CUDA). `tailscale serve` (set up once by hand) puts them on the
+    tailnet; this never runs it."""
+    for name, port in (("API", API_PORT), ("web", WEB_PORT)):
+        if port_busy(port):
+            sys.exit(f"Port {port} ({name}) is in use. Stop what listens there first; a second API on the same data/ and runs/ is unsafe.")
+    exe = shutil.which("pnpm")
+    if not exe:
+        sys.exit("pnpm is not installed. See web/README.md.")
+    api, web, env = dev_commands(exe)
+    if not (WEB / "node_modules").is_dir():
+        run(exe, "install", "--frozen-lockfile", cwd=WEB)
+    url = tailnet_url()
+    print(f"Tailnet: {url or 'Tailscale is not running here'}", flush=True)
+    print("Once, if `tailscale serve status` does not show / and /api/ (this changes what serve shows; `tailscale serve reset` undoes it):", flush=True)
+    for line in SERVE:
+        print("  " + line, flush=True)
+    procs = [spawn(api), spawn(web, cwd=WEB, env={**os.environ, **env})]
+    threading.Thread(target=announce, name="device-notice", daemon=True).start()
+    code = 0
+    try:
+        while all(p.poll() is None for p in procs):
+            time.sleep(1)
+        code = next(p.returncode for p in procs if p.returncode is not None) or 1  # one stopped by itself: say so
+        print(f"+ a dev process exited with {code}; stopping the other", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for p in procs:
+            stop(p)
+        for p in procs:
+            p.wait()
+    sys.exit(code)
+
+
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
          "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
-         "web:build": web_build}
+         "web:build": web_build, "setup": setup, "dev": dev}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])

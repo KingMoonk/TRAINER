@@ -1,7 +1,7 @@
 # Agent rules
 
-- Test with `.venv/bin/python tasks.py test` (ruff and all unit tests) or `.venv/bin/python tasks.py test tests.test_x tests.test_y` (just those modules). For work in `web/`, also run `pnpm test` (Vitest, no browser) from `web/`, plus `pnpm lint`, `pnpm typecheck`, `pnpm build` and `pnpm gen:api`. Nothing else runs locally. Details: `.claude/rules/testing.md`.
-- Only run `tasks.py test:ci` or `test:ci:e2e` or `tests.e2e_train` if trying to debug CI issues.
+- Use the `Makefile` for every command it covers (`make help` lists them); call `tasks.py` or `pnpm` directly only for what it lacks. Test with `make test` (ruff and all unit tests) or `make test T="tests.test_x tests.test_y"` (just those modules). Worktrees get `.venv` as a symlink to the main checkout's (`.claude/rules/git-workflow.md`). For work in `web/`, also run `make web-check` (Vitest, lint, typecheck, build) and `pnpm gen:api` from `web/`. Nothing else runs locally. Details: `.claude/rules/testing.md`.
+- Only run `make test-ci`, `tasks.py test:ci:e2e` or `tests.e2e_train` if trying to debug CI issues.
 - Never run Playwright (`pnpm test:e2e`, `web:e2e`) locally: it is CI-only. Never open an app window locally (no `app.py`, `studio_ia.shell`, Panda3D viewer, `tk.Tk()`); `tests/test_*.py` must stay window-free, and Vitest tests run in jsdom, never a real browser.
 - While iterating, run just the affected tests (see `.claude/rules/affected-tests.md`).
 - Git: each issue or task gets a new branch off origin/wedd-compute-cluster in a new worktree (the base branch; PRs target it; never check out wedd-compute-cluster itself). `master` is legacy: only when the user asks. The sync-base hook keeps wedd-compute-cluster current. Details: `.claude/rules/git-workflow.md`.
