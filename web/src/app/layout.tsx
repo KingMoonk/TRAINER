@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { InlineScript } from "@/components/inline-script";
 import { Providers } from "@/components/providers";
 import { Sidebar } from "@/components/sidebar";
 import { StatusStrip } from "@/components/status-strip";
@@ -18,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="dark h-full antialiased" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: ACCENT_SCRIPT }} />
+        <InlineScript code={ACCENT_SCRIPT} />
       </head>
       <body className="flex min-h-dvh flex-col md:flex-row">
         <Providers>
