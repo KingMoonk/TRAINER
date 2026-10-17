@@ -92,7 +92,16 @@ Then:
 - A browser on an `--allow-origin` origin gets the CORS headers on its preflight (`OPTIONS`, which carries no token) and on
   every response that was let in. A response the API refused with `401` carries none, and an origin that is not listed gets
   none at all. Cookies are not allowed cross-origin; the page sends the token header. On a node that is open and has no token,
-  `http://localhost:*` pages keep their CORS access too, as before.
+  `http://localhost:*` pages keep their CORS access too, as before. With a token set they get none, so a page on another local
+  port cannot forge `Tailscale-User-Login` and read the answer.
+- The web app sends the token as `X-Groundwork-Token` on every request, and reads the live `/events` stream with `fetch` so the
+  header can go on it (an `EventSource` cannot send headers, and the token never goes in a URL). The page takes the token from
+  the browser's `localStorage` key `groundwork-token`; set it once in the page's console on the Funnel site:
+  `localStorage.setItem("groundwork-token", "<the token>")`. It stays in that browser only and is never baked into the build.
+- **No Host check.** The API does not compare the `Host` header with a list of names, so a DNS-rebinding page can reach an open
+  loopback node (`--bind 127.0.0.1`) under its own hostname. Such a page is cross-origin to the API's own pages, and the API
+  gives other origins no CORS headers, but the request itself is still served. If you open the browser on untrusted sites while
+  the node runs, give the node a token (which ends the open mode) or bind it only for the time you need it.
 - Anyone who holds the token can use the node, as anyone on the tailnet can with `tailscale serve`: keep it out of pages and
   logs you do not control, and change it in the config (and restart) to revoke it. The API does not limit how often a caller may
   try tokens; a long random token is the protection.

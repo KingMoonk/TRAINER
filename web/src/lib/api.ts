@@ -5,6 +5,8 @@
 
 import createClient from "openapi-fetch";
 import type { paths } from "@/lib/api-schema";
+import { getStream } from "@/lib/sse-post";
+import { apiToken, authHeaders, TOKEN_HEADER } from "@/lib/token";
 
 const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -27,7 +29,7 @@ export function apiUrl(path: string): string {
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(apiUrl(path), {
     ...init,
-    headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
+    headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...authHeaders(), ...init?.headers },
   });
   if (!res.ok) throw new ApiError(res.status, path, await res.text());
   if (res.status === 204) return undefined as T;
@@ -36,6 +38,13 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
 
 /** The typed client: `api.GET("/jobs/{job_id}", { params: { path: { job_id } } })`. Wrap a call in `unwrap` for its data or an ApiError. */
 export const api = createClient<paths>({ baseUrl: BASE });
+api.use({
+  onRequest({ request }) {
+    const token = apiToken();
+    if (token) request.headers.set(TOKEN_HEADER, token);
+    return request;
+  },
+});
 
 /** The data of a typed `api` call, or an ApiError for a non-2xx reply (the same error `fetchJson` throws). */
 export async function unwrap<T>(request: Promise<{ data?: T; error?: unknown; response: Response }>): Promise<T> {
@@ -49,12 +58,19 @@ export async function unwrap<T>(request: Promise<{ data?: T; error?: unknown; re
 /** Every `Services.emit(kind, payload)` on the server, as the API's `GET /events` SSE stream will send it. */
 export type ApiEvent = { kind: string; payload: unknown };
 
-/** Open the event stream and call `onEvent` for each event. Returns the function that closes it. */
+const RECONNECT_MS = 3000;
+
+/**
+ * Open the event stream and call `onEvent` for each event. Returns the function that closes it.
+ * With a stored token (token.ts) the stream is read with fetch so `X-Groundwork-Token` can go in a header, which an EventSource
+ * cannot send; it reconnects on its own like an EventSource does. Without one, a plain EventSource is used.
+ */
 export function subscribe(
   onEvent: (event: ApiEvent) => void,
   onError?: (error: Event) => void,
   onOpen?: () => void,
 ): () => void {
+  if (apiToken()) return subscribeWithHeaders(onEvent, onError, onOpen);
   const source = new EventSource(apiUrl("/events"));
   if (onOpen) source.onopen = onOpen;
   source.onmessage = (message: MessageEvent<string>) => {
@@ -66,4 +82,21 @@ export function subscribe(
   };
   if (onError) source.onerror = onError;
   return () => source.close();
+}
+
+function subscribeWithHeaders(onEvent: (event: ApiEvent) => void, onError?: (error: Event) => void, onOpen?: () => void): () => void {
+  const abort = new AbortController();
+  void (async () => {
+    while (!abort.signal.aborted) {
+      try {
+        await getStream("/events", onEvent, abort.signal, onOpen);
+      } catch {
+        // a refused or dropped connection is reported below and retried
+      }
+      if (abort.signal.aborted) return;
+      onError?.(new Event("error"));
+      await new Promise((resolve) => setTimeout(resolve, RECONNECT_MS));
+    }
+  })();
+  return () => abort.abort();
 }

@@ -1,7 +1,8 @@
-// A reader for a server-sent-events stream that answers a POST. EventSource (used for GET /events in api.ts) can only GET,
-// and POST /chat/reply streams on its own response, so this reads the body with fetch. Abort the signal to stop the stream.
+// Readers for a server-sent-events stream over fetch. EventSource can only GET and cannot send a header (the Funnel token goes in
+// `X-Groundwork-Token`), and POST /chat/reply streams on its own response, so these read the body with fetch. Abort the signal to stop the stream.
 
 import { ApiError, apiUrl } from "@/lib/api";
+import { authHeaders } from "@/lib/token";
 
 /** One message of the stream. The API frames each as `data: {"kind", "payload"}`; a frame without that shape is skipped. */
 export type SseEvent = { kind: string; payload: unknown };
@@ -38,25 +39,22 @@ export class SseParser {
   }
 }
 
-/**
- * POST `body` as JSON to `path` and call `onEvent` for each event on the response, until it ends or `signal` aborts.
- * Resolves when the stream ends; an abort resolves too (the caller knows it asked). A non-2xx status throws ApiError.
- */
-export async function postStream(
+async function readStream(
   path: string,
-  body: unknown,
+  init: RequestInit,
   onEvent: (event: SseEvent) => void,
   signal?: AbortSignal,
+  onOpen?: () => void,
 ): Promise<void> {
   try {
     const res = await fetch(apiUrl(path), {
-      method: "POST",
-      headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      ...init,
+      headers: { Accept: "text/event-stream", ...authHeaders(), ...init.headers },
       signal,
     });
     if (!res.ok) throw new ApiError(res.status, path, await res.text());
     if (!res.body) return;
+    onOpen?.();
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
     const parser = new SseParser();
     for (;;) {
@@ -68,4 +66,17 @@ export async function postStream(
     if (signal?.aborted) return;
     throw error;
   }
+}
+
+/**
+ * POST `body` as JSON to `path` and call `onEvent` for each event on the response, until it ends or `signal` aborts.
+ * Resolves when the stream ends; an abort resolves too (the caller knows it asked). A non-2xx status throws ApiError.
+ */
+export function postStream(path: string, body: unknown, onEvent: (event: SseEvent) => void, signal?: AbortSignal): Promise<void> {
+  return readStream(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, onEvent, signal);
+}
+
+/** GET `path` and call `onEvent` for each event, like `postStream`. `onOpen` runs once the response is accepted. */
+export function getStream(path: string, onEvent: (event: SseEvent) => void, signal?: AbortSignal, onOpen?: () => void): Promise<void> {
+  return readStream(path, { method: "GET" }, onEvent, signal, onOpen);
 }

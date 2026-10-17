@@ -1,12 +1,13 @@
 """python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--allow-origin ORIGIN] [--reload] [--dump-openapi FILE]"""
 
 import argparse
+import ipaddress
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import studio_cluster
 
@@ -36,21 +37,24 @@ def schema_json():
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
+LABEL = r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+ORIGIN = re.compile(rf"(?P<scheme>[A-Za-z]+)://(?P<host>\[[0-9A-Fa-f:.]+\]|{LABEL}(\.{LABEL})*)(:(?P<port>[0-9]{{1,5}}))?")
+
+
 def origin(value):
-    """`https://app.vercel.app` from a typed origin: a scheme, a host and an optional port, nothing else (no path, no `*`)."""
-    text = value.strip().rstrip("/")
+    """`https://app.vercel.app` from a typed origin: a scheme, a host and an optional port, nothing else (no path, no `*`, no
+    space). The scheme and host are lowercased; a port outside 1-65535 is refused, not rewritten to the default."""
+    found = ORIGIN.fullmatch(value.strip().rstrip("/"))
+    scheme = found and found["scheme"].lower()
+    port = found and int(found["port"]) if found and found["port"] else None
     try:
-        parts = urlsplit(text)
-        _ = parts.port  # raises ValueError for a bad port
+        if found and found["host"].startswith("["):
+            ipaddress.IPv6Address(found["host"][1:-1])
     except ValueError:
-        parts = None
-    if not parts or parts.scheme not in ("http", "https") or not parts.hostname or text != f"{parts.scheme}://{parts.netloc}" \
-            or parts.username or parts.password or "*" in text:
-        raise argparse.ArgumentTypeError(f"{value!r} is not a web origin like https://app.example.com (scheme, host, optional port).")
-    host = parts.hostname.lower()
-    host = f"[{host}]" if ":" in host else host
-    port = parts.port
-    return f"{parts.scheme}://{host}" + (f":{port}" if port and port != DEFAULT_PORTS[parts.scheme] else "")
+        found = None
+    if not found or scheme not in DEFAULT_PORTS or (found["port"] and not 0 < port < 65536):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a web origin like https://app.example.com (scheme, host, optional port 1-65535).")
+    return f"{scheme}://{found['host'].lower()}" + (f":{port}" if port and port != DEFAULT_PORTS[scheme] else "")
 
 
 def parse(argv=None):
