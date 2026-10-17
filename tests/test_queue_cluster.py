@@ -683,6 +683,113 @@ class OwnerSide(unittest.TestCase):
         self.assertFalse(self.held(key))
         self.assertEqual(job.params["cluster"]["checkpoints"], [])
 
+    # ---- review round 2 ----
+    def resumed_job_with_a_newer_checkpoint(self):
+        """A job placed again after its runner was lost, whose new runner has since reported a checkpoint of its own; returns (job, key)."""
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.report_checkpoint(job, 100)
+        self.lose_the_runner(job)
+        self.net.down.discard("gpu-box")
+        self.runner.cluster.poll_once()
+        self.runner._place_waiting()
+        self.assertEqual((job.status, job.epoch), ("running", 2))
+        newer = self.report_checkpoint(job, 50, epoch=2)
+        self.assertNotIn("fetch", job.params)
+        return job, newer
+
+    def assertResumesFrom(self, job, key):
+        self.assertEqual(job.status, "waiting")
+        self.assertEqual(job.params["fetch"], {"init_from": key})
+        self.assertEqual((job.params["cluster"]["offset"], job.params["config"]["steps"]), (150, 850))
+
+    def test_closing_the_app_puts_a_resumed_job_back_to_resume_from_its_newest_checkpoint(self):
+        job, newer = self.resumed_job_with_a_newer_checkpoint()
+        self.runner.cluster.close()
+        self.assertResumesFrom(job, newer)
+
+    def test_loading_a_queue_saved_while_a_resumed_job_ran_away_resumes_from_its_newest_checkpoint(self):
+        job, newer = self.resumed_job_with_a_newer_checkpoint()
+        path = self.root / "data" / "queue.json"
+        saved = path.read_bytes()  # what is on disk if the app dies now
+        self.runner.shutdown()
+        path.write_bytes(saved)
+        self.runner = self.make_runner(store=self.bucket)
+        self.assertResumesFrom(next(j for j in self.runner.jobs if j.id == job.id), newer)
+
+    def test_the_version_a_catch_up_job_starts_from_is_recorded_on_the_job_for_the_sweep(self):
+        start = self.root / "start.npz"
+        write_checkpoint(start, 10)
+        job = self.runner.enqueue(self.job(mode="catch_up", init_from=str(start)))
+        self.place()
+        key = self.store.published[0][0]
+        self.assertEqual(job.params["fetch"], {"init_from": key})
+        self.assertIn(key, self.runner.cluster._protected())
+
+    def test_a_renewal_or_an_end_for_another_epoch_than_the_job_is_at_changes_nothing(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.bucket.publish(studio_publish.checkpoint_version(job.id, 100), self.make_checkpoint(100))
+        cluster, real = self.runner.cluster, self.runner.cluster._remote
+
+        def moved_on(calls=[]):  # noqa: B006 - the renewal saw the job at epoch 1; before it took the lock the job was placed again
+            def look(job_id):
+                found = real(job_id)
+                if not calls:
+                    calls.append(1)
+                    job.epoch = 2
+                return found
+            return look
+
+        before = dict(job.params)
+        with mock.patch.object(cluster, "_remote", side_effect=moved_on()), self.assertRaises(sched.StaleEpoch):
+            cluster.renewed(job.id, {"epoch": 1, "checkpoint": {"key": key, "step": 100}})
+        self.assertEqual(job.params, before)
+        job.epoch = 1
+        with mock.patch.object(cluster, "_remote", side_effect=moved_on([])), self.assertRaises(sched.StaleEpoch):
+            cluster.finished(job.id, {"epoch": 1, "status": "done", "key": key, "step": 1})
+        self.assertEqual((job.status, job.params), ("running", before))
+
+    def test_a_result_of_a_finished_job_the_queue_forgot_is_still_kept(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.report_checkpoint(job, 100)
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "done", "key": self.publish_result(job, step=100), "step": 100})
+        with self.runner.lock:
+            self.runner.jobs.extend(Job("pretrain", f"later {n}", status="done") for n in range(50))
+            self.runner._save()  # keeps the last 50 finished jobs: the first one falls out
+        self.assertNotIn(job, self.runner.jobs)
+        self.assertIn(key, self.runner.cluster._protected())
+        self.runner.cluster.tick()
+        self.assertTrue(self.held(key))
+        self.assertEqual(self.deleted(), [])
+
+    def test_a_removed_job_is_handed_to_the_cluster_while_the_queue_lock_is_held(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        held = []
+        with mock.patch.object(self.runner.cluster, "removed", side_effect=lambda j: held.append(self.runner.lock._is_owned())):
+            self.runner.remove(job.id)
+        self.assertEqual(held, [True])
+
+    def test_a_key_a_job_is_set_to_resume_from_is_kept_by_the_check_made_just_before_the_delete(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        older = self.report_checkpoint(job, 100)
+        self.report_checkpoint(job, 200)
+        doomed = self.runner.cluster._doomed()
+        self.assertEqual(doomed, [(job.id, [older])])
+        with self.runner.lock:  # the job is set to start from it after the list was made
+            job.params = {**job.params, "fetch": {"init_from": older}}
+        self.runner.cluster._sweeping = True
+        self.runner.cluster._sweep_now(doomed)
+        self.assertTrue(self.held(older))
+        self.assertEqual(self.deleted(), [])
+
     def test_a_pinned_job_waits_for_its_node_and_is_never_moved_to_another(self):
         Peer(self.net, "other-box")
         self.nodes = ["gpu-box", "other-box"]

@@ -242,7 +242,7 @@ Only keys a runner reported for that job are deleted, never a prefix sweep of th
 only if its metadata says it is a checkpoint of that job (a key that is a published version, another job's checkpoint, or the
 result, or one a job that has not ended counts on, is left alone: the key it was set to resume from counts as much as the newest it
 reported, and the result of a job counts even after the job was removed from the queue. The list is checked again, under a lock a
-finishing job also takes, just before each delete. A result whose key a cleanup took first fails the job with a sentence). Deleting adds no bytes, so it does not go through the size
+finishing job also takes, just before each delete. A result whose key a cleanup took first fails the job with a sentence. Deleting adds no bytes, so it does not go through the size
 check, and nothing in this cleanup uploads. A key whose listing is missing is not deleted, and neither is any key in a store that cannot
 look keys up; the one exception is a key whose delete this app began and the store cut short. A delete that fails is logged and tried again about a minute later; it never stops
 the job or the queue. The keys still to delete are kept in the job's record in `data/queue.json` (`params.cluster.checkpoints`), so
