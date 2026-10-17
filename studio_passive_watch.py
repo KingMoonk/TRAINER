@@ -226,8 +226,12 @@ def install(root, *, home=None, run=subprocess.run, platform=sys.platform):
             script = _script(root)  # schtasks /TR holds at most 261 characters; the command line itself can be longer
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text('@echo off\r\nstart "" ' + subprocess.list2cmdline(command).replace("%", "%%") + "\r\n", encoding="utf-8")
-            run(["schtasks", "/Create", "/TN", name, "/TR", f'"{script}"', "/SC", "ONLOGON", "/F"],
-                capture_output=True, check=True)
+            try:
+                run(["schtasks", "/Create", "/TN", name, "/TR", f'"{script}"', "/SC", "ONLOGON", "/F"],
+                    capture_output=True, check=True)
+            except (OSError, subprocess.SubprocessError):
+                script.unlink(missing_ok=True)  # no task, so no script left claiming there is one
+                raise
             return name
     except (OSError, subprocess.SubprocessError):
         pass
@@ -242,7 +246,19 @@ def _script(root):
     return Path(root) / "data" / f"passive-watchdog-{_label(root)}.cmd"
 
 
+def _task(root):
+    return f"GroundworkPassive-{_label(root)}"
+
+
+def _task_exists(root, run):
+    try:
+        return run(["schtasks", "/Query", "/TN", _task(root)], capture_output=True).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def uninstall(root, *, home=None, run=subprocess.run, platform=sys.platform):
+    """Remove the sign-in entry. Returns False (and says so on stderr) when a Windows task could not be deleted and is still there; never raises."""
     root = Path(root).resolve()
     try:
         if platform == "darwin":
@@ -250,10 +266,17 @@ def uninstall(root, *, home=None, run=subprocess.run, platform=sys.platform):
         elif platform.startswith("linux"):
             _desktop(root, home).unlink(missing_ok=True)
         elif platform == "win32":
-            run(["schtasks", "/Delete", "/TN", f"GroundworkPassive-{_label(root)}", "/F"], capture_output=True)
+            try:
+                deleted = run(["schtasks", "/Delete", "/TN", _task(root), "/F"], capture_output=True).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                deleted = False
+            if not deleted and _task_exists(root, run):
+                print(f"Could not delete the sign-in task {_task(root)}; remove it in Task Scheduler.", file=sys.stderr, flush=True)
+                return False  # keep the script: the task still points at it
             _script(root).unlink(missing_ok=True)
     except (OSError, subprocess.SubprocessError):
-        pass
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- one pass
@@ -378,14 +401,14 @@ def start(root, session_id=None, *, spawn=spawn, install=install, alive=alive, o
     return pid
 
 
-def installed(root, *, home=None, platform=sys.platform):
-    """True when the watchdog is registered to start at sign-in (Windows: its launch script is there; schtasks is not asked)."""
+def installed(root, *, home=None, run=subprocess.run, platform=sys.platform):
+    """True when the watchdog is registered to start at sign-in (Windows: Task Scheduler has the task, asked with `schtasks /Query`)."""
     root = Path(root).resolve()
     if platform == "darwin":
         return (Path(home or Path.home()) / "Library" / "LaunchAgents" / f"com.groundwork.passive.{_label(root)}.plist").exists()
     if platform.startswith("linux"):
         return _desktop(root, home).exists()
-    return platform == "win32" and _script(root).exists()
+    return platform == "win32" and _task_exists(root, run)
 
 
 def stop(store, session_id, *, alive=alive, ours=ours):

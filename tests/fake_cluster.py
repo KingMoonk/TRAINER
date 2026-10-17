@@ -44,6 +44,9 @@ class Client:
     def post_json(self, path, body=None, params=None, timeout=None):
         return self.net.call(self.address, "POST", path, body, {**self.options, "timeout": timeout})
 
+    def delete_json(self, path, params=None, timeout=None):
+        return self.net.call(self.address, "DELETE", path, None, {**self.options, "timeout": timeout})
+
 
 def refuse(status, detail):
     return PeerError(f"answered {status}: {detail}", status=status, detail=detail)

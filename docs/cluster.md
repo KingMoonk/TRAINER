@@ -106,6 +106,20 @@ below the memory, or that does not train in the dtype, never gets the job. You c
 runs there or waits, and is never moved to a better one. If two machines share that name (any letter case), the job waits and says
 which machines they are: pin it by address (the Queue page's Run on list does).
 
+## Moving a run between devices
+
+A checkpoint is plain arrays plus the optimizer state, so a run saved on one device resumes on another (CUDA, MPS or CPU). Each
+version records `train_device`, the device kind that trained its best checkpoint (read from the checkpoint), and `score_device`,
+the one that scored it on the held-back text (always `cpu` today: `studio_eval.SCORE_DEVICE`, so scores do not depend on the
+machine). Both show in the Versions data (`GET /versions`) and in the published metadata (`train_device`, `score_device`, and the older
+`device`, which equals `train_device`). A version pulled from another machine keeps the device that trained it there.
+
+Checked by hand on an RTX 4060 (300 steps on CUDA, resumed to 450 on the CPU, resumed to 600 on CUDA, tiny model on the sample
+data): the training loss kept falling across both hops (2.66 at step 300, 2.53 at 450, 2.49 at 600; a straight 600-step CUDA run
+ends at 2.45). No kernel path failed on CUDA or the CPU: the code uses no `torch.compile` and no fused attention, so there is
+no fallback to record. MPS has not been run (no Mac was available): the CUDA to MPS and MPS to CUDA resumes are still to do
+(issue #129).
+
 ## The version bucket
 
 Machines exchange trained versions through an S3-compatible bucket, because upload bandwidth is the limit on a home

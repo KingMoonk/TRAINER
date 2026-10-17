@@ -509,6 +509,17 @@ def load_checkpoint(path, weights_only=False, merged=True):
     return metadata
 
 
+def checkpoint_device(path):
+    """The device kind ("cuda", "mps" or "cpu") that wrote a checkpoint, or None when it does not say or cannot be read.
+    Reads only the metadata entry, not the weights."""
+    try:
+        with np.load(Path(path), allow_pickle=False) as archive:
+            device = json.loads(str(archive["metadata"].item())).get("device")
+    except (OSError, ValueError, KeyError):
+        return None
+    return device if device in DEVICES and device != "auto" else None
+
+
 def read_metrics(path):
     """The rows of a run's metrics.jsonl (a partial last line from a crash is skipped). A run in progress is read only past what was read before."""
     return jsonl_rows(path)

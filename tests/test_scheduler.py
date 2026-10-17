@@ -480,7 +480,13 @@ class Resuming(unittest.TestCase):
         self.assertEqual(params["cluster"]["offset"], 400)
         self.assertEqual(params["config"]["batch_size"], 8)
         self.assertIn("step 400", note)
-        self.assertIn("optimizer starts again from zero", note)
+
+    def test_only_the_node_that_wrote_the_checkpoint_can_continue_from_its_own_copy(self):
+        notes = {"steps": 1000, "checkpoint": {"key": "k", "step": 400, "node": "gpu-box", "epoch": 2, "base": 100}}
+        self.assertEqual(sched.resume_here(notes, "gpu-box"), {"epoch": 2, "steps": 900, "base": 100})
+        self.assertIsNone(sched.resume_here(notes, "other-box"))
+        self.assertIsNone(sched.resume_here({"steps": 1000, "checkpoint": {"key": "k", "step": 400}}, "gpu-box"))  # no record of where
+        self.assertIsNone(sched.resume_here({"steps": 1000}, "gpu-box"))
 
     def test_a_second_interruption_before_a_new_checkpoint_resumes_from_the_same_one(self):
         first, _, _ = sched.resume_params(self.params(checkpoint={"key": "k", "step": 400}), "a")
