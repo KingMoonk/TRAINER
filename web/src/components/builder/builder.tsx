@@ -11,7 +11,10 @@ import { toast } from "sonner";
 import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Controls, Costs, Expect, StartFrom, Tray, VersionList } from "@/components/builder/side";
+import { Experiments } from "@/components/builder/experiments";
+import { Explain } from "@/components/builder/explain";
 import { GuessCheck, GuessPanel, type GuessStep } from "@/components/builder/guess";
+import { LabNotebook } from "@/components/builder/notebook";
 import { Tower } from "@/components/builder/tower";
 import {
   anchoredDraft,
@@ -33,9 +36,11 @@ import {
   wordChanged,
   type Choices,
   type Draft,
+  type Explaining,
   type Guess,
   type Line,
   type Spec,
+  type Try,
   type Version,
 } from "@/lib/builder";
 import { BUILDER, fill } from "@/lib/copy/builder";
@@ -184,6 +189,21 @@ export function Builder() {
     });
   const discard = () => setStore({ base, draft: cur!, anchor: null });
 
+  // The side panel explains the part last clicked; a starting question sets up one change and goes with the version it is saved as.
+  const [explaining, setExplaining] = useState<Explaining | null>(null);
+  const [experiment, setExperiment] = useState<{ question: string; draft: Choices } | null>(null);
+  const heldQuestion = experiment && JSON.stringify(experiment.draft) === JSON.stringify(draft) ? experiment.question : null;
+  const tryQuestion = (key: Try["key"]) =>
+    run(async () => {
+      const tried = await design.experiment(cur!, key);
+      if (!tried.choices) {
+        toast.error(tried.why);
+        return;
+      }
+      setStore({ base, draft: tried.choices, anchor: null });
+      setExperiment({ question: tried.question, draft: tried.choices });
+    });
+
   // Saving: version 1 has nothing to compare, so it is saved at once. Any other save first asks for a guess at what the
   // change will do (or Skip), as the Tk page does; a draft of several changes can instead be split into one version
   // (and one queued job) per change. `asking` is only live while the draft is the one it was opened on.
@@ -219,11 +239,13 @@ export function Builder() {
 
   const saved = (version: Version) => client.setQueryData<Version[]>(["versions"], (list) => upsertVersion(list, version));
   const save = useMutation({
-    mutationFn: (guess: Guess) => versions.save(draftSpec!, changeText(chips, base), guess),
+    mutationFn: ({ guess, question }: { guess: Guess; question: string | null }) =>
+      versions.save(draftSpec!, changeText(chips, base), question ? { ...guess, question } : guess),
     onSuccess: (version) => {
       saved(version);
       void client.invalidateQueries({ queryKey: ["versions", "current"], exact: true });
       setAsked(null);
+      setExperiment(null);
       toast.success(fill(BUILDER.saved, { version: versionName(version.number) }));
     },
     onError: (reason) => toast.error(detailOf(reason)),
@@ -283,11 +305,11 @@ export function Builder() {
     opener.current = null;
     document.getElementById(id)?.focus();
   }, [asking]);
-  const startSave = () => (base === null || !draftSpec ? save.mutate({}) : ask("one"));
+  const startSave = () => (base === null || !draftSpec ? save.mutate({ guess: {}, question: null }) : ask("one"));
   const finish = (skip: boolean) => {
     const guesses = (plan && asking === "split" ? plan.steps : [null]).map((_, i) => (skip ? {} : guessOf(picks[i])));
     if (asking === "split") saveSplit.mutate(guesses);
-    else save.mutate(guesses[0]);
+    else save.mutate({ guess: guesses[0], question: heldQuestion });
   };
   const guessSteps: GuessStep[] | null =
     asking === "split"
@@ -345,8 +367,11 @@ export function Builder() {
               onPick={pick}
               onResize={resize}
               onWords={setWords}
+              explaining={explaining}
+              onExplain={(part, block) => setExplaining({ part, block })}
             />
             <div className="flex flex-col gap-3">
+              <Explain draft={draft} explaining={explaining} onClose={() => setExplaining(null)} />
               <StartFrom
                 presets={presetsQ.data ?? []}
                 versions={versionsQ.data ?? []}
@@ -354,6 +379,7 @@ export function Builder() {
                 onGpt2={importGpt2}
                 note={note}
               />
+              <Experiments cur={cur} asking={heldQuestion} busy={save.isPending || saveSplit.isPending} onTry={tryQuestion} />
               <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
               <Costs now={sizesNowQ.data} next={draftSpec ? sizesNewQ.data : sizesNowQ.data} warm={warm} lines={lines} />
               <Expect expectations={expectQ.data} />
@@ -365,6 +391,7 @@ export function Builder() {
               steps={guessSteps}
               error={guessError ? detailOf(guessError) : null}
               picks={picks}
+              question={heldQuestion}
               saveLabel={asking === "split" && plan ? fill(BUILDER.predict_split_save, { count: plan.steps.length }) : BUILDER.predict_save}
               saving={save.isPending || saveSplit.isPending}
               onPick={pickGuess}
@@ -391,6 +418,7 @@ export function Builder() {
             </p>
           )}
           {current && <GuessCheck before={checkBefore} version={current} />}
+          <LabNotebook versions={versionsQ.data} />
         </>
       )}
       <VersionTray />

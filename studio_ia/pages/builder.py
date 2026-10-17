@@ -13,15 +13,13 @@ from pathlib import Path
 import studio_registry as registry
 from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM
 from studio_glossary import glossary_text
-from studio_slots import BLOCK_SLOTS
 from studio_spec import default_spec, validate_spec
 from studio_spec import config_from_spec as config_from_spec
 from studio_validate import errors
 from studio_warmstart import NOTES
-from studio_ia import pieces as cut
 from studio_ia import threads
 from studio_ia.copy import BUILDER as T
-from studio_ia.design import (FF, HEADS, PARAM_PARTS, VS, WIDTHS, WORDS, WORD_TERMS, block_parts,
+from studio_ia.design import (HEADS, PARAM_PARTS, WIDTHS, WORDS, WORD_TERMS, block_parts,
                               blocks_change_pair, change_chips, choose, compute_lines, design_expectation,
                               expectations, fields_of, fits, gpt2_words_ready, gpu_kind, knob_applies, lr_text,
                               module_name, module_tip, new_issues, own_slots, part_options, part_tip, preset_cost,
@@ -55,6 +53,18 @@ from studio_ia.design import (
     pieces_for as pieces_for,
     pill_text as pill_text,
     catchup_job as catchup_job,
+    EXPERIMENTS as EXPERIMENTS,
+    FF as FF,
+    VS as VS,
+    HEAD_PAGES as HEAD_PAGES,
+    LINK_LABELS as LINK_LABELS,
+    PART_LINKS as PART_LINKS,
+    example_pieces as example_pieces,
+    example_text as example_text,
+    experiment_draft as experiment_draft,
+    experiment_rows as experiment_rows,
+    explain as explain,
+    held_question as held_question,
 )
 from studio_ia.pages.base import Page
 from studio_ia.services import if_added, plain_error, queued_outlook
@@ -109,99 +119,6 @@ NO_CURVE = "No error curve yet: version {n} has not trained on this computer. It
 
 
 # ---------------------------------------------------------------------------------------------- learn the parts (#83)
-
-PART_LINKS = dict(embedding=("trace", "inside3d"), position=("trace", "inside3d"), mixer=("head_zoom", "value_map", "head_lab", "inside3d"),
-                  channel=("inside3d", "trace"), norm=("trace",), final_norm=("trace",), head=("loss", "trace"))  # part -> pages that show it work
-HEAD_PAGES = ("head_zoom", "value_map", "head_lab")  # about attention heads: only for a look-back that has them
-LINK_LABELS = dict(trace="trace", head_zoom="inside_head", value_map="value_map", loss="loss", head_lab="head_lab", inside3d="3d")
-
-
-def example_pieces(v, lists):
-    """The example sentence cut by word list v ([label]), or None while the lists are read or that list is not built."""
-    tok = lists["tokenizers"][v] if lists else None
-    return [label for label, _known in cut.chips(tok, lists["sentence"])] if tok is not None else None
-
-
-def example_text(part, s, short, lists=None):
-    """What part `part` (running module `short`) does to the example sentence under the draft's choices `s`."""
-    d, rows, pieces = s["d"], VS[s["V"]], example_pieces(s["V"], lists)
-    upto = T["up_to"] if s["V"] in (1, 3) else ""  # built from your text: the size is a cap
-    last, before = (pieces[-1].strip() or pieces[-1], len(pieces) - 1) if pieces and len(pieces) > 1 else (None, 0)
-    slot = "norm" if part == "final_norm" else part
-    if slot == "norm" or slot == "mixer" or slot == "channel":
-        if registry.get(slot, short).skip:
-            return T["example_skipped"]
-    if part == "embedding":
-        if pieces:
-            return T["example_table_pieces"].format(sentence=lists["sentence"], count=len(pieces), cs="" if len(pieces) == 1 else "s", pieces=" · ".join(pieces), d=d,
-                                                    upto=upto, rows=f"{rows:,}")
-        return T["example_table"].format(d=d, upto=upto, rows=f"{rows:,}")
-    if part == "position":
-        return T["example_position"].format(t=s["T"])
-    if part == "mixer":
-        heads = s["H"] if "heads" in fields_of("mixer", short) else None
-        if heads:
-            key = "example_mixer_heads_pieces" if last else "example_mixer_heads"
-            return T[key].format(last=last, before=before, s="" if before == 1 else "s", heads=heads, size=d // heads)
-        return T["example_mixer_pieces" if last else "example_mixer"].format(last=last, before=before, s="" if before == 1 else "s",
-                                                                          v="s" if before == 1 else "")
-    if part == "channel":
-        if "d_ff" in fields_of("channel", short):
-            return T["example_channel_room"].format(d=d, room=FF[s["W"]] * d)
-        return T["example_channel"]
-    if slot == "norm":
-        return T["example_norm"].format(d=d)
-    return T["example_head_pieces" if last else "example_head"].format(last=last, d=d, upto=upto, rows=f"{rows:,}")
-
-
-def explain(part, s, block=None, lists=None):
-    """What the side panel says about one part of the draft `s`: {title, what, module, module_text, example, links}. `part` is a
-    PART_LINKS key; `block` is the block a sub-layer was clicked in (None: a model-wide part or the all-blocks choice).
-    `lists` is services.word_lists() (None while it is read). links are [(route, label, block)] to the pages that show it work."""
-    slot = "norm" if part == "final_norm" else part
-    short = block_parts(s, block)[slot] if block is not None and slot in BLOCK_SLOTS else s["M"][slot]
-    title = T["final_norm"] if part == "final_norm" else T["part_" + slot]
-    if block is not None:
-        title = T["explain_in_block"].format(part=title, n=block + 1)
-    what = f"{T['final_norm_tip']}\n\n{part_tip('norm')}" if part == "final_norm" else part_tip(slot)
-    links = [(route, T[LINK_LABELS[route]], block or 0) for route in PART_LINKS[part]
-             if route not in HEAD_PAGES or "heads" in fields_of(slot, short)]
-    return dict(title=title, what=what, module=T["explain_now"].format(name=module_name(slot, short)), module_text=module_tip(slot, short),
-                example=example_text(part, s, short, lists), links=links)
-
-
-EXPERIMENTS = (("heads", "exp_heads"), ("words", "exp_words"), ("depth", "exp_depth"), ("width", "exp_depth"))  # depth and width ask one question
-
-
-def experiment_draft(cur, key):
-    """(choices, "") with the one change that puts question `key` to the current version's choices `cur`, or (None, why not)."""
-    if key == "heads":
-        if not knob_applies(cur, "H"):
-            return None, T["exp_no_heads"]
-        up = [h for h in HEADS if h > cur["H"]]
-        return dict(cur, H=up[0] if up else max(h for h in HEADS if h < cur["H"])), ""
-    if key == "words":
-        return dict(cur, V=1 if cur["V"] == 0 else 0), ""
-    if key == "depth":
-        return resize(cur, cur["L"] + 1 if cur["L"] < 12 else cur["L"] - 1), ""
-    if not knob_applies(cur, "W"):
-        return None, T["exp_no_room"]
-    return dict(cur, W=cur["W"] + 1 if cur["W"] < 2 else cur["W"] - 1), ""
-
-
-def experiment_rows(cur):
-    """[(question, [(key, label, why it cannot be tried or "")])] for the starting-questions card, in EXPERIMENTS order."""
-    out = {}
-    for key, question in EXPERIMENTS:
-        out.setdefault(T[question], []).append((key, T["exp_try_" + key], experiment_draft(cur, key)[1]))
-    return list(out.items())
-
-
-def held_question(experiment, draft):
-    """The question a starting question set up, while the draft is still exactly that one change; else None.
-    `experiment` = (question, the draft it set up) or None."""
-    return experiment[0] if experiment and experiment[1] == draft else None
-
 
 UNLOCK = 3  # trained versions before module menus and per-block choices show by themselves
 ADVANCED = "builder_advanced"  # the remembered Advanced toggle (Services.setting)

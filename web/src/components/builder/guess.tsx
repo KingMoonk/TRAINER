@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { design, detailOf, type Guess, type Question, type Version } from "@/lib/builder";
-import { BUILDER, questionName } from "@/lib/copy/builder";
+import { BUILDER, fill, questionName } from "@/lib/copy/builder";
 import { cn } from "@/lib/utils";
 
 const AMBER = "text-warning";
@@ -23,6 +23,8 @@ type PanelProps = {
   steps: GuessStep[] | null;
   error: string | null;
   picks: Guess[];
+  /** The starting question the draft is the one change of, or null. */
+  question?: string | null;
   saveLabel: string;
   saving: boolean;
   onPick: (step: number, key: string, value: string) => void;
@@ -32,7 +34,7 @@ type PanelProps = {
 };
 
 /** "Before you save · what do you expect?": a row of choices per question, then save with them, save without, or go back. */
-export function GuessPanel({ steps, error, picks, saveLabel, saving, onPick, onSave, onSkip, onBack }: PanelProps) {
+export function GuessPanel({ steps, error, picks, question, saveLabel, saving, onPick, onSave, onSkip, onBack }: PanelProps) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => panel.current?.focus(), []);
   return (
@@ -48,6 +50,11 @@ export function GuessPanel({ steps, error, picks, saveLabel, saving, onPick, onS
         <p id="guess-kicker" className={cn("text-sm font-medium", AMBER)}>
           {BUILDER.predict}
         </p>
+        {question && (
+          <p className="text-sm" data-testid="guess-question">
+            {fill(BUILDER.predict_question, { question })}
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">{BUILDER.predict_text}</p>
       </div>
       {error ? (

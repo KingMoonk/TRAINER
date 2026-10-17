@@ -505,6 +505,7 @@ class NotebookRow(BaseModel):
     guesses: str
     note: str
     state: Literal["attention", "live", "neutral"]
+    question: str = Field("", description="the starting question the version was made to ask, when it was")
 
 
 class LearningNotebook(BaseModel):
@@ -534,3 +535,81 @@ def notebook(request: Request, services: Services):
         return plain(dict(rows=rows, lines=design.notebook_lines(rows)))
 
     return _job(request, "design.notebook", work)
+
+
+# ---------------------------------------------------------------------------------------------- learn the parts (#83)
+
+Part = Literal["embedding", "position", "mixer", "channel", "norm", "final_norm", "head"]
+
+
+class ExplainBody(BaseModel):
+    choices: Choices
+    part: Part
+    block: int | None = Field(None, ge=0, description="the block a sub-layer was clicked in; absent for a model-wide part or every block")
+    pieces: list[str] | None = Field(None, description="the example sentence cut by the draft's word list; absent while the lists are read")
+    sentence: str | None = None
+
+
+class PartLink(BaseModel):
+    route: str
+    label: str
+    block: int
+
+
+class Explained(BaseModel):
+    title: str
+    what: str
+    module: str
+    module_text: str
+    example: str
+    links: list[PartLink]
+
+
+@router.post("/explain")
+def explain(body: ExplainBody) -> Explained:
+    """explain: what the side panel says about one part of the draft, with the example sentence worked through it."""
+    choices = choices_in(body.choices)
+    block = None if body.block is None else min(body.block, choices["L"] - 1)
+    said = maths(design.explain_for, body.part, choices, block, body.pieces, body.sentence)
+    return Explained(**{**said, "links": [PartLink(route=route, label=label, block=at) for route, label, at in said["links"]]})
+
+
+class ExperimentBody(BaseModel):
+    choices: Choices
+
+
+class Try(BaseModel):
+    key: Literal["heads", "words", "depth", "width"]
+    label: str
+    why: str = Field(description="why it cannot be tried here; empty when it can")
+
+
+class Experiment(BaseModel):
+    question: str
+    tries: list[Try]
+
+
+@router.post("/experiments")
+def experiments(body: ExperimentBody) -> list[Experiment]:
+    """experiment_rows: the starting questions for the current version's choices, each with its ways to try it."""
+    rows = maths(design.experiment_rows, choices_in(body.choices))
+    return [Experiment(question=question, tries=[Try(key=key, label=label, why=why) for key, label, why in tries]) for question, tries in rows]
+
+
+class TryBody(BaseModel):
+    choices: Choices
+    key: Literal["heads", "words", "depth", "width"]
+
+
+class Tried(BaseModel):
+    choices: Choices | None = Field(description="the current version's choices with that one change; null when it cannot be tried")
+    why: str
+    question: str
+
+
+@router.post("/experiment")
+def experiment(body: TryBody) -> Tried:
+    """experiment_draft: the draft that puts one starting question to the current version, and the question that goes with it."""
+    draft, why = maths(design.experiment_draft, choices_in(body.choices), body.key)
+    question = design.T[dict(design.EXPERIMENTS)[body.key]]
+    return Tried(choices=None if draft is None else choices_out(draft), why=why, question=question)

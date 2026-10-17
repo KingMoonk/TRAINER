@@ -26,6 +26,15 @@ export type SplitPreview = components["schemas"]["SplitPreview"];
 export type LearningCheck = components["schemas"]["LearningCheck"];
 /** A guess: {error: "lower", step: "faster"}; a question left alone has no key. Skipped is the empty guess. */
 export type Guess = Record<string, string>;
+export type Notebook = components["schemas"]["LearningNotebook"];
+export type NotebookRow = components["schemas"]["NotebookRow"];
+export type Explained = components["schemas"]["Explained"];
+export type Part = components["schemas"]["ExplainBody"]["part"];
+export type Experiment = components["schemas"]["Experiment"];
+export type Try = components["schemas"]["Try"];
+export type WordLists = components["schemas"]["WordListsModel"];
+/** The part the side panel explains, and the block it was clicked in (null: a model-wide part, or the all-blocks choice). */
+export type Explaining = { part: Part; block: number | null };
 export type Version = components["schemas"]["Version"];
 export type Slot = components["schemas"]["OptionsBody"]["slot"];
 export type Preview = components["schemas"]["ComputeBody"]["preview"];
@@ -71,6 +80,23 @@ export const design = {
   guessCheck: async (oldVersion: number, newVersion: number, signal: AbortSignal) => {
     const job = await unwrap(api.POST("/design/guess-check", { body: { old_version: oldVersion, new_version: newVersion }, signal }));
     return (await awaitJob<LearningCheck | null>(job, signal, { events: true })) ?? null;
+  },
+  /** The lab notebook: one row per version (a job: it reads every version's run files). */
+  notebook: async (signal: AbortSignal) => {
+    const job = await unwrap(api.POST("/design/notebook", { signal }));
+    return (await awaitJob<Notebook | null>(job, signal, { events: true })) ?? null;
+  },
+  /** What the side panel says about a part of the draft; `pieces` and `sentence` are the example sentence cut by its word list. */
+  explain: (choices: Choices, part: Part, block: number | null, pieces: string[] | null, sentence: string | null) =>
+    unwrap(api.POST("/design/explain", { body: { choices, part, block, pieces, sentence } })),
+  /** The starting questions for the current version's choices. */
+  experiments: (choices: Choices) => unwrap(api.POST("/design/experiments", { body: { choices } })),
+  /** The current version's choices with the one change that puts a starting question; none (with why) when it cannot be tried. */
+  experiment: (choices: Choices, key: Try["key"]) => unwrap(api.POST("/design/experiment", { body: { choices, key } })),
+  /** The word lists and the example sentence they cut (a job: the first read fits them on your text). */
+  wordLists: async (signal: AbortSignal) => {
+    const job = await unwrap(api.POST("/pretraining/word_lists", { signal }));
+    return awaitJob<WordLists>(job, signal);
   },
 };
 
