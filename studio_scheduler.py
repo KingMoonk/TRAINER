@@ -136,6 +136,11 @@ class LeaseTable:
     def release(self, job_id):
         self._held.pop(job_id, None)
 
+    def held(self):
+        """[(lease, seconds since the runner was last heard from)] for every lease held, as this owner sees them."""
+        now = self.clock()
+        return [(lease, now - heard) for lease, heard in list(self._held.values())]
+
     def lapsed(self):
         """Jobs whose runner has been silent for longer than the lease: the runner has certainly stopped, or is about to."""
         return [j for j, (lease, heard) in self._held.items() if self.clock() - heard > lease.duration_s]
