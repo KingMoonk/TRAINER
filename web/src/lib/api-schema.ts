@@ -5482,6 +5482,11 @@ export interface components {
             /** Published At */
             published_at?: string | null;
             /**
+             * Score Device
+             * @description the device that scored it on the held-back text, when known
+             */
+            score_device?: string | null;
+            /**
              * Scorecard
              * @description as measured on the machine that trained it
              */
@@ -5495,6 +5500,11 @@ export interface components {
             size?: number | null;
             /** Step */
             step?: number | null;
+            /**
+             * Train Device
+             * @description the same, under the name the version row uses
+             */
+            train_device?: string | null;
         };
         /** Question */
         Question: {
@@ -6387,6 +6397,8 @@ export interface components {
              * @description when this copy of the weights was made
              */
             published_at: string;
+            /** Score Device */
+            score_device?: string | null;
             /**
              * Scorecard
              * @description as measured on this machine
@@ -6410,6 +6422,8 @@ export interface components {
             };
             /** Step */
             step?: number | null;
+            /** Train Device */
+            train_device?: string | null;
             /**
              * Weights Dtype
              * @default float16
@@ -6913,6 +6927,8 @@ export interface components {
             prediction?: {
                 [key: string]: unknown;
             };
+            /** Score Device */
+            score_device?: string | null;
             /** Scorecard */
             scorecard?: {
                 [key: string]: unknown;
@@ -6926,6 +6942,8 @@ export interface components {
              * @default draft
              */
             status: string;
+            /** Train Device */
+            train_device?: string | null;
             /**
              * Verdict
              * @default
@@ -6954,6 +6972,11 @@ export interface components {
             prediction?: {
                 [key: string]: unknown;
             };
+            /**
+             * Score Device
+             * @description the device kind that scored it on the held-back text
+             */
+            score_device?: string | null;
             /** Scorecard */
             scorecard?: {
                 [key: string]: unknown;
@@ -6967,6 +6990,11 @@ export interface components {
              * @default draft
              */
             status: string;
+            /**
+             * Train Device
+             * @description the device kind (cuda, mps, cpu) that trained best_checkpoint
+             */
+            train_device?: string | null;
             /**
              * Verdict
              * @default

@@ -52,6 +52,8 @@ class PublishedVersion(BaseModel):
     change: str | None = None
     origin: str = Field(description="the machine that published it")
     device: str | None = Field(None, description="the device that trained it (cuda, mps, cpu), when the checkpoint recorded one")
+    train_device: str | None = Field(None, description="the same, under the name the version row uses")
+    score_device: str | None = Field(None, description="the device that scored it on the held-back text, when known")
     step: int | None = None
     published_at: str | None = None
     size: int | None = Field(None, description="bytes of the weights file in the store")
@@ -72,6 +74,8 @@ class SharedVersion(BaseModel):
     scorecard: dict = Field(default_factory=dict, description="as measured on this machine")
     origin: str = Field(description="this machine's name in the version store")
     device: str | None = None
+    train_device: str | None = None
+    score_device: str | None = None
     step: int | None = None
     published_at: str = Field(description="when this copy of the weights was made")
     weights_dtype: str = "float16"

@@ -5312,6 +5312,18 @@
             ],
             "title": "Published At"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device that scored it on the held-back text, when known",
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "description": "as measured on the machine that trained it",
@@ -5340,6 +5352,18 @@
               }
             ],
             "title": "Step"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the same, under the name the version row uses",
+            "title": "Train Device"
           }
         },
         "required": [
@@ -7553,6 +7577,17 @@
             "title": "Published At",
             "type": "string"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "description": "as measured on this machine",
@@ -7584,6 +7619,17 @@
               }
             ],
             "title": "Step"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Device"
           },
           "weights_dtype": {
             "default": "float16",
@@ -8754,6 +8800,17 @@
             "title": "Prediction",
             "type": "object"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "title": "Scorecard",
@@ -8768,6 +8825,17 @@
             "default": "draft",
             "title": "Status",
             "type": "string"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Device"
           },
           "verdict": {
             "default": "",
@@ -8824,6 +8892,18 @@
             "title": "Prediction",
             "type": "object"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device kind that scored it on the held-back text",
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "title": "Scorecard",
@@ -8838,6 +8918,18 @@
             "default": "draft",
             "title": "Status",
             "type": "string"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device kind (cuda, mps, cpu) that trained best_checkpoint",
+            "title": "Train Device"
           },
           "verdict": {
             "default": "",

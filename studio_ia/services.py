@@ -30,6 +30,8 @@ class Version:
     scorecard: dict = field(default_factory=dict)
     verdict: str = ""
     prediction: dict = field(default_factory=dict)  # the guess made on saving: {"error": "lower", "step": "slower", "memory": "more"}
+    train_device: str | None = None  # cuda | mps | cpu: what trained best_checkpoint
+    score_device: str | None = None  # what scored it on the held-back text
 
 
 @dataclass
@@ -1678,6 +1680,7 @@ class WorkspaceServices(Services):
             card = {**(self.store.get(row["number"]).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                     "bpc_method": studio_eval.SCORE_METHOD}
             self.store.set_scorecard(row["number"], card)
+            self._note_devices(row["number"], self._abs(row["best_checkpoint"]), True)
             row["scorecard"] = card
 
     def checkpoint_step(self, version):
@@ -1724,7 +1727,7 @@ class WorkspaceServices(Services):
             row = self.store.get(number)
         except KeyError:
             raise ValueError(f"No version {number}.") from None
-        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard")}
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard", "score_device")}
         key = self._through(store, lambda: store.publish(version, self._abs(row.get("best_checkpoint"))))
         self.store.add_published(number, key)
         return {"key": key, "number": number, "origin": key.split("/")[0]}
@@ -1735,7 +1738,7 @@ class WorkspaceServices(Services):
         entries = self._through(store, store.list)
         own = studio_publish.own_origin(store)
         here = {key: row["number"] for row in self._rows() for key in row.get("published") or ()}
-        return [{**{k: entry.get(k) for k in ("key", "number", "name", "change", "origin", "device", "step", "published_at", "size")},
+        return [{**{k: entry.get(k) for k in ("key", "number", "name", "change", "origin", "device", "train_device", "score_device", "step", "published_at", "size")},
                  "scorecard": entry.get("scorecard") or {}, "mine": entry.get("origin") == own,
                  "local": entry["key"] in here, "local_number": here.get(entry["key"])} for entry in reversed(entries)]
 
@@ -1745,7 +1748,7 @@ class WorkspaceServices(Services):
             row = self.store.get(number)
         except KeyError:
             raise ValueError(f"No version {number}.") from None
-        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard")}
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard", "score_device")}
         return self._through(None, lambda: studio_publish.shared_copy(
             version, self._abs(row.get("best_checkpoint")), self.root / "data" / "shared", studio_publish.own_origin()))
 
@@ -1787,7 +1790,7 @@ class WorkspaceServices(Services):
         else:
             name = f"{entry.get('name') or 'Version ' + str(entry.get('number'))} from {entry.get('origin')}"
             change = f"pulled from {entry.get('origin')}: {entry.get('change') or 'no description'}"
-            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, entry["key"]))
+            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, entry["key"], entry.get("train_device") or entry.get("device")))
         v = self._version(row)
         self.emit("versions", v)
         return v
@@ -2213,8 +2216,15 @@ class WorkspaceServices(Services):
                 card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                         "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
+            self._note_devices(number, ckpt, scores is not None)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
         self.emit("versions", None)
+
+    def _note_devices(self, number, ckpt, scored=False):
+        """Record on the version the device kind that trained `ckpt` and, when the caller just scored it, the one that scored it."""
+        import studio_eval
+        from studio_model import checkpoint_device
+        self.store.set_devices(number, train=checkpoint_device(ckpt), score=studio_eval.SCORE_DEVICE if scored else None)
 
     def _drop_empty_import(self, number, how):
         """An import that ended without weights leaves a version that holds only a design. The newest can simply go; an older one
@@ -2250,6 +2260,7 @@ class WorkspaceServices(Services):
                 card["answers"] = True
             self.store.set_best_checkpoint(v.number, result["checkpoint"])
             self.store.set_scorecard(v.number, card)
+            self._note_devices(v.number, self._abs(result["checkpoint"]))
         self.emit("versions", None)
 
     def _human_pairs(self):
