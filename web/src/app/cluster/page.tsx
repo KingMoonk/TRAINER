@@ -69,13 +69,6 @@ export default function ClusterPage() {
         <p role="alert" className="text-sm text-destructive">{T.couldNotLoad.replace("{why}", problem(read.error))}</p>
       ) : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>{T.nameTitle}</CardTitle>
-              <CardDescription>{T.nameDesc}</CardDescription>
-            </CardHeader>
-            <CardContent>{read.isPending ? <Skeleton className="h-8 w-72" /> : <TailnetName name={me?.tailnet_name ?? ""} />}</CardContent>
-          </Card>
           <section aria-labelledby="machines" className="flex flex-col gap-3" data-testid="machines">
             <div className="flex flex-col gap-1">
               <h2 id="machines" className="text-lg font-semibold tracking-tight">{T.machines}</h2>
@@ -91,6 +84,19 @@ export default function ClusterPage() {
                 {list.map((address) => card(address, () => edit(list.filter((other) => other !== address))))}
               </div>
             )}
+          </section>
+          <section aria-labelledby="manage" className="flex flex-col gap-3" data-testid="manage">
+            <div className="flex flex-col gap-1">
+              <h2 id="manage" className="text-lg font-semibold tracking-tight">{T.manage}</h2>
+              <p className="max-w-prose text-sm text-muted-foreground">{T.manageLead}</p>
+            </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>{T.nameTitle}</CardTitle>
+              <CardDescription>{T.nameDesc}</CardDescription>
+            </CardHeader>
+            <CardContent>{read.isPending ? <Skeleton className="h-8 w-72" /> : <TailnetName name={me?.tailnet_name ?? ""} />}</CardContent>
+          </Card>
             <form onSubmit={add} className="flex flex-wrap items-center gap-2">
               <input
                 aria-label={T.addLabel}

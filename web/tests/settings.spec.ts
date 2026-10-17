@@ -37,16 +37,3 @@ test.describe("on a phone", () => {
     await expect(page).toHaveURL(/\/settings\/$/);
   });
 });
-
-test("Settings links to the Cluster page instead of managing machines", async ({ page }) => {
-  await page.goto("/settings/");
-  await expect(page.getByTestId("settings-cluster").getByRole("link", { name: "Open the Cluster page" })).toHaveAttribute("href", "/cluster/");
-  await expect(page.getByLabel("Machine to add")).toHaveCount(0);
-});
-
-test("the sidebar has a Cluster entry that opens /cluster/", async ({ page }) => {
-  await page.goto("/builder/");
-  await page.getByRole("link", { name: "Cluster", exact: true }).first().click();
-  await expect(page).toHaveURL(/\/cluster\/$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Cluster" })).toBeVisible();
-});

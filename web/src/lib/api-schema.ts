@@ -3076,6 +3076,11 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Thermal
+             * @default false
+             */
+            thermal: boolean;
+            /**
              * Tilekind
              * @default weight
              * @enum {string}
@@ -3742,6 +3747,11 @@ export interface components {
             spec?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Thermal
+             * @default false
+             */
+            thermal: boolean;
             /**
              * Tilekind
              * @default weight
@@ -6242,6 +6252,11 @@ export interface components {
             spec?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Thermal
+             * @default false
+             */
+            thermal: boolean;
             /**
              * Tilekind
              * @default weight
@@ -10860,6 +10875,7 @@ export interface operations {
                 headStage?: "scores" | "scale" | "mask" | "pattern" | "values";
                 tileKind?: "weight" | "gradient" | "update";
                 snapshot?: number;
+                thermal?: boolean;
             };
             header?: never;
             path?: never;

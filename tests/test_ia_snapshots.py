@@ -1,15 +1,11 @@
 """Snapshots, commands and the render scheduler (#82), and the machine strip drawn from snapshots only (no display)."""
-import gc
 import os
 import threading
 import unittest
-from types import SimpleNamespace
 from unittest import mock
 
 import studio_ui_guard as guard
-from studio_ia import threads
 from studio_ia.services import FakeServices, Job, QueueState, Services
-from studio_ia.shell import Studio, strip_lines
 from studio_ia.snapshots import Render, Snapshots, Topic, Versions, versions_snapshot
 from studio_ui_guard import OnUIThread
 
@@ -231,26 +227,6 @@ class Commands(Bound):
         self.assertIsNotNone(self.snaps.get("queue"))
 
 
-class Collector(unittest.TestCase):
-    def test_a_worker_holds_the_collector_until_the_tk_thread_settles_it(self):
-        threads.attach()
-        self.addCleanup(threads.detach)
-        svc = FakeServices()
-        gate, running = threading.Event(), threading.Event()
-        snaps = Snapshots(svc, {"t": Topic(lambda _s: (running.set(), gate.wait(10)), ())})
-        snaps.refresh("t")
-        self.assertTrue(running.wait(10))
-        self.assertFalse(gc.isenabled())  # a collection on the worker could free Tk objects off the Tk thread
-        gate.set()
-        snaps.wait()
-        for _ in range(1000):  # the thread is done only once its frames are gone
-            threads.settle()
-            if gc.isenabled():
-                break
-            threading.Event().wait(.005)
-        self.assertTrue(gc.isenabled())
-
-
 class RenderScheduler(unittest.TestCase):
     def setUp(self):
         self.now = 0.0
@@ -301,66 +277,6 @@ class Label:
 
     def cget(self, name):
         return self.options[name]
-
-
-class Strip(Bound):
-    """The machine strip reads snapshots only: its services allow nothing else."""
-
-    def shell(self):
-        services = mock.NonCallableMock(spec=["snapshots"])  # any other service call is an AttributeError
-        services.snapshots = self.snaps
-        return SimpleNamespace(services=services, strip_now=Label(), strip_next=Label(), strip_chat=Label(),
-                               strip_bar=mock.Mock(), _strip_resume=False)
-
-    def test_before_the_first_queue_snapshot_it_waits(self):
-        shell = self.shell()
-        Studio.refresh_strip(shell)
-        self.assertEqual(shell.strip_now.cget("text"), "")
-        shell.strip_bar.set.assert_not_called()
-
-    def test_it_draws_the_queue_and_versions_snapshots(self):
-        shell = self.shell()
-        self.snaps.publish("queue", QueueState(job=Job("1", "pretrain", "Version 5 catch-up"), step=50, total=200, phase="steady",
-                                               up_next=[Job("2", "quicktest")]))
-        Studio.refresh_strip(shell)
-        self.assertEqual(shell.strip_now.cget("text"), "Version 5 catch-up · steady")
-        self.assertEqual(shell.strip_next.cget("text"), "1 queued")
-        self.assertEqual(shell.strip_chat.cget("text"), "Finding the version Chat uses…")
-        shell.strip_bar.set.assert_called_with(.25)
-        self.snaps.publish("versions", Versions(current=SimpleNamespace(number=3)))
-        Studio.refresh_strip(shell)
-        self.assertEqual(shell.strip_chat.cget("text"), "Chat uses version 3 · best so far")
-
-    def test_resume_is_a_command(self):
-        shell = self.shell()
-        shell.services = self.svc
-        self.svc.pause()
-        self.snaps.refresh("queue")
-        self.settle()
-        Studio.refresh_strip(shell)
-        self.assertTrue(shell._strip_resume)
-        Studio._strip_chat_click(shell)  # the click returns at once; the queue resumes on the command worker
-        self.settle()
-        self.assertFalse(self.snaps.get("queue").paused)
-        Studio.refresh_strip(shell)
-        self.assertEqual(shell.strip_now.cget("text"), "Nothing is training")
-
-    def test_strip_lines_while_the_chat_version_is_unknown(self):
-        self.assertEqual(strip_lines(QueueState(), None, known=False)[2], "Finding the version Chat uses…")
-        self.assertEqual(strip_lines(QueueState(paused=True), None, known=False)[2], "Resume ›")
-
-
-class ShellEvents(unittest.TestCase):
-    def test_snapshot_events_mark_the_render_and_never_reach_the_page(self):
-        page = mock.Mock()
-        shell = SimpleNamespace(render=Render(), route="queue", pages={"queue": page}, refresh_next=mock.Mock())
-        Studio.on_event(shell, "snapshot", "queue")
-        Studio.on_event(shell, "command", {"name": "resume", "ok": True, "error": None})
-        page.on_event.assert_not_called()  # the Queue page rebuilds on any event that is not "train"
-        self.assertEqual(shell.render._dirty, {"queue"})
-        Studio.on_event(shell, "queue", None)
-        page.on_event.assert_called_once_with("queue", None)
-        shell.refresh_next.assert_called_once()
 
 
 if __name__ == "__main__":

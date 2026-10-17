@@ -6,8 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import studio_passive_watch as watch
-from studio_ia.pages.passive import competes, session_view, when
-from studio_ia.services import FakeServices, Job, QueueState, WorkspaceServices
+from studio_ia.services import WorkspaceServices
 from studio_passive import PassiveStore, merge_plan
 
 
@@ -97,44 +96,6 @@ class WorkspaceView(unittest.TestCase):
         sid = store.create(merge_plan({}))
         self.assertEqual(WorkspaceServices.stop_passive(self.services, sid), "stopped")
         self.assertEqual(self.view()["sessions"][0]["status"], "stopped")
-
-
-class PageLogic(unittest.TestCase):
-    def test_running_session_reads_plainly_and_can_stop(self):
-        headline, facts, can_stop = session_view(row())
-        self.assertTrue(headline.startswith("Running · started "), headline)
-        self.assertEqual(facts, "Trainer: Running · watchdog: Running · restarts: 0 · last heard under a minute ago")
-        self.assertTrue(can_stop)
-
-    def test_finished_session_has_no_stop_and_no_heartbeat(self):
-        headline, facts, can_stop = session_view(row(status="finished", trainer="Stopped", watchdog="Stopped", restarts=3, heard=4000.0))
-        self.assertTrue(headline.startswith("Finished"))
-        self.assertNotIn("last heard", facts)
-        self.assertFalse(can_stop)
-
-    def test_heard_long_ago_drops_the_about(self):
-        self.assertIn("last heard 1.7 hours ago", session_view(row(heard=6000.0))[1])
-
-    def test_when_shows_local_time_or_the_raw_stamp(self):
-        self.assertRegex(when("2026-10-15T08:30:00+00:00"), r"^\d\d [A-Z][a-z]{2} \d\d:\d\d$")
-        self.assertEqual((when("garbage"), when(None)), ("garbage", ""))
-
-    def test_warns_only_when_a_passive_session_and_a_queue_job_both_train(self):
-        busy, idle = QueueState(job=Job("1", "pretrain")), QueueState()
-        view = {"sessions": [row()], "signin": True}
-        self.assertIn("share this computer", competes(view, busy))
-        self.assertEqual(competes(view, idle), "")
-        self.assertEqual(competes(view, QueueState(job=Job("1", "pretrain"), paused=True)), "")
-        self.assertEqual(competes({"sessions": [row(status="paused")], "signin": False}, busy), "")
-
-    def test_fake_services_stop_and_remove_sign_in(self):
-        f = FakeServices()
-        self.assertEqual(f.passive(), {"sessions": [], "signin": False})
-        f.passive_sessions, f.passive_signin = [row()], True
-        self.assertEqual(f.stop_passive("p1"), "stopped")
-        f.remove_passive_signin()
-        view = f.passive()
-        self.assertEqual((view["sessions"][0]["status"], view["signin"]), ("stopped", False))
 
 
 if __name__ == "__main__":

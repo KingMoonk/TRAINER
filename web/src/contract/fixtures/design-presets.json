@@ -1,0 +1,465 @@
+{
+  "body": [
+    {
+      "key": "starter",
+      "name": "Starter decoder",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "activation": "gelu",
+              "bias": true,
+              "d_ff": 0,
+              "layers": 1
+            },
+            "id": "mlp_gelu"
+          },
+          "mixer": {
+            "config": {
+              "bias": true,
+              "heads": 4
+            },
+            "id": "attention"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "layernorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 64,
+          "dropout": 0.1,
+          "n_ctx": 256,
+          "n_layer": 2
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "Starter decoder",
+        "position": {
+          "config": {},
+          "id": "learned"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.999,
+              "eps": 1e-08,
+              "lr": 0.001,
+              "weight_decay": 0.01
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "min_lr": 0.1,
+              "warmup": 20
+            },
+            "id": "cosine"
+          }
+        }
+      },
+      "term": "starter_model"
+    },
+    {
+      "key": "tiny_llama_style",
+      "name": "Tiny Llama style \u00b7 byte tokenizer",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "d_ff": 0
+            },
+            "id": "swiglu"
+          },
+          "mixer": {
+            "config": {
+              "bias": false,
+              "heads": 8,
+              "kv_heads": 2
+            },
+            "id": "gqa"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "rmsnorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 256,
+          "dropout": 0.0,
+          "n_ctx": 256,
+          "n_layer": 4
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "Tiny Llama style \u00b7 byte tokenizer",
+        "position": {
+          "config": {
+            "base": 10000.0
+          },
+          "id": "rope"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.999,
+              "eps": 1e-08,
+              "lr": 0.001,
+              "weight_decay": 0.01
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "min_lr": 0.1,
+              "warmup": 20
+            },
+            "id": "cosine"
+          }
+        }
+      },
+      "term": "llama_model"
+    },
+    {
+      "key": "gpt2_small_style",
+      "name": "GPT-2 small style \u00b7 byte tokenizer",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "activation": "gelu",
+              "bias": true,
+              "d_ff": 3072,
+              "layers": 1
+            },
+            "id": "mlp_gelu"
+          },
+          "mixer": {
+            "config": {
+              "bias": true,
+              "heads": 12
+            },
+            "id": "attention"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "layernorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 768,
+          "dropout": 0.1,
+          "n_ctx": 1024,
+          "n_layer": 12
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "GPT-2 small style \u00b7 byte tokenizer",
+        "position": {
+          "config": {},
+          "id": "learned"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.999,
+              "eps": 1e-08,
+              "lr": 0.001,
+              "weight_decay": 0.01
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "min_lr": 0.1,
+              "warmup": 20
+            },
+            "id": "cosine"
+          }
+        }
+      },
+      "term": "gpt2_model"
+    },
+    {
+      "key": "gpt3_small_style",
+      "name": "GPT-3 Small style \u00b7 byte tokenizer",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "activation": "gelu",
+              "bias": true,
+              "d_ff": 3072,
+              "layers": 1
+            },
+            "id": "mlp_gelu"
+          },
+          "mixer": {
+            "config": {
+              "bias": true,
+              "heads": 12
+            },
+            "id": "attention"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "layernorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 768,
+          "dropout": 0.1,
+          "n_ctx": 2048,
+          "n_layer": 12
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "GPT-3 Small style \u00b7 byte tokenizer",
+        "position": {
+          "config": {},
+          "id": "learned"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.95,
+              "eps": 1e-08,
+              "lr": 0.0006,
+              "weight_decay": 0.1
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "min_lr": 0.1,
+              "warmup": 20
+            },
+            "id": "cosine"
+          }
+        }
+      },
+      "term": "gpt3_model"
+    },
+    {
+      "key": "gpt3_medium_style",
+      "name": "GPT-3 Medium style \u00b7 byte tokenizer",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "activation": "gelu",
+              "bias": true,
+              "d_ff": 4096,
+              "layers": 1
+            },
+            "id": "mlp_gelu"
+          },
+          "mixer": {
+            "config": {
+              "bias": true,
+              "heads": 16
+            },
+            "id": "attention"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "layernorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 1024,
+          "dropout": 0.1,
+          "n_ctx": 2048,
+          "n_layer": 24
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "GPT-3 Medium style \u00b7 byte tokenizer",
+        "position": {
+          "config": {},
+          "id": "learned"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.95,
+              "eps": 1e-08,
+              "lr": 0.0003,
+              "weight_decay": 0.1
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "min_lr": 0.1,
+              "warmup": 20
+            },
+            "id": "cosine"
+          }
+        }
+      },
+      "term": "gpt3_model"
+    }
+  ],
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/design/presets"
+  },
+  "status": 200
+}

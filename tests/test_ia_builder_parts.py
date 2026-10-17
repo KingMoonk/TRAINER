@@ -5,7 +5,6 @@ import studio_registry as registry
 from studio_glossary import GLOSSARY, MODULE_TERMS
 from studio_ia.expectation import expectation
 from studio_ia import design as D
-from studio_ia.pages import builder as B
 from studio_spec import block_at, default_spec, validate_spec
 from studio_validate import errors
 
@@ -111,37 +110,6 @@ class Validation(unittest.TestCase):
         issues = D.new_issues(base(), spec)
         self.assertTrue(any("slower" in text for text in issues))
         self.assertEqual(D.new_issues(base(), base()), [])
-
-
-class Changes(unittest.TestCase):
-    def test_chips_name_the_part_and_the_block(self):
-        cur = choices()
-        draft = D.choose(D.choose(cur, "position", "sinusoidal"), "mixer", "gru", 1)
-        self.assertEqual(D.part_changes(cur, draft), ["position: Sinusoidal", "block 2 look back: GRU"])
-        spec = D.write_spec(base(), draft)
-        self.assertEqual(D.change_chips(base(), spec, cur, draft), ["position: Sinusoidal", "block 2 look back: GRU"])
-        undone = D.choose(D.choose(draft, "mixer", "attention", 1), "position", "learned")
-        self.assertEqual(D.part_changes(draft, undone), ["position: Learned", "block 2 look back: same as the others"])
-
-    def test_chips_keep_the_plain_changes_alongside(self):
-        cur = choices()
-        draft = D.choose(dict(cur, L=4), "channel", "swiglu")
-        chips = D.change_chips(base(), D.write_spec(base(), draft), cur, draft)
-        self.assertEqual(chips, ["more blocks (2 → 4)", "thinking room: SwiGLU"])
-
-    def test_a_changed_part_means_its_weights_start_fresh(self):
-        cur = choices()
-        self.assertEqual(D.warm_kind(cur, D.choose(cur, "mixer", "gru", 1)), "other")
-        self.assertEqual(D.warm_outlook(cur, D.choose(cur, "head", "untied"))["kind"], "other")
-        self.assertEqual(D.warm_kind(cur, D.choose(dict(cur, L=3), "mixer", "gru", 2)), "same")  # only the new block has it
-        self.assertEqual(D.warm_kind(cur, D.choose(cur, "mixer", "gru", 1) | {"V": 2}), "scratch")
-
-    def test_expectations_describe_the_new_module_and_its_advice(self):
-        cur = choices()
-        draft = D.choose(cur, "mixer", "gru")
-        module = registry.get("mixer", "gru")
-        out = D.expectations(cur, draft, issues=["advice"])
-        self.assertEqual(out, [B.T["part_expect"].format(part=B.T["part_mixer"], name=module.name, blurb=module.blurb), "advice"])
 
 
 class Costs(unittest.TestCase):

@@ -5,6 +5,8 @@ import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from "l
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribe } from "@/lib/api";
+import { useEvent } from "@/lib/events";
+import { isSnapshotEvent } from "@/app/landscape/logic";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +31,8 @@ const STAGE_HELP: Record<HeadStage, string> = {
   values: "what the head passes on",
 };
 
+const THERMAL_MODEL = "Each block's heads: one tile per head (where it looks), under them the keys and values; a wide tile is shared (GQA, MQA).";
+
 export function Inside3d({ version }: { version?: number }) {
   const cache = useQueryClient();
   const probeController = useRef<AbortController | null>(null);
@@ -48,20 +52,19 @@ export function Inside3d({ version }: { version?: number }) {
   const [mode, setMode] = useState<Mode>("Build");
   const [headStage, setHeadStage] = useState<HeadStage>("pattern");
   const [tileKind, setTileKind] = useState<TileKind>("weight");
-  const [snapshot, setSnapshot] = useState(0);
+  const [picked, setSnapshot] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [probing, setProbing] = useState(false);
   const [note, setNote] = useState("");
   const [reduceMotion, setReduceMotion] = useState(false);
   const [showNumbers, setShowNumbers] = useState(true);
-
-  const query: SceneQuery = { version, level, mode, headStage, tileKind, snapshot };
-  const { data: scene, error, isPending } = useQuery({
-    queryKey: ["viewer-scene", query],
-    queryFn: ({ signal }) => fetchScene(query, signal),
-    placeholderData: keepPreviousData,
-    retry: false,
-    refetchInterval: 15_000,
+  const [thermal, setThermal] = useState(true);
+  // Follow training: show each new snapshot of a run as it is saved. Off until the first snapshot of a run arrives (so a version
+  // opens on snapshot 0, as before), then on until the person picks a snapshot or turns it off.
+  const [follow, setFollow] = useState(false);
+  const chosen = useRef(false);
+  useEvent("train", (payload) => {
+    if (isSnapshotEvent(payload) && !chosen.current) setFollow(true);
   });
 
   const { data: snapshots = [] } = useQuery({
@@ -72,6 +75,18 @@ export function Inside3d({ version }: { version?: number }) {
   });
   const count = snapshots.length;
   const last = Math.max(0, count - 1);
+  // Following shows the newest snapshot whatever was picked; picking one (or Play) ends it.
+  const snapshot = follow && count ? last : picked;
+  const query: SceneQuery = { version, level, mode, headStage, tileKind, snapshot, thermal };
+  const { data: scene, error, isPending } = useQuery({
+    queryKey: ["viewer-scene", query],
+    queryFn: ({ signal }) => fetchScene(query, signal),
+    placeholderData: keepPreviousData,
+    retry: false,
+    refetchInterval: 15_000,
+  });
+
+  const pick = (index: number) => { chosen.current = true; setFollow(false); setPlaying(false); setSnapshot(index); };
 
   const onPassDone = useCallback(() => {
     // Play moves on to the next snapshot and stops after the last one.
@@ -82,6 +97,9 @@ export function Inside3d({ version }: { version?: number }) {
   const togglePlay = () => {
     if (!count) return setNote("Nothing to play yet: load snapshots first.");
     if (!playing && snapshot >= last) setSnapshot(0); // at the end, Play starts over
+    else setSnapshot(snapshot);
+    chosen.current = true;
+    setFollow(false);
     setNote("");
     setPlaying(!playing);
   };
@@ -136,7 +154,7 @@ export function Inside3d({ version }: { version?: number }) {
           </div>
         )}
         <p className="pointer-events-none absolute bottom-2 left-3 right-3 text-[11px] text-muted-foreground">
-          Drag: look around | Wheel: zoom | Right-drag: move
+          {scene?.view.thermal && level === "Model" ? `${THERMAL_MODEL} ` : ""}Drag: look around | Wheel: zoom | Right-drag: move
         </p>
       </section>
 
@@ -205,6 +223,10 @@ export function Inside3d({ version }: { version?: number }) {
                 <p className="text-xs text-muted-foreground">{STAGE_HELP[headStage]}</p>
               </Field>
             )}
+            <div className="flex items-center justify-between">
+              <Label htmlFor="thermal">Thermal map</Label>
+              <Switch id="thermal" checked={thermal} onCheckedChange={setThermal} />
+            </div>
             {rows.includes("tile") && (
               <Field label="Show">
                 <Choice values={TILE_KINDS} value={tileKind} onChange={setTileKind} />
@@ -225,7 +247,7 @@ export function Inside3d({ version }: { version?: number }) {
           <CardContent className="flex flex-col gap-3">
             {scene?.playback.show ? (
               <div className="flex flex-col gap-3">
-                <Select value={String(Math.min(snapshot, last))} onValueChange={(value) => (setPlaying(false), setSnapshot(Number(value)))} disabled={probing}>
+                <Select value={String(Math.min(snapshot, last))} onValueChange={(value) => pick(Number(value))} disabled={probing}>
                   <SelectTrigger className="min-w-0" aria-label="Snapshot">
                     <SelectValue />
                   </SelectTrigger>
@@ -238,13 +260,13 @@ export function Inside3d({ version }: { version?: number }) {
                   </SelectContent>
                 </Select>
                 <div className="grid grid-cols-3 gap-2">
-                  <Button variant="outline" disabled={snapshot <= 0 || probing} onClick={() => (setPlaying(false), setSnapshot(snapshot - 1))}>
+                  <Button variant="outline" disabled={snapshot <= 0 || probing} onClick={() => pick(snapshot - 1)}>
                     <SkipBack /> Previous
                   </Button>
                   <Button disabled={probing} onClick={togglePlay}>
                     {playing ? <Pause /> : <Play />} {playing ? "Pause" : "Play"}
                   </Button>
-                  <Button variant="outline" disabled={snapshot >= last || probing} onClick={() => (setPlaying(false), setSnapshot(snapshot + 1))}>
+                  <Button variant="outline" disabled={snapshot >= last || probing} onClick={() => pick(snapshot + 1)}>
                     Next <SkipForward />
                   </Button>
                 </div>
@@ -267,6 +289,10 @@ export function Inside3d({ version }: { version?: number }) {
                   <Switch id="motion" checked={!reduceMotion} onCheckedChange={(on) => setReduceMotion(!on)} />
                 </div>
               )}
+              <div className="flex items-center justify-between">
+                <Label htmlFor="follow">Follow training</Label>
+                <Switch id="follow" checked={follow} onCheckedChange={(on) => { chosen.current = !on; setFollow(on); if (on) setPlaying(false); }} />
+              </div>
               {scene?.view.controls.toggles.includes("numbers") && (
                 <div className="flex items-center justify-between">
                   <Label htmlFor="numbers">Numbers</Label>

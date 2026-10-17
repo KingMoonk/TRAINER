@@ -27,8 +27,8 @@ export type BoxKind =
   | "masked"
   | "picked"
   | "update";
-export type LineKind = "mixer" | "lane";
-export type LabelKind = "label" | "label_selected" | "token";
+export type LineKind = "mixer" | "lane" | "connector";
+export type LabelKind = "label" | "label_selected" | "token" | "tile_title" | "tile_dims" | "tile_axis";
 export type PaletteKey = BoxKind | LineKind | LabelKind | "background";
 
 export type PaletteEntry = { color: string; alpha: number; frame?: string; frame_alpha?: number };
@@ -55,7 +55,24 @@ export type LineEntry = {
 
 export type SceneLabel = { text: string; position: Vec3; kind: LabelKind; selected: boolean; size: number };
 
-type GroupBase = { origin: Vec3; boxes: BoxEntry[]; lines: LineEntry[]; labels: SceneLabel[] };
+/**
+ * A real matrix drawn as a heat-map plane facing the camera (the thermal look). `values` is rows x columns, at most 32 each way
+ * (block-averaged when `shape`, the true size, is bigger); `range` is the ramp's low and high over the whole matrix. A `mask` of 1
+ * marks a hidden cell (a later key). A tile keeps its `id` from frame to frame, so a client updates it in place. No `values`: no data yet.
+ */
+export type SceneTile = {
+  id: string;
+  label: string;
+  origin: Vec3; // the centre, in the group
+  size: [number, number]; // width, height
+  selected: boolean;
+  shape: number[];
+  range: [number, number];
+  values?: NumberArray;
+  mask?: NumberArray;
+};
+
+type GroupBase = { origin: Vec3; boxes: BoxEntry[]; lines: LineEntry[]; labels: SceneLabel[]; tiles?: SceneTile[] };
 
 /** One block at the Model and Window levels, keyed `gate:<index>`. */
 export type GateGroup = GroupBase & { index: number; selected: boolean };
@@ -84,6 +101,8 @@ export type SceneView = {
   mode: Mode;
   head_stage: HeadStage;
   tile_kind: TileKind;
+  /** The server drew heat-map tiles (the `thermal` control); absent from servers that predate it. */
+  thermal?: boolean;
   reduce_motion: boolean;
   show_numbers: boolean;
   levels: Level[];

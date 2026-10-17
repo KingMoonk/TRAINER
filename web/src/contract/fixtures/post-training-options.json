@@ -1,0 +1,37 @@
+{
+  "body": {
+    "default_teacher": null,
+    "leash": [
+      {
+        "beta": 0.5,
+        "name": "Close",
+        "note": "Small, safe changes. Needs more pairs to show an effect."
+      },
+      {
+        "beta": 0.1,
+        "name": "Medium",
+        "note": "A balance. A good default."
+      },
+      {
+        "beta": 0.02,
+        "name": "Far",
+        "note": "Bigger changes from fewer pairs, with more risk of forgetting."
+      }
+    ],
+    "lora_blocker": "LoRA needs a trained version to start from.",
+    "lora_default": false,
+    "lora_ranks": [
+      4,
+      8,
+      16,
+      32
+    ],
+    "teachers": []
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/post-training/options"
+  },
+  "status": 200
+}

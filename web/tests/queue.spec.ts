@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// The Queue page against a mocked API: it reads GET /queue, calls the hold/move/remove/pause/plan routes and keeps the running
-// job's numbers current from the `train` events on /events. Live-fake specs wait for the fake server running jobs (#139).
+// The Queue page in a real browser against a mocked API: the list, hold/move/remove, and the two ways to reorder (drag and the
+// arrow keys), which need real layout and drag events. The rest of the page (pause, plan, toasts, live progress) is
+// src/app/queue/page.test.tsx under Vitest.
 
 const frame = (event: object) => `data: ${JSON.stringify(event)}\n\n`;
 const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -11,17 +12,17 @@ const job = (id: string, label: string, over: Partial<Job> = {}): Job => ({ id, 
 
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
 
-async function mockApi(page: Page, start: { running?: boolean; reason?: string | null; supported?: boolean } = {}) {
+async function mockApi(page: Page) {
   const calls: { method: string; path: string; body: unknown }[] = [];
   const state = {
-    job: start.running === false ? null : (job("run1", "Version 3 pretraining", { status: "running", eta_s: null }) as Job | null),
+    job: job("run1", "Version 3 pretraining", { status: "running", eta_s: null }) as Job | null,
     step: 100,
     total: 1000,
     paused: false,
     stopping: false,
     plan: { ...PLAN } as Record<string, unknown>,
-    reason: start.reason ?? (null as string | null),
-    supported: start.supported ?? true,
+    reason: null as string | null,
+    supported: true,
     up_next: [job("a", "First waiting"), job("b", "Second waiting", { note: "A note" }), job("c", "Third waiting")],
     connections: 0,
   };
@@ -68,39 +69,6 @@ async function mockApi(page: Page, start: { running?: boolean; reason?: string |
     if (state.job?.id === id) state.job = null;
     state.up_next = state.up_next.filter((j) => j.id !== id);
     return route.fulfill(json(view()));
-  });
-  await page.route("**/queue/pause", (route) => {
-    record(route);
-    state.paused = true;
-    return route.fulfill(json(view()));
-  });
-  await page.route("**/queue/resume", (route) => {
-    record(route);
-    state.paused = false;
-    return route.fulfill(json(view()));
-  });
-  await page.route("**/queue/start", (route) => {
-    record(route);
-    return route.fulfill(json(view()));
-  });
-  await page.route("**/queue/stop_after_cooldown", (route) => {
-    record(route);
-    state.stopping = true;
-    return route.fulfill(json(view()));
-  });
-  await page.route("**/queue/checkpoint_now", (route) => {
-    record(route);
-    return route.fulfill(json({ started: true }));
-  });
-  await page.route("**/queue/plan", async (route) => {
-    if (route.request().method() === "GET") return route.fulfill(json(state.plan));
-    const body = record(route) as Record<string, unknown>;
-    // Make overlapping user edits deterministic: an older render must never
-    // send a whole stale plan while the preceding save is still in flight.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    state.plan = body;
-    if (body.idle_only === false) state.reason = null;
-    return route.fulfill(json(state.plan));
   });
   // Each (re)connection of the stream carries one training step: the page re-reads the queue, and the step has moved on.
   await page.route("**/events", (route) => {
@@ -197,97 +165,3 @@ test("the reorder grip supports arrow keys and keeps focus on its job", async ({
   ]);
 });
 
-test("pause, resume, checkpoint now, stop after cool-down and stop", async ({ page }) => {
-  const { calls } = await mockApi(page);
-  await page.goto("/queue/");
-
-  await page.getByRole("button", { name: "Pause" }).click();
-  await expect(page.getByTestId("state-line")).toHaveText("Version 3 pretraining · paused");
-  await page.getByRole("button", { name: "Resume" }).click();
-  await expect(page.getByTestId("state-line")).toHaveText("Version 3 pretraining · running");
-
-  await page.getByRole("button", { name: "Make a checkpoint now" }).click();
-  await expect(page.getByText("Making a checkpoint from the last one.")).toBeVisible();
-
-  await page.getByRole("button", { name: "Stop after a short cool-down" }).click();
-  await expect(page.getByText("Asked it to stop. It stops at its next check.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Stop after a short cool-down" })).toBeDisabled();
-
-  await page.getByRole("button", { name: "Stop", exact: true }).click();
-  await expect(page.getByText("Nothing is training.")).toBeVisible();
-  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
-    "POST /queue/pause",
-    "POST /queue/resume",
-    "POST /queue/checkpoint_now",
-    "POST /queue/stop_after_cooldown",
-    "DELETE /queue/jobs/run1",
-  ]);
-});
-
-test("with nothing running, jobs saved by an earlier session can be started", async ({ page }) => {
-  const { calls } = await mockApi(page, { running: false });
-  await page.goto("/queue/");
-  await expect(page.getByText("Nothing is training.")).toBeVisible();
-  await page.getByRole("button", { name: "Start the waiting jobs" }).click();
-  await expect.poll(() => calls.map((c) => c.path)).toEqual(["/queue/start"]);
-  await page.getByRole("button", { name: "Pause" }).click();
-  await expect(page.getByText("Paused by you. Nothing starts until you resume.")).toBeVisible();
-});
-
-test("the plan is saved, and 'only when idle' can be turned off so training stops waiting", async ({ page }) => {
-  const { calls } = await mockApi(page, { reason: "computer in use" });
-  await page.goto("/queue/");
-
-  await expect(page.getByTestId("gate")).toContainText("Training is waiting: computer in use");
-  const idle = page.getByRole("switch", { name: /Only when I.m not using the computer/ });
-  await expect(idle).toBeEnabled();
-  await idle.click();
-  await expect(idle).not.toBeChecked();
-  await expect(page.getByTestId("gate")).toHaveCount(0);
-  expect(calls[0]).toEqual(expect.objectContaining({ method: "PUT", path: "/queue/plan", body: expect.objectContaining({ idle_only: false, hours: "any", memory: "most" }) }));
-
-  await page.getByRole("radio", { name: "Set hours" }).click();
-  await expect(page.getByLabel("From hour")).toHaveValue("22");
-  await page.getByLabel("From hour").fill("9");
-  await page.getByLabel("From hour").press("Enter");
-  await page.getByLabel("to hour").fill("99");
-  await page.getByLabel("to hour").press("Enter");
-  await expect(page.getByLabel("to hour")).toHaveValue("7");
-  await page.getByLabel("to hour").fill("17");
-  await page.getByLabel("to hour").press("Enter");
-  await page.getByRole("radio", { name: "Half" }).click();
-  await page.getByRole("switch", { name: "Keep the computer awake while training" }).click();
-  await expect.poll(() => calls.at(-1)?.body).toEqual(
-    expect.objectContaining({ hours: "set", start_hour: 9, end_hour: 17, memory: "half", keep_awake: true, idle_only: false }),
-  );
-});
-
-test("idle detection the computer cannot do greys the idle switch", async ({ page }) => {
-  await mockApi(page, { supported: false });
-  await page.goto("/queue/");
-  await expect(page.getByRole("switch", { name: /Only when I.m not using the computer/ })).toBeDisabled();
-  await expect(page.getByText("Not available on this computer")).toBeVisible();
-});
-
-test("the running job's progress moves in place from /events while waiting rows stay mounted", async ({ page }) => {
-  await mockApi(page);
-  await page.goto("/queue/");
-  await expect(rows(page)).toHaveCount(3);
-  await rows(page).nth(1).evaluate((el) => ((el as HTMLElement).dataset.mounted = "yes"));
-  await page.getByTestId("progress-line").evaluate((el) => ((el as HTMLElement).dataset.mounted = "yes"));
-
-  await expect(page.getByTestId("progress-line")).toContainText(/step 1\d\d of 1,000/, { timeout: 15_000 });
-  await expect(page.getByTestId("progress-line")).not.toContainText("step 100 of");
-  await expect(rows(page).nth(1)).toHaveAttribute("data-mounted", "yes");
-  await expect(page.getByTestId("progress-line")).toHaveAttribute("data-mounted", "yes");
-  await expect(page.getByRole("progressbar", { name: "Job progress" })).not.toHaveAttribute("aria-valuenow", "10");
-});
-
-test("a failed call is a toast, not a broken page", async ({ page }) => {
-  await mockApi(page);
-  await page.route("**/queue/pause", (route) => route.fulfill(json({ detail: "The runner is not running" }, 409)));
-  await page.goto("/queue/");
-  await page.getByRole("button", { name: "Pause" }).click();
-  await expect(page.getByText("The runner is not running")).toBeVisible();
-  await expect(page.getByTestId("state-line")).toHaveText("Version 3 pretraining · running");
-});

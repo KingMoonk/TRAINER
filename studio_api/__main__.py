@@ -61,8 +61,8 @@ def origin(value):
     return f"{scheme}://{host or found['host'].lower()}" + (f":{port}" if port and port != DEFAULT_PORTS[scheme] else "")
 
 
-def parse(argv=None):
-    parser = argparse.ArgumentParser(prog="python -m studio_api")
+def parse(argv=None, prog="python -m studio_api"):
+    parser = argparse.ArgumentParser(prog=prog)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--fake", action="store_true", help="serve FakeServices (no workspace)")
     source.add_argument("--workspace", type=Path, help="existing folder containing data/ and runs/ (useful from a worktree)")
