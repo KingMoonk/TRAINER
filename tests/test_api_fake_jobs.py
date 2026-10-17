@@ -17,6 +17,17 @@ class FakeJobTests(ApiCase):
         second = self.job("POST", "/data/text/import", files=payload)
         self.assertIn("0 added, 1 duplicates", second["result"][0])
 
+    def test_snapshot_events_are_opt_in_and_name_a_step(self):
+        self.assertEqual(self.services.snapshot_every, 0)  # the default fake emits only stats, so the sequence above is unchanged
+        seen = []
+        fake = FakeServices(job_steps=STEPS, step_seconds=0, sleep=lambda s: None, snapshot_every=2)
+        fake.emit = lambda kind, payload=None: seen.append((kind, payload))
+        fake.enqueue(Job("j1", "pretrain", "Train"))
+        fake.start_queue()
+        self.assertTrue(fake.wait_idle())
+        snapshots = [p for k, p in seen if k == "train" and p.get("type") == "viz_snapshot"]
+        self.assertEqual([p["step"] for p in snapshots], [2, 4])
+
     def test_fake_step_duration_is_configurable_and_validated(self):
         from studio_api.__main__ import parse
         self.assertEqual(parse(["--fake", "--fake-step-seconds", ".25"]).fake_step_seconds, .25)

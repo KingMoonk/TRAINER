@@ -4,7 +4,7 @@
 // <html>). Both are read from the DOM, so a component re-renders when either changes, wherever it was changed from.
 
 import { ThemeProvider } from "next-themes";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { ACCENT_KEY, ACCENTS, type Accent } from "@/lib/theme";
 
 export function AppearanceProvider({ children }: { children: ReactNode }) {
@@ -66,4 +66,14 @@ function resolveColor(name: string): string {
  */
 export function useThemeColor(name: string): string {
   return useSyncExternalStore(watchRoot, () => resolveColor(name), () => "");
+}
+
+/**
+ * Several tokens at once, in the order asked: `useThemeColors(["--ramp-1", "--ramp-2"])`. Each is "" before the first
+ * client render. Pass a module-level array (the hook compares the names, not the array).
+ */
+export function useThemeColors(names: readonly string[]): string[] {
+  const key = names.join("|");
+  const joined = useSyncExternalStore(watchRoot, () => key.split("|").map(resolveColor).join("|"), () => "");
+  return useMemo(() => (joined ? joined.split("|") : key.split("|").map(() => "")), [joined, key]);
 }

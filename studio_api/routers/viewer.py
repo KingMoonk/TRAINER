@@ -117,6 +117,70 @@ class ViewerSummaryResult(BaseModel):
     note: str
 
 
+class LandscapeRequest(BaseModel):
+    """What to draw: the loss over a plane of weights. `live` asks for the cheap frame a training run can afford between steps."""
+    version: int | None = Field(default=None, ge=1)
+    snapshot: int | None = Field(default=None, ge=0)  # centre on this snapshot (an index into /viewer/snapshots); None = the best checkpoint
+    mode: Literal["random", "pca"] = "random"  # two random filter-normalised directions, or the two main directions of the training path
+    grid: int = Field(default=21, ge=5, le=41)  # cells per side; made odd so the current weights are a cell
+    span: float = Field(default=1.0, ge=0.1, le=4.0)  # how far each side reaches, in filters (random) or path lengths (pca)
+    seed: int = Field(default=0, ge=0, le=2**31 - 1)
+    live: bool = False  # random directions, a small grid and a throttle; the same directions as the last live frame
+    new_anchor: bool = False  # live: start the directions afresh from these weights
+
+
+class LandscapePoint(BaseModel):
+    x: float
+    y: float
+    loss: float
+
+
+class LandscapeCurrent(LandscapePoint):
+    step: int
+
+
+class LandscapeMinimum(LandscapePoint):
+    inside: bool  # False: the lowest cell is on the edge, so the true minimum may lie beyond it
+
+
+class LandscapeStep(LandscapePoint):
+    step: int
+
+
+class LandscapeCentre(BaseModel):
+    step: int
+    name: str
+
+
+class LandscapeBatch(BaseModel):
+    rows: int
+    tokens: int
+
+
+class LandscapeCost(BaseModel):
+    seconds: float
+    evaluations: int
+
+
+class LandscapeResult(BaseModel):
+    mode: Literal["random", "pca"]
+    unit: Literal["filter", "trajectory"]  # what 1.0 on an axis means
+    grid: int
+    span: float
+    seed: int
+    live: bool
+    axis: list[float]  # the grid's coordinates, the same on both sides
+    loss: list[list[float]]  # nats per piece; loss[row][column] is at (axis[column], axis[row])
+    ceiling: float  # the 95th percentile: a colour scale that the steep walls do not flatten
+    current: LandscapeCurrent
+    minimum: LandscapeMinimum
+    trajectory: list[LandscapeStep]  # the snapshots projected onto the plane, each with its true loss
+    center: LandscapeCentre
+    batch: LandscapeBatch
+    cost: LandscapeCost
+    note: str
+
+
 def snapshot_paths(request: Request, number=None):
     """The snapshots a client may name: the version's training snapshots, then the ones a probe saved (oldest first)."""
     services = request.app.state.services
@@ -277,6 +341,21 @@ def probe(request: Request, body: ProbeRequest | None = None):
                 pass  # the probe worked; the Model level's note says why there is no summary
         return {"snapshot": snapshot_paths(request, version.number).index(str(path)), "note": T["probe_done"].format(n=version.number)}
     return start_job(request, "viewer.probe", run, ProbeResult)
+
+
+@router.post("/landscape", response_model=JobOut, status_code=202)
+def landscape(request: Request, body: LandscapeRequest | None = None):
+    """The loss landscape around a version's weights (Li et al. 2018) as a job: the held-back loss on a grid of weights moved along
+    two directions. Cheap by design (one fixed small batch, a grid capped by model size) and, with `live`, throttled so training
+    keeps its speed. The result is a LandscapeResult."""
+    services = request.app.state.services
+    options = body or LandscapeRequest()
+    version = pick_version(services, options.version)
+
+    def run(stop):
+        return services.inspect_landscape(version.number, options.snapshot, options.mode, options.grid, options.span, options.seed,
+                                          options.live, options.new_anchor, stop)
+    return start_job(request, "viewer.landscape", run, LandscapeResult)
 
 
 @router.get("/summary", response_model=ViewerSummaryStatus)

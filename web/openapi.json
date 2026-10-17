@@ -2593,6 +2593,77 @@
         "title": "Knobs",
         "type": "object"
       },
+      "LandscapeRequest": {
+        "description": "What to draw: the loss over a plane of weights. `live` asks for the cheap frame a training run can afford between steps.",
+        "properties": {
+          "grid": {
+            "default": 21,
+            "maximum": 41.0,
+            "minimum": 5.0,
+            "title": "Grid",
+            "type": "integer"
+          },
+          "live": {
+            "default": false,
+            "title": "Live",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "random",
+            "enum": [
+              "random",
+              "pca"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "new_anchor": {
+            "default": false,
+            "title": "New Anchor",
+            "type": "boolean"
+          },
+          "seed": {
+            "default": 0,
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Seed",
+            "type": "integer"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot"
+          },
+          "span": {
+            "default": 1.0,
+            "maximum": 4.0,
+            "minimum": 0.1,
+            "title": "Span",
+            "type": "number"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "LandscapeRequest",
+        "type": "object"
+      },
       "LearningCheck": {
         "properties": {
           "check": {
@@ -14210,6 +14281,55 @@
           }
         },
         "summary": "Frame",
+        "tags": [
+          "viewer"
+        ]
+      }
+    },
+    "/viewer/landscape": {
+      "post": {
+        "description": "The loss landscape around a version's weights (Li et al. 2018) as a job: the held-back loss on a grid of weights moved along\ntwo directions. Cheap by design (one fixed small batch, a grid capped by model size) and, with `live`, throttled so training\nkeeps its speed. The result is a LandscapeResult.",
+        "operationId": "landscape_viewer_landscape_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/LandscapeRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Landscape",
         "tags": [
           "viewer"
         ]

@@ -46,8 +46,12 @@ export function PinSelect({ id, name, row, nodes, actions }: { id: string; name:
 }
 
 /** What the other machines have: each machine, then the jobs that run or wait on it. A machine that stopped answering stays, greyed. */
+export function isElsewhere(row: QueueRow): boolean {
+  return !row.queued_here || (row.status === "running" && row.node !== "local");
+}
+
 export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
-  const rows = cluster.jobs.filter((row) => !row.queued_here || (row.status === "running" && row.node !== "local"));
+  const rows = cluster.jobs.filter(isElsewhere);
   return (
     <Card data-testid="other-machines">
       <CardHeader>
