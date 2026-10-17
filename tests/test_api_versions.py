@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from studio_versions import NoCheckpoint
 from tests.api_tap import EventTap
@@ -37,7 +38,7 @@ def raising(error):
 class VersionsApiTest(unittest.TestCase):
     def setUp(self):
         self.services = ExportingServices()
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 

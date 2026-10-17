@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from studio_api import events, jobs
 from studio_api.auth import TailscaleAuth
+from studio_api.hosts import ANY, HostCheck, HostNames
 from studio_api.static import ExportFiles
 from studio_api.version import app_version
 from studio_versions import NoCheckpoint
@@ -24,13 +25,17 @@ def get_services(request: Request):
     return request.app.state.services
 
 
-def create_app(services, open=False, origins=(), **auth):
+def create_app(services, open=False, origins=(), hosts=(), **auth):
     """`auth` is TailscaleAuth's allow_tags, allow_users, whois and token (studio_cluster.allowed_callers gives the first two,
     studio_cluster.funnel_token the token). `origins` are the web origins (the Vercel site) allowed to call this API from a
-    browser: their requests get the CORS headers only once authenticated, and only their preflight is answered without."""
+    browser: their requests get the CORS headers only once authenticated, and only their preflight is answered without.
+    `hosts` are the names the Host header may carry besides localhost and IP addresses (studio_api.hosts.own_names); the default
+    allows only those. Pass hosts=ANY to skip the check (tests over a TestClient, the OpenAPI dump)."""
     @asynccontextmanager
     async def lifespan(app):
         yield
+        if isinstance(hosts, HostNames):
+            hosts.stop.set()  # the Tailscale-name refresh thread
         app.state.jobs.close()
         app.state.broadcaster.close()
 
@@ -47,6 +52,8 @@ def create_app(services, open=False, origins=(), **auth):
     app.add_middleware(TailscaleAuth, open=open, origins=origins, **auth)
     if local_pages and not origins:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
         app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, **cors)
+    if hosts is not ANY:  # outermost: a request for a foreign name never reaches auth, CORS or a route
+        app.add_middleware(HostCheck, hosts=hosts, origins=origins)
 
     @app.exception_handler(ValueError)
     async def bad_request(request, exc):

@@ -9,6 +9,7 @@ import numpy as np
 import studio_diloco
 from studio_api import app as api_app
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from studio_peer import PeerError
 
@@ -30,7 +31,7 @@ def build(directory, run="run1", clock=None, **changes):
 
 def app():
     with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
-        return create_app(FakeServices(), open=True)
+        return create_app(FakeServices(), open=True, hosts=ANY)
 
 
 class Peer:

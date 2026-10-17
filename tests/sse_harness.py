@@ -13,6 +13,7 @@ from collections import Counter
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 
 TIMEOUT = 10.0
@@ -105,7 +106,7 @@ class ApiCase(unittest.TestCase):
         self.services = self.make_services()
         self.emitted = []
         self.services.watch(lambda kind, payload: self.emitted.append(kind))
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = TestClient(self.app)
         self.events = Capture(self.app)
         self.hit = set()

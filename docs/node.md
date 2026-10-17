@@ -17,6 +17,7 @@ the tailnet itself and listing nodes; this page covers one machine.
 | `--bind HOST` | The address to listen on. Default `127.0.0.1`: only this machine, and `tailscale serve` (below) reaches it from there. |
 | `--port N` | The port. Use `8787`, the port `studio_cluster.DEFAULT_PORT` assumes when a node is listed as a bare name. |
 | `--allow-origin ORIGIN` | A web origin (the Vercel site, `https://trainer.example.vercel.app`) allowed to call the API from a browser. Repeat it for several, or list them comma-separated in the `STUDIO_API_ALLOW_ORIGINS` environment variable. Default: none (below). |
+| `--allow-host NAME` | A host name the API answers to besides the defaults (below): a custom DNS name or a reverse proxy's name. Repeat it for several. |
 | `--fake` | Serve `FakeServices` (empty, in-memory data) instead of the workspace, for frontend work. Needs no workspace and is always open. |
 | `--dump-openapi FILE` | Write the OpenAPI schema to `FILE` and exit. This is how `web/openapi.json` is made (see `web/README.md`). |
 
@@ -48,6 +49,26 @@ The allow-list lives in `data/workspace.json` and is read when the API starts:
 
 Both keys are optional (`allowTags` defaults to `["tag:trainer"]`, `allowUsers` to nobody). A bad value stops the API at start
 with a sentence saying which key to fix.
+
+### Host names
+
+Every request and websocket must carry a `Host` header naming this node; anything else gets `421` (with the CORS header for a
+configured `--allow-origin`, so a page can show the message). This stops DNS rebinding: a web page that rebinds its own name to
+`127.0.0.1` could otherwise call a loopback node and forge `Tailscale-User-Login`. The header must be plainly `name`, `ipv4` or
+`[ipv6]` with an optional `:port`; userinfo or text after the brackets is refused. Allowed, with any port: `localhost`, any IP
+address (`127.0.0.1`, `[::1]`, the tailnet address other nodes may use), this machine's name (full and short), the `--bind`
+address, each `--allow-host`, and the node's Tailscale names: its MagicDNS name, that name's first label, its host name and its
+certificate domains, from `tailscale status --json`. They are read at start and again by a background thread (every minute while
+none is known, every ten minutes after; a failed read keeps the last good names), never while a request waits. If none is found
+the API logs a warning: a node behind `tailscale serve` or Funnel then refuses those requests until tailscale answers or you
+pass `--allow-host`. Other nodes address this one by the name in their `studioConfig.nodes` entry, so list it under its machine
+name, Tailscale name or IP; any other name needs `--allow-host`.
+
+`--allow-host` takes a name, or a pattern where one `*` stands for exactly one label (`node.*.ts.net`; at least two literal labels
+are required). **Put a wildcard only under a domain you control**: `*.co.uk` or `*.duckdns.org` would let any stranger's
+name through and re-open DNS rebinding. A node without the `tailscale` command, such as the API container in `compose.yaml`, needs it: compose passes
+`--allow-host ${TS_HOSTNAME:-groundwork-dev}` and `--allow-host ${TS_HOSTNAME:-groundwork-dev}.*.ts.net`, which covers the
+`groundwork-dev.<tailnet>.ts.net` name `tailscale serve` forwards. Add others through `API_ARGS`.
 
 ### Funnel and a page on another origin (optional)
 

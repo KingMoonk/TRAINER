@@ -8,6 +8,7 @@ import studio_cluster
 from fastapi.testclient import TestClient
 from studio_api.__main__ import ARGV, make, reloaded
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_api.version import app_version
 from studio_ia.services import FakeServices, Job, QueueState
 from tests.api_tap import EventTap
@@ -24,7 +25,7 @@ def probed(**kwargs):
 class NodeApiTest(unittest.TestCase):
     def setUp(self):
         self.services = FakeServices()
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
         self.enterContext(mock.patch.object(studio_cluster, "own_info", probed))

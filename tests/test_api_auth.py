@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import studio_cluster
 from studio_api.__main__ import ORIGINS, parse
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_api.auth import TailscaleAuth
 from studio_ia.services import FakeServices
 
@@ -31,7 +32,7 @@ def preflight_to(client, path, origin):
 
 class App(unittest.TestCase):
     def client(self, **kw):
-        app = create_app(FakeServices(), **kw)
+        app = create_app(FakeServices(), **kw, hosts=ANY)
         client = TestClient(app)
         self.addCleanup(client.close)
         client.__enter__()
@@ -116,12 +117,12 @@ class OpenNodeCors(App):
 
 class MiddlewareOrder(unittest.TestCase):
     def test_auth_is_outside_the_cors_layer_for_configured_origins(self):
-        app = create_app(FakeServices(), origins=[SITE], token=TOKEN)
+        app = create_app(FakeServices(), origins=[SITE], token=TOKEN, hosts=ANY)
         classes = [m.cls for m in app.user_middleware]
         self.assertEqual(classes, [TailscaleAuth, CORSMiddleware])  # first is outermost
 
     def test_a_preflight_from_a_listed_origin_never_reaches_a_route(self):
-        app = create_app(FakeServices(), origins=[SITE], token=TOKEN)
+        app = create_app(FakeServices(), origins=[SITE], token=TOKEN, hosts=ANY)
         reached = []
 
         @app.options("/test-secret")
@@ -177,7 +178,7 @@ class Funnel(App):
         self.assertNotIn("wrong", refused.text)
 
     def test_the_funnel_caller_is_recorded_as_funnel(self):
-        app = create_app(FakeServices(), token=TOKEN)
+        app = create_app(FakeServices(), token=TOKEN, hosts=ANY)
 
         @app.get("/test-user")
         def user(request: Request):
@@ -186,7 +187,7 @@ class Funnel(App):
             self.assertEqual(client.get("/test-user", headers={"X-Groundwork-Token": TOKEN}).json(), {"user": "funnel"})
 
     def test_a_direct_tailnet_caller_cannot_use_the_token(self):
-        app = create_app(FakeServices(), token=TOKEN, whois=lambda ip: None)
+        app = create_app(FakeServices(), token=TOKEN, whois=lambda ip: None, hosts=ANY)
         with TestClient(app, client=("100.64.0.9", 5000)) as client:
             self.assertEqual(client.get("/jobs", headers={"X-Groundwork-Token": TOKEN}).status_code, 401)
 

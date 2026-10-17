@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from studio_api import app as api_app
 from studio_api.__main__ import LOCAL
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 
 
@@ -59,7 +60,7 @@ def create(services, open=True):
     """create_app without the web/out mount, so a developer's own build does not decide what these tests see (a mount at /
     would also answer for any route a test adds afterwards)."""
     with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
-        return create_app(services, open=open)
+        return create_app(services, open=open, hosts=ANY)
 
 
 def shut(app):
@@ -307,7 +308,7 @@ class WebOutTest(unittest.TestCase):
             (out / "index.html").write_text("<h1>Groundwork</h1>", encoding="utf-8")
             (out / "queue").mkdir()
             (out / "queue" / "index.html").write_text("<h1>Queue</h1>", encoding="utf-8")
-            with mock.patch.object(api_app, "WEB_OUT", out), TestClient(create_app(FakeServices(), open=True)) as client:
+            with mock.patch.object(api_app, "WEB_OUT", out), TestClient(create_app(FakeServices(), open=True, hosts=ANY)) as client:
                 root, queue = client.get("/"), client.get("/queue/")
                 self.assertEqual(client.get("/jobs").status_code, 200)  # the API still wins over the mount
         self.assertIn("Groundwork", root.text)

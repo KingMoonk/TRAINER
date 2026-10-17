@@ -4,6 +4,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from tests.api_tap import EventTap
 
@@ -15,7 +16,7 @@ class PassiveApiTest(unittest.TestCase):
     def setUp(self):
         self.services = FakeServices()
         self.services.passive_sessions, self.services.passive_signin = [dict(SESSION)], True
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 
@@ -23,7 +24,7 @@ class PassiveApiTest(unittest.TestCase):
         self.assertEqual(self.client.get("/passive").json(), {"sessions": [SESSION], "signin": True})
 
     def test_never_used_is_empty(self):
-        client = TestClient(create_app(FakeServices(), open=True))
+        client = TestClient(create_app(FakeServices(), open=True, hosts=ANY))
         self.assertEqual(client.get("/passive").json(), {"sessions": [], "signin": False})
 
     def test_a_stopped_session_has_no_heartbeat(self):

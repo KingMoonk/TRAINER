@@ -20,14 +20,15 @@ services:
 
   # The API and the web app share the tailscale container's network, so `tailscale serve` reaches them on 127.0.0.1 and
   # nothing listens on the host. The API binds 127.0.0.1: only `tailscale serve` (which adds Tailscale-User-Login) can
-  # reach it.
+  # reach it. This container has no tailscale command, so the API cannot learn the name `tailscale serve` forwards as Host
+  # (groundwork-dev.<tailnet>.ts.net); --allow-host names it from TS_HOSTNAME (a * is one label, the tailnet's).
   api:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
     network_mode: service:tailscale
     working_dir: /app
-    command: python -m studio_api --reload --bind 127.0.0.1 ${API_ARGS:-}
+    command: python -m studio_api --reload --bind 127.0.0.1 --allow-host ${TS_HOSTNAME:-groundwork-dev} --allow-host ${TS_HOSTNAME:-groundwork-dev}.*.ts.net ${API_ARGS:-}
     volumes:
       - .:/app
     depends_on:

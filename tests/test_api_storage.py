@@ -4,6 +4,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from tests.api_tap import EventTap
 
@@ -23,7 +24,7 @@ class SizedServices(FakeServices):
 class StorageApiTest(unittest.TestCase):
     def setUp(self):
         self.services = SizedServices()
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 
@@ -43,7 +44,7 @@ class StorageApiTest(unittest.TestCase):
         self.assertEqual(self.client.get("/storage/free").json(), {"bytes": 120 * 10 ** 9})
 
     def test_the_fake_workspace_has_nothing_to_clean(self):
-        client = TestClient(create_app(FakeServices(), open=True))
+        client = TestClient(create_app(FakeServices(), open=True, hosts=ANY))
         self.assertEqual(client.get("/storage").json(), {"items": 0, "bytes": 0})
         self.assertEqual(client.post("/storage/clean", json={}).json(), {"items": 0, "bytes": 0})
 

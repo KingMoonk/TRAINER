@@ -12,6 +12,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_core import Workspace
 from studio_ia.services import FakeServices, WorkspaceServices
 from studio_spec import default_spec
@@ -36,7 +37,7 @@ class Node:
         self.test, self.root = test, Path(root)
         self.services = WorkspaceServices(Workspace(self.root))
         test.addCleanup(self.services.close)
-        self.client = test.enterContext(TestClient(create_app(self.services, open=True)))
+        self.client = test.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
 
     def use_folder(self, folder):
         self.services.set_setting("store", {"folder": str(folder)})
@@ -214,7 +215,7 @@ class Refusals(PublishCase):
                 self.assertIn("TRAINER_STORE_FOLDER", response.json()["detail"])
 
     def test_the_fake_services_answer_the_same_sentence(self):
-        client = self.enterContext(TestClient(create_app(FakeServices(), open=True)))
+        client = self.enterContext(TestClient(create_app(FakeServices(), open=True, hosts=ANY)))
         client.post("/versions", json={"spec": {"dims": {"n_ctx": 8}}})
         for method, route in (("get", "/versions/published"), ("post", "/versions/1/publish"), ("post", "/versions/1/pull")):
             response = getattr(client, method)(route)

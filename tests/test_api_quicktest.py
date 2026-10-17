@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import studio_quicktest
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from studio_spec import default_spec, validate_spec
 
@@ -22,7 +23,7 @@ def changed():
 class QuickTestApiTest(unittest.TestCase):
     def setUp(self):
         self.services = FakeServices()
-        self.client = self.enterContext(TestClient(create_app(self.services, open=True)))
+        self.client = self.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
 
     def stage(self):
         self.assertEqual(self.client.put("/quicktest/draft", json={"spec": changed()}).status_code, 204)

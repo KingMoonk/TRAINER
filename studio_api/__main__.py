@@ -1,4 +1,4 @@
-"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--allow-origin ORIGIN] [--reload] [--dump-openapi FILE]"""
+"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--allow-origin ORIGIN] [--allow-host NAME] [--reload] [--dump-openapi FILE]"""
 
 import argparse
 import ipaddress
@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import studio_cluster
+from studio_api.hosts import allow_host
 
 LOCAL = ("127.0.0.1", "localhost", "::1")
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -30,9 +31,10 @@ def schema_json():
     function writes it. info.version is pinned: app_version() comes from the checkout's tags, so it differs per checkout and
     would make the file stale on every commit."""
     from studio_api.app import create_app
+    from studio_api.hosts import ANY
     from studio_ia.services import FakeServices
 
-    schema = create_app(FakeServices(), open=True).openapi()
+    schema = create_app(FakeServices(), open=True, hosts=ANY).openapi()
     schema["info"]["version"] = "0"
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
@@ -71,6 +73,9 @@ def parse(argv=None):
     parser.add_argument("--allow-origin", action="append", default=[], type=origin, metavar="ORIGIN",
                         help=f"a web origin (the Vercel site) allowed to call the API from a browser once authenticated; repeat for "
                              f"several, or list them comma-separated in ${ORIGINS} (default: none)")
+    parser.add_argument("--allow-host", action="append", default=[], type=allow_host, metavar="NAME",
+                        help="a host name besides localhost, an IP address, this machine's name and its Tailscale names that requests "
+                             "may carry in Host (a custom DNS name or proxy; a * stands for one label); repeat for several")
     parser.add_argument("--reload", action="store_true", help="restart when a .py file changes (development)")
     parser.add_argument("--dump-openapi", metavar="FILE", help="write the OpenAPI schema to FILE and exit (pnpm gen:api reads web/openapi.json)")
     args = parser.parse_args(argv)
@@ -88,7 +93,10 @@ def parse(argv=None):
 
 def build(args):
     from studio_api.app import create_app
+    from studio_api.hosts import own_names
 
+    hosts = own_names(args.bind, args.allow_host)
+    hosts.start_refresh()
     if args.fake:
         from studio_ia.services import FakeServices
 
@@ -100,9 +108,9 @@ def build(args):
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
         tags, users = studio_cluster.allowed_callers(workspace.state)
-        return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, allow_tags=tags, allow_users=users,
+        return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,
                           token=studio_cluster.funnel_token(workspace.state))
-    return create_app(services, open=True, origins=args.allow_origin)
+    return create_app(services, open=True, origins=args.allow_origin, hosts=hosts)
 
 
 def make(argv=None):
