@@ -16,6 +16,7 @@ import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { QUICKTEST } from "./copy";
 import { NO_RUN, applyEvent, checkMark, secondsLeft, signalText, type Result, type RunState, type Which } from "./logic";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 const route = routeFor("quicktest");
 const STORE = "groundwork.quicktest"; // this tab's last run: when it was queued (server clock), its job and the guess made
@@ -203,14 +204,12 @@ export default function Page() {
   const busy = running || start.isPending;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-8">
-      <div className="flex flex-col gap-2">
-        <Link href="/builder" className="text-xs text-muted-foreground hover:underline">
-          ‹ Network designer
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-        <p className="max-w-prose text-muted-foreground">{QUICKTEST.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader
+        breadcrumb={<Link href="/builder" className="hover:underline">‹ Network designer</Link>}
+        title={route.title}
+        lead={QUICKTEST.lead}
+      />
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-3">

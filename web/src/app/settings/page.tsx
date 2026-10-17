@@ -9,6 +9,7 @@ import { useAccent } from "@/components/theme";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { MachinesSection } from "./machines";
 import { ACCENTS, MODES, type Accent, type Mode } from "@/lib/theme";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 // The chosen button: the app-wide neutral selected look (globals.css), plus a tick.
 const SELECTED = "data-[state=on]:selected-box data-[state=on]:hover:bg-(--selected-surface)";
@@ -23,11 +24,8 @@ export default function Page() {
   const ready = useSyncExternalStore(mounted, () => true, () => false);
   const dark = resolvedTheme !== "light";
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-8">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">{APPEARANCE.h1}</h1>
-        <p className="max-w-prose text-muted-foreground">{APPEARANCE.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={APPEARANCE.h1} lead={APPEARANCE.lead} />
       <section aria-labelledby="appearance" className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <h2 id="appearance" className="text-lg font-semibold tracking-tight">{APPEARANCE.section}</h2>

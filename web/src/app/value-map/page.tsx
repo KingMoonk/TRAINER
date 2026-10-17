@@ -11,6 +11,7 @@ import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { reason, runJob } from "../trace/use-job";
 import { VALUE_MAP, fill } from "./copy";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 type ValueMap = { d_model: number; heads: number; blocks: Record<string, number>; singular: number[] | null };
 
@@ -61,11 +62,8 @@ function ValueMapPage({ version }: { version?: number }) {
   const fit = (text: string) => (d === undefined ? text : text.replace("256", String(d)));
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl min-w-0 flex-col gap-4 p-4 md:p-8">
-      <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
-      <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-    {version !== undefined && <p className="text-sm text-muted-foreground">Version {version}</p>}
-      <p className="max-w-prose text-muted-foreground">{route.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader breadcrumb="Network designer › Look inside" title={route.title} meta={version !== undefined ? `Version ${version}` : undefined} lead={route.lead} />
 
       <div className="flex flex-wrap items-center gap-2">
         {d === undefined ? (
