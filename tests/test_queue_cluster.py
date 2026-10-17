@@ -1278,10 +1278,11 @@ class TwoNodes(unittest.TestCase):
             self.assertTrue(wait(lambda: admit.call_count == 2 and not run.publishing), "it was not offered again")
             self.assertEqual(run.refused_mtime, 0.)  # a failed read is not a refusal of this checkpoint
             self.assertIn("not shared", run.refusal)
-            self.beat(6.)  # the owner hears of it on the renewal
+            self.beat(6.)  # the owner hears of it on the renewal; the retry is due again, so this tick starts a third attempt too
+            self.assertTrue(wait(lambda: admit.call_count == 3 and not run.publishing), "the third attempt did not finish")
             self.assertIn(run.refusal, job.note)
             self.b_clock.advance(6.)
-        self.b.cluster.tick()
+        self.b.cluster.tick()  # no attempt is in flight any more and the retry is due, so this one publishes
         self.assertTrue(wait(lambda: run.checkpoint is not None), "it was not published once the store could be read")
         self.assertEqual(run.refusal, "")
         (self.b_root / "hold").unlink()
