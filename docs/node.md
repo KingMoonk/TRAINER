@@ -158,7 +158,9 @@ seconds (open `/events` streams are cut after 2 seconds, `GRACEFUL_SHUTDOWN` in 
 
 When Tailscale is running, `dev` points `tailscale serve` at the two servers before it starts them: `/` to `127.0.0.1:3000` and
 `/api/` to `127.0.0.1:8787` (the prefix is stripped, so the page and the API are one origin). `make run` points it back at the
-built app (`/` to `127.0.0.1:8787`, no `/api/`). Each reads `tailscale serve status --json` first and changes only the paths that
+built app (`/` to `127.0.0.1:8787`, no `/api/`). Other machines reach a node in either mode at `https://<its tailnet name>`: the node client
+(`studio_peer`) sees the dev web page answering at `/` and calls the API under `/api` from then on, so the Cluster pages and
+distributed runs work the same in `make dev`. Each reads `tailscale serve status --json` first and changes only the paths that
 differ, so starting either again changes nothing; other ports and Funnel settings are left alone. Without Tailscale both say so
 and serve on loopback only. To do it by hand (the CLI on a Mac is `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when
 `tailscale` is not on `PATH`):

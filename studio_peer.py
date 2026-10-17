@@ -3,6 +3,8 @@
 `PeerClient(address)` takes a node as the workspace config lists it (a tailnet name, which gets studio_cluster.DEFAULT_PORT,
 or a URL) and calls paths on it with JSON or binary bodies. A connection that fails or times out is retried with jittered
 backoff; an answer, even an error status, never is: a 4xx means the request was wrong and a 5xx may have had an effect.
+A node in `make dev` puts its web page at `/` and its API under `/api/` (tasks.py DEV_SERVE): when a peer answers with a web
+page instead of the API, the call is made once more under `/api`, and the client keeps that prefix.
 Every failure is a PeerError, with the status when the peer answered.
 """
 from __future__ import annotations
@@ -20,6 +22,7 @@ TIMEOUT = 10.  # seconds per attempt
 RETRIES = 2  # extra attempts after a connection failure
 BLOCK = 1 << 20  # bytes read at a time when a body goes to a file
 BACKOFF = .5  # seconds before the first retry; doubled each time, with up to half again of jitter
+API_PREFIX = "/api"  # where the API is on a node whose `/` is the dev web server
 
 
 class PeerError(Exception):
@@ -81,6 +84,21 @@ class PeerClient:
         return _json(self._call("POST", path, params, bytes(data), "application/octet-stream", timeout))
 
     def _call(self, method, path, params, data, content_type, timeout, read=None):
+        try:
+            return self._send(method, path, params, data, content_type, timeout, read)
+        except PeerError as first:
+            if first.status is None or not _is_page(first.status, first.detail) or self.base.endswith(API_PREFIX):
+                raise
+            self.base += API_PREFIX  # a web page, not the API: the node is in `make dev`
+            try:
+                return self._send(method, path, params, data, content_type, timeout, read)
+            except PeerError as second:
+                if second.status is not None and _is_page(second.status, second.detail):  # no API under /api either
+                    self.base = self.base[:-len(API_PREFIX)]
+                    raise first from None
+                raise
+
+    def _send(self, method, path, params, data, content_type, timeout, read):
         url = self.url(path, params)
         request = urllib.request.Request(url, data=data, method=method)
         if content_type:
@@ -100,6 +118,13 @@ class PeerClient:
                     raise PeerError(f"{self.address} did not answer {method} /{path.lstrip('/')}: {reason}") from None
                 self._sleep(delay * (1 + self._rng.random() / 2))
                 delay *= 2
+
+
+def _is_page(status, detail):
+    """Whether an error answer came from a web server, not the API: an HTML page, or Next's 308 to a trailing slash (the API's
+    own slash redirect is a 307)."""
+    head = detail.lstrip()[:15].lower()
+    return status == 308 or head.startswith("<!doctype html") or head.startswith("<html")
 
 
 def _json(raw):

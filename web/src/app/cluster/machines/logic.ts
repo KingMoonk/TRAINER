@@ -6,9 +6,10 @@ import { seenText, type ClusterQueue, type QueueRow } from "@/lib/cluster";
 export type ClusterNode = components["schemas"]["ClusterNode"];
 export type Queue = components["schemas"]["QueueStateModel"];
 
-/** What a machine computes on: "NVIDIA RTX 4090 (cuda, 24 GB)", or "" for a machine that did not answer. */
+/** What a machine computes on: "NVIDIA RTX 4090 (cuda, 24 GB)", or "" for a machine that did not answer (its device is then
+ * only the API's placeholder, "cpu"). */
 export function deviceText(node: ClusterNode): string {
-  if (!node.device) return "";
+  if (!node.online || !node.device) return "";
   const gb = node.memory_bytes > 0 ? `, ${Math.round(node.memory_bytes / 2 ** 30)} GB` : "";
   return node.device_name ? `${node.device_name} (${node.device}${gb})` : `${node.device}${gb}`;
 }

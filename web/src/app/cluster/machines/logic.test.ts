@@ -14,8 +14,9 @@ const quiet = { job: null, up_next: [], paused: false, step: 0, total: 0, phase:
 
 describe("machines", () => {
   test("device text, and who refused this machine", () => {
-    expect(deviceText(node("m", { device: "mps", device_name: "Apple M2", memory_bytes: 16 * 2 ** 30 }))).toBe("Apple M2 (mps, 16 GB)");
-    expect(deviceText(node("x", { device: "cpu" }))).toBe("cpu");
+    expect(deviceText(node("m", { online: true, device: "mps", device_name: "Apple M2", memory_bytes: 16 * 2 ** 30 }))).toBe("Apple M2 (mps, 16 GB)");
+    expect(deviceText(node("x", { online: true, device: "cpu" }))).toBe("cpu");
+    expect(deviceText(node("beast", { online: false, device: "cpu" }))).toBe("");  // the API's placeholder for a machine that did not answer
     expect(deviceText(node("down"))).toBe("");
     expect(refusedUs(node("a", { error: "a answered 401 to GET /node: no" }))).toBe(true);
     expect(refusedUs(node("a", { online: true, error: "a answered 401" }))).toBe(false);
