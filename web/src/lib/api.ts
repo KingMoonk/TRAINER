@@ -46,6 +46,12 @@ export async function unwrap<T>(request: Promise<{ data?: T; error?: unknown; re
 export type ApiEvent = { kind: string; payload: unknown };
 
 const RECONNECT_MS = 3000;
+let refused = false;
+
+/** Whether the node answered 401 to the stored token. Until the page reloads no stream is opened or retried (a retry cannot help). */
+export function tokenRefused(): boolean {
+  return refused;
+}
 
 /**
  * Open the event stream and call `onEvent` for each event. Returns the function that closes it.
@@ -72,6 +78,7 @@ export function subscribe(
 }
 
 function subscribeWithHeaders(onEvent: (event: ApiEvent) => void, onError?: (error: Event) => void, onOpen?: () => void): () => void {
+  if (refused) return () => {};
   const abort = new AbortController();
   void (async () => {
     while (!abort.signal.aborted) {
@@ -80,8 +87,10 @@ function subscribeWithHeaders(onEvent: (event: ApiEvent) => void, onError?: (err
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) {  // the server refused the stored token: retrying cannot help
           if (!abort.signal.aborted) {
+            const first = !refused;
+            refused = true;
             onError?.(new Event("error"));
-            toast.error("The node refused the stored token, so live updates are off. Fix it (docs/node.md) and reload the page.", { id: "token-refused" });
+            if (first) toast.error("The node refused the stored token, so live updates are off. Fix it (docs/node.md) and reload the page.", { id: "token-refused" });
           }
           return;
         }

@@ -50,6 +50,8 @@ def origin(value):
     port = found and int(found["port"]) if found and found["port"] else None
     try:
         host = f"[{ipaddress.IPv6Address(found['host'][1:-1]).compressed}]" if found and found["host"].startswith("[") else None
+        if host and ipaddress.IPv6Address(found["host"][1:-1]).ipv4_mapped:
+            found = None  # browsers send the dotted form unpredictably; name the IPv4 address instead
     except ValueError:
         found = None
     if not found or scheme not in DEFAULT_PORTS or (found["port"] and not 0 < port < 65536):

@@ -272,7 +272,8 @@ class Config(unittest.TestCase):
 
     def test_junk_origins_are_refused_and_the_scheme_is_lowercased(self):
         for bad in ("https://a.com\\", "https://a .com", "https://a.com:0", "https://a.com:", "https://a.com:99999", "https://a.com:80:80",
-                    "https://-a.com", "https://a..com", "https://a.com\n.evil.com", "https://[::1", "https://[zz]", "https://a.com:٣", "https://a.com//"):
+                    "https://-a.com", "https://a..com", "https://a.com\n.evil.com", "https://[::1", "https://[zz]", "https://a.com:٣", "https://a.com//",
+                    "http://[::ffff:1.2.3.4]", "http://[::ffff:102:304]"):
             with mock.patch("sys.stderr"), self.assertRaises(SystemExit, msg=bad):
                 parse(["--fake", "--allow-origin", bad])
         args = parse(["--fake", "--allow-origin", "HTTPS://A.Example.com:8443/", "--allow-origin", "HTTP://[::1]:3000"])

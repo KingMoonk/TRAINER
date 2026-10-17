@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { subscribe, type ApiEvent } from "@/lib/api";
+import { subscribe, tokenRefused, type ApiEvent } from "@/lib/api";
 import { PLACEHOLDER_STATUS, type Connection, type ProblemReport, type StudioEvent, type StudioStatus } from "@/lib/types";
 
 const RETRY_MS = 5_000;
@@ -77,7 +77,7 @@ export function ShellEvents({ children }: { children: React.ReactNode }) {
         () => {
           close();
           setShell((s) => ({ ...s, connection: "offline" }));
-          timer = setTimeout(connect, RETRY_MS);
+          if (!tokenRefused()) timer = setTimeout(connect, RETRY_MS);  // a refused token is not retried until the page reloads
         },
         () => setShell((s) => ({ ...s, connection: "online" })),
       );
