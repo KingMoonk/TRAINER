@@ -51,6 +51,7 @@ STEPS = [
     ("distributed-runs-empty", "GET", "/distributed/runs", None),
     ("node", "GET", "/node", None),
     ("passive", "GET", "/passive", None),
+    ("traffic-rules", "GET", "/traffic/rules", None),
     ("storage", "GET", "/storage", None),
     ("storage-free", "GET", "/storage/free", None),
     ("storage-exports", "GET", "/storage/exports", None),

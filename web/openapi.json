@@ -6680,6 +6680,146 @@
         "title": "RowsRequest",
         "type": "object"
       },
+      "Rule": {
+        "description": "When the console raises an alert. `source` traffic: a record matches when its method (if given), route template or path (`*`\nstands for one path segment) and status (a class like 5xx, or one code) do. `source` event: an /events event of this `kind`.\nEither may then require the field at the dotted path `where` (in the record, or in the event payload) to equal `equals`, or with\n`new_min` to be a new lowest number for the rule.",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "equals": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equals"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "new_min": {
+            "default": false,
+            "title": "New Min",
+            "type": "boolean"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "severity": {
+            "enum": [
+              "success",
+              "info",
+              "warning",
+              "destructive"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "traffic",
+              "event"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Where"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "severity",
+          "source"
+        ],
+        "title": "Rule",
+        "type": "object"
+      },
+      "Rules": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "Rules",
+        "type": "object"
+      },
       "Run": {
         "properties": {
           "can_stop": {
@@ -14494,6 +14634,114 @@
         "summary": "Free Space",
         "tags": [
           "storage"
+        ]
+      }
+    },
+    "/traffic": {
+      "get": {
+        "description": "Server-sent events: `record` events, each a full record (see the module docstring). The newest `last` records come first, then\nevery new one as it happens; a stream's record is sent again when it closes. A `hello` event first names this node and when its buffer began (ids restart with it).",
+        "operationId": "traffic_traffic_get",
+        "parameters": [
+          {
+            "description": "how many of the newest records to send first",
+            "in": "query",
+            "name": "last",
+            "required": false,
+            "schema": {
+              "default": 2000,
+              "description": "how many of the newest records to send first",
+              "maximum": 2000,
+              "minimum": 0,
+              "title": "Last",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Traffic",
+        "tags": [
+          "traffic"
+        ]
+      }
+    },
+    "/traffic/rules": {
+      "get": {
+        "description": "The alert rules every browser applies: the saved ones, else the defaults.",
+        "operationId": "get_rules_traffic_rules_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Rules",
+        "tags": [
+          "traffic"
+        ]
+      },
+      "put": {
+        "description": "Replace the alert rules; every connected browser is told (`traffic_rules` event).",
+        "operationId": "put_rules_traffic_rules_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rules"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Rules",
+        "tags": [
+          "traffic"
         ]
       }
     },

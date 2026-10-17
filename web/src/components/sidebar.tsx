@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Server, Settings, Sparkles } from "lucide-react";
+import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Server, Settings, Sparkles, Terminal } from "lucide-react";
+import { useTraffic } from "@/components/traffic/traffic-provider";
+import { TRAFFIC } from "@/lib/copy/traffic";
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
@@ -13,6 +15,13 @@ export function Sidebar() {
   const pathname = usePathname().replace(/\/$/, "");
   const current = ROUTES.find((route) => route.href === pathname);
   const pages = ROUTES.filter((route) => route.area === current?.area);
+  const traffic = useTraffic();
+  const consoleButton = (className: string) => (
+    <button type="button" onClick={traffic.toggle} aria-pressed={traffic.open} title={`${TRAFFIC.button} (${TRAFFIC.shortcut})`} aria-label={TRAFFIC.button} aria-keyshortcuts="Control+`"
+      className={cn(gearClass(traffic.open), className)}>
+      <Terminal className="size-4" aria-hidden="true" />
+    </button>
+  );
   return (
     <aside className="studio-glass z-20 flex w-full shrink-0 flex-col border-b border-sidebar-border md:sticky md:top-0 md:h-dvh md:w-60 md:border-r md:border-b-0">
       <Link href="/builder" className="flex items-center gap-3 px-5 py-5 md:py-7" aria-label="Groundwork Studio home">
@@ -35,6 +44,7 @@ export function Sidebar() {
         <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined} title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel} className={cn(gearClass(pathname === "/settings"), "md:hidden")}>
           <Settings className="size-4" aria-hidden="true" />
         </Link>
+        {consoleButton("md:hidden")}
       </nav>
       {pages.length > 1 && (
         <div role="group" aria-label="Pages in this area" className="flex gap-1 overflow-x-auto border-t border-surface-border px-3 py-2 md:mx-3 md:mt-3 md:flex-col md:gap-0.5 md:overflow-y-auto md:px-0 md:pt-4">
@@ -45,11 +55,13 @@ export function Sidebar() {
           ))}
         </div>
       )}
-      <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined}
-        title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel}
-        className={cn(gearClass(pathname === "/settings"), "mx-4 mb-4 hidden md:mt-auto md:flex")}>
-        <Settings className="size-4" aria-hidden="true" />
-      </Link>
+      <div className="mx-4 mb-4 hidden gap-1 md:mt-auto md:flex">
+        <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined}
+          title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel} className={gearClass(pathname === "/settings")}>
+          <Settings className="size-4" aria-hidden="true" />
+        </Link>
+        {consoleButton("")}
+      </div>
     </aside>
   );
 }
