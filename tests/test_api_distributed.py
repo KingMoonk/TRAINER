@@ -268,6 +268,16 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.start(version=9).status_code, 404)
         self.assertEqual(self.client.get("/distributed/runs/none").status_code, 404)
 
+    def test_the_most_and_least_machines_a_run_needs_are_checked_and_kept_on_the_job(self):
+        self.services.set_setting("nodes", ["127.0.0.1:9"])
+        too_many = self.start(machines=["127.0.0.1:9"], min_members=3)
+        self.assertEqual((too_many.status_code, too_many.json()["detail"]), (400, "The run needs 3 machines at once, but only 2 are chosen, this computer included."))
+        self.assertEqual(self.start(min_members=3, max_members=2).status_code, 400)
+        run_id = self.start(machines=["127.0.0.1:9"], min_members=2, max_members=2, rounds=2000).json()["id"]
+        job = next(j for j in [self.services.queue().job, *self.services.queue().up_next] if j is not None and j.id == run_id)
+        self.assertEqual((job.params["min_members"], job.params["max_members"]), (2, 2))
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+
     def test_the_demo_run_is_live_with_a_cuda_and_an_mps_member_and_one_can_be_stopped(self):
         run = self.services.demo_run()
         runs_now = self.client.get("/distributed/runs").json()

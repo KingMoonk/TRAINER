@@ -23,7 +23,7 @@ KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "c
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
-PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine
+PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine; "(session <id>)" follows it
 
 
 @dataclass
@@ -58,7 +58,7 @@ class Job:
 @dataclass(frozen=True)
 class Gate:
     """Whether the plan lets the machine train right now. Frozen, so two readings compare with == (the runner announces a change)."""
-    reason: str | None = None            # PASSIVE | "outside hours" | "on battery" | "computer in use" | None (may train)
+    reason: str | None = None            # PASSIVE + " (session <id>)" | "outside hours" | "on battery" | "computer in use" | None (may train)
     resumes_at: datetime | None = None   # for "outside hours": when the next window opens; None for every other reason
     supported: bool = True               # False when idle_only is on but this computer cannot report idle time (the plan then ignores it)
 
@@ -126,15 +126,21 @@ def disk_need(root):
     return max(MIN_FREE, 3 * largest)
 
 
-def passive_running(root):
-    """True while a passive training session (studio_passive) under `root` is queued, running or paused. It trains in its own
-    process and a paused one still holds its model in memory, so the queue waits for it rather than compete for the machine."""
+def passive_session(root):
+    """The id of the passive training session (studio_passive) under `root` that is queued, running or paused, else None. It trains
+    in its own process and a paused one still holds its model in memory, so the queue waits for it rather than compete for the machine."""
     if not (Path(root) / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
-        return False
+        return None
     try:
-        return PassiveStore(root).active() is not None
+        session = PassiveStore(root).active()
     except sqlite3.Error:
-        return False  # an unreadable record cannot hold the queue forever; Resources › Passive training shows the session
+        return None  # an unreadable record cannot hold the queue forever; Resources › Passive training shows the session
+    return session and session["id"]
+
+
+def passive_running(root):
+    """True while a passive training session is queued, running or paused (see passive_session)."""
+    return passive_session(root) is not None
 
 
 def in_window(plan, hour):
@@ -402,8 +408,9 @@ class Runner:
         idle = idle_seconds() if plan.idle_only else None
         supported = not (plan.idle_only and idle is None)
         now = self.clock()
-        if passive_running(self.path.parent.parent):  # first: it is why nothing trains, whatever the plan says
-            return Gate(PASSIVE, None, supported)
+        session = passive_session(self.path.parent.parent)
+        if session is not None:  # first: it is why nothing trains, whatever the plan says
+            return Gate(f"{PASSIVE} (session {session})", None, supported)
         if not in_window(plan, now.hour):
             return Gate("outside hours", next_start(plan, now), supported)
         if plan.pause_on_battery and platform_helpers.on_battery():

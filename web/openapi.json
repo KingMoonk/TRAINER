@@ -5312,6 +5312,18 @@
             ],
             "title": "Published At"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device that scored it on the held-back text, when known",
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "description": "as measured on the machine that trained it",
@@ -5340,6 +5352,18 @@
               }
             ],
             "title": "Step"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the same, under the name the version row uses",
+            "title": "Train Device"
           }
         },
         "required": [
@@ -6886,6 +6910,11 @@
             ],
             "title": "Rank"
           },
+          "replica": {
+            "default": false,
+            "title": "Replica",
+            "type": "boolean"
+          },
           "round": {
             "title": "Round",
             "type": "integer"
@@ -7548,6 +7577,17 @@
             "title": "Published At",
             "type": "string"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "description": "as measured on this machine",
@@ -7579,6 +7619,17 @@
               }
             ],
             "title": "Step"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Device"
           },
           "weights_dtype": {
             "default": "float16",
@@ -7966,6 +8017,32 @@
             },
             "title": "Machines",
             "type": "array"
+          },
+          "max_members": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Members"
+          },
+          "min_members": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Members"
           },
           "outer_lr": {
             "default": 0.7,
@@ -8749,6 +8826,17 @@
             "title": "Prediction",
             "type": "object"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "title": "Scorecard",
@@ -8763,6 +8851,17 @@
             "default": "draft",
             "title": "Status",
             "type": "string"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Device"
           },
           "verdict": {
             "default": "",
@@ -8819,6 +8918,18 @@
             "title": "Prediction",
             "type": "object"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device kind that scored it on the held-back text",
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "title": "Scorecard",
@@ -8833,6 +8944,18 @@
             "default": "draft",
             "title": "Status",
             "type": "string"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device kind (cuda, mps, cpu) that trained best_checkpoint",
+            "title": "Train Device"
           },
           "verdict": {
             "default": "",
@@ -11103,6 +11226,133 @@
           }
         },
         "summary": "Shard",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/state": {
+      "get": {
+        "description": "A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.\n409 when `round` is not the latest, 404 before any round has closed.",
+        "operationId": "state_collective__run__state_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "State",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/validation": {
+      "get": {
+        "description": "The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them.",
+        "operationId": "validation_collective__run__validation_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validation",
         "tags": [
           "collective"
         ]
@@ -13662,6 +13912,49 @@
           }
         },
         "summary": "Remove Passive Signin",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/keep-going": {
+      "post": {
+        "description": "Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended.",
+        "operationId": "keep_passive_going_passive__session_id__keep_going_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep Passive Going",
         "tags": [
           "passive"
         ]

@@ -60,10 +60,41 @@ def pretrain(job, context, emit, stop, pause):
     out = output_dir(job, context.run_dir)
     init = p.get("init_from") if p.get("mode") == "catch_up" else None
     job.params["output_dir"] = str(out)
-    return studio_model.train(cfg, _examples(job, context), out, emit=emit, stop=stop, pause=pause, init_from=init,
-                              wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
-                              snapshot_every=p.get("snapshot_every", 50),  # feeds the 3D page's scrubber; newest 20 kept
-                              offload_optimizer=offload)
+    options = dict(emit=emit, stop=stop, pause=pause, wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
+                   snapshot_every=p.get("snapshot_every", 50),  # feeds the 3D page's scrubber; newest 20 kept
+                   offload_optimizer=offload)
+    if p.get("resume"):
+        resumed = _resume(job, cfg, out, init, options)
+        if resumed is not None:
+            return resumed
+    return studio_model.train(cfg, _examples(job, context), out, init_from=init, **options)
+
+
+def _resume(job, cfg, out, init, options):
+    """Continue from `params["resume"]`, a full checkpoint (`last.npz`: weights, optimizer, sampler and RNG) this node wrote, on the data
+    it was written with (the `dataset.jsonl` beside it, so a changed dataset cannot refuse it) and for the `resume_steps` its attempt
+    was planned for. Emits "resumed" with `resume_base`, the steps done before that attempt, once training has accepted the checkpoint,
+    so the owner counts progress from there. When training refuses it before the first step and the job has published weights to start
+    from (`init`), emits "resume_refused" and returns None: the caller trains from those with a fresh optimizer. Without them the
+    refusal is the job's failure."""
+    import studio_model
+    path = Path(job.params["resume"])
+    emit, started = options["emit"], []
+
+    def relay(event):
+        if not started:
+            started.append(True)
+            emit({"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": studio_model.load_checkpoint(path)["step"]})
+        emit(event)
+    try:
+        examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        return studio_model.train(dict(cfg, steps=int(job.params.get("resume_steps") or cfg["steps"])), examples, out, resume=path,
+                                  **{**options, "emit": relay})
+    except (OSError, ValueError, KeyError) as exc:
+        if started or init is None:
+            raise
+        emit({"type": "resume_refused", "reason": str(exc) or type(exc).__name__})
+        return None
 
 
 def _member(job, context, emit, stop, name):

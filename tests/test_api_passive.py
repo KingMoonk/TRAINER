@@ -39,12 +39,24 @@ class PassiveApiTest(unittest.TestCase):
     def test_stopping_an_unknown_session_is_a_404(self):
         self.assertEqual(self.client.post("/passive/nope/stop").status_code, 404)
 
+    def test_keep_going_brings_back_a_dead_session(self):
+        self.services.passive_sessions = [{**SESSION, "trainer": "Stopped", "watchdog": "Stopped", "heard": None}]
+        kept = self.client.post("/passive/p1/keep-going")
+        self.assertEqual((kept.status_code, kept.json()), (200, {"status": "running"}))
+        self.assertEqual((self.services.passive_kept, self.client.get("/passive").json()["sessions"][0]["watchdog"]), (["p1"], "Running"))
+
+    def test_keep_going_unknown_is_404_and_an_ended_session_is_409(self):
+        self.assertEqual(self.client.post("/passive/nope/keep-going").status_code, 404)
+        self.client.post("/passive/p1/stop")
+        self.assertEqual(self.client.post("/passive/p1/keep-going").status_code, 409)
+
     def test_removing_the_signin_watchdog(self):
         self.assertEqual(self.client.delete("/passive/signin").status_code, 204)
         self.assertFalse(self.client.get("/passive").json()["signin"])
 
     def test_none_of_it_emits_events(self):
         self.client.get("/passive")
+        self.client.post("/passive/p1/keep-going")
         self.client.post("/passive/p1/stop")
         self.client.delete("/passive/signin")
         self.assertEqual([event for event in self.tap.events if event[0] != "status"], [])  # initial shell snapshot is independent

@@ -532,6 +532,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * State
+         * @description A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.
+         *     409 when `round` is not the latest, 404 before any round has closed.
+         */
+        get: operations["state_collective__run__state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/validation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Validation
+         * @description The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them.
+         */
+        get: operations["validation_collective__run__validation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -1729,6 +1770,26 @@ export interface paths {
         post?: never;
         /** Remove Passive Signin */
         delete: operations["remove_passive_signin_passive_signin_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/passive/{session_id}/keep-going": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep Passive Going
+         * @description Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended.
+         */
+        post: operations["keep_passive_going_passive__session_id__keep_going_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -5421,6 +5482,11 @@ export interface components {
             /** Published At */
             published_at?: string | null;
             /**
+             * Score Device
+             * @description the device that scored it on the held-back text, when known
+             */
+            score_device?: string | null;
+            /**
              * Scorecard
              * @description as measured on the machine that trained it
              */
@@ -5434,6 +5500,11 @@ export interface components {
             size?: number | null;
             /** Step */
             step?: number | null;
+            /**
+             * Train Device
+             * @description the same, under the name the version row uses
+             */
+            train_device?: string | null;
         };
         /** Question */
         Question: {
@@ -6085,6 +6156,11 @@ export interface components {
             members?: number | null;
             /** Rank */
             rank?: number | null;
+            /**
+             * Replica
+             * @default false
+             */
+            replica: boolean;
             /** Round */
             round: number;
             /** Shards */
@@ -6321,6 +6397,8 @@ export interface components {
              * @description when this copy of the weights was made
              */
             published_at: string;
+            /** Score Device */
+            score_device?: string | null;
             /**
              * Scorecard
              * @description as measured on this machine
@@ -6344,6 +6422,8 @@ export interface components {
             };
             /** Step */
             step?: number | null;
+            /** Train Device */
+            train_device?: string | null;
             /**
              * Weights Dtype
              * @default float16
@@ -6499,6 +6579,10 @@ export interface components {
              * @default []
              */
             machines: string[];
+            /** Max Members */
+            max_members?: number | null;
+            /** Min Members */
+            min_members?: number | null;
             /**
              * Outer Lr
              * @default 0.7
@@ -6847,6 +6931,8 @@ export interface components {
             prediction?: {
                 [key: string]: unknown;
             };
+            /** Score Device */
+            score_device?: string | null;
             /** Scorecard */
             scorecard?: {
                 [key: string]: unknown;
@@ -6860,6 +6946,8 @@ export interface components {
              * @default draft
              */
             status: string;
+            /** Train Device */
+            train_device?: string | null;
             /**
              * Verdict
              * @default
@@ -6888,6 +6976,11 @@ export interface components {
             prediction?: {
                 [key: string]: unknown;
             };
+            /**
+             * Score Device
+             * @description the device kind that scored it on the held-back text
+             */
+            score_device?: string | null;
             /** Scorecard */
             scorecard?: {
                 [key: string]: unknown;
@@ -6901,6 +6994,11 @@ export interface components {
              * @default draft
              */
             status: string;
+            /**
+             * Train Device
+             * @description the device kind (cuda, mps, cpu) that trained best_checkpoint
+             */
+            train_device?: string | null;
             /**
              * Verdict
              * @default
@@ -8136,6 +8234,77 @@ export interface operations {
             header?: never;
             path: {
                 shard: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    state_collective__run__state_get: {
+        parameters: {
+            query: {
+                round: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validation_collective__run__validation_get: {
+        parameters: {
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
                 /** @description the run id: the pretrain_distributed job's id */
                 run: string;
             };
@@ -10057,6 +10226,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    keep_passive_going_passive__session_id__keep_going_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

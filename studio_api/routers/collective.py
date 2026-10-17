@@ -79,6 +79,7 @@ class RoundView(Versioned):
     deadline_s: float | None = None
     shards: list[int] | None = None
     members: int | None = None
+    replica: bool = False  # this member is one of the run's replicas: it also takes GET /state each round and GET /validation once
 
 
 class Accepted(Versioned):
@@ -131,6 +132,22 @@ def shard(shard: int, found: "studio_diloco.Coordinator" = Depends(member_call))
         return binary(found, found.shard_bytes(shard))
     except KeyError:
         raise HTTPException(404, f"No shard {shard}.") from None
+
+
+@router.get("/state", response_class=Response, responses=BINARY)
+def state(round: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.
+    409 when `round` is not the latest, 404 before any round has closed."""
+    try:
+        return binary(found, found.state_bytes(round))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+
+
+@router.get("/validation", response_class=Response, responses=BINARY)
+def validation(found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them."""
+    return binary(found, found.validation_bytes())
 
 
 @router.post("/rounds/{round}/delta", status_code=202, response_model=Accepted,
