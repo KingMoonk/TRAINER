@@ -2068,9 +2068,8 @@ class WorkspaceServices(Services):
         """An import that ended without weights leaves a version that holds only a design. The newest can simply go; an older one
         cannot (numbers follow the order), so it says in its description that it has no weights."""
         if not self.store.remove_last(number):
-            self._to(number, "saved")
             reason = "was stopped" if how == "stopped" else "did not finish"
-            self.store.set_change(number, f"{self.store.get(number)['change']}, but the download {reason}, so this design has no weights")
+            self.store.leave_saved(number, f", but the download {reason}, so this design has no weights")
         self.emit("versions", None)
 
     def _json(self, name, default):
