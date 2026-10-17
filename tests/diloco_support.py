@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+from fastapi.testclient import TestClient
 
 import studio_diloco
 from studio_api import app as api_app
@@ -32,6 +33,16 @@ def build(directory, run="run1", clock=None, **changes):
 def app():
     with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
         return create_app(FakeServices(), open=True, hosts=ANY)
+
+
+class TermClient(TestClient):
+    """A TestClient that sends the run's term (1, or `term`) on every call that does not name one, as a member does."""
+    term = 1
+
+    def request(self, method, url, **options):
+        params = dict(options.get("params") or {})
+        params.setdefault("term", self.term)
+        return super().request(method, url, **{**options, "params": params})
 
 
 class Peer:

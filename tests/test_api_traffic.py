@@ -118,7 +118,7 @@ class MiddlewareTest(unittest.TestCase):
         self.assertIn("device", record["response"]["body"]["json"])
 
     def test_a_route_with_a_path_parameter_keeps_the_template(self):
-        self.client.get("/collective/nope/rounds/3")
+        self.client.get("/collective/nope/rounds/3", params={"term": 1})
         record = self.tap.snapshot()[-1]
         self.assertEqual((record["route"], record["status"]), ("/collective/{run}/rounds/{round}", 404))
 
