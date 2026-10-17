@@ -70,7 +70,8 @@ export function cameFrom(published: PublishedVersion[] | undefined, number: numb
   return entry && !entry.mine ? entry.origin : "";
 }
 
-function problem(error: unknown): string {
+/** The sentence an API error carries (its `detail`), or the status when it has none. */
+export function problem(error: unknown): string {
   if (error instanceof ApiError) {
     try {
       const body = JSON.parse(error.body) as { detail?: unknown };

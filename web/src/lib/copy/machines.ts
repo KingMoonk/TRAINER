@@ -1,0 +1,32 @@
+// The Settings page's Machines section: the machines this one pools compute with (GET and PUT /cluster/nodes, docs/cluster.md).
+
+export const MACHINES = {
+  section: "Machines",
+  sectionLead: "The other computers this one shares training with, over your tailnet. This list is kept on this computer.",
+  nameTitle: "This computer's name",
+  nameDesc: "Give this name to a friend: they add it to their list, and you add theirs to yours.",
+  copy: "Copy",
+  copied: "Copied this computer's name.",
+  copyFailed: "Could not copy. Select the name and copy it yourself.",
+  noName: "Tailscale has not told this computer its name yet. Check that Tailscale is running and MagicDNS is on (docs/cluster.md).",
+  listTitle: "Machines",
+  listDesc: "This computer first, then each one in the list. A machine that does not answer stays listed with the reason.",
+  thisMachine: "This computer",
+  online: "Online",
+  offline: "Not answering",
+  busy: "Busy",
+  unsaved: "Not saved yet. Save to ask it.",
+  remove: "Remove",
+  addLabel: "Machine to add",
+  addPlaceholder: "windows-box or https://box.tail1234.ts.net",
+  add: "Add",
+  duplicate: "That machine is already in the list.",
+  save: "Save",
+  saving: "Saving…",
+  saved: "Saved the list of machines.",
+  undo: "Undo changes",
+  loadFailed: "Could not read the list of machines: {why}",
+  refusedTitle: "A machine refused this one",
+  refused:
+    "A machine answered 401: it does not let this computer in. On the tailnet, tag this computer tag:trainer, or ask the other machine's owner to add your Tailscale login to studioConfig.cluster.allowUsers in their data/workspace.json (docs/cluster.md, \"ACL\").",
+};
