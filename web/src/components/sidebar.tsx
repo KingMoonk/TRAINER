@@ -2,17 +2,29 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Server, Settings, Sparkles } from "lucide-react";
+import { Boxes, ChevronRight, Database, Layers3, MessageSquare, Network, Server, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 const gearClass = (active: boolean) => cn("flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", active && "border-surface-border bg-surface-raised text-foreground");
-const icons = { designer: Network, pretraining: Layers3, post: Sparkles, chat: MessageSquare, queue: ListOrdered, cluster: Server, resources: Database };
+const icons = { models: Network, data: Database, runs: Layers3, eval: MessageSquare, machines: Server };
 
 export function Sidebar() {
   const pathname = usePathname().replace(/\/$/, "");
   const current = ROUTES.find((route) => route.href === pathname);
-  const pages = ROUTES.filter((route) => route.area === current?.area);
+  const pages = ROUTES.filter((route) => route.area === current?.area && !route.hidden);
+  const settingsActive = pathname === "/settings";
+  const settingsGear = (className?: string) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link href="/settings" aria-current={settingsActive ? "page" : undefined} aria-label={APPEARANCE.settingsLabel} className={cn(gearClass(settingsActive), className)}>
+          <Settings className="size-4" aria-hidden="true" />
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent side="right">{APPEARANCE.settingsLabel}</TooltipContent>
+    </Tooltip>
+  );
   return (
     <aside className="studio-glass z-20 flex w-full shrink-0 flex-col border-b border-sidebar-border md:sticky md:top-0 md:h-dvh md:w-60 md:border-r md:border-b-0">
       <Link href="/builder" className="flex items-center gap-3 px-5 py-5 md:py-7" aria-label="Groundwork Studio home">
@@ -25,16 +37,14 @@ export function Sidebar() {
           const selected = current?.area === area.id;
           return (
             <Link key={area.id} href={areaHome(area.id).href} aria-current={selected ? "page" : undefined}
-              className={cn("flex shrink-0 items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", area.id === "queue" && "md:mt-5", selected && "border-surface-border bg-surface-raised font-medium text-foreground shadow-sm")}>
+              className={cn("flex shrink-0 items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", area.id === "machines" && "md:mt-5", selected && "border-surface-border bg-surface-raised font-medium text-foreground shadow-sm")}>
               <Icon className="size-4" aria-hidden="true" />{area.title}
               {selected && <ChevronRight className="ml-auto hidden size-3.5 text-muted-foreground md:block" aria-hidden="true" />}
             </Link>
           );
         })}
         {/* On a phone the sidebar is a bar across the top, so the gear joins the row; on a desktop it sits at the foot. */}
-        <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined} title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel} className={cn(gearClass(pathname === "/settings"), "md:hidden")}>
-          <Settings className="size-4" aria-hidden="true" />
-        </Link>
+        {settingsGear("md:hidden")}
       </nav>
       {pages.length > 1 && (
         <div role="group" aria-label="Pages in this area" className="flex gap-1 overflow-x-auto border-t border-surface-border px-3 py-2 md:mx-3 md:mt-3 md:flex-col md:gap-0.5 md:overflow-y-auto md:px-0 md:pt-4">
@@ -45,11 +55,11 @@ export function Sidebar() {
           ))}
         </div>
       )}
-      <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined}
-        title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel}
-        className={cn(gearClass(pathname === "/settings"), "mx-4 mb-4 hidden md:mt-auto md:flex")}>
-        <Settings className="size-4" aria-hidden="true" />
-      </Link>
+      {/* Pinned to the foot of the nav (margin-top: auto). The API console button (#341) goes in the marked slot, beside the gear. */}
+      <div className="mx-4 mb-4 hidden items-center gap-1 pt-4 md:mt-auto md:flex">
+        {settingsGear()}
+        {/* CONSOLE SLOT (#341): API console button goes here. */}
+      </div>
     </aside>
   );
 }

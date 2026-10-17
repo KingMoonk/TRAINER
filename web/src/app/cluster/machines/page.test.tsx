@@ -253,9 +253,10 @@ describe("Cluster page", () => {
     await waitFor(() => expect(state.removes).toEqual(["run1"]));
   });
 
-  test("the sidebar has a Cluster entry", async () => {
+  test("the sidebar has a Machines entry", async () => {
     server({ addresses: [] });
     renderPage(<MachinesPage />, { route: "/cluster/machines", shell: true });
-    expect(await screen.findByRole("link", { name: "Cluster" })).toHaveAttribute("href", "/cluster/training");
+    const studio = within(await screen.findByRole("navigation", { name: "Studio" }));
+    expect(studio.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/cluster/machines");
   });
 });

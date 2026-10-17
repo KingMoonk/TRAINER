@@ -34,25 +34,52 @@ describe("areaHome", () => {
   });
 
   test("names the expected homes", () => {
-    expect(areaHome("designer").route).toBe("builder");
-    expect(areaHome("pretraining").route).toBe("pretraining");
-    expect(areaHome("post").route).toBe("post_training");
-    expect(areaHome("chat").route).toBe("chat");
-    expect(areaHome("queue").route).toBe("queue");
-    expect(areaHome("resources").route).toBe("your_data");
+    expect(areaHome("models").route).toBe("builder");
+    expect(areaHome("data").route).toBe("your_data");
+    expect(areaHome("runs").route).toBe("runs");
+    expect(areaHome("eval").route).toBe("chat");
+    expect(areaHome("machines").route).toBe("machines");
+  });
+});
+
+describe("the five sidebar areas", () => {
+  test("are Models, Data, Runs, Eval and Machines, in that order", () => {
+    expect(AREAS.map((a) => a.title)).toEqual(["Models", "Data", "Runs", "Eval", "Machines"]);
+  });
+
+  test("group the routes as the design does", () => {
+    const pagesIn = (area: string) => ROUTES.filter((r) => r.area === area).map((r) => r.route);
+    expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare", "trace", "head_zoom", "value_map", "loss", "landscape", "head_lab", "inside3d"]);
+    expect(pagesIn("data").sort()).toEqual(["make_data", "pretraining", "storage", "your_data"]);
+    expect(pagesIn("runs")).toEqual(["runs", "new_run", "run_view", "training_run", "post_training", "queue", "passive", "cluster_training"]);
+    expect(pagesIn("eval")).toEqual(["chat", "benchmark"]);
+    expect(pagesIn("machines")).toEqual(["machines"]);
+  });
+
+  test("the new run pages are routes, and run_view is hidden from the nav", () => {
+    expect(routeFor("runs")).toMatchObject({ href: "/runs", area: "runs" });
+    expect(routeFor("new_run")).toMatchObject({ href: "/runs/new", area: "runs" });
+    expect(routeFor("run_view")).toMatchObject({ href: "/runs/view", area: "runs", hidden: true });
+    expect(ROUTES.filter((r) => r.hidden).map((r) => r.route)).toEqual(["run_view"]);
+  });
+
+  test("keep the route names and hrefs the Tk shell uses", () => {
+    expect(routeFor("cluster_training").href).toBe("/cluster/training");
+    expect(routeFor("machines").href).toBe("/cluster/machines");
+    expect(routeFor("pretraining").href).toBe("/pretraining");
   });
 });
 
 describe("routeFor", () => {
   test("finds a route by its Tk name", () => {
-    expect(routeFor("head_zoom")).toMatchObject({ href: "/head-zoom", area: "designer", title: "Inside a head" });
+    expect(routeFor("head_zoom")).toMatchObject({ href: "/head-zoom", area: "models", title: "Inside a head" });
   });
 
   test("returns every listed route", () => {
     for (const r of ROUTES) expect(routeFor(r.route)).toBe(r);
   });
 
-  test("looks-inside pages are all in the designer area", () => {
-    expect(ROUTES.filter((r) => r.lookInside).every((r) => r.area === "designer")).toBe(true);
+  test("looks-inside pages are all in the models area", () => {
+    expect(ROUTES.filter((r) => r.lookInside).every((r) => r.area === "models")).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ROUTES, areaHome } from "../src/lib/routes";
+import { PENDING_ROUTES } from "./pending-routes";
 
 // A 375 px screen (iPhone SE/mini width): the document must not scroll sideways on any page.
 test.use({ viewport: { width: 375, height: 812 } });
@@ -10,7 +11,7 @@ async function sideways(page: Page) {
   return page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 }
 
-for (const route of ROUTES) {
+for (const route of ROUTES.filter((r) => !PENDING_ROUTES.includes(r.route))) {
   test(`${route.href}: the document does not scroll sideways at 375 px`, async ({ page }) => {
     await page.goto(`${route.href}/`);
     await expect(page.getByRole("status", { name: "Status" })).toBeVisible();
@@ -44,8 +45,8 @@ test("a status strip full of long values still fits, and the connection light st
 
 test("the sidebar links stay reachable on a phone", async ({ page }) => {
   await page.goto("/queue/");
-  const nav = page.getByRole("navigation");
-  await expect(nav.getByRole("link", { name: "Resources", exact: true })).toBeVisible();
-  await nav.getByRole("link", { name: "Resources", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${areaHome("resources").href}/?$`));
+  const nav = page.getByRole("navigation", { name: "Studio" });
+  await expect(nav.getByRole("link", { name: "Data", exact: true })).toBeVisible();
+  await nav.getByRole("link", { name: "Data", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${areaHome("data").href}/?$`));
 });
