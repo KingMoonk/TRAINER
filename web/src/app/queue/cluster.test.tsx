@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { describe, expect, test } from "vitest";
 import ChatPage from "@/app/chat/page";
 import { VersionTray } from "@/app/builder/version-tray";
@@ -154,7 +155,7 @@ describe("Queue page with several machines", () => {
     expect(await screen.findByTestId("place-w1")).toHaveTextContent(/^Runs on any machine that fits it$/);
 
     const select = screen.getByRole("combobox", { name: "Run on: First waiting" });
-    expect(machines(select)).toEqual(["Any machine", "mac-mini (this machine)", "gpu-box"]);
+    expect(machines(select)).toEqual(["Any machine", "All machines (DiLoCo)", "mac-mini (this machine)", "gpu-box"]);
     await user.selectOptions(select, "gpu-box");
     await waitFor(() => expect(screen.getByTestId("place-w1")).toHaveTextContent(/^Pinned to gpu-box: it runs there or waits$/));
     await waitFor(() => expect(select).toHaveValue("gpu-box:8000"));
@@ -164,6 +165,48 @@ describe("Queue page with several machines", () => {
     await user.selectOptions(select, "Any machine");
     await waitFor(() => expect(screen.getByTestId("place-w1")).toHaveTextContent(/^Runs on any machine that fits it$/));
     expect(pins.at(-1)).toEqual({ path: "/queue/jobs/w1/pin", body: { pinned: null } });
+  });
+
+  test("all machines (DiLoCo) turns a waiting pretrain job into a run, from the Training tab's defaults, and its row lists the members", async () => {
+    const state = twoMachines();
+    state.queue.up_next = [job("w1", "First waiting", { params: { version: 3, datasets: ["Your files"] } }), job("w2", "Second waiting", { kind: "quicktest" })];
+    const run = job("r1", "Version 3 across 2 machines", {
+      kind: "pretrain_distributed",
+      params: { machines: [{ node: "mac-mini" }, { node: "gpu-box" }], left_out: [{ node: "old", reason: "old did not answer within 2 seconds." }] },
+    });
+    const DEFAULTS = { rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+    const { calls } = server(state, {
+      extra: {
+        "GET /distributed/defaults": { body: DEFAULTS },
+        "POST /distributed/runs": () => {
+          state.queue.up_next = [run, state.queue.up_next[1]];
+          state.jobs = state.jobs.map((r) => (r.id === "w1" ? row("r1", run.label, { kind: "pretrain_distributed" }) : r));
+          return { status: 201, body: { id: "r1", members: [{ node: "mac-mini" }, { node: "gpu-box" }] } };
+        },
+        "GET /queue/jobs/r1/outlook": { body: { outlook: "after about 10 min" } },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<QueuePage />);
+
+    const select = await screen.findByRole("combobox", { name: "Run on: First waiting" });
+    expect(machines(select)).toEqual(["Any machine", "All machines (DiLoCo)", "mac-mini (this machine)", "gpu-box"]);
+    // Only a pretrain job can run on all machines.
+    expect(machines(screen.getByRole("combobox", { name: "Run on: Second waiting" }))).toEqual(["Any machine", "mac-mini (this machine)", "gpu-box"]);
+
+    await user.selectOptions(select, "All machines (DiLoCo)");
+    const members = await screen.findByTestId("members-r1");
+    expect(members).toHaveTextContent("Trains on mac-mini, gpu-box together");
+    expect(members).toHaveTextContent("Left out: old did not answer within 2 seconds.");
+    expect(calls.find((c) => c.path === "/distributed/runs")?.body).toEqual({
+      replaces: "w1", all_machines: true, machines: [], version: 3, dataset_ids: ["Your files"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
+    });
+    // A run is not pinned: its row has no "Run on" picker and no place line.
+    expect(screen.queryByRole("combobox", { name: `Run on: ${run.label}` })).toBeNull();
+    expect(screen.queryByTestId("place-r1")).toBeNull();
+    expect(await screen.findByText("It now trains on 2 machines together.")).toBeInTheDocument();
+    act(() => void toast.dismiss());
+    await waitFor(() => expect(screen.queryByText("It now trains on 2 machines together.")).toBeNull());
   });
 
   test("two machines with the same hostname are told apart by their address", async () => {
@@ -190,7 +233,7 @@ describe("Queue page with several machines", () => {
     expect(await screen.findByTestId("place-w1")).toHaveTextContent(/^Pinned to gpu-box \(10\.0\.0\.3:8000\): it runs there or waits$/);
 
     const select = screen.getByRole("combobox", { name: "Run on: First waiting" });
-    expect(machines(select)).toEqual(["Any machine", "mac-mini (this machine)", "gpu-box (10.0.0.2:8000)", "gpu-box (10.0.0.3:8000)"]);
+    expect(machines(select)).toEqual(["Any machine", "All machines (DiLoCo)", "mac-mini (this machine)", "gpu-box (10.0.0.2:8000)", "gpu-box (10.0.0.3:8000)"]);
     expect(select).toHaveValue("10.0.0.3:8000");
 
     await waitFor(() => expect(strip()).toHaveTextContent("mac-mini (this machine), gpu-box (10.0.0.2:8000), gpu-box (10.0.0.3:8000)"));
@@ -215,7 +258,7 @@ describe("Queue page with several machines", () => {
     expect(other.getByRole("status")).toHaveTextContent("gpu-box is not answering");
     expect(other.getByTestId("node-gpu-box:8000")).toHaveClass("opacity-60");
     // The "Run on" list still names the machine, marked.
-    expect(machines(screen.getByRole("combobox", { name: "Run on: First waiting" }))).toEqual(["Any machine", "mac-mini (this machine)", "gpu-box (offline)"]);
+    expect(machines(screen.getByRole("combobox", { name: "Run on: First waiting" }))).toEqual(["Any machine", "All machines (DiLoCo)", "mac-mini (this machine)", "gpu-box (offline)"]);
   });
 
   test("a cluster of one shows nothing about machines", async () => {

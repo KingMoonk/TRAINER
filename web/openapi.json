@@ -7392,6 +7392,17 @@
       "StartRun": {
         "description": "What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.",
         "properties": {
+          "all_machines": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "All Machines"
+          },
           "dataset_ids": {
             "items": {
               "type": "string"
@@ -7427,6 +7438,17 @@
             "minimum": 0.0,
             "title": "Outer Momentum",
             "type": "number"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces"
           },
           "rounds": {
             "default": 10,
@@ -11968,7 +11990,7 @@
         ]
       },
       "post": {
-        "description": "Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen\nmachines are invited when the run starts, and the form's settings are checked here (400 with a sentence).",
+        "description": "Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen\nmachines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`\nevery listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,\neach with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the\npretrain job leaves the queue.",
         "operationId": "start_run_distributed_runs_post",
         "requestBody": {
           "content": {

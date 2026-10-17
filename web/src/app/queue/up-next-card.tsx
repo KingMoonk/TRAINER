@@ -8,7 +8,7 @@ import type { ClusterQueue } from "@/lib/cluster";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
 import { allDoneLine, dropIndex, minutes, rowFor, type Job, type Queue } from "./logic";
-import { PinSelect, PlaceLine } from "./nodes";
+import { MembersLine, PinSelect, PlaceLine } from "./nodes";
 import { useJobOutlook, type QueueActions } from "./use-queue";
 
 /** `cluster` is set only when other machines are listed: a cluster of one shows no machine on any row. */
@@ -145,10 +145,11 @@ function Row({
         </div>
         {job.note && <div className="text-xs text-muted-foreground">{job.note}</div>}
         {outlook && <div className="text-xs text-muted-foreground">{fill(T.starts, { outlook })}</div>}
-        {row && <PlaceLine row={row} />}
+        {row && job.kind !== "pretrain_distributed" && <PlaceLine row={row} />}
+        <MembersLine job={job} />
       </div>
       {job.eta_s != null && <span className="text-xs text-muted-foreground">{minutes(job.eta_s)}</span>}
-      {cluster && <PinSelect id={job.id} name={name} row={row} nodes={cluster.nodes} actions={actions} />}
+      {cluster && job.kind !== "pretrain_distributed" && <PinSelect job={job} name={name} row={row} nodes={cluster.nodes} actions={actions} />}
       <div className="flex flex-wrap gap-1">
         <Button variant="outline" size="sm" aria-label={`${T.moveUp}: ${name}`} disabled={n === 0} onClick={() => move(n - 1)}>
           {"▲"}
