@@ -1,5 +1,6 @@
-// The Builder's strings, moved here from studio_ia/copy.py BUILDER (the Python copies stay until Phase 5 removes the Tk
-// page). Only the design half (issue #148) is here; the learning loop's strings (#83) come with that half.
+// The Builder's strings: the design half, the learning loop and the cards around the tower. They moved here from
+// studio_ia/copy.py BUILDER; the Python copy keeps only what the server itself writes (the sentences design.py and
+// expectation.py return).
 
 export const BUILDER = {
   h1: "Build your model",
