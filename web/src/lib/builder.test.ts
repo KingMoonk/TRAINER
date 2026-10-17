@@ -3,6 +3,9 @@ import { ApiError } from "./api-core";
 import { emit, mockApi } from "@/test/network";
 import { BUILDER } from "./copy/builder";
 import {
+  paramBars,
+  paramNote,
+  paramShares,
   anchoredDraft,
   bar,
   BLOCK_LINES,
@@ -569,5 +572,30 @@ describe("queueJobs, pretraining and versions", () => {
       expect(error).toMatchObject({ status: 409, path: "/post-training/imports", body: '{"detail":"Already downloading."}' });
       expect(detailOf(error)).toBe("Already downloading.");
     });
+  });
+});
+
+describe("where the size goes", () => {
+  const now = { table: 40, position: 10, blocks: 40, head: 10 };
+  const next = { table: 40, position: 10, blocks: 140, head: 10 };
+
+  test("both bars are drawn to the larger design's scale", () => {
+    const [a, b] = paramBars(now, next);
+    expect(a).toEqual([20, 5, 20, 5]);
+    expect(b.reduce((x, y) => x + y, 0)).toBeCloseTo(100);
+  });
+
+  test("a missing part counts as zero and an empty design does not divide by zero", () => {
+    expect(paramBars({}, {})).toEqual([[0, 0, 0, 0], [0, 0, 0, 0]]);
+  });
+
+  test("shares name each part in bar order", () => {
+    expect(paramShares(now).map((s) => s.text)).toEqual(["word table 40%", "position 10%", "blocks 40%", "word scores 10%"]);
+  });
+
+  test("the note shows only when the word table is half the model or more", () => {
+    expect(paramNote(now)).toBe("");
+    expect(paramNote({ table: 60, position: 0, blocks: 30, head: 10 })).toBe(BUILDER.params_table_heavy);
+    expect(paramNote({ table: 50, position: 0, blocks: 50, head: 0 })).toBe(BUILDER.params_table_heavy);
   });
 });

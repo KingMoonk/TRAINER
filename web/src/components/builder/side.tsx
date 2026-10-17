@@ -16,6 +16,10 @@ import {
   COST_ROWS,
   design,
   fitsText,
+  PARAM_PARTS,
+  paramBars,
+  paramNote,
+  paramShares,
   nextVersionName,
   say,
   specOf,
@@ -171,6 +175,40 @@ type CostsProps = {
   lines: Line[] | undefined;
 };
 
+/** "Where the size goes": the current design's parameters stacked faintly above the draft's, on one scale. */
+function ParamBar({ now, next }: { now: Sizes["parts"]; next: Sizes["parts"] }) {
+  const [a, b] = paramBars(now, next);
+  const note = paramNote(next);
+  const row = (widths: number[], faint: boolean, testId: string) => (
+    <div className="flex h-1.5 w-full" aria-hidden="true" data-testid={testId}>
+      {PARAM_PARTS.map((p, i) => (
+        <span key={p.key} className={cn("h-full", p.fill, faint && "opacity-40")} style={{ width: `${widths[i]}%` }} />
+      ))}
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-1 pt-1" data-testid="param-bar">
+      <span className="text-xs font-medium" title={BUILDER.params_where_tip}>
+        {BUILDER.params_where}
+      </span>
+      {row(a, true, "param-now")}
+      {row(b, false, "param-next")}
+      <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+        {paramShares(next).map((share) => {
+          const part = PARAM_PARTS.find((p) => p.key === share.key)!;
+          return (
+            <span key={share.key} className="inline-flex items-center gap-1">
+              <span className={cn("inline-block size-2 rounded-sm", part.fill)} aria-hidden="true" />
+              {share.text}
+            </span>
+          );
+        })}
+      </div>
+      {note ? <p className={cn("text-xs", AMBER)}>{note}</p> : null}
+    </div>
+  );
+}
+
 export function Costs({ now, next, warm, lines }: CostsProps) {
   return (
     <Panel title={BUILDER.what_costs} testId="costs">
@@ -195,6 +233,7 @@ export function Costs({ now, next, warm, lines }: CostsProps) {
       ) : (
         <Skeleton className="h-16 w-full" />
       )}
+      {now && next ? <ParamBar now={now.parts} next={next.parts} /> : null}
       <p className="pt-1 text-sm font-medium">{BUILDER.carry_over}</p>
       {warm ? (
         <p className="text-xs">

@@ -247,6 +247,41 @@ export function fitsText(fits: boolean | null | undefined): string {
   return `${BUILDER.training_memory} ${verdict}`;
 }
 
+// ------------------------------------------------------------------------------------------------ where the size goes
+
+/** The four parts a model's parameters split into, in bar order, with the theme colour class that paints each. */
+export const PARAM_PARTS = [
+  { key: "table", name: BUILDER.params_table, fill: "bg-part-attention" },
+  { key: "position", name: BUILDER.params_position, fill: "bg-muted-foreground" },
+  { key: "blocks", name: BUILDER.params_blocks, fill: "bg-part-mlp" },
+  { key: "head", name: BUILDER.params_head, fill: "bg-part-cost" },
+] as const;
+
+export type ParamKey = (typeof PARAM_PARTS)[number]["key"];
+
+/** Each design's parts as percentages of the larger design's total, so both bars share one scale (builder.py param_bars). */
+export function paramBars(a: Record<string, number>, b: Record<string, number>): [number[], number[]] {
+  const total = (parts: Record<string, number>) => PARAM_PARTS.reduce((sum, p) => sum + (parts[p.key] ?? 0), 0);
+  const top = Math.max(total(a), total(b), 1);
+  const widths = (parts: Record<string, number>) => PARAM_PARTS.map((p) => ((parts[p.key] ?? 0) / top) * 100);
+  return [widths(a), widths(b)];
+}
+
+/** "word table 12%" for each part in bar order (builder.py param_shares). */
+export function paramShares(parts: Record<string, number>): { key: ParamKey; text: string }[] {
+  const total = PARAM_PARTS.reduce((sum, p) => sum + (parts[p.key] ?? 0), 0) || 1;
+  return PARAM_PARTS.map((p) => ({
+    key: p.key,
+    text: fill(BUILDER.params_share, { name: p.name, share: `${Math.round(((parts[p.key] ?? 0) / total) * 100)}%` }),
+  }));
+}
+
+/** A sentence when the word table is at least half the model, else "" (builder.py param_note). */
+export function paramNote(parts: Record<string, number>): string {
+  const total = PARAM_PARTS.reduce((sum, p) => sum + (parts[p.key] ?? 0), 0) || 1;
+  return (parts.table ?? 0) >= 0.5 * total ? BUILDER.params_table_heavy : "";
+}
+
 // ------------------------------------------------------------------------------------------------ the tower
 
 /** The registry's entry for a module, for its name and settings. */

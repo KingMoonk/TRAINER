@@ -19,6 +19,16 @@ export const BUILDER = {
   training_memory_fits: "unknown (memory size not reported)",
   training_memory_desc:
     "on this computer at 16 rows per step. The bars compare weights, gradients and optimizer state (16 bytes per parameter at 32-bit); the engine adds activations, which grow with rows per step.",
+  params_where: "Where the size goes",
+  params_where_tip:
+    "Every parameter is one number the model learns. The bar splits them by part: the word table, the blocks and the word scores. The faint bar is the current version, the bright one your draft.",
+  params_table: "word table",
+  params_position: "position",
+  params_blocks: "blocks",
+  params_head: "word scores",
+  params_share: "{name} {share}",
+  params_table_heavy:
+    "Most of this model is its word table: more blocks or thinking room would add less than you might think.",
   what_expect: "What to expect",
   no_changes: "No changes",
   no_changes_text: "Version {version} is the current design. Chat answers with the best checkpoint on held-back text.",
