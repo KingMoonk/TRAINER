@@ -10,7 +10,8 @@
     python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
     python tasks.py setup                     once per machine: .venv, the right torch (MPS on a Mac, CUDA with nvidia-smi), requirements, pnpm install; prints the device. Any Python 3.12+.
-    python tasks.py dev                       the live loop: the API (--reload) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both. docs/node.md, "Developing".
+    python tasks.py dev                       the live loop: the API (--reload) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both; points `tailscale serve` at them. docs/node.md, "Developing".
+    python tasks.py run                       the built app (app.py on 127.0.0.1:8787); points `tailscale serve` at it.
 
 Each level includes the one before it. Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
 """
@@ -116,7 +117,8 @@ TORCH = "torch>=2.14.1,<3"  # as in requirements-training.txt
 CUDA_INDEX = "https://download.pytorch.org/whl/cu126"  # requirements-gpu.txt
 MIN_PYTHON = (3, 12)
 API_PORT, WEB_PORT = 8787, 3000
-SERVE = (f"tailscale serve --bg http://127.0.0.1:{WEB_PORT}", f"tailscale serve --bg --set-path=/api/ http://127.0.0.1:{API_PORT}")  # `/` to the page, `/api/` to the API
+DEV_SERVE = {"/": f"http://127.0.0.1:{WEB_PORT}", "/api/": f"http://127.0.0.1:{API_PORT}"}  # `dev`: the page, and the API under /api/
+APP_SERVE = {"/": f"http://127.0.0.1:{API_PORT}"}  # `run`: the API, which serves the built page itself
 
 
 def find_python(current=sys.executable, version=sys.version_info, which=shutil.which, ask=None):
@@ -196,6 +198,52 @@ def tailnet_url(names=None):
     return next((f"https://{n}/" for n in names if n.endswith(".ts.net")), "")
 
 
+def serve_handlers(status):
+    """{path: proxy target} of the HTTPS :443 handlers in `tailscale serve status --json`."""
+    found = {}
+    for host, conf in ((status or {}).get("Web") or {}).items():
+        if host.endswith(":443"):
+            found.update({path: (h or {}).get("Proxy", "") for path, h in ((conf or {}).get("Handlers") or {}).items()})
+    return found
+
+
+def serve_commands(have, want):
+    """The `tailscale serve` arguments that turn the handlers `have` into `want`: none when they already match."""
+    off = [["serve", "--https=443", f"--set-path={path}", "off"] for path in have if path not in want]
+    on = [["serve", "--bg", *([] if path == "/" else [f"--set-path={path}"]), target]
+          for path, target in want.items() if have.get(path) != target]
+    return off + on
+
+
+def ensure_serve(want, binary, url, run=subprocess.run, say=print):
+    """Point this machine's tailnet HTTPS name at `want` ({path: loopback URL}) with `tailscale serve`, changing only the paths that
+    differ, so running it again changes nothing. Does nothing when Tailscale is missing or not running (`url` empty)."""
+    if not binary or not url:
+        say("Tailnet: Tailscale is not running here; the page is on 127.0.0.1 only.")
+        return
+
+    def handlers():
+        done = run([binary, "serve", "status", "--json"], capture_output=True, text=True, timeout=10, check=False)
+        try:
+            return serve_handlers(json.loads(done.stdout or "{}")) if done.returncode == 0 else {}
+        except ValueError:
+            return {}
+
+    commands = serve_commands(handlers(), want)
+    for args in commands:
+        say("+ tailscale " + " ".join(args))
+        run([binary, *args], capture_output=True, text=True, timeout=30, check=False)
+    if commands and handlers() != want:
+        say("WARNING: `tailscale serve status` does not show " + ", ".join(f"{p} -> {t}" for p, t in want.items())
+            + "; check it, or `tailscale serve reset` and start again.")
+    say(f"Tailnet: {url}" + ("" if commands else " (serve already pointed here)"))
+
+
+def tailnet(want):
+    from studio_api.hosts import tailscale_binary
+    ensure_serve(want, tailscale_binary(), tailnet_url())
+
+
 def port_busy(port):
     with socket.socket() as probe:
         probe.settimeout(.5)
@@ -219,8 +267,8 @@ def stop(proc):
 
 def dev():
     """The live dev loop on this machine: the API with --reload and the Next dev server, both on 127.0.0.1, with both outputs in
-    this terminal. Run it with the .venv interpreter (`python tasks.py setup` makes it), on the host so torch sees the GPU (Metal, CUDA). `tailscale serve` (set up once by hand) puts them on the
-    tailnet; this never runs it."""
+    this terminal. Run it with the .venv interpreter (`python tasks.py setup` makes it), on the host so torch sees the GPU (Metal, CUDA).
+    When Tailscale is running it points `tailscale serve` at them first (`/` the page, `/api/` the API); `run` points it back."""
     for name, port in (("API", API_PORT), ("web", WEB_PORT)):
         if port_busy(port):
             sys.exit(f"Port {port} ({name}) is in use. Stop what listens there first; a second API on the same data/ and runs/ is unsafe.")
@@ -230,11 +278,7 @@ def dev():
     api, web, env = dev_commands(exe)
     if not (WEB / "node_modules").is_dir():
         run(exe, "install", "--frozen-lockfile", cwd=WEB)
-    url = tailnet_url()
-    print(f"Tailnet: {url or 'Tailscale is not running here'}", flush=True)
-    print("Once, if `tailscale serve status` does not show / and /api/ (this changes what serve shows; `tailscale serve reset` undoes it):", flush=True)
-    for line in SERVE:
-        print("  " + line, flush=True)
+    tailnet(DEV_SERVE)
     procs = [spawn(api), spawn(web, cwd=WEB, env={**os.environ, **env})]
     threading.Thread(target=announce, name="device-notice", daemon=True).start()
     code = 0
@@ -253,9 +297,20 @@ def dev():
     sys.exit(code)
 
 
+def run_app():
+    """The built app (app.py: the API serving web/out), with `tailscale serve` pointed at it first when Tailscale is running."""
+    if port_busy(API_PORT):
+        sys.exit(f"Port {API_PORT} is in use. Stop what listens there first (`make dev`, another `make run`).")
+    tailnet(APP_SERVE)
+    try:
+        run(PY, str(APP))
+    except KeyboardInterrupt:
+        pass
+
+
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
          "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
-         "web:build": web_build, "setup": setup, "dev": dev}
+         "web:build": web_build, "setup": setup, "dev": dev, "run": run_app}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
