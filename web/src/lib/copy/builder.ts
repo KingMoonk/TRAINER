@@ -109,6 +109,9 @@ export const BUILDER = {
   split: "Split into {count} versions",
   split_note: "Saved versions {first}–{last}, one change each. They train one after another; each starts from the one before.",
   no_text: "There is no plain text to train on yet. Add some in Your data, then queue it.",
+  predict_loading: "Reading the questions…",
+  text_sets_failed: "Your text sets could not be read, so these changes cannot be split here: {reason}",
+  split_partial: "Saved {saved}; queued {queued} of {total} jobs. {reason}",
   guess_checking: "Checking your guess…",
 } as const;
 

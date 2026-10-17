@@ -6,7 +6,7 @@
 // makes a version (POST /versions); the `versions` event then moves the comparison to it.
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,7 +21,6 @@ import {
   guessOf,
   isVersion,
   jobFor,
-  nextVersionName,
   pretraining,
   queueJobs,
   specBase,
@@ -78,7 +77,9 @@ export function Builder() {
   // The draft: against the current version. A new current version (a save, here or elsewhere) starts a fresh draft from
   // it, as the Tk page's refresh does; a reload finds the one localStorage kept when it is against the same version.
   const [store, setStore] = useState<Draft | null>(null);
-  if (cur && (!store || store.base !== base)) {
+  // A split saves several versions one after another; each moves the current version, which must not reset the draft until it is done.
+  const [splitting, setSplitting] = useState(false);
+  if (cur && !splitting && (!store || store.base !== base)) {
     // Set during render, as React suggests for state that follows a prop: the next render has the draft.
     const kept = loadDraft();
     setStore(kept && kept.base === base ? kept : { base, draft: cur, anchor: null });
@@ -189,7 +190,8 @@ export function Builder() {
   const draftKey = JSON.stringify([base, store?.draft, store?.anchor]);
   const [asked, setAsked] = useState<{ kind: "one" | "split"; key: string } | null>(null);
   const [picks, setPicks] = useState<Guess[]>([]);
-  const asking = asked && asked.key === draftKey ? asked.kind : null;
+  if (asked && asked.key !== draftKey) setAsked(null); // the draft moved on: the question is about a draft that is gone
+  const asking = asked ? asked.kind : null;
   const ask = (kind: "one" | "split") => {
     setPicks([]);
     setAsked({ kind, key: draftKey });
@@ -231,22 +233,56 @@ export function Builder() {
       if (!plan) throw new Error(BUILDER.one_change_cannot);
       if (!datasets.length) throw new Error(BUILDER.no_text);
       const made: Version[] = [];
-      for (const [i, step] of plan.steps.entries()) {
-        const version = await versions.save(step.spec, step.chips.join(", "), guesses[i]);
-        saved(version);
-        made.push(version);
+      let queued = 0;
+      try {
+        for (const [i, step] of plan.steps.entries()) {
+          const version = await versions.save(step.spec, step.chips.join(", "), guesses[i]);
+          saved(version);
+          made.push(version);
+        }
+        for (const [i, job] of plan.jobs.entries()) {
+          await queueJobs.enqueue(jobFor(job, Number(job.params?.version), made[i].number));
+          queued++;
+        }
+      } catch (reason) {
+        if (made.length) {
+          throw new Error(
+            fill(BUILDER.split_partial, {
+              saved: made.map((v) => versionName(v.number)).join(", "),
+              queued,
+              total: plan.jobs.length,
+              reason: detailOf(reason),
+            }),
+          );
+        }
+        throw reason;
       }
-      for (const [i, job] of plan.jobs.entries()) await queueJobs.enqueue(jobFor(job, Number(job.params?.version), made[i].number));
       return made;
     },
-    onSuccess: (made) => {
+    onMutate: () => setSplitting(true),
+    onSettled: () => {
+      setSplitting(false);
       void client.invalidateQueries({ queryKey: ["versions", "current"], exact: true });
       void client.invalidateQueries({ queryKey: ["queue"] });
+    },
+    onSuccess: (made) => {
       setAsked(null);
       toast.success(fill(BUILDER.split_note, { first: made[0].number, last: made[made.length - 1].number }));
     },
     onError: (reason) => toast.error(detailOf(reason)),
   });
+  // Back at the tray (Back, a save, or the draft moving on), keyboard focus returns to the button that opened the panel.
+  const opener = useRef<"one" | "split" | null>(null);
+  useEffect(() => {
+    if (asking) {
+      opener.current = asking;
+      return;
+    }
+    if (!opener.current) return;
+    const id = opener.current === "split" ? "builder-split" : "builder-save";
+    opener.current = null;
+    document.getElementById(id)?.focus();
+  }, [asking]);
   const startSave = () => (base === null || !draftSpec ? save.mutate({}) : ask("one"));
   const finish = (skip: boolean) => {
     const guesses = (plan && asking === "split" ? plan.steps : [null]).map((_, i) => (skip ? {} : guessOf(picks[i])));
@@ -329,7 +365,7 @@ export function Builder() {
               steps={guessSteps}
               error={guessError ? detailOf(guessError) : null}
               picks={picks}
-              saveLabel={asking === "split" && plan ? fill(BUILDER.predict_split_save, { count: plan.steps.length }) : fill(BUILDER.save_as, { version: nextVersionName(base) })}
+              saveLabel={asking === "split" && plan ? fill(BUILDER.predict_split_save, { count: plan.steps.length }) : BUILDER.predict_save}
               saving={save.isPending || saveSplit.isPending}
               onPick={pickGuess}
               onSave={() => finish(false)}
@@ -348,6 +384,11 @@ export function Builder() {
               onSplit={() => ask("split")}
               onDiscard={discard}
             />
+          )}
+          {textSetsQ.isError && chips.length > 1 && base !== null && (
+            <p role="alert" className="text-xs text-destructive">
+              {fill(BUILDER.text_sets_failed, { reason: detailOf(textSetsQ.error) })}
+            </p>
           )}
           {current && <GuessCheck before={checkBefore} version={current} />}
         </>

@@ -4,7 +4,7 @@
 // the change will do (skippable); after training, the guess checked against the result. The questions, the split and the
 // checking are the server's (/design/questions, /design/split-plan, /design/guess-check); this file only asks and shows.
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -55,7 +55,7 @@ export function GuessPanel({ steps, error, picks, saveLabel, saving, onPick, onS
           {BUILDER.predict_failed} {error}
         </p>
       ) : !steps ? (
-        <div className="flex flex-col gap-2" aria-busy="true" data-testid="guess-loading">
+        <div role="status" aria-label={BUILDER.predict_loading} className="flex flex-col gap-2" aria-busy="true" data-testid="guess-loading">
           <Skeleton className="h-8 w-2/3" />
           <Skeleton className="h-8 w-1/2" />
         </div>
@@ -95,7 +95,7 @@ export function GuessPanel({ steps, error, picks, saveLabel, saving, onPick, onS
         <Button size="sm" onClick={onSave} disabled={!steps || saving} data-testid="guess-save">
           {saveLabel}
         </Button>
-        <Button size="sm" variant="outline" onClick={onSkip} disabled={!steps || saving} data-testid="guess-skip">
+        <Button size="sm" variant="outline" onClick={onSkip} disabled={saving || (!steps && !error)} data-testid="guess-skip">
           {BUILDER.predict_skip}
         </Button>
         <Button size="sm" variant="ghost" onClick={onBack} disabled={saving} data-testid="guess-back">
@@ -109,27 +109,29 @@ export function GuessPanel({ steps, error, picks, saveLabel, saving, onPick, onS
 /** The saved guess of version `version`, checked against what it did next to version `before` (check_text). Nothing when it has none. */
 export function GuessCheck({ before, version }: { before: number | null; version: Version }) {
   const guessed = Object.keys(version.prediction ?? {}).some((key) => key !== "question");
+  const card = version.scorecard as { bpc?: unknown; bpc_method?: unknown } | undefined;
   const checkQ = useQuery({
-    // What the check reads changes when the version trains: its checkpoint and score.
-    queryKey: ["design", "guess-check", before, version.number, version.status, version.best_checkpoint ?? null, version.scorecard ?? null],
+    // Only what the check reads: whether the version has trained and its score (not every status change).
+    queryKey: ["design", "guess-check", before, version.number, Boolean(version.best_checkpoint), card?.bpc ?? null, card?.bpc_method ?? null],
     queryFn: ({ signal }) => design.guessCheck(before!, version.number, signal),
     enabled: guessed && before !== null,
+    placeholderData: keepPreviousData,
     retry: false,
   });
-  if (!guessed || before === null) return null;
-  if (checkQ.isPending) return <Skeleton className="h-14 w-full" aria-label={BUILDER.guess_checking} data-testid="guess-check-loading" />;
-  if (checkQ.isError || !checkQ.data?.tray) {
-    return checkQ.isError ? (
-      <p role="alert" className="text-sm text-destructive">
-        {detailOf(checkQ.error)}
-      </p>
-    ) : null;
-  }
-  const [state, kicker, text] = checkQ.data.tray;
+  const tray = checkQ.data?.tray;
+  // The live region is always there, so what fills it later is announced.
   return (
-    <div className="flex flex-col gap-1 rounded-md border px-3 py-2" data-testid="guess-check" data-state={state} aria-live="polite">
-      <p className={cn("text-sm font-medium", state === "attention" && AMBER, state === "live" && "text-success")}>{kicker}</p>
-      <p className="text-xs text-muted-foreground">{text}</p>
+    <div role="status" aria-live="polite" data-testid="guess-check-region">
+      {!guessed || before === null ? null : checkQ.isPending ? (
+        <Skeleton className="h-14 w-full" aria-label={BUILDER.guess_checking} data-testid="guess-check-loading" />
+      ) : checkQ.isError ? (
+        <p className="text-sm text-destructive">{detailOf(checkQ.error)}</p>
+      ) : tray ? (
+        <div className="flex flex-col gap-1 rounded-md border px-3 py-2" data-testid="guess-check" data-state={tray[0]}>
+          <p className={cn("text-sm font-medium", tray[0] === "attention" && AMBER, tray[0] === "live" && "text-success")}>{tray[1]}</p>
+          <p className="text-xs text-muted-foreground">{tray[2]}</p>
+        </div>
+      ) : null}
     </div>
   );
 }

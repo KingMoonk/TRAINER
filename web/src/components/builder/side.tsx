@@ -290,7 +290,7 @@ type TrayProps = {
 export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, onSave, onSplit, onDiscard }: TrayProps) {
   const nv = nextVersionName(base);
   const saveButton = (
-    <Button size="sm" onClick={onSave} disabled={!canSave || saving} data-testid="save">
+    <Button size="sm" onClick={onSave} disabled={!canSave || saving} id="builder-save" data-testid="save">
       {fill(BUILDER.save_as, { version: nv })}
     </Button>
   );
@@ -312,7 +312,7 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
       <>
         {saveButton}
         {splitCount > 1 && (
-          <Button size="sm" variant="outline" onClick={onSplit} disabled={!canSave || saving} data-testid="split">
+          <Button size="sm" variant="outline" onClick={onSplit} disabled={!canSave || saving} id="builder-split" data-testid="split">
             {fill(BUILDER.split, { count: splitCount })}
           </Button>
         )}
@@ -334,9 +334,10 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className={cn("text-sm font-medium", (cannotWrite || chips.length > 0) && AMBER)}>{kicker}</p>
         <p className="text-xs text-muted-foreground">{text}</p>
-        {splitCount > 1 && !cannotWrite && (
+        {chips.length > 1 && base !== null && !cannotWrite && (
           <p className="text-xs text-muted-foreground" data-testid="split-offer">
-            {fill(BUILDER.one_change, { count: splitCount })} {fill(BUILDER.one_change_split, { count: splitCount })}
+            {fill(BUILDER.one_change, { count: chips.length })}{" "}
+            {splitCount > 1 ? fill(BUILDER.one_change_split, { count: splitCount }) : BUILDER.one_change_cannot}
           </p>
         )}
         {chips.length > 0 && !cannotWrite && (
