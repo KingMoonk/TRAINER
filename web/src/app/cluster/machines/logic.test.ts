@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
 import type { QueueRow } from "@/lib/cluster";
-import { changed, cleanList, deviceText, fraction, jobRows, lastSeen, machineJobs, progressText, refusedUs, runPage, waitingPlace, type ClusterNode } from "./logic";
+import { changed, cleanList, deviceText, factsAge, fraction, jobRows, lastSeen, machineJobs, progressText, refusedUs, runPage, waitingPlace, type ClusterNode } from "./logic";
 
 const node = (address: string, over: Partial<ClusterNode> = {}): ClusterNode => ({
-  address, local: false, hostname: "", version: "", device: "", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: false, error: "", tailnet_name: "", ...over,
+  address, local: false, hostname: "", version: "", device: "", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: false, error: "", tailnet_name: "", origin: "", origin_down: false, ...over,
 });
 const row = (id: string, label: string, over: Partial<QueueRow> = {}): QueueRow => ({
   id, kind: "pretrain", label, status: "waiting", node: "", hostname: "", queued_on: "mac-mini", queued_here: true, queued_address: "local",
@@ -80,7 +80,19 @@ describe("jobs", () => {
   });
 
   test("with other machines listed the merged rows are used as they are", () => {
-    const merged = { nodes: [{ address: "local", hostname: "m", pin: "m", local: true, online: true, error: "", seen_at: 0 }], jobs: rows };
+    const merged = { nodes: [{ address: "local", hostname: "m", pin: "m", local: true, online: true, error: "", seen_at: 0, origin: "", origin_down: false, listed: true }], jobs: rows };
     expect(jobRows(merged, { ...quiet, job: job("r", { status: "running" }) } as never)).toBe(rows);
+  });
+});
+
+describe("how old the facts about a machine are here", () => {
+  test("this machine and one the store holds nothing of say nothing", () => {
+    expect(factsAge(node("local", { local: true, age_s: 0 }))).toBe("");
+    expect(factsAge(node("beast", { age_s: null }))).toBe("");
+  });
+
+  test("another machine says the age of this computer's copy, and when it is down says so", () => {
+    expect(factsAge(node("beast", { origin: "beast", age_s: 5 }))).toBe("Its facts here are 5 s old");
+    expect(factsAge(node("beast", { origin: "beast", age_s: 120, origin_down: true }))).toContain("2 min old");
   });
 });

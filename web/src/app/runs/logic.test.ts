@@ -4,7 +4,7 @@ import type { Job, Queue } from "@/app/queue/logic";
 import { buildRows, completedText, etaText, inSection, machineName, progressPercent, rolesOn, runEta, type ClusterJob } from "./logic";
 
 const node = (address: string, hostname: string, over: Partial<ClusterNode> = {}): ClusterNode => ({
-  address, hostname, local: address === "local", version: "1", device: "mps", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,
+  address, hostname, local: address === "local", version: "1", device: "mps", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", origin: "", origin_down: false, ...over,
 });
 const NODES = [node("local", "mac"), node("beast:8000", "beast", { device: "cuda" })];
 const job = (id: string, over: Partial<Job> = {}): Job => ({ id, kind: "pretrain", label: id, note: "", params: {}, status: "waiting", eta_s: null, created_at: 0, epoch: 0, error: "", node: "", owner: "", ...over });
@@ -16,7 +16,7 @@ const queue = (over: Partial<Queue> = {}): Queue => ({
 const round = (n: number, loss: number | null, val: number | null, seconds = 600) => ({ round: n, loss, val_loss: val, seconds, step: n * 100, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0 });
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id, label: "from scratch", version: 5, state: "running", note: "", started_at: 100, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
-  delta_dtype: "float16", can_stop: true, history: [round(6, 3.5, 3.6), round(7, 3.41, 3.47)],
+  delta_dtype: "float16", term: 1, coordinator: "", origin: "", age_s: 0, origin_down: false, can_stop: true, history: [round(6, 3.5, 3.6), round(7, 3.41, 3.47)],
   phase: "training", deadline_s: null, grace_s: 2, window_s: null, contributed: 0, expected: 2, theta_bytes: 0, now_s: 0, timeline: [], events: [],
   members: [
     { node: "mac", address: "local", local: true, state: "training" },

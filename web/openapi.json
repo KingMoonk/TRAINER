@@ -807,6 +807,17 @@
             "title": "Address",
             "type": "string"
           },
+          "age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age S"
+          },
           "busy": {
             "title": "Busy",
             "type": "boolean"
@@ -845,6 +856,16 @@
           },
           "online": {
             "title": "Online",
+            "type": "boolean"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          },
+          "origin_down": {
+            "default": false,
+            "title": "Origin Down",
             "type": "boolean"
           },
           "tailnet_name": {
@@ -5404,6 +5425,17 @@
             "title": "Address",
             "type": "string"
           },
+          "age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age S"
+          },
           "error": {
             "default": "",
             "title": "Error",
@@ -5413,12 +5445,27 @@
             "title": "Hostname",
             "type": "string"
           },
+          "listed": {
+            "default": true,
+            "title": "Listed",
+            "type": "boolean"
+          },
           "local": {
             "title": "Local",
             "type": "boolean"
           },
           "online": {
             "title": "Online",
+            "type": "boolean"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          },
+          "origin_down": {
+            "default": false,
+            "title": "Origin Down",
             "type": "boolean"
           },
           "pin": {
@@ -7118,6 +7165,11 @@
       },
       "Run": {
         "properties": {
+          "age_s": {
+            "default": 0.0,
+            "title": "Age S",
+            "type": "number"
+          },
           "can_stop": {
             "title": "Can Stop",
             "type": "boolean"
@@ -7125,6 +7177,11 @@
           "contributed": {
             "title": "Contributed",
             "type": "integer"
+          },
+          "coordinator": {
+            "default": "",
+            "title": "Coordinator",
+            "type": "string"
           },
           "deadline_s": {
             "anyOf": [
@@ -7190,6 +7247,16 @@
             "title": "Now S",
             "type": "number"
           },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          },
+          "origin_down": {
+            "default": false,
+            "title": "Origin Down",
+            "type": "boolean"
+          },
           "outer_lr": {
             "title": "Outer Lr",
             "type": "number"
@@ -7240,6 +7307,11 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "term": {
+            "default": 1,
+            "title": "Term",
+            "type": "integer"
           },
           "theta_bytes": {
             "title": "Theta Bytes",
@@ -12965,7 +13037,7 @@
     },
     "/distributed/runs": {
       "get": {
-        "description": "Every run this computer owns, newest first, each with its members and rounds. A machine that is offline or refuses is a\nmember row with a reason; the rest of the run still reads.",
+        "description": "Every run in the cluster, newest first, each with its members and rounds and the `origin` that wrote it and its `age_s`. Runs\nthis computer coordinates are read live; the others come from this computer's copy of the observation store, so a node that is\ndown keeps its last runs here with a growing age and `origin_down`. A machine that is offline or refuses is a member row with\na reason; the rest of the run still reads.",
         "operationId": "list_runs_distributed_runs_get",
         "responses": {
           "200": {
@@ -13073,7 +13145,7 @@
     },
     "/distributed/runs/{run_id}/members/{node}/stop": {
       "post": {
-        "description": "Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)\nand for a node that is not a member.",
+        "description": "Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)\nand for a node that is not a member. A run another computer coordinates: that computer is asked.",
         "operationId": "stop_member_distributed_runs__run_id__members__node__stop_post",
         "parameters": [
           {
@@ -13125,7 +13197,7 @@
     },
     "/distributed/runs/{run_id}/stop": {
       "post": {
-        "description": "End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The\nweights of the last finished round stay in the run's folder.",
+        "description": "End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The\nweights of the last finished round stay in the run's folder. A run another computer coordinates is stopped by asking that computer.",
         "operationId": "stop_run_distributed_runs__run_id__stop_post",
         "parameters": [
           {

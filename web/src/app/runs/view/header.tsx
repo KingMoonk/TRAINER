@@ -6,7 +6,7 @@ import { Hint } from "@/app/runs/hint";
 import { T } from "./copy";
 
 /** The run's name, its shape line (the machines, the coordinator, the settings) and the controls that end it. */
-export function RunHeader({ title, shape, controls }: { title: string; shape: string; controls?: ReactNode }) {
+export function RunHeader({ title, shape, controls, freshness }: { title: string; shape: string; controls?: ReactNode; freshness?: string }) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-4">
       <div className="flex min-w-0 flex-col gap-1.5">
@@ -15,6 +15,7 @@ export function RunHeader({ title, shape, controls }: { title: string; shape: st
         <Hint tip={T.shapeTip} plain>
           <span className="font-mono text-sm text-muted-foreground" data-testid="run-shape">{shape}</span>
         </Hint>
+        {freshness && <span className="text-xs text-muted-foreground" data-testid="run-freshness">{freshness}</span>}
       </div>
       {controls}
     </header>

@@ -16,6 +16,8 @@ export const CLUSTER = {
   idle: "Idle",
   listedAs: "Listed as {address}",
   lastAnswered: "Last answered {when}",
+  factsAge: "Its facts here are {age} old",
+  factsDown: "Its facts here are {age} old; this computer's copy says it is not answering",
   neverAnswered: "Has not answered yet",
   unsaved: "Not saved yet. Save to ask it.",
   running: "Running now",

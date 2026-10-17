@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { QueueRow } from "@/lib/cluster";
 import { CLUSTER as T } from "@/lib/copy/cluster";
 import { cn } from "@/lib/utils";
-import { deviceText, fraction, lastSeen, machineJobs, progressText, refusedUs, runPage, waitingPlace, type ClusterNode } from "./logic";
+import { deviceText, factsAge, fraction, lastSeen, machineJobs, progressText, refusedUs, runPage, waitingPlace, type ClusterNode } from "./logic";
 
 type Props = {
   node?: ClusterNode; // undefined: added to the list but not saved yet
@@ -28,6 +28,7 @@ export function MachineCard({ node, address, rows, seenAt, login, names, busy, o
   const { running, waiting } = machineJobs(address, rows);
   const device = node ? deviceText(node) : "";
   const seen = node ? lastSeen(node, seenAt) : "";
+  const facts = node ? factsAge(node) : "";
   const stale = node && !node.online;
   return (
     <Card data-testid={`machine-${address}`} data-online={node ? String(node.online) : undefined} className={cn(stale && "opacity-90")}>
@@ -53,6 +54,7 @@ export function MachineCard({ node, address, rows, seenAt, login, names, busy, o
         {node && !node.online && node.error && <p className="text-muted-foreground" data-testid={`machine-error-${address}`}>{node.error}</p>}
         {node && refusedUs(node) && <Refused name={node.hostname || address} login={login} />}
         {seen && <p className="text-xs text-muted-foreground" data-testid={`seen-${address}`}>{seen}</p>}
+        {facts && <p className="text-xs text-muted-foreground" data-testid={`facts-${address}`}>{facts}</p>}
         {node && (
           <>
             <JobList title={T.running} empty={T.nothingRunning} rows={running} names={names} stale={!!stale} onStop={onStop} busy={busy} />

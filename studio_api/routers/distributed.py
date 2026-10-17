@@ -6,6 +6,7 @@ This is the owner's side. The members' wire protocol is `/collective` (studio_ap
 """
 
 import os
+import socket
 import time
 import uuid
 from dataclasses import asdict
@@ -17,6 +18,8 @@ from pydantic import BaseModel, Field
 import studio_cluster
 import studio_distributed as runs
 import studio_diloco
+import studio_facts
+import studio_peer
 from studio_api.app import get_services
 from studio_api.routers.pretraining import _version
 from studio_api.version import app_version
@@ -140,6 +143,11 @@ class Run(BaseModel):
     note: str
     started_at: float
     owner: str  # the computer that coordinates
+    term: int = 1  # the coordinator's term
+    coordinator: str = ""  # the origin whose account of the run this is
+    origin: str = ""  # whose fact this is: the node that wrote it into the observation store
+    age_s: float = 0.  # seconds since the origin wrote it (0 for a run this computer coordinates: it is read live)
+    origin_down: bool = False  # the origin is not answering: this is its last account of the run
     round: int  # rounds finished
     rounds: int
     inner_steps: int
@@ -199,17 +207,77 @@ def _find(services, run_id):
     return found
 
 
+def _cluster(services):
+    return getattr(getattr(services, "runner", None), "cluster", None)
+
+
+def _live_rows(services):
+    """This computer's runs, read live (age 0)."""
+    cluster = _cluster(services)
+    if cluster is None:
+        return [_read(run, job)[0] for run, job in _owned(services, create=True)]
+    out = []
+    for run, coordinator, job in cluster.local_runs():
+        if coordinator is not None and job is not None and job.status in ("failed", "stopped", "done"):
+            coordinator.stop()  # its own member is gone: the run cannot go on
+        out.append(runs.view(run, coordinator, job))
+    return out
+
+
+def _rows(services):
+    """Every run in the cluster: this computer's live, the others' from the local replica with origin and age. Without a cluster
+    (no queue that can take part in one) only this computer's, labelled with its hostname."""
+    cluster = _cluster(services)
+    rows = _live_rows(services)
+    if cluster is None:
+        host = socket.gethostname()
+        rows = [{**row, "coordinator": host, "origin": host, "age_s": 0., "origin_down": False} for row in rows]
+        return sorted(rows, key=lambda row: row["started_at"], reverse=True)
+    return studio_facts.cluster_runs(cluster, rows)
+
+
 @router.get("/runs")
 def list_runs(services: Services) -> list[Run]:
-    """Every run this computer owns, newest first, each with its members and rounds. A machine that is offline or refuses is a
-    member row with a reason; the rest of the run still reads."""
-    rows = [_read(run, job)[0] for run, job in _owned(services, create=True)]
-    return [Run.model_validate(row) for row in sorted(rows, key=lambda row: row["started_at"], reverse=True)]
+    """Every run in the cluster, newest first, each with its members and rounds and the `origin` that wrote it and its `age_s`. Runs
+    this computer coordinates are read live; the others come from this computer's copy of the observation store, so a node that is
+    down keeps its last runs here with a growing age and `origin_down`. A machine that is offline or refuses is a member row with
+    a reason; the rest of the run still reads."""
+    return [Run.model_validate(row) for row in _rows(services)]
+
+
+def _found(services, run_id):
+    row = next((row for row in _rows(services) if row["id"] == run_id), None)
+    if row is None:
+        raise HTTPException(404, f"No run {run_id}.")
+    return row
 
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str, services: Services) -> Run:
-    return Run.model_validate(_read(*_find(services, run_id))[0])
+    return Run.model_validate(_found(services, run_id))
+
+
+def _forward(services, row, path):
+    """Send a command to the node that owns the run (it is not this one) and return the run as that node answers. The replica is not
+    written: the owner writes the outcome and it arrives by sync."""
+    cluster = _cluster(services)
+    address = cluster.address_of(row["origin"]) if cluster is not None else None
+    if address is None:
+        raise HTTPException(409, f"{row['origin']} coordinates this run and is not one of this computer's listed machines.")
+    try:
+        answer = cluster.client_for(address, retries=0, timeout=10.).post_json(path, {})
+    except studio_peer.PeerError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return Run.model_validate({**answer, "coordinator": row["origin"], "origin": row["origin"], "age_s": 0., "origin_down": False})
+
+
+def _remote(services, run_id):
+    """The row of a run another computer coordinates, else None."""
+    cluster = _cluster(services)
+    if cluster is None or any(run.id == run_id for run, _, _ in cluster.local_runs()):
+        return None
+    row = next((row for row in studio_facts.cluster_runs(cluster, []) if row["id"] == run_id), None)
+    return row if row is not None and row["origin"] != cluster.hostname else None
 
 
 def _address_for_peers(request):
@@ -301,13 +369,16 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     if index is not None:
         services.move(job.id, index)
     services.start_queue()
-    return get_run(job.id, services)
+    return Run.model_validate(_found(services, job.id))
 
 
 @router.post("/runs/{run_id}/stop")
 def stop_run(run_id: str, services: Services) -> Run:
     """End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The
-    weights of the last finished round stay in the run's folder."""
+    weights of the last finished round stay in the run's folder. A run another computer coordinates is stopped by asking that computer."""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/stop")
     run, job = _find(services, run_id)
     runs.stop_run(run, studio_diloco.COORDINATORS.get(run.id))
     if job is not None and job.status in ("waiting", "held", "running"):
@@ -318,7 +389,10 @@ def stop_run(run_id: str, services: Services) -> Run:
 @router.post("/runs/{run_id}/members/{node}/stop")
 def stop_member(run_id: str, node: str, services: Services) -> Run:
     """Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)
-    and for a node that is not a member."""
+    and for a node that is not a member. A run another computer coordinates: that computer is asked."""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/members/{node}/stop")
     run, job = _find(services, run_id)
     coordinator = studio_diloco.COORDINATORS.get(run.id)
     machine = next((m for m in run.machines if m.node == node), None)

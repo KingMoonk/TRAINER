@@ -102,7 +102,7 @@ def archive(run_id, coordinator):
     run = RUNS.get(run_id)
     if run is not None and run.final is None:
         run.final = coordinator.snapshot()
-        run.term = coordinator.term
+        run.term = getattr(coordinator, "term", run.term)
 
 
 # ---- inviting ---------------------------------------------------------------------------------------------------------
@@ -259,7 +259,7 @@ def view(run, coordinator, job):
     ended = state in ("finished", "stopped", "failed") and (state if state != "failed" else "stopped")
     settings = (snap or {}).get("settings") or run.settings
     return {"id": run.id, "label": run.label, "version": run.version, "state": state, "note": note, "started_at": run.started_at,
-            "owner": run.owner, "term": coordinator.term if coordinator is not None else run.term, "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
+            "owner": run.owner, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or ""),
             "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,

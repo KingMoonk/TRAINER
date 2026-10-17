@@ -9,6 +9,8 @@ owner, `POST /cluster/jobs/{id}/renew` and `.../finished`. Every write to the ow
 current one is answered 409, and the runner then stops its copy.
 """
 
+import dataclasses
+import time
 from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
@@ -17,6 +19,7 @@ from pydantic import BaseModel, Field
 
 import studio_cluster
 import studio_cluster_queue
+import studio_facts
 import studio_peer
 import studio_scheduler as sched
 from studio_api.app import get_services
@@ -49,6 +52,9 @@ class ClusterNode(BaseModel):
     online: bool
     error: str = ""  # why a machine is offline, in plain words
     tailnet_name: str = ""  # this machine's MagicDNS name, to give to another machine's list; "" for a peer, or when Tailscale is unknown
+    origin: str = ""  # the node whose facts these are: its name in the observation store; "" when this node holds none of its facts
+    age_s: float | None = None  # seconds since the node last wrote its heartbeat into this computer's copy of the store; 0 for this machine
+    origin_down: bool = False  # the store says the node is not answering
 
 
 class NodeList(BaseModel):
@@ -76,6 +82,10 @@ class QueueNode(BaseModel):
     online: bool
     error: str = ""
     seen_at: float = 0.0  # when its queue was last read (epoch seconds); 0 for this machine and for one that never answered
+    origin: str = ""  # the node's name in the observation store ("" when this node holds none of its facts)
+    age_s: float | None = None  # seconds since the node last wrote its queue into this computer's copy of the store; 0 for this machine
+    origin_down: bool = False
+    listed: bool = True  # False for a node this computer knows only from the store (another node's list names it)
 
 
 class QueueRow(BaseModel):
@@ -189,9 +199,15 @@ def nodes(request: Request, services=Depends(get_services)) -> list[ClusterNode]
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     state = {"studioConfig": {"nodes": services.setting("nodes", [])}}
     tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
-    return [ClusterNode(**asdict(info), local=info.address == studio_cluster.LOCAL,
-                        tailnet_name=tailnet if info.address == studio_cluster.LOCAL else "")
-            for info in studio_cluster.survey(state, own, timeout=studio_cluster.POLL_TIMEOUT)]
+    cluster = getattr(getattr(services, "runner", None), "cluster", None)
+    rows = []
+    for info in studio_cluster.survey(state, own, timeout=studio_cluster.POLL_TIMEOUT):
+        local = info.address == studio_cluster.LOCAL
+        name = cluster.hostname if cluster is not None and local else (info.hostname or (cluster._names.get(info.address, "") if cluster is not None else ""))
+        facts = studio_facts.node_facts(cluster, name) if cluster is not None else None
+        rows.append(ClusterNode(**asdict(info), local=local, tailnet_name=tailnet if local else "",
+                                **({"origin": facts[0], "age_s": facts[1], "origin_down": facts[2]} if facts else {})))
+    return rows
 
 
 @router.put("/nodes")
@@ -222,13 +238,55 @@ def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQue
     running = services.queue()
     progress = ({"job_id": running.job.id, "step": running.step, "total": running.total, "eta_s": running.eta_s}
                 if running.job is not None else None)
-    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None), progress)
+    peers = _with_store_queues(cluster, peers)
     shared = any(p.info.hostname.lower() == own.hostname.lower() for p in peers)  # a hostname pin would name two machines
     own_pin = own.address if shared or not own.hostname else own.hostname
-    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own_pin, local=True, online=True),
+    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own_pin, local=True, online=True, **_queue_stamp(cluster, own.hostname)),
              *(QueueNode(address=p.info.address, hostname=p.info.hostname, pin=p.info.address, local=False,
-                         online=p.info.online, error=p.info.error, seen_at=p.seen_at) for p in peers)]
+                         online=p.info.online, error=p.info.error, seen_at=p.seen_at, listed=p.info.address in addresses,
+                         **_queue_stamp(cluster, p.info.hostname)) for p in peers)]
+    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None), progress)
     return ClusterQueue(nodes=nodes, jobs=[QueueRow(**asdict(r)) for r in rows])
+
+
+def _queue_stamp(cluster, hostname):
+    """origin, age_s and origin_down of a machine's queue as this computer's copy of the observation store holds it."""
+    if cluster is None or not hostname:
+        return {}
+    jobs, age = studio_facts.queue_facts(cluster, hostname)
+    if age is None and hostname != cluster.hostname:
+        return {}
+    return {"origin": hostname, "age_s": 0. if hostname == cluster.hostname else age, "origin_down": cluster.is_down(hostname)}
+
+
+def _with_store_queues(cluster, peers):
+    """The survey's peers, where a peer whose queue could not be read keeps the queue it last wrote into the store (marked stale), and
+    a node the store knows that no listed machine answers to is added as a stale peer: the cluster as any node's store has it."""
+    if cluster is None:
+        return peers
+    out, named = [], {cluster.hostname.lower()}
+    for peer in peers:
+        name = peer.info.hostname or cluster._names.get(peer.info.address, "")  # an offline peer forgets its name; the poll remembers it
+        if name and not peer.info.hostname:
+            peer = dataclasses.replace(peer, info=dataclasses.replace(peer.info, hostname=name))
+        named.add(name.lower())
+        if peer.stale and not peer.jobs and name:
+            jobs, age = studio_facts.queue_facts(cluster, name)
+            if age is not None:
+                peer = dataclasses.replace(peer, jobs=tuple(jobs), seen_at=time.time() - age)
+        out.append(peer)
+    for origin in studio_facts.origins(cluster):
+        if origin.lower() in named:
+            continue
+        found = studio_facts.node_facts(cluster, origin)
+        jobs, age = studio_facts.queue_facts(cluster, origin)
+        record = found[3] if found else {}
+        info = studio_cluster.NodeInfo(address=origin, hostname=origin, version=record.get("version", ""), device=record.get("device", "cpu"),
+                                       device_name=record.get("device_name", ""), memory_bytes=record.get("memory_bytes", 0),
+                                       busy=bool(record.get("busy")), online=not cluster.is_down(origin),
+                                       error=f"{origin} is not on this computer's list; its facts arrive through another node.")
+        out.append(studio_cluster_queue.Peer(info, tuple(jobs), stale=True, seen_at=time.time() - (age or 0.)))
+    return out
 
 
 @router.get("/access")

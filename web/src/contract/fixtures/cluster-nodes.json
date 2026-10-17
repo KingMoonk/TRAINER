@@ -2,6 +2,7 @@
   "body": [
     {
       "address": "local",
+      "age_s": null,
       "busy": false,
       "device": "cpu",
       "device_name": "CPU",
@@ -13,6 +14,8 @@
       "local": true,
       "memory_bytes": 17179869184,
       "online": true,
+      "origin": "",
+      "origin_down": false,
       "tailnet_name": "",
       "version": "v0.0.0"
     }

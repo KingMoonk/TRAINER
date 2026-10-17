@@ -1,7 +1,9 @@
 {
   "body": {
+    "age_s": 0.0,
     "can_stop": true,
     "contributed": 0,
+    "coordinator": "Michaels-Mac.local",
     "deadline_s": 4.25,
     "delta_dtype": "float16",
     "events": [
@@ -191,6 +193,8 @@
     ],
     "note": "",
     "now_s": 8.0,
+    "origin": "Michaels-Mac.local",
+    "origin_down": false,
     "outer_lr": 0.7,
     "outer_momentum": 0.9,
     "owner": "mac-mini",
@@ -199,6 +203,7 @@
     "rounds": 400,
     "started_at": 1700000000.0,
     "state": "running",
+    "term": 1,
     "theta_bytes": 4000000,
     "timeline": [
       {

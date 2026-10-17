@@ -28,6 +28,7 @@ from pathlib import Path
 
 import studio_cluster
 import studio_publish
+import studio_facts
 import studio_scheduler as sched
 import studio_state
 from studio_peer import PeerClient
@@ -85,9 +86,11 @@ class Cluster:
     the workspace config. `client_for(address, **options)` makes the PeerClient; tests pass fakes for it, for `store`, `own` and `clock`."""
 
     def __init__(self, runner, client_for=client_for, store=None, own=None, clock=time.monotonic, address=None, environ=None,
-                 lease_s=sched.LEASE_S, threads=True):
+                 lease_s=sched.LEASE_S, threads=True, hostname=None, local_runs=None):
         self.runner, self.client_for, self.clock, self.lease_s, self.threads = runner, client_for, clock, lease_s, threads
         self.environ = os.environ if environ is None else environ
+        self.hostname = hostname or socket.gethostname()  # this node's origin in the observation store
+        self._local_runs = local_runs  # tests give each in-process node its own; None: this process's runs (studio_distributed)
         self.address = address if address is not None else (self.environ.get("TRAINER_NODE_ADDRESS") or "").strip() or None
         self._store_factory = store or self.workspace_store
         self._own_factory = own or (lambda: studio_cluster.own_info(version=_version()))
@@ -106,8 +109,10 @@ class Cluster:
         self._silent = {}  # peer address -> (polls in a row it did not answer, clock time of the next poll): it is left alone until then
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
         self._store, self._store_problem, self._store_mtime = None, "", object()  # object(): not yet read, equal to no mtime
-        self.state = studio_state.Replica(socket.gethostname(), studio_state.next_incarnation(runner.root / "data" / studio_state.INCARNATION_FILE),
-                                          clock)  # the observation store; nothing publishes into it yet
+        self.state = studio_state.Replica(self.hostname, studio_state.next_incarnation(runner.root / "data" / studio_state.INCARNATION_FILE),
+                                          clock)  # the observation store; `publish_state` writes this node's facts into it
+        self.beat, self.events, self.members = 0, [], {}  # heartbeat count; recent cluster events; run id -> this node's member report
+        self._names = {}  # peer address -> the hostname it last answered with
         self.polled = threading.Event()
         self._threads = []
         self._lock = threading.RLock()
@@ -175,6 +180,7 @@ class Cluster:
     def start(self):
         if self._threads or not self.threads:
             return
+        self.publish_state()  # promptly, so this incarnation replaces the old one's entries in the other replicas
         for name, work, every in (("poll", self.poll_once, POLL_EVERY), ("tick", self.tick, TICK_EVERY)):
             thread = threading.Thread(target=self._every, args=(work, every), daemon=True, name=f"cluster {name}")
             thread.start()
@@ -202,7 +208,42 @@ class Cluster:
             run.ended = True
 
     # ---- the cluster as this node sees it ---------------------------------------------------------------------------
+    def publish_state(self):
+        """Write this node's facts into its replica (studio_facts.publish): at every poll, which is also the heartbeat."""
+        studio_facts.publish(self)
+
+    def busy(self):
+        return self.runner.running is not None or bool(self.runner.blocked)
+
+    def local_runs(self):
+        """[(run, coordinator, job)] of the runs this node coordinates or queued."""
+        if self._local_runs is not None:
+            return self._local_runs()
+        import studio_distributed
+        with self.runner.lock:
+            jobs = list(self.runner.jobs)
+        return studio_distributed.local_runs(jobs, create=True)
+
+    def address_of(self, origin):
+        """The listed address of the peer that is `origin`, or None when this node's list has none by that name."""
+        return next((a for a, name in self._names.items() if name == origin and a in self.peers()), None)
+
+    def is_down(self, origin):
+        """True for an origin that is not answering: its last poll failed, or its heartbeat is older than DOWN_AFTER."""
+        if origin == self.hostname:
+            return False
+        address = self.address_of(origin)
+        known = self._known.get(address) if address else None
+        if known is not None and not known.online:
+            return True
+        age = studio_facts.heartbeat_age(self, origin)
+        return age is None or age > studio_facts.DOWN_AFTER
+
     def poll_once(self):
+        try:
+            self.publish_state()
+        except Exception:  # noqa: BLE001 - facts are a courtesy; the poll still runs
+            _log.debug("publishing state failed", exc_info=True)
         peers = self.peers()
         if not peers:
             self.polled.set()
@@ -227,6 +268,8 @@ class Cluster:
             results = list(pool.map(ask, due))
         for address, info, error in results:
             self.health.observe(address, info is not None)
+            if info is not None and info.hostname:
+                self._names[address] = info.hostname
             self._known[address] = info or studio_cluster.offline(address, error)
             if info is not None:
                 self._silent.pop(address, None)
@@ -237,7 +280,7 @@ class Cluster:
 
     def nodes(self):
         """This node first, then each listed peer as last polled."""
-        own = dataclasses.replace(self.own(), busy=self.runner.running is not None or bool(self.runner.blocked))
+        own = dataclasses.replace(self.own(), busy=self.busy())
         return [own, *(self._known.get(a) or studio_cluster.offline(a, "not polled yet") for a in self.peers())]
 
     # ---- owner: placing and dispatching -----------------------------------------------------------------------------
@@ -752,6 +795,12 @@ class Cluster:
 
     # ---- runner: the end of a job -----------------------------------------------------------------------------------
     def _on_event(self, kind, payload):
+        if isinstance(payload, dict):
+            if kind == "cluster":
+                self.events.append({**payload, "at": self.clock()})
+                del self.events[:-studio_facts.EVENTS_KEPT]
+            elif kind == "train" and payload.get("type") == "diloco_member" and payload.get("run"):
+                self.members[payload["run"]] = studio_facts.member_fact(payload, self.clock())
         run = next((r for r in self.guests.values() if payload.get("job") == r.local_id), None) if isinstance(payload, dict) else None
         if run is None or run.ended:
             return

@@ -1369,8 +1369,10 @@ export interface paths {
         };
         /**
          * List Runs
-         * @description Every run this computer owns, newest first, each with its members and rounds. A machine that is offline or refuses is a
-         *     member row with a reason; the rest of the run still reads.
+         * @description Every run in the cluster, newest first, each with its members and rounds and the `origin` that wrote it and its `age_s`. Runs
+         *     this computer coordinates are read live; the others come from this computer's copy of the observation store, so a node that is
+         *     down keeps its last runs here with a growing age and `origin_down`. A machine that is offline or refuses is a member row with
+         *     a reason; the rest of the run still reads.
          */
         get: operations["list_runs_distributed_runs_get"];
         put?: never;
@@ -1418,7 +1420,7 @@ export interface paths {
         /**
          * Stop Member
          * @description Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)
-         *     and for a node that is not a member.
+         *     and for a node that is not a member. A run another computer coordinates: that computer is asked.
          */
         post: operations["stop_member_distributed_runs__run_id__members__node__stop_post"];
         delete?: never;
@@ -1439,7 +1441,7 @@ export interface paths {
         /**
          * Stop Run
          * @description End a run. Every member is told it is finished at its next call, and the member jobs leave the other machines' queues. The
-         *     weights of the last finished round stay in the run's folder.
+         *     weights of the last finished round stay in the run's folder. A run another computer coordinates is stopped by asking that computer.
          */
         post: operations["stop_run_distributed_runs__run_id__stop_post"];
         delete?: never;
@@ -3603,6 +3605,8 @@ export interface components {
         ClusterNode: {
             /** Address */
             address: string;
+            /** Age S */
+            age_s?: number | null;
             /** Busy */
             busy: boolean;
             /** Device */
@@ -3624,6 +3628,16 @@ export interface components {
             memory_bytes: number;
             /** Online */
             online: boolean;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+            /**
+             * Origin Down
+             * @default false
+             */
+            origin_down: boolean;
             /**
              * Tailnet Name
              * @default
@@ -5501,6 +5515,8 @@ export interface components {
         QueueNode: {
             /** Address */
             address: string;
+            /** Age S */
+            age_s?: number | null;
             /**
              * Error
              * @default
@@ -5508,10 +5524,25 @@ export interface components {
             error: string;
             /** Hostname */
             hostname: string;
+            /**
+             * Listed
+             * @default true
+             */
+            listed: boolean;
             /** Local */
             local: boolean;
             /** Online */
             online: boolean;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+            /**
+             * Origin Down
+             * @default false
+             */
+            origin_down: boolean;
             /** Pin */
             pin: string;
             /**
@@ -6210,10 +6241,20 @@ export interface components {
         };
         /** Run */
         Run: {
+            /**
+             * Age S
+             * @default 0
+             */
+            age_s: number;
             /** Can Stop */
             can_stop: boolean;
             /** Contributed */
             contributed: number;
+            /**
+             * Coordinator
+             * @default
+             */
+            coordinator: string;
             /** Deadline S */
             deadline_s: number | null;
             /** Delta Dtype */
@@ -6238,6 +6279,16 @@ export interface components {
             note: string;
             /** Now S */
             now_s: number;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+            /**
+             * Origin Down
+             * @default false
+             */
+            origin_down: boolean;
             /** Outer Lr */
             outer_lr: number;
             /** Outer Momentum */
@@ -6260,6 +6311,11 @@ export interface components {
              * @enum {string}
              */
             state: "queued" | "starting" | "waiting" | "running" | "finished" | "stopped" | "failed";
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
             /** Theta Bytes */
             theta_bytes: number;
             /** Timeline */
