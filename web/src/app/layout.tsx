@@ -4,6 +4,8 @@ import { InlineScript } from "@/components/inline-script";
 import { Providers } from "@/components/providers";
 import { Sidebar } from "@/components/sidebar";
 import { StatusStrip } from "@/components/status-strip";
+import { TrafficConsole } from "@/components/traffic/traffic-console";
+import { TrafficProvider } from "@/components/traffic/traffic-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { ShellEvents } from "@/lib/events";
 import { ACCENT_SCRIPT } from "@/lib/theme";
@@ -24,13 +26,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="flex min-h-dvh flex-col md:flex-row">
         <Providers>
           <ShellEvents>
-            <a href="#studio-content" className="sr-only z-50 rounded-lg bg-primary px-4 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Skip to content</a>
-            <Sidebar />
-            <div id="studio-content" tabIndex={-1} className="flex min-w-0 flex-1 flex-col outline-none">
-              <StatusStrip />
-              {children}
-            </div>
-            <Toaster />
+            <TrafficProvider>
+              <a href="#studio-content" className="sr-only z-50 rounded-lg bg-primary px-4 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Skip to content</a>
+              <Sidebar />
+              <div id="studio-content" tabIndex={-1} className="flex min-w-0 flex-1 flex-col outline-none">
+                <StatusStrip />
+                {children}
+              </div>
+              <TrafficConsole />
+              <Toaster />
+            </TrafficProvider>
           </ShellEvents>
         </Providers>
       </body>

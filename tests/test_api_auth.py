@@ -12,6 +12,7 @@ from studio_api.__main__ import ORIGINS, parse
 from studio_api.app import create_app
 from studio_api.hosts import ANY
 from studio_api.auth import TailscaleAuth
+from studio_api.traffic import TrafficMiddleware
 from studio_ia.services import FakeServices
 
 SITE = "https://trainer.example.vercel.app"
@@ -119,7 +120,8 @@ class MiddlewareOrder(unittest.TestCase):
     def test_auth_is_outside_the_cors_layer_for_configured_origins(self):
         app = create_app(FakeServices(), origins=[SITE], token=TOKEN, hosts=ANY)
         classes = [m.cls for m in app.user_middleware]
-        self.assertEqual(classes, [TailscaleAuth, CORSMiddleware])  # first is outermost
+        self.assertEqual(classes[0], TrafficMiddleware)  # the traffic console sees even the refused requests
+        self.assertEqual(classes[1:], [TailscaleAuth, CORSMiddleware])  # first is outermost
 
     def test_a_preflight_from_a_listed_origin_never_reaches_a_route(self):
         app = create_app(FakeServices(), origins=[SITE], token=TOKEN, hosts=ANY)
