@@ -6,7 +6,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,6 +37,7 @@ import {
   type Version,
 } from "@/lib/builder";
 import { BUILDER, fill, presetAbout } from "@/lib/copy/builder";
+import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const AMBER = "text-warning";
@@ -333,6 +335,11 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
       {fill(BUILDER.save_as, { version: nv })}
     </Button>
   );
+  const quickTest = (
+    <Link href={`${routeFor("quicktest").href}/`} className={buttonVariants({ variant: "outline", size: "sm" })} data-testid="quick-test-first">
+      {BUILDER.quick_test_first}
+    </Link>
+  );
   let kicker: string;
   let text: string;
   let actions: React.ReactNode = null;
@@ -349,6 +356,7 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
     text = fill(BUILDER.not_saved_text, { version: nv });
     actions = (
       <>
+        {quickTest}
         {saveButton}
         {splitCount > 1 && (
           <Button size="sm" variant="outline" onClick={onSplit} disabled={!canSave || saving} id="builder-split" data-testid="split">
@@ -363,7 +371,12 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
   } else if (base === null) {
     kicker = BUILDER.first_save;
     text = fill(BUILDER.first_save_text, { version: nv });
-    actions = saveButton;
+    actions = (
+      <>
+        {saveButton}
+        {quickTest}
+      </>
+    );
   } else {
     kicker = BUILDER.no_changes;
     text = fill(BUILDER.no_changes_text, { version: versionName(base) });
@@ -391,5 +404,19 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
       </div>
       <div className="flex flex-wrap gap-2">{actions}</div>
     </div>
+  );
+}
+
+/** Compare runs and Quick test, which read the staged draft; the look-inside pages hang off the parts and the versions below. */
+export function TryIt() {
+  return (
+    <section className="flex flex-wrap items-center gap-3" data-testid="try-it" aria-label={BUILDER.try_it}>
+      <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{BUILDER.try_it}</h2>
+      {(["compare", "quicktest"] as const).map((key) => (
+        <Link key={key} href={`${routeFor(key).href}/`} className="text-sm underline underline-offset-4">
+          {key === "compare" ? BUILDER.compare_runs : BUILDER.quick_test}
+        </Link>
+      ))}
+    </section>
   );
 }

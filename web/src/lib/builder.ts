@@ -100,6 +100,14 @@ export const design = {
   },
 };
 
+/** The unsaved draft, published so Quick test and Compare runs can read it (builder.py stage): null takes it back. */
+export const quicktest = {
+  stage: async (spec: Spec | null) => {
+    if (spec) await unwrap(api.PUT("/quicktest/draft", { body: { spec } }));
+    else await unwrap(api.DELETE("/quicktest/draft"));
+  },
+};
+
 /** The sets of text to train on (the ids a catch-up job reads), and the queue. */
 export const queueJobs = {
   textSets: () => unwrap(api.GET("/pretraining/text_sets")),
@@ -299,6 +307,23 @@ export function piecesFor(v: number, lists: WordLists | undefined): PiecesView {
   const lost = chips.filter((c) => c.state === "lost").length;
   if (lost) line += `, ${fill(lost > 1 ? BUILDER.pieces_lost_many : BUILDER.pieces_lost_one, { n: String(lost) })}`;
   return { chips, note: null, line };
+}
+
+// ------------------------------------------------------------------------------------------------ when answering
+
+/** The question both versions are asked (builder.py PROMPT). */
+export const PROMPT = BUILDER.example_prompt;
+
+export type AnswerRow = { number: number; why: string };
+
+/** The rows of the "when answering" card: version n and n + 1, each with why it cannot answer ("" when it can). `trained` holds
+ *  the numbers that have trained weights; nothing can answer while it is empty, so there are no rows (builder.py answer_rows).
+ *  Version 0 is not a version, so it never gets a row. */
+export function answerRows(n: number, trained: ReadonlySet<number>, editing: boolean): AnswerRow[] {
+  if (!trained.size) return [];
+  return [n, n + 1]
+    .filter((k) => k > 0)
+    .map((k) => ({ number: k, why: trained.has(k) ? "" : editing && k === n + 1 ? BUILDER.compare_later : BUILDER.not_trained }));
 }
 
 // ------------------------------------------------------------------------------------------------ the tower

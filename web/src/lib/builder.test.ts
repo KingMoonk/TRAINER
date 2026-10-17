@@ -7,6 +7,7 @@ import {
   paramNote,
   paramShares,
   anchoredDraft,
+  answerRows,
   bar,
   BLOCK_LINES,
   blockViews,
@@ -633,5 +634,27 @@ describe("piecesFor", () => {
     expect(piecesFor(2, lists).note).toBe(BUILDER.pieces_gpt2_missing);
     const own = { ...lists!, lists: [lists!.lists[0], null, null, null] } as typeof lists;
     expect(piecesFor(1, own).note).toBe(BUILDER.pieces_needs_text);
+  });
+});
+
+describe("answerRows", () => {
+  test("nothing trained: no rows, so no prompt or button", () => {
+    expect(answerRows(2, new Set(), true)).toEqual([]);
+  });
+
+  test("the untrained next version of an unsaved draft says to save and train it", () => {
+    expect(answerRows(2, new Set([2]), true)).toEqual([
+      { number: 2, why: "" },
+      { number: 3, why: BUILDER.compare_later },
+    ]);
+  });
+
+  test("a saved version that has not trained says so", () => {
+    expect(answerRows(2, new Set([2]), false)[1]).toEqual({ number: 3, why: BUILDER.not_trained });
+    expect(answerRows(2, new Set([3]), true)[0]).toEqual({ number: 2, why: BUILDER.not_trained });
+  });
+
+  test("version 0 never gets a row", () => {
+    expect(answerRows(0, new Set([1]), true)).toEqual([{ number: 1, why: "" }]);
   });
 });
