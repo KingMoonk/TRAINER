@@ -562,6 +562,7 @@ class OwnerSide(unittest.TestCase):
         old = self.report_checkpoint(job, 100)
         self.lose_the_runner(job)
         self.net.down.discard("gpu-box")
+        self.clock.advance(studio_remote.POLL_BACKOFF_MAX)
         self.runner.cluster.poll_once()
         self.runner._place_waiting()
         self.assertEqual(job.params["fetch"], {"init_from": old})
@@ -692,6 +693,7 @@ class OwnerSide(unittest.TestCase):
         self.report_checkpoint(job, 100)
         self.lose_the_runner(job)
         self.net.down.discard("gpu-box")
+        self.clock.advance(studio_remote.POLL_BACKOFF_MAX)  # (a silent peer is left alone for a while)
         self.runner.cluster.poll_once()
         self.runner._place_waiting()
         self.assertEqual((job.status, job.epoch), ("running", 2))
@@ -821,6 +823,20 @@ class OwnerSide(unittest.TestCase):
         self.assertEqual((job.status, job.error, job.epoch), ("failed", "The dataset is empty.", 1))
         self.assertNotIn("fetch", job.params)
 
+    def test_a_peer_that_does_not_answer_is_polled_less_and_less_often(self):
+        self.net.down.add("gpu-box")
+        asked = []
+        for _ in range(12):
+            before = len(self.net.to("gpu-box"))
+            self.runner.cluster.poll_once()
+            asked.append(len(self.net.to("gpu-box")) - before)
+            self.clock.advance(studio_remote.POLL_EVERY)
+        self.assertEqual(asked, [1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0])  # after 0 s, 10 s, 30 s; the next is due at 70 s
+        self.net.down.clear()
+        self.clock.advance(studio_remote.POLL_BACKOFF_MAX)
+        self.runner.cluster.poll_once()
+        self.assertTrue(self.runner.cluster.nodes()[1].online)
+
     def test_a_pinned_job_waits_for_its_node_and_is_never_moved_to_another(self):
         Peer(self.net, "other-box")
         self.nodes = ["gpu-box", "other-box"]
@@ -832,6 +848,7 @@ class OwnerSide(unittest.TestCase):
         self.assertIsNone(self.runner._next_local())
         self.assertIn("pinned to gpu-box, which is not answering", self.runner.cluster.waiting[job.id])
         self.net.down.clear()
+        self.clock.advance(studio_remote.POLL_BACKOFF_MAX)
         self.place()
         self.assertEqual((job.status, job.node), ("running", "gpu-box"))
 

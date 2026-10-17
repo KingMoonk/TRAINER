@@ -1,6 +1,7 @@
 """Replicas of a DiLoCo run (docs/distributed.md, "Terms and coordinator failover"): who they are across membership changes, what they
 keep (theta, v, diloco.json of the latest round) over three members on the real routes, what they fetch once, and that they clean up."""
 import io
+import json
 import tempfile
 import threading
 import unittest
@@ -140,6 +141,7 @@ class Replication(unittest.TestCase):
                 for name, value in found["own_momentum"].items():
                     np.testing.assert_array_equal(found["momentum"][name], value)
                 self.assertEqual(found["record"], found["own_record"])
+                self.assertEqual(json.loads(found["record"])["term"], coordinator.term)  # the term travels with the round
         for node in replicas:
             self.assertEqual(calls[node].count("validation"), 1)  # once per run
             self.assertEqual(sorted(s for s in calls[node] if isinstance(s, int)), list(range(coordinator.shard_count)))  # every shard, once
@@ -162,7 +164,7 @@ class Replication(unittest.TestCase):
     def test_validation_is_served_as_windows(self):
         coordinator = support.build(self.dir / "run", "run1", inner_steps=2, rounds=2)
         studio_diloco.COORDINATORS["run1"] = coordinator
-        body = self.client.get("/collective/run1/validation")
+        body = self.client.get("/collective/run1/validation", params={"term": 1})
         self.assertEqual(body.status_code, 200)
         self.assertGreater(len(coordinator.val), 0)
         with np.load(io.BytesIO(body.content)) as archive:
@@ -171,22 +173,22 @@ class Replication(unittest.TestCase):
     def test_the_state_route_serves_the_latest_round_only(self):
         coordinator = support.build(self.dir / "run", "run1", inner_steps=2, rounds=3, outer_lr=.7, outer_momentum=.9)
         studio_diloco.COORDINATORS["run1"] = coordinator
-        self.assertEqual(self.client.get("/collective/run1/state", params={"round": 0}).status_code, 404)  # nothing has closed
-        self.client.post("/collective/run1/join", json={"node": "a"})
-        view = self.client.get("/collective/run1/rounds/0", params={"node": "a"}).json()
+        self.assertEqual(self.client.get("/collective/run1/state", params={"round": 0, "term": 1}).status_code, 404)  # nothing has closed
+        self.client.post("/collective/run1/join", json={"node": "a"}, params={"term": 1})
+        view = self.client.get("/collective/run1/rounds/0", params={"node": "a", "term": 1}).json()
         self.assertTrue(view["replica"])
         body = studio_diloco.encode_arrays(support.constant_delta(coordinator), "float32")
-        params = {"node": "a", "generation": view["generation"], "epoch": 0, "tokens": 10, "steps": 2}
+        params = {"term": 1, "node": "a", "generation": view["generation"], "epoch": 0, "tokens": 10, "steps": 2}
         self.client.post("/collective/run1/rounds/0/delta", params=params, content=body, headers={"content-type": "application/octet-stream"})
-        state = self.client.get("/collective/run1/state", params={"round": 1})
+        state = self.client.get("/collective/run1/state", params={"round": 1, "term": 1})
         self.assertEqual(state.status_code, 200)
         momentum, record = studio_diloco.decode_state(state.content)
         name = next(iter(momentum))
         np.testing.assert_array_equal(momentum[name], coordinator.momentum[name])
         self.assertEqual(record, (coordinator.directory / "diloco.json").read_bytes())
-        self.assertEqual(self.client.get("/collective/run1/state", params={"round": 0}).status_code, 409)
-        self.assertEqual(self.client.get("/collective/run1/state", params={"round": 2}).status_code, 409)
-        self.assertEqual(self.client.get("/collective/nope/state", params={"round": 1}).status_code, 404)
+        self.assertEqual(self.client.get("/collective/run1/state", params={"round": 0, "term": 1}).status_code, 409)
+        self.assertEqual(self.client.get("/collective/run1/state", params={"round": 2, "term": 1}).status_code, 409)
+        self.assertEqual(self.client.get("/collective/nope/state", params={"round": 1, "term": 1}).status_code, 404)
 
 
 class LateWrites(unittest.TestCase):

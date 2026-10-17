@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import uvicorn
-from fastapi.testclient import TestClient
 
 import studio_diloco
 import studio_distributed
@@ -25,7 +24,7 @@ class Collective(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
-        self.client = self.enterContext(TestClient(support.app()))
+        self.client = self.enterContext(support.TermClient(support.app()))
         self.addCleanup(studio_diloco.COORDINATORS.clear)
 
     def start(self, run="r1", **changes):
@@ -108,7 +107,7 @@ class WireProtocol(Collective):
         generation = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()["generation"]
         body = {"node": "a", "generation": generation, "epoch": 5, "round": 0, "phase": "training", "step": 1, "loss": 3.5, "tokens_per_second": 800.}
         taken = self.client.post("/collective/r1/progress", json=body)
-        self.assertEqual((taken.status_code, taken.json()), (200, {"accepted": True}))
+        self.assertEqual((taken.status_code, taken.json()), (200, {"accepted": True, "term": 1}))
         self.assertEqual((coordinator.reports["a"]["step"], coordinator.reports["a"]["loss"]), (1, 3.5))
         for why, change in {"generation": {"generation": generation + 1}, "epoch": {"epoch": 4}, "round": {"round": 1},
                             "stranger": {"node": "b"}}.items():

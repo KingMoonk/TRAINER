@@ -402,6 +402,7 @@ export interface paths {
         /**
          * Join
          * @description Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.
+         *     A member that does not know the term yet sends 0 and learns it from the answer.
          */
         post: operations["join_collective__run__join_post"];
         delete?: never;
@@ -2554,6 +2555,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/state/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync
+         * @description Push-pull anti-entropy. An empty vector gets the whole state.
+         */
+        post: operations["sync_state_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storage": {
         parameters: {
             query?: never;
@@ -4382,6 +4403,11 @@ export interface components {
             seed: number;
             /** Shard Count */
             shard_count: number;
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
             /** Tokenizer */
             tokenizer: {
                 [key: string]: unknown;
@@ -6111,6 +6137,11 @@ export interface components {
             shards?: number[] | null;
             /** State */
             state: string;
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
         };
         /** RowsPage */
         RowsPage: {
@@ -6534,6 +6565,23 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** StateEntry */
+        StateEntry: {
+            /** Age */
+            age: number;
+            /** Incarnation */
+            incarnation: number;
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Origin */
+            origin: string;
+            /** Seq */
+            seq: number;
+            /** Value */
+            value: unknown;
+        };
         /** StatusRequest */
         StatusRequest: {
             /** Version */
@@ -6664,6 +6712,36 @@ export interface components {
             key: "gate_few_docs" | "gate_better" | "gate_not_sure" | "gate_not_better" | "no_band_yet" | "held_back_below" | "held_back_inside";
             /** Need */
             need?: number | null;
+        };
+        /** SyncBody */
+        SyncBody: {
+            /**
+             * Entries
+             * @default []
+             */
+            entries: components["schemas"]["StateEntry"][];
+            /**
+             * Vector
+             * @default {}
+             */
+            vector: {
+                [key: string]: [
+                    number,
+                    number
+                ];
+            };
+        };
+        /** SyncReply */
+        SyncReply: {
+            /** Entries */
+            entries: components["schemas"]["StateEntry"][];
+            /** Vector */
+            vector: {
+                [key: string]: [
+                    number,
+                    number
+                ];
+            };
         };
         /** TeacherOut */
         TeacherOut: {
@@ -7119,6 +7197,11 @@ export interface components {
              * @default true
              */
             accepted: boolean;
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
         };
         /** Started */
         studio_api__routers__data__Started: {
@@ -7855,7 +7938,10 @@ export interface operations {
     };
     join_collective__run__join_post: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -7891,7 +7977,10 @@ export interface operations {
     };
     leave_collective__run__leave_post: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -7928,6 +8017,8 @@ export interface operations {
             query: {
                 round: number;
                 node?: string;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -7960,7 +8051,10 @@ export interface operations {
     };
     progress_collective__run__progress_post: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -7996,9 +8090,11 @@ export interface operations {
     };
     round_state_collective__run__rounds__round__get: {
         parameters: {
-            query?: {
+            query: {
                 node?: string;
                 wait?: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -8040,6 +8136,8 @@ export interface operations {
                 steps: number;
                 seconds?: number;
                 loss?: number | null;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -8077,7 +8175,10 @@ export interface operations {
     };
     shard_collective__run__shards__shard__get: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 shard: number;
@@ -8112,6 +8213,8 @@ export interface operations {
         parameters: {
             query: {
                 round: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -8144,7 +8247,10 @@ export interface operations {
     };
     validation_collective__run__validation_get: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -11235,6 +11341,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Version"];
+                };
+            };
+        };
+    };
+    sync_state_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncReply"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

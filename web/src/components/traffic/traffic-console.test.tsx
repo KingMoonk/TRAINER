@@ -162,4 +162,13 @@ describe("the traffic console", () => {
     expect(put.rules.find((r) => r.id === "run.finished")?.enabled).toBe(false);
     expect(put.rules.find((r) => r.id === "api.5xx")?.enabled).toBe(true);
   });
+
+  test("the panel paints an opaque theme surface and isolates its stacking, so the page beneath never shows through", async () => {
+    setup([record({ path: "/one" })]);
+    const user = userEvent.setup();
+    await user.click(openButton());
+    await waitFor(() => expect(within(console_()).getAllByTestId("traffic-row")).toHaveLength(1));
+    expect(console_()).toHaveClass("bg-popover", "text-popover-foreground", "isolate", "z-30");
+    expect(console_()).not.toHaveClass("bg-card");
+  });
 });

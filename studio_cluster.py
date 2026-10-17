@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 from studio_peer import PeerClient, PeerError, base_url
 
 DEFAULT_PORT = 8787  # the API's port when a node is listed as a bare name; studio_api (Phase 1) must serve on the same one
+GATEWAY_ERRORS = (502, 503, 504)  # what a proxy answers when the server behind it is not there
 POLL_TIMEOUT = 2.  # seconds: a peer that does not answer this fast is offline for now
 DEFAULT_TAG = "tag:trainer"  # the tag a node carries to call its peers (docs/cluster.md)
 LOCAL = "local"  # the address of this machine's own NodeInfo
@@ -69,8 +70,8 @@ def info_from_payload(address, payload):
                     dtypes=tuple(str(d) for d in dtypes) if isinstance(dtypes, list) and dtypes else ("float32",))
 
 
-def offline(address, error):
-    return NodeInfo(address=address, online=False, error=error)
+def offline(address, error, hostname=""):
+    return NodeInfo(address=address, hostname=hostname, online=False, error=error)
 
 
 # ---- the registry --------------------------------------------------------------------------------------------------
@@ -244,7 +245,11 @@ def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
 def failure(address, exc, timeout=POLL_TIMEOUT):
     """Why a peer is offline, as a sentence for the person looking at the node list."""
     if isinstance(exc, PeerError):
-        return f"{str(exc).rstrip('.')}."
+        text = f"{str(exc).rstrip('.')}."
+        if exc.status in GATEWAY_ERRORS and not exc.detail.strip():  # an empty gateway answer: a proxy is there, the app is not behind it
+            text += (f" Something answers at {address} (usually `tailscale serve`) but the app is not behind it: start the app on that "
+                     f"machine, or list it by its direct address (http://<machine>:{DEFAULT_PORT}).")
+        return text
     if isinstance(exc, TimeoutError):
         return f"{address} did not answer within {timeout:g} seconds."
     if isinstance(exc, ConnectionRefusedError):
