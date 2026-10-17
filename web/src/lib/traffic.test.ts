@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  NO_FILTERS, RING, alertDetail, bytes, curl, duration, filterChoices, isNoise, isSlow, matchesFilters, p95, pick, pushAlert, reqPerSecond,
+  NO_FILTERS, RING, absoluteBase, alertDetail, bytes, curl, duration, filterChoices, isNoise, isSlow, matchesFilters, p95, pick, pushAlert, reqPerSecond,
   route, ruleFires, statusClass, upsert, type Rule, type RuleMemory, type TrafficRecord,
 } from "./traffic";
 
@@ -108,18 +108,29 @@ describe("filters", () => {
 });
 
 describe("curl", () => {
-  test("repeats the method, query and JSON body, with the token as a variable", () => {
+  test("repeats the method, query and JSON body", () => {
     const body = { type: "application/json", bytes: 9, json: { name: "it's" } };
     const r = record({ method: "POST", path: "/queue/jobs", request: { headers: {}, query: { a: "b c" }, body } });
     const text = curl(r, "http://127.0.0.1:8787");
     expect(text).toContain("curl -X POST 'http://127.0.0.1:8787/queue/jobs?a=b%20c'");
-    expect(text).toContain(`"$GROUNDWORK_TOKEN"`);
     expect(text).toContain(`--data '{"name":"it'\\''s"}'`);
+    expect(text).not.toContain("X-Groundwork-Token");
+  });
+  test("sends this browser's token when it has one", () => {
+    expect(curl(record({ path: "/queue" }), "https://n.ts.net/api", "t0k")).toContain("-H 'X-Groundwork-Token: t0k'");
   });
   test("leaves a binary body out with a note", () => {
     const body = { type: "application/octet-stream", bytes: 4096, binary: true };
     const r = record({ method: "POST", request: { headers: {}, query: {}, body } });
     expect(curl(r, "")).toContain("# the binary application/octet-stream (4.0 KB) is not kept");
+  });
+});
+
+describe("absoluteBase", () => {
+  test("puts a relative API path on the page's origin", () => {
+    expect(absoluteBase("/api", "https://n.ts.net/console?x=1")).toBe("https://n.ts.net/api");
+    expect(absoluteBase("", "http://localhost:3000/console")).toBe("http://localhost:3000");
+    expect(absoluteBase("http://127.0.0.1:8787", "http://localhost:3000/")).toBe("http://127.0.0.1:8787");
   });
 });
 

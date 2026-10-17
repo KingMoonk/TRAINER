@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { fetchJson } from "@/lib/api";
 import { BASE } from "@/lib/api-core";
+import { apiToken } from "@/lib/token";
 import { TRAFFIC } from "@/lib/copy/traffic";
-import { bytes, clock, curl, duration, route, statusClass, type BodyView, type StatusClass, type TrafficRecord } from "@/lib/traffic";
+import { absoluteBase, bytes, clock, curl, duration, route, statusClass, type BodyView, type StatusClass, type TrafficRecord } from "@/lib/traffic";
 import { fields, modelSchema, operationId, problems, type Schema, type Spec } from "@/lib/traffic-schema";
 import { cn } from "@/lib/utils";
 
@@ -95,8 +96,8 @@ function Detail({ record }: { record: TrafficRecord }) {
   const query = Object.entries(record.request.query);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(curl(record, BASE || window.location.origin));
-      toast.success("Copied as curl. Secrets are masked: set $GROUNDWORK_TOKEN.");
+      await navigator.clipboard.writeText(curl(record, absoluteBase(BASE, window.location.href), apiToken()));
+      toast.success("Copied as curl.");
     } catch {
       toast.error("The clipboard is not available here.");
     }
