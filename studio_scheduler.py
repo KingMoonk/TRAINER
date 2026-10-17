@@ -374,8 +374,19 @@ def resume_params(params, node):
     out.update(mode="catch_up", fetch={"init_from": checkpoint["key"]})
     out.pop("init_from", None)
     out["cluster"] = {**notes, "offset": done}
-    return out, (f"Interrupted on {node} at step {done}. It continues from that checkpoint, and the optimizer starts again from zero "
-                 "because only the weights are published."), False
+    return out, f"Interrupted on {node} at step {done}. It continues from that checkpoint.", False
+
+
+def resume_here(notes, address):
+    """{"epoch", "steps", "base"} when the job's last checkpoint was written on the node at `address`, which still holds the full one
+    (`last.npz` of that attempt's folder: optimizer, sampler and RNG), else None. `steps` is the length of the attempt that wrote it
+    and `base` the steps done before that attempt."""
+    checkpoint = notes.get("checkpoint") or {}
+    if checkpoint.get("node") != address or "epoch" not in checkpoint:
+        return None
+    base = int(checkpoint.get("base") or 0)
+    steps = int(notes.get("steps") or 0) - base
+    return {"epoch": int(checkpoint["epoch"]), "steps": steps, "base": base} if steps > 0 else None
 
 
 def interrupt(job):

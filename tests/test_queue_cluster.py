@@ -47,10 +47,14 @@ def trainish(job, context, emit, stop, pause):
     """A pretrain stand-in: logs what it was given, saves last.npz at step 3, waits there while 'hold' exists, then runs to the end."""
     root, out = Path(context.root), Path(job.params["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
-    steps = job.params["config"]["steps"]
-    (root / "ran.json").write_text(json.dumps({"steps": steps, "init_from": job.params.get("init_from"),
+    steps, resume = job.params["config"]["steps"], job.params.get("resume")
+    (root / "ran.json").write_text(json.dumps({"steps": steps, "init_from": job.params.get("init_from"), "resume": resume,
                                                "examples": len(job.params.get("examples") or []), "version": job.params.get("version")}))
-    for step in range(1, steps + 1):
+    first = 1
+    if resume:  # as studio_jobs.pretrain: on from the step of the checkpoint, to the end of the attempt that wrote it
+        steps, first = job.params["resume_steps"], 4
+        emit({"type": "resumed", "base": job.params["resume_base"], "step": 3})
+    for step in range(first, steps + 1):
         emit({"type": "metric", "step": step, "total": steps, "loss": 1.})
         if step == 3:
             write_checkpoint(out / "last.npz", step)
@@ -281,7 +285,6 @@ class OwnerSide(unittest.TestCase):
         self.assertEqual((job.params["mode"], job.params["fetch"], job.params["config"]["steps"]),
                          ("catch_up", {"init_from": "gpu-box/v0-aaa"}, 600))
         self.assertIn("Interrupted on gpu-box at step 400", job.note)
-        self.assertIn("optimizer starts again from zero", job.note)
         with self.assertRaises(sched.StaleEpoch):  # the node's old copy, if it comes back, is refused
             self.runner.cluster.renewed(job.id, {"epoch": 1})
 
@@ -315,6 +318,59 @@ class OwnerSide(unittest.TestCase):
         self.runner._place_waiting()
         self.assertEqual((job.status, job.node, job.epoch), ("running", "other-box", 2))
         self.assertEqual(other.dispatched[0]["fetch"], {"init_from": "gpu-box/v0-aaa"})
+
+    def test_the_node_that_wrote_the_checkpoint_is_told_to_continue_from_its_own_copy(self):
+        job = self.interrupted(step=400)
+        self.net.down.clear()
+        self.place()
+        params = self.peer.dispatched[-1]["job"]["params"]
+        self.assertEqual(params["resume_from"], {"epoch": 1, "steps": 1000, "base": 0, "offset": 400})
+        self.assertEqual(self.peer.dispatched[-1]["fetch"], {"init_from": "gpu-box/v0-aaa"})  # kept for when its own copy is gone
+        self.assertNotIn("optimizer starts again", job.note)  # not yet known: the runner says which way it went
+        self.assertNotIn("resume_from", job.params)
+
+    def test_a_runner_that_continued_with_its_optimizer_is_said_so_once_and_its_progress_is_the_checkpoints(self):
+        job = self.interrupted(step=400)
+        self.net.down.clear()
+        self.place()
+        self.assertEqual(job.params["cluster"]["attempt_base"], 0)  # the attempt it resumes started at step 0
+        # (the runner reports steps shifted by its base minus the owner's offset, here 0 - 400, so 451 is its step 51)
+        events = [{"type": "resumed", "base": 0, "step": 450}, {"type": "metric", "step": 51, "total": 600}]
+        self.runner.cluster.renewed(job.id, {"epoch": 2, "events": events, "checkpoint": {"key": "gpu-box/v0-bbb", "step": 60}})
+        self.assertIn("continues from its own checkpoint at step 450, with the optimizer state it had", job.note)
+        self.assertEqual(self.sent("train")[-1]["step"], 451)
+        self.assertEqual(self.sent("train")[-1]["total"], 1000)
+        self.assertEqual(job.params["cluster"]["checkpoint"], {"key": "gpu-box/v0-bbb", "step": 460, "node": "gpu-box", "epoch": 2, "base": 0})
+        self.runner.cluster.renewed(job.id, {"epoch": 2, "events": events[:1]})  # sent again after a lost reply: said once
+        self.assertEqual(job.note.count("own checkpoint"), 1)
+
+    def test_a_runner_that_could_not_use_its_own_checkpoint_says_so_and_goes_on_from_the_weights(self):
+        job = self.interrupted(step=400)
+        self.net.down.clear()
+        self.place()
+        self.runner.cluster.renewed(job.id, {"epoch": 2, "events": [{"type": "resume_refused", "reason": "its folder no longer has it"},
+                                                                    {"type": "metric", "step": 10, "total": 600}]})
+        self.assertIn("its folder no longer has it", job.note)
+        self.assertIn("optimizer starts again from zero", job.note)
+        self.assertEqual(self.sent("train")[-1]["step"], 410)
+        self.assertEqual(job.params["cluster"]["attempt_base"], 400)
+
+    def test_a_different_node_gets_the_published_weights_only_and_the_note_says_the_optimizer_restarts(self):
+        other = Peer(self.net, "other-box")
+        self.nodes = ["gpu-box", "other-box"]
+        self.runner = self.make_runner()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.runner.cluster.renewed(job.id, {"epoch": 1, "checkpoint": {"key": "gpu-box/v0-aaa", "step": 100}})
+        self.net.down.add("gpu-box")
+        for _ in range(7):
+            self.clock.advance(10)
+            self.runner.cluster.poll_once()
+            self.runner.cluster.tick()
+        self.runner._place_waiting()
+        self.assertEqual(job.node, "other-box")
+        self.assertNotIn("resume_from", other.dispatched[0]["job"]["params"])
+        self.assertIn("On other-box the optimizer starts again from zero because only the weights are published.", job.note)
 
     def test_without_a_checkpoint_it_starts_again_and_says_so(self):
         job = self.interrupted()
@@ -1350,13 +1406,16 @@ class TwoNodes(unittest.TestCase):
         self.a.cluster.poll_once()
         self.a._place_waiting()
         self.assertEqual((job.status, job.node, job.epoch), ("running", "gpu-box", 2))
-        self.assertTrue(wait(lambda: job.status == "done"), "the resumed job did not finish")
+        self.assertTrue(wait(lambda: self.beat(1.) or job.status == "done"), "the resumed job did not finish")  # (it is not reported before the renewal that says how it resumed)
         ran = self.ran()
         self.assertEqual(ran["steps"], 97)
-        self.assertTrue(Path(ran["init_from"]).is_file())
+        self.assertTrue(Path(ran["init_from"]).is_file())  # (pulled in case its own copy cannot be used)
+        self.assertTrue(Path(ran["resume"]).is_file())  # the node that wrote the checkpoint continues from its own, with the optimizer
+        self.assertEqual(Path(ran["resume"]).parent.name, f"queue_{job.id}-e1")
         self.assertEqual(job.params["remote_result"]["step"], 100)  # 3 steps before the loss + 97 after
         self.assertEqual(job.epoch, 2)
-        self.assertIn("optimizer starts again from zero", job.note)
+        self.assertIn("continues from its own checkpoint at step 3, with the optimizer state it had", job.note)
+        self.assertNotIn("starts again from zero", job.note)
 
     def test_a_node_that_wakes_up_with_the_old_epoch_is_refused_and_stops_its_copy(self):
         (self.b_root).mkdir(parents=True, exist_ok=True)
