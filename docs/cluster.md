@@ -101,7 +101,8 @@ Every job kind carries requirements, and the cluster picks the best free node th
 
 A job may also ask for a minimum of memory or a dtype (`float32`, `bfloat16`, `float16`); those are not preferences: a node
 below the memory, or that does not train in the dtype, never gets the job. You can pin a job to one node by name instead: it
-runs there or waits, and is never moved to a better one.
+runs there or waits, and is never moved to a better one. If two machines share that name (any letter case), the job waits and says
+which machines they are: pin it by address (the Queue page's Run on list does).
 
 ## The version bucket
 

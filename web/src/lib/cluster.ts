@@ -7,6 +7,8 @@ import { useEvent } from "@/lib/events";
 import type { components } from "@/lib/api-schema";
 import { awaitJob } from "@/lib/job-result";
 
+export { nodeName } from "@/lib/node-name";
+
 export type ClusterQueue = components["schemas"]["ClusterQueue"];
 export type QueueNode = components["schemas"]["QueueNode"];
 export type QueueRow = components["schemas"]["QueueRow"];
@@ -36,16 +38,6 @@ export function useCluster() {
     refetchInterval: (query) => (isCluster(query.state.data) ? REFRESH_MS : false),
     retry: false,
   });
-}
-
-/**
- * What a machine is called on a page: its name, else the address it was listed by. When another listed machine has the same name, the
- * address is added (a job is pinned to the address). This machine keeps its bare name: its address is only "local".
- */
-export function nodeName(node: QueueNode, nodes: QueueNode[]): string {
-  const name = node.hostname || node.address;
-  const shared = node.hostname && !node.local && nodes.some((n) => n !== node && n.hostname.toLowerCase() === node.hostname.toLowerCase());
-  return shared ? `${name} (${node.address})` : name;
 }
 
 /** The last time a machine answered, as a clock time, or "" when it never did. */

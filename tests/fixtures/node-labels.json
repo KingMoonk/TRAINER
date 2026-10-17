@@ -1,0 +1,58 @@
+{
+  "about": "Node lists and the label each machine gets on the Queue page, by address. Read by tests/test_node_labels.py (studio_cluster_queue.merge) and web/tests/node-name.spec.ts (nodeName), so the two naming rules cannot drift. The node with address \"local\" is this machine.",
+  "cases": [
+    {
+      "name": "distinct hostnames are bare",
+      "nodes": [
+        {"address": "local", "hostname": "mac-mini"},
+        {"address": "gpu-box:8000", "hostname": "gpu-box"},
+        {"address": "100.64.0.7:8787", "hostname": "laptop"}
+      ],
+      "labels": {"local": "mac-mini", "gpu-box:8000": "gpu-box", "100.64.0.7:8787": "laptop"}
+    },
+    {
+      "name": "two peers with one hostname both get their address",
+      "nodes": [
+        {"address": "local", "hostname": "mac-mini"},
+        {"address": "100.64.0.2:8787", "hostname": "gpu-box"},
+        {"address": "100.64.0.3:8787", "hostname": "gpu-box"}
+      ],
+      "labels": {"local": "mac-mini", "100.64.0.2:8787": "gpu-box (100.64.0.2:8787)", "100.64.0.3:8787": "gpu-box (100.64.0.3:8787)"}
+    },
+    {
+      "name": "hostnames differing only in letter case are the same name and keep their own spelling",
+      "nodes": [
+        {"address": "local", "hostname": "mac-mini"},
+        {"address": "a:8787", "hostname": "GPU-Box"},
+        {"address": "b:8787", "hostname": "gpu-box"}
+      ],
+      "labels": {"local": "mac-mini", "a:8787": "GPU-Box (a:8787)", "b:8787": "gpu-box (b:8787)"}
+    },
+    {
+      "name": "this machine keeps its bare name when a peer shares it",
+      "nodes": [
+        {"address": "local", "hostname": "box"},
+        {"address": "peer:8787", "hostname": "box"}
+      ],
+      "labels": {"local": "box", "peer:8787": "box (peer:8787)"}
+    },
+    {
+      "name": "three machines with one hostname",
+      "nodes": [
+        {"address": "local", "hostname": "box"},
+        {"address": "one:8787", "hostname": "Box"},
+        {"address": "two:8787", "hostname": "box"}
+      ],
+      "labels": {"local": "box", "one:8787": "Box (one:8787)", "two:8787": "box (two:8787)"}
+    },
+    {
+      "name": "a machine that never answered is called by its address, and does not share a name with another",
+      "nodes": [
+        {"address": "local", "hostname": "mac-mini"},
+        {"address": "down-a:8787", "hostname": ""},
+        {"address": "down-b:8787", "hostname": ""}
+      ],
+      "labels": {"local": "mac-mini", "down-a:8787": "down-a:8787", "down-b:8787": "down-b:8787"}
+    }
+  ]
+}

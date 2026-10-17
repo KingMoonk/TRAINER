@@ -203,9 +203,13 @@ def decide(kind, nodes, health, pinned=None, store_ready=True, requirements=None
 
 
 def _why_pinned(pinned, kind, nodes, health, remote_kind, store_ready, exclude):
-    node = next((n for n in nodes if studio_cluster.matches(pinned, n)), None)
-    if node is None:
+    found = studio_cluster.pinned_nodes(pinned, nodes)
+    if len(found) > 1:
+        names = " and ".join(f"{n.hostname} ({n.address})" for n in found)
+        return f"It is pinned to {pinned}, a name {len(found)} machines share: {names}. Pin it to one by its address."
+    if not found:
         return f"It is pinned to {pinned}, which is not one of this cluster's machines."
+    node = found[0]
     if node.address == studio_cluster.LOCAL:
         return "It is pinned to this machine, which is busy."
     if not remote_kind:
