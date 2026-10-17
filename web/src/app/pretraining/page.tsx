@@ -15,6 +15,7 @@ import { T } from "./copy";
 import { HOLD, LENGTHS, PREVIEW_ROWS, ROWS, chosenIds, errorText, type Length, type Preview } from "./logic";
 import { LrCard } from "./lr-card";
 import { TrainCard } from "./train-card";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 export default function PretrainingPage() {
   const queryClient = useQueryClient();
@@ -86,12 +87,10 @@ export default function PretrainingPage() {
   const toggle = (set: { id: string }) => setUse((now) => ({ ...now, [set.id]: !(now[set.id] ?? sets.data?.find((s) => s.id === set.id)?.on) }));
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-8">
-      <div className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{T.h1}</h1>
-        <p className="max-w-prose text-muted-foreground">{T.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={T.h1} lead={T.lead}>
         <Link href="/make-data/?kind=text" className="w-fit text-sm text-highlight hover:underline">{T.makeData} ›</Link>
-      </div>
+      </PageHeader>
 
       <div>
         <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{T.modelLabel}</div>

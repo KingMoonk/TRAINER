@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { Choice } from "./cards";
 import { T, fill } from "./copy";
 import { LENGTHS, errorText, lrLine, modeTexts, queueNote, stepsLine, type Length, type Plan } from "./logic";
+import { optionBox } from "@/components/option-box";
 
 /** Continue or start over, how long, and Add to the queue: the job is the one the server's plan built. */
 export function TrainCard({
@@ -77,10 +78,7 @@ export function TrainCard({
                     aria-checked={on}
                     data-testid={`mode-${key}`}
                     onClick={() => onMode(key)}
-                    className={cn(
-                      "flex flex-col gap-0.5 rounded-lg border-2 px-3 py-2 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                      on ? "selected-box" : "border-border hover:bg-muted/30",
-                    )}
+                    className={optionBox(on, "flex flex-col gap-0.5 px-3 py-2")}
                   >
                     <span className="font-medium">{texts[key].title}</span>
                     <span className={cn("text-sm", blocked ? "text-warning" : "text-muted-foreground")}>{texts[key].note}</span>

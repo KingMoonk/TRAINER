@@ -26,6 +26,7 @@ import {
   type TestKey,
   type Version,
 } from "@/app/head-lab/inspect";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 type Mode = "mean" | "zero";
 type Loaded = { version: Version; ids: number[]; tokens: string[]; patterns: Record<number, Pattern>; tests: Record<number, Record<TestKey, number[]>> };
@@ -376,10 +377,8 @@ function Reply({ label, reply }: { label: string; reply: string | null | undefin
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-8">
-      <p className="text-xs text-muted-foreground">Network designer › Look inside</p>
-      <h1 className="text-2xl font-semibold tracking-tight">{HEAD_LAB.h1}</h1>
-      <p className="max-w-prose text-muted-foreground">{HEAD_LAB.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader breadcrumb="Network designer › Look inside" title={HEAD_LAB.h1} lead={HEAD_LAB.lead} />
       {children}
     </main>
   );
