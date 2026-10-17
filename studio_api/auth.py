@@ -5,9 +5,18 @@
 * Any other peer address (a node calling the API on its tailnet address): ignore the header and ask the local tailscaled who
   owns the source address (`tailscale whois --json <ip>`). Let in a node with an allowed tag, or a user in the allow-list.
 * `open` (--fake or a loopback bind): everyone is let in, as before.
+* Funnel: `tailscale funnel` also connects from loopback but writes no `Tailscale-User-Login`, and sets `Tailscale-Funnel-Request: ?1`
+  (stripping any copy the client sent). A loopback request with that header is public traffic: it gets in as `funnel` only with
+  the workspace config's token (studio_cluster.funnel_token) in `X-Groundwork-Token`, even on an open node, and with no token
+  configured it is refused. Any Tailscale-User-Login on it is ignored. A loopback request without the Funnel header and without
+  the login header also gets in with the token. A node with a token is not open. The token is compared in constant time and is
+  never logged or echoed.
+* Browser pages on a configured origin (the Vercel site): their CORS preflight carries no token and no identity, so it is let
+  through to the CORS middleware, which answers it (and refuses every other origin). The request that follows is checked as above.
 """
 
 import asyncio
+import hmac
 import ipaddress
 import json
 import os
@@ -16,6 +25,8 @@ import subprocess
 import time
 
 HEADER = b"tailscale-user-login"
+FUNNEL_HEADER = b"tailscale-funnel-request"
+TOKEN_HEADER = b"x-groundwork-token"
 WHOIS_TIMEOUT = 3.  # seconds for the tailscale CLI to answer
 CACHE_SECONDS = 60.  # how long an answer about an address is reused
 MISS_SECONDS = 5.  # an address tailscaled could not name is asked again soon (tailscaled may just be starting)
@@ -28,6 +39,12 @@ def refusal(direct):
                 "with an allowed tag (default tag:trainer) or a user listed in studioConfig.cluster.allowUsers (docs/cluster.md).")
     return ("No Tailscale-User-Login header. Reach this node through `tailscale serve` (docs/node.md), "
             "or run it with --bind 127.0.0.1 or --fake.")
+
+
+def token_matches(presented, token):
+    """Whether `presented` (header bytes) is the configured `token` (text). An empty token or an empty header never matches."""
+    expected = token.encode("utf-8")
+    return bool(expected) and bool(presented) and hmac.compare_digest(presented, expected)
 
 
 def tailscale_binary():
@@ -80,8 +97,10 @@ def caller_from_whois(who, allow_tags, allow_users):
 
 
 class TailscaleAuth:
-    def __init__(self, app, open=False, whois=tailscale_whois, allow_tags=("tag:trainer",), allow_users=(), clock=time.monotonic):
-        self.app, self.open = app, open
+    def __init__(self, app, open=False, whois=tailscale_whois, allow_tags=("tag:trainer",), allow_users=(), clock=time.monotonic,
+                 token="", origins=()):
+        self.app, self.token, self.origins = app, token or "", tuple(origins)
+        self.open = open and not self.token  # a node with a token is reached through serve or Funnel: nobody gets in unnamed
         self.whois, self.allow_tags, self.allow_users, self.clock = whois, tuple(allow_tags), tuple(allow_users), clock
         self.cache = {}  # ip -> (expires, caller)
 
@@ -95,21 +114,37 @@ class TailscaleAuth:
         return caller
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             return await self.app(scope, receive, send)
         ip = peer_ip(scope)
-        header = ""
+        header, presented, origin, preflight, funnel = "", b"", b"", False, False
         for name, value in scope.get("headers", ()):
             if name == HEADER:
                 header = value.decode("latin-1")
+            elif name == FUNNEL_HEADER:
+                funnel = True
+            elif name == TOKEN_HEADER:
+                presented = value
+            elif name == b"origin":
+                origin = value
+            elif name == b"access-control-request-method":
+                preflight = True
+        if self.origins and preflight and scope.get("method") == "OPTIONS" and origin.decode("latin-1") in self.origins:
+            return await self.app(scope, receive, send)  # the CORS middleware answers it; it has no token to check
         direct = bool(ip) and not is_loopback(ip)
-        if self.open:
+        if funnel and not direct:  # public traffic through Funnel: only the token, whether or not the node is open
+            user = "funnel" if token_matches(presented, self.token) else ""
+        elif self.open:
             user = header or "local"
         elif direct:  # the header is whatever the caller typed
             user = await self.caller(ip)
         else:
             user = header
+            if not user and token_matches(presented, self.token):
+                user = "funnel"
         if not user:
+            if scope["type"] == "websocket":
+                return await send({"type": "websocket.close", "code": 1008})
             await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"application/json")]})
             await send({"type": "http.response.body", "body": json.dumps({"detail": refusal(direct)}).encode()})
             return
