@@ -12,12 +12,13 @@ from unittest import mock
 import uvicorn
 from fastapi.testclient import TestClient
 
+import studio_cluster
 import studio_diloco
 import studio_distributed as runs
 from studio_api import app as api_app
 from studio_api.app import create_app
 from studio_api.hosts import ANY
-from studio_ia.services import FakeServices
+from studio_ia.services import FakeServices, Job
 from studio_peer import PeerError
 from studio_spec import default_spec
 from tests import diloco_support as support
@@ -308,6 +309,75 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.client.get(f"/distributed/runs/{run_id}").json()["state"], "queued")
         self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/stop").json()["state"], "stopped")
         self.assertEqual(self.client.get("/queue").json()["up_next"], [])
+
+
+class AllMachines(unittest.TestCase):
+    """The queue's "All machines (DiLoCo)": a waiting pretrain job becomes a run on every listed machine that answers on this version."""
+
+    PEERS = {"box": studio_cluster.NodeInfo(address="box", hostname="box", version="1.0.0", device="cuda", device_name="RTX"),
+             "old": studio_cluster.offline("old", "old did not answer within 2 seconds."),
+             "new": studio_cluster.NodeInfo(address="new", hostname="newpc", version="2.0.0", device="cuda")}
+
+    def setUp(self):
+        self.services = FakeServices(step_seconds=.005)
+        self.services.save_version(default_spec(), "first")
+        self.services.pause()  # the jobs stay in Up next to be read; no member is invited
+        with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
+            self.client = self.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
+        self.addCleanup(runs.RUNS.clear)
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+        self.services.set_setting("nodes", list(self.PEERS))
+        self.enterContext(mock.patch("studio_api.routers.distributed.app_version", return_value="1.0.0"))
+        self.surveyed = []
+
+        def survey(state, own, *args, **kwargs):
+            self.surveyed.append(state["studioConfig"]["nodes"])
+            return [own, *(self.PEERS[a] for a in state["studioConfig"]["nodes"])]
+        self.enterContext(mock.patch.object(studio_cluster, "survey", survey))
+        for label in ("before", "pretrain", "after"):
+            self.services.enqueue(Job(id=label, kind="pretrain" if label == "pretrain" else "quicktest", label=label,
+                                      params={"version": 1, "datasets": ["Your files"]} if label == "pretrain" else {}))
+
+    def start(self, **body):
+        defaults = self.client.get("/distributed/defaults").json()
+        return self.client.post("/distributed/runs", json={"dataset_ids": ["Your files"], "all_machines": True, "replaces": "pretrain",
+                                                           **{k: defaults[k] for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
+                                                           **body})
+
+    def test_the_pretrain_job_becomes_a_run_in_its_place_on_every_machine_that_answers(self):
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.text)
+        run = started.json()
+        self.assertEqual(self.surveyed, [list(self.PEERS)])  # every listed machine was asked
+        waiting = self.services.queue().up_next
+        self.assertEqual([j.id for j in waiting], ["before", run["id"], "after"])
+        job = waiting[1]
+        self.assertEqual((job.kind, job.params["version"], job.params["datasets"]), ("pretrain_distributed", 1, ["Your files"]))
+        self.assertEqual((job.params["rounds"], job.params["inner_steps"]), (studio_diloco.Settings().rounds, studio_diloco.Settings().inner_steps))
+        self.assertEqual([m["address"] for m in job.params["machines"]], ["local", "box"])
+        self.assertEqual(job.params["left_out"], [
+            {"node": "old", "address": "old", "reason": "old did not answer within 2 seconds."},
+            {"node": "newpc", "address": "new", "reason": "newpc runs app version 2.0.0; this computer runs 1.0.0."}])
+        self.assertEqual([m["address"] for m in run["members"]], ["local", "box"])
+        self.assertEqual(run["state"], "queued")
+
+    def test_when_no_other_machine_can_join_the_pretrain_job_stays_and_the_reply_says_why(self):
+        self.services.set_setting("nodes", ["old", "new"])
+        refused = self.start()
+        self.assertEqual(refused.status_code, 409)
+        self.assertIn("No other machine can join", refused.json()["detail"])
+        self.assertIn("old did not answer", refused.json()["detail"])
+        self.assertEqual([j.id for j in self.services.queue().up_next], ["before", "pretrain", "after"])
+
+    def test_only_a_waiting_pretrain_job_can_be_replaced(self):
+        self.assertEqual(self.start(replaces="before").status_code, 409)
+        self.assertEqual(self.start(replaces="gone").status_code, 404)
+        self.assertEqual([j.id for j in self.services.queue().up_next], ["before", "pretrain", "after"])
+
+    def test_the_run_takes_the_pretrain_jobs_version_and_text_over_the_body(self):
+        self.services.save_version(default_spec(), "second")
+        run = self.start(version=2, dataset_ids=["nope"]).json()
+        self.assertEqual(run["version"], 1)
 
 
 class Invited(unittest.TestCase):
