@@ -6,7 +6,6 @@ This is the owner's side. The members' wire protocol is `/collective` (studio_ap
 """
 
 import os
-import socket
 import time
 import uuid
 from dataclasses import asdict
@@ -228,12 +227,11 @@ def _live_rows(services):
 
 def _rows(services):
     """Every run in the cluster: this computer's live, the others' from the local replica with origin and age. Without a cluster
-    (no queue that can take part in one) only this computer's, labelled with its hostname."""
+    (no queue that can take part in one) only this computer's, labelled with the run's owner (this computer's hostname)."""
     cluster = _cluster(services)
     rows = _live_rows(services)
     if cluster is None:
-        host = socket.gethostname()
-        rows = [{**row, "coordinator": host, "origin": host, "age_s": 0., "origin_down": False} for row in rows]
+        rows = [{**row, "coordinator": row["owner"], "origin": row["owner"], "age_s": 0., "origin_down": False} for row in rows]
         return sorted(rows, key=lambda row: row["started_at"], reverse=True)
     return studio_facts.cluster_runs(cluster, rows)
 
