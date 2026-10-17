@@ -4,6 +4,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from tests.api_tap import EventTap
 from tests.api_work import finished
@@ -25,7 +26,7 @@ class SavedRuns(FakeServices):
 class BenchmarkApiTest(unittest.TestCase):
     def setUp(self):
         self.services = SavedRuns()
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 
@@ -89,7 +90,7 @@ class CompareSetupTest(unittest.TestCase):
         wide = {**base, "dims": {**base["dims"], "d_model": 96}}
         self.services.save_version(base, "base")
         self.services.save_version(wide, "wider")
-        self.client = self.enterContext(TestClient(create_app(self.services, open=True)))
+        self.client = self.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
         self.setup = {"variants": [1], "mode": "params", "seeds": 3, "guess": "better", "question": " Does width help? "}
 
     def test_plan_counts_runs_and_sweeps_and_matches_the_variant(self):

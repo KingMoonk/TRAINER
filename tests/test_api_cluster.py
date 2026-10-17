@@ -14,6 +14,7 @@ import studio_cluster_queue
 import studio_scheduler as sched
 from fastapi.testclient import TestClient
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_api.routers import cluster as cluster_routes
 from studio_api.version import app_version
 from studio_core import Workspace
@@ -308,7 +309,7 @@ class SavedList(unittest.TestCase):
     def launch(self):
         svc = WorkspaceServices(Workspace(self.root))
         self.addCleanup(svc.close)
-        app = create_app(svc, open=True)
+        app = create_app(svc, open=True, hosts=ANY)
         self.addCleanup(app.state.jobs.close)
         self.addCleanup(app.state.broadcaster.close)
         return TestClient(app)

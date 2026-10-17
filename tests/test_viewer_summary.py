@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import studio_summary as summary
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_api.routers.viewer import ViewControls, build
 from studio_ia.copy import INSIDE3D as T
 from studio_ia.services import FakeServices
@@ -104,7 +105,7 @@ class ModelLevel(unittest.TestCase):
         write_checkpoint(self.checkpoint, self.version.spec, Tokenizer("byte"))
         self.version.best_checkpoint = str(self.checkpoint)
         self.services.heldout_docs = TEXT
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 

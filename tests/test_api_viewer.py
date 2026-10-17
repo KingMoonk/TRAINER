@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_compile import CompiledModel
 from studio_ia.copy import INSIDE3D as T
 from studio_ia.services import FakeServices
@@ -32,7 +33,7 @@ class ViewerApiTest(unittest.TestCase):
         self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.paths = [self.save(1), self.save(2)]
         self.services.snapshot_paths = [str(p) for p in self.paths]
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
 
     def save(self, step):

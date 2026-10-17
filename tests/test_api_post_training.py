@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import studio_import
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from tests.api_tap import EventTap
 from tests.api_work import finished, small_spec, trained
@@ -46,7 +47,7 @@ class PostTrainingApiTest(unittest.TestCase):
         self.services = DataServices()
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.services.root = self.root
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 

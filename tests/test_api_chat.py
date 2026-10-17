@@ -8,6 +8,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 
 ASK = {"version": 2, "messages": [{"role": "user", "content": "Hi"}]}
@@ -47,7 +48,7 @@ def parse(body):
 class ChatApiTest(unittest.TestCase):
     def setUp(self):
         self.services = ChattingServices()
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
 
     def test_the_reply_streams_as_events_and_ends_with_done(self):

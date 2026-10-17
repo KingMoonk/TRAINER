@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import studio_cluster
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from studio_peer import PeerClient
 from studio_publish import FolderStore, sha256_of
@@ -241,7 +242,7 @@ class OwnerRoutes(PeerCase):
                 self.assertIn("has not trained yet", response.json()["detail"])
 
     def test_fake_services_have_no_weights_to_send(self):
-        client = self.enterContext(TestClient(create_app(FakeServices(), open=True)))
+        client = self.enterContext(TestClient(create_app(FakeServices(), open=True, hosts=ANY)))
         client.post("/versions", json={"spec": {"dims": {"n_ctx": 8}}})
         self.assertEqual(client.get("/versions/1/weights/meta").status_code, 409)
         self.assertEqual(client.get("/versions/1/weights").status_code, 409)

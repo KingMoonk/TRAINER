@@ -4,6 +4,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from studio_api.app import create_app
+from studio_api.hosts import ANY
 from studio_ia.services import FakeServices
 from tests.api_tap import EventTap
 from tests.api_work import finished
@@ -12,7 +13,7 @@ from tests.api_work import finished
 class InspectApiTest(unittest.TestCase):
     def setUp(self):
         self.services = FakeServices()
-        self.app = create_app(self.services, open=True)
+        self.app = create_app(self.services, open=True, hosts=ANY)
         self.client = self.enterContext(TestClient(self.app))
         self.tap = self.enterContext(EventTap(self.app))
 

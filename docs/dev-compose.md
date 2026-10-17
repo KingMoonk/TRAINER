@@ -32,6 +32,9 @@ After changing `requirements*.txt`, run `docker compose build api`. After changi
 
 `API_ARGS=--fake` in `.env` serves `FakeServices` instead of this checkout's workspace (`data/`, `runs/`).
 
+The API refuses a request whose `Host` is not one of its names (docs/node.md, "Host names"). Its container has no `tailscale`
+command, so compose gives it `--allow-host` for `${TS_HOSTNAME}` and `${TS_HOSTNAME}.*.ts.net`, the name `tailscale serve` forwards. If you reach it under another name, add `--allow-host NAME` to `API_ARGS`.
+
 ## Limits
 
 - The API container is Linux, so torch is the CPU build: no Metal on a Mac. Train on the host (`python app.py`, or the API run

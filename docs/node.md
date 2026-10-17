@@ -52,12 +52,22 @@ with a sentence saying which key to fix.
 
 ### Host names
 
-Every request and websocket must carry a `Host` header naming this node; anything else gets `421`. This stops DNS rebinding: a
-web page that rebinds its own name to `127.0.0.1` could otherwise call a loopback node and forge `Tailscale-User-Login`. Allowed,
-with any port: `localhost`, any IP address (`127.0.0.1`, `[::1]`, the tailnet address other nodes may use), this machine's name,
-the node's Tailscale name and short name (read once at start with `tailscale status --json`, skipped if `tailscale` is missing or
-slow), the `--bind` address, and each `--allow-host`. Other nodes address this one by the name in their `studioConfig.nodes`
-entry, so list the node under its machine name, Tailscale name or IP; a node reached under any other name needs `--allow-host`.
+Every request and websocket must carry a `Host` header naming this node; anything else gets `421` (with the CORS header for a
+configured `--allow-origin`, so a page can show the message). This stops DNS rebinding: a web page that rebinds its own name to
+`127.0.0.1` could otherwise call a loopback node and forge `Tailscale-User-Login`. The header must be plainly `name`, `ipv4` or
+`[ipv6]` with an optional `:port`; userinfo or text after the brackets is refused. Allowed, with any port: `localhost`, any IP
+address (`127.0.0.1`, `[::1]`, the tailnet address other nodes may use), this machine's name (full and short), the `--bind`
+address, each `--allow-host`, and the node's Tailscale names: its MagicDNS name, that name's first label, its host name and its
+certificate domains, from `tailscale status --json`. They are read at start and again by a background thread (every minute while
+none is known, every ten minutes after; a failed read keeps the last good names), never while a request waits. If none is found
+the API logs a warning: a node behind `tailscale serve` or Funnel then refuses those requests until tailscale answers or you
+pass `--allow-host`. Other nodes address this one by the name in their `studioConfig.nodes` entry, so list it under its machine
+name, Tailscale name or IP; any other name needs `--allow-host`.
+
+`--allow-host` takes a name, or a pattern where one `*` stands for exactly one label (`node.*.ts.net`; at least two literal labels
+are required). A node without the `tailscale` command, such as the API container in `compose.yaml`, needs it: compose passes
+`--allow-host ${TS_HOSTNAME:-groundwork-dev}` and `--allow-host ${TS_HOSTNAME:-groundwork-dev}.*.ts.net`, which covers the
+`groundwork-dev.<tailnet>.ts.net` name `tailscale serve` forwards. Add others through `API_ARGS`.
 
 ### Funnel and a page on another origin (optional)
 
