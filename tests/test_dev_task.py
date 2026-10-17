@@ -31,11 +31,18 @@ class DevCommandsTest(unittest.TestCase):
         self.assertEqual(env, {"NEXT_PUBLIC_API_URL": "/api"})
 
     def test_the_api_reloads_on_the_port_serve_points_at(self):
-        api, web, _ = tasks.dev_commands("pnpm")
+        api, web, _ = tasks.dev_commands("pnpm", reload=True)
         self.assertIn("--reload", api)
         self.assertEqual(api[api.index("--port") + 1], str(tasks.API_PORT))
         self.assertEqual(web[web.index("--port") + 1], str(tasks.WEB_PORT))
         self.assertEqual(api[:3], [tasks.PY, "-m", "studio_api"])  # the venv that runs tasks.py, so its torch
+
+    def test_windows_does_not_use_uvicorns_reload(self):
+        for platform, uvicorn in (("win32", False), ("linux", True), ("darwin", True)):
+            with mock.patch.object(tasks.sys, "platform", platform):
+                self.assertEqual(tasks.reload_by_uvicorn(), uvicorn)
+                self.assertEqual("--reload" in tasks.dev_commands("pnpm")[0], uvicorn)
+        self.assertNotIn("--reload", tasks.dev_commands("pnpm", reload=False)[0])
 
     def test_serve_maps_name_the_loopback_ports(self):
         self.assertEqual(tasks.DEV_SERVE, {"/": f"http://127.0.0.1:{tasks.WEB_PORT}", "/api/": f"http://127.0.0.1:{tasks.API_PORT}"})
@@ -146,16 +153,57 @@ class SetupTest(unittest.TestCase):
     def test_stop_ends_the_whole_process_group_or_tree(self):
         proc = mock.Mock(pid=42)
         proc.poll.return_value = None
-        with mock.patch.object(tasks.sys, "platform", "linux"), mock.patch.object(tasks.os, "killpg") as killpg:
+        with mock.patch.object(tasks.sys, "platform", "linux"), mock.patch.object(tasks.os, "killpg", create=True) as killpg:
             tasks.stop(proc)
         killpg.assert_called_once_with(42, tasks.signal.SIGTERM)
         with mock.patch.object(tasks.sys, "platform", "win32"), mock.patch.object(tasks.subprocess, "call") as call:
             tasks.stop(proc)
         self.assertEqual(call.call_args.args[0][:2], ["taskkill", "/PID"])
         proc.poll.return_value = 0
-        with mock.patch.object(tasks.os, "killpg") as killpg:
+        with mock.patch.object(tasks.os, "killpg", create=True) as killpg:
             tasks.stop(proc)
         killpg.assert_not_called()
+
+
+class SourceWatchTest(unittest.TestCase):
+    def test_only_the_python_sources_uvicorn_watched_are_scanned(self):
+        walked = [("/r", ["web", ".venv", ".git", ".claude", "data", "runs", "node_modules", "studio_api", "tests"], ["a.py", "b.txt"]),
+                  ("/r/studio_api", ["__pycache__"], ["c.py", "c.pyc"])]
+        seen = []
+
+        def walk(root):
+            for here, dirs, files in walked:
+                yield here, dirs, files
+                seen.append(list(dirs))
+
+        with mock.patch.object(tasks.os, "stat", return_value=mock.Mock(st_mtime_ns=7)):
+            found = tasks.scan_sources("/r", walk)
+        self.assertEqual(set(found), {tasks.os.path.join("/r", "a.py"), tasks.os.path.join("/r/studio_api", "c.py")})
+        self.assertEqual(seen[0], ["studio_api", "tests"])
+        self.assertEqual(seen[1], [])
+
+    def test_a_vanished_file_is_skipped(self):
+        with mock.patch.object(tasks.os, "stat", side_effect=FileNotFoundError):
+            self.assertEqual(tasks.scan_sources("/r", lambda root: [("/r", [], ["a.py"])]), {})
+
+    def test_a_change_triggers_once_after_it_settles(self):
+        states = iter([{"a": 1}, {"a": 1}, {"a": 2}, {"a": 2, "b": 1}, {"a": 2, "b": 1}, {"a": 2, "b": 1}])
+        watcher = tasks.SourceWatcher(lambda: next(states))
+        self.assertFalse(watcher.poll())  # unchanged
+        self.assertFalse(watcher.poll())  # a changed: wait, still being written
+        self.assertFalse(watcher.poll())  # b appeared: still moving
+        self.assertTrue(watcher.poll())   # settled
+        self.assertFalse(watcher.poll())  # reported once
+
+    def test_decisions(self):
+        step = tasks.dev_step
+        self.assertEqual(step(True, True, False, True), "keep")
+        self.assertEqual(step(True, True, True, True), "restart")
+        self.assertEqual(step(False, True, True, True), "restart")
+        self.assertEqual(step(False, True, False, True), "wait")
+        self.assertEqual(step(True, False, True, True), "stop")  # Next ended: stop, even with a change pending
+        self.assertEqual(step(False, True, False, False), "stop")  # uvicorn reloads itself, so an ended API is real
+        self.assertEqual(step(True, True, True, False), "keep")
 
 
 class NodeDeviceTest(unittest.TestCase):
