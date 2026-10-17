@@ -35,6 +35,8 @@ class Calls(Collective):
             "progress": self.call("POST", "progress", term, json={**node, "round": 0, "phase": "training"}),
             "delta": self.call("POST", "rounds/0/delta", term, content=body, headers={"content-type": "application/octet-stream"},
                                params={"node": "a", "generation": 1, "epoch": 0, "tokens": 10, "steps": 2}),
+            "state": self.call("GET", "state", term, params={"round": 1}),  # the delta above closed round 0
+            "validation": self.call("GET", "validation", term),
             "leave": self.call("POST", "leave", term, json=node),
         }
 
