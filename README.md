@@ -2,7 +2,7 @@
 
 A native Python desktop studio for creating datasets and training your own language model from random weights.
 
-**PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** Python's built-in Tkinter supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
+**PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** A web UI in your browser, served by a local API, supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
 
 ## Quickstart
 
@@ -72,8 +72,8 @@ policy's `tagOwners` (`docs/cluster.md`, ACL). The request stays pending and lea
 stops resolving); `sudo tailscale up --reset` clears it and logs in again. `tailscale set` has no `--advertise-tags`; tag a
 machine with `tailscale up --advertise-tags=...` or from the admin console's **Machines** page.
 
-The Tk desktop app still runs until the web UI replaces it (`docs/rewrite.md`, Phase 5): `.venv/bin/python app.py`, or on
-Windows double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
+`.venv/bin/python app.py` starts the API on this machine and opens the web UI in your browser (build it once with
+`.venv/bin/python tasks.py web:build`). The details below cover GPU support, the workflow and the command line.
 
 
 ## Lint and tests
@@ -119,9 +119,7 @@ Measure before optimizing. Both tools are opt-in and work the same on macOS and 
 
 ## Launch
 
-On Windows, double-click **start_studio.bat**. It creates a virtual environment if needed, installs the two dependencies, and opens the desktop window.
-
-Or run from this directory:
+Run from this directory (build the web UI once first with `python tasks.py web:build`):
 
 ```powershell
 python -m venv .venv
@@ -129,7 +127,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-Use the `.venv` interpreter in PyCharm. Python must include Tkinter (included with the standard Windows installer). The old web server and JavaScript version have been removed.
+Use the `.venv` interpreter in PyCharm. `app.py` starts the API and opens the web UI in your browser. The old web server and JavaScript version have been removed.
 
 ## GPU acceleration
 
@@ -254,10 +252,9 @@ Entry points and engine services sit in the repository root; swappable model/tra
 
 | Layer | Modules | Role |
 |---|---|---|
-| Entry points | `app.py`, `train.py`, `start_studio.bat` | Launch the desktop GUI, run training from the command line, or set up and launch on Windows. |
-| GUI shell | `studio_ia/shell.py` | `Studio` (Tk window, sidebar, page router). |
-| GUI pages | `studio_ia/pages/` | One page per route; pages talk only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
-| GUI helpers | `studio_ia/widgets.py`, `studio_ia/theme.py`, `studio_ia/copy.py`, `studio_ux.py`, `studio_glossary.py` | Shared widgets, colours and fonts, every string on screen, time estimates, plain-English glossary. |
+| Entry points | `app.py`, `train.py` | Start the API and open the web UI, or run training from the command line. |
+| API | `studio_api/` | The web UI's server; it talks only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
+| UI helpers | `studio_ia/copy.py`, `studio_glossary.py` | Every string on screen, plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
@@ -269,7 +266,7 @@ Entry points and engine services sit in the repository root; swappable model/tra
 ### Dependency flow
 
 ```
-app.py ──► studio_ia.shell ──► studio_ia.pages ──► studio_ia.services ──► engine modules, studio_queue
+app.py ──► studio_api ──► studio_ia.services ──► engine modules, studio_queue
 train.py ─┐
           ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
           │        ▲

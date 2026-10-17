@@ -1,10 +1,8 @@
-"""Theme floor: text tokens stay readable on every surface and fonts never go below 12px. Window-free."""
+"""Theme floor: the viewer's text tokens stay readable on every surface. Window-free."""
 
 import unittest
-from unittest import mock
 
-from studio_ia import theme
-from studio_ia.theme import C
+from studio_viewer_ui import C
 
 TEXT = ("text", "text2", "muted", "dim")
 SURFACES = ("bg", "panel", "panel2")
@@ -40,30 +38,6 @@ class TestTheme(unittest.TestCase):
     def test_dim_stays_a_lower_tier_than_muted(self):
         for bg in SURFACES:
             self.assertLess(contrast(C["dim"], C[bg]), contrast(C["muted"], C[bg]))
-
-    def test_font_never_below_the_minimum(self):
-        fake = mock.Mock()
-        fake.actual.return_value = "Test"
-        with mock.patch.object(theme.tkfont, "nametofont", return_value=fake):
-            for size in (8, 11, 12):
-                self.assertEqual(theme.font(size), ("Test", -12))
-            self.assertEqual(theme.font(11, bold=True), ("Test", -12, "bold"))
-            self.assertEqual(theme.font(11, mono=True), ("Test", -12))
-            self.assertEqual(theme.font(15), ("Test", -15))
-
-    def test_text_boxes_share_the_padded_ui_font_style(self):
-        fake = mock.Mock()
-        fake.actual.return_value = "Test"
-        with mock.patch.object(theme.tkfont, "nametofont", return_value=fake), \
-                mock.patch.object(theme.tk, "Text") as text, mock.patch.object(theme.ttk, "Entry") as entry:
-            theme.text_box("parent", height=3, state="disabled")
-            theme.entry("parent", 14, width=8)
-        kw = text.call_args.kwargs
-        self.assertEqual((kw["padx"], kw["pady"]), theme.TEXT_PAD)
-        self.assertEqual(kw["font"], ("Test", -15))
-        self.assertEqual((kw["highlightthickness"], kw["highlightbackground"], kw["highlightcolor"]), (1, C["border"], C["violet"]))
-        self.assertEqual((kw["height"], kw["state"]), (3, "disabled"))
-        self.assertEqual(entry.call_args.kwargs, dict(font=("Test", -14), width=8))
 
 
 if __name__ == "__main__":

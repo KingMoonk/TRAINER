@@ -7,18 +7,9 @@ from unittest import mock
 import studio_gate
 from studio_core import Workspace
 from studio_data_kinds import add_problems
-from studio_ia.copy import CHAT
-from studio_ia.pages.chat import against_chance, answering_version, few_shot_note, few_shot_rows, stream_reply, verdict_view
-from studio_ia.pages.post_training import PostTrainingPage, blocker, default_teacher, is_mixed_precision, live_view, lora_blocker, lora_config, lora_default, spread_text, step_line, teacher_options
-from studio_ia.pretraining_plan import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, pretrain_config, steps_for, word_list_changed
-from studio_ia.pages.queue import total_hours
-from studio_ia.pages.storage import export_default_name, export_rows, export_run, size_text, storage_state
-from studio_ia.copy import TRAINING as T
-from studio_ia.pages.training_run import history_of, phase_at, switch_note
-from studio_ia.services import FakeServices, QueueState, Job, WorkspaceServices, layout_rows
-from studio_model import validate_config
+from studio_ia.pretraining_plan import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, word_list_changed
+from studio_ia.services import WorkspaceServices
 from studio_spec import default_spec
-from tests.test_export import gpt2_spec
 
 BYTE, BPE = {"id": "byte", "config": {}}, {"id": "bpe_gpt2", "config": {}}
 
@@ -44,130 +35,6 @@ class PretrainingMode(unittest.TestCase):
 
     def test_scratch_is_always_allowed(self):
         self.assertEqual(forced_mode(version(BYTE), version(BYTE, "p.npz"), "from_scratch"), "from_scratch")
-
-
-class ChatStreaming(unittest.TestCase):
-    def run_pair(self):
-        out = {0: [], 1: []}
-
-        def chat(num, messages, on_text, stop):
-            text = ""
-            for w in (f"v{num} ", "says ", "hi"):
-                text += w
-                on_text(text)
-            return text
-        for i, num in enumerate((2, 1)):
-            stream_reply(chat, num, [], None, out[i].append)
-        return out
-
-    def test_compare_both_panes_get_cumulative_text_then_end(self):
-        out = self.run_pair()
-        self.assertEqual(out[0][-2:], ["v2 says hi", None])
-        self.assertEqual(out[1][-2:], ["v1 says hi", None])
-
-    def test_final_text_used_when_nothing_streamed_and_errors_shown(self):
-        got = []
-        stream_reply(lambda *a: "whole", 1, [], None, got.append)
-        self.assertEqual(got, ["whole", None])
-        got = []
-        with self.assertLogs("studio_ia.services", "ERROR"):
-            stream_reply(lambda *a: 1 / 0, 1, [], None, got.append)
-        self.assertEqual(got, ["Something went wrong: ZeroDivisionError. The log has the details.", None])
-
-
-class PageLogic(unittest.TestCase):
-    def test_steps_and_config(self):
-        self.assertEqual(steps_for(10_000, 4096, 2), 5)
-        self.assertIsNone(steps_for(None, 4096, 2))
-        cfg = validate_config(pretrain_config(default_spec(), 50, 8, .05))
-        self.assertEqual((cfg["steps"], cfg["batch_size"], cfg["validation"], cfg["objective"]), (50, 8, .05, "all"))
-
-    def test_phase_and_history(self):
-        phases = [(0, 10, "warm-up"), (10, 80, "steady"), (80, 100, "cool-down")]
-        self.assertEqual([phase_at(phases, k) for k in (0, 10, 11, 80, 81, 100)], ["warm-up", "warm-up", "steady", "steady", "cool-down", "cool-down"])
-        self.assertEqual(phase_at([], 5), "")
-        self.assertEqual(history_of([(0, 3.), (5, 2.)], [(5, 2.5)]), [{"loss": 3., "val_loss": None}, {"loss": 2., "val_loss": 2.5}])
-
-    def test_queue_total_hours(self):
-        self.assertIsNone(total_hours(QueueState()))
-        job = Job("a", "pretrain")
-        self.assertIsNone(total_hours(QueueState(job=job, eta_s=None)))
-        self.assertEqual(total_hours(QueueState(job=job, eta_s=3600, up_next=[Job("b", "compare", eta_s=1800)])), 1.5)
-
-    def test_lora_choice_follows_the_engine_refusals(self):
-        fp32, bf16 = default_spec(), default_spec()
-        bf16["train"]["precision"] = {"id": "bf16", "config": {}}
-        plain, mixed = SimpleNamespace(spec=fp32, best_checkpoint="c.npz"), SimpleNamespace(spec=bf16, best_checkpoint="c.npz")
-        self.assertFalse(is_mixed_precision(fp32))
-        self.assertTrue(is_mixed_precision(bf16))
-        self.assertFalse(is_mixed_precision({}))
-        self.assertIsNone(lora_blocker(plain))
-        self.assertIn("float32", lora_blocker(mixed))
-        self.assertIn("trained version", lora_blocker(SimpleNamespace(spec=fp32, best_checkpoint=None)))
-        self.assertIn("trained version", lora_blocker(None))
-        self.assertEqual(lora_config(True, 16, plain), {"lora": {"rank": 16}})
-        self.assertEqual(lora_config(False, 16, plain), {"lora": None})
-        self.assertEqual(lora_config(True, 16, mixed), {})
-        self.assertEqual(lora_config(True, 16, None), {})
-        self.assertEqual(validate_config({"lora": lora_config(True, 16, plain)["lora"]})["lora"]["rank"], 16)
-
-    def test_lora_default_is_the_versions_own_setting(self):
-        spec = default_spec()
-        self.assertFalse(lora_default(SimpleNamespace(spec=spec)))
-        self.assertFalse(lora_default(None))
-        spec["train"]["run"] = {"lora": {"rank": 4}}
-        self.assertTrue(lora_default(SimpleNamespace(spec=spec)))
-
-    def test_post_blockers_and_step_line(self):
-        self.assertIn("Pretraining", blocker(0, {"conversations": 5}, checkpoint=False))
-        self.assertIsNone(blocker(0, {"conversations": 5}))
-        self.assertIn("conversations", blocker(0, {}))
-        self.assertIn("2 pairs", blocker(3, {"pairs": 1}))
-        self.assertIsNone(blocker(3, {"pairs": 2}))
-        self.assertIn("other trained version", blocker(2, {}, 0, False))
-        self.assertIn("correction", blocker(2, {}, 1, True))
-        self.assertEqual(step_line(QueueState(step=5, total=20, eta_s=600)), "step 5 of 20 · about 10 min left")
-        self.assertEqual(step_line(QueueState()), "starting")
-        self.assertEqual(step_line(QueueState(step=40, total=1200, eta_s=600)), "step 40 of 1,200 · about 10 min left")
-
-    def test_chat_follows_best_unless_picked(self):
-        self.assertEqual(answering_version([1, 2, 3], 2, None), 2)
-        self.assertEqual(answering_version([1, 2, 3], 2, 3), 3)
-        self.assertEqual(answering_version([1, 2, 3], 2, None, follows=False, current=3), 3)
-        self.assertIsNone(answering_version([], None, None))
-
-    def test_few_shot_rows_sit_beside_guessing(self):
-        table = FakeServices().few_shot(1)
-        rows = few_shot_rows(table)
-        self.assertEqual([r[0] for r in rows], [CHAT["few_shot_zero"], CHAT["few_shot_one"], "4" + CHAT["few_shot_fitted"].format(used="3.5")])
-        self.assertEqual(rows[2][1:4], ("14 of 40", "35%", "30%"))
-        self.assertEqual({r[4] for r in rows}, {CHAT["few_shot_near"]})  # 11 to 14 of 40 is within a guesser's spread around 12
-        self.assertEqual(against_chance(30, 40, .3), CHAT["few_shot_above"])
-        self.assertEqual(against_chance(2, 40, .3), CHAT["few_shot_below"])
-        self.assertEqual(few_shot_rows({"items": 0, "chance": None, "rows": []}), [])
-        self.assertEqual(few_shot_rows(None), [])
-        self.assertIn("about 30%", few_shot_note(table))
-        self.assertNotIn(CHAT["few_shot_training"], few_shot_note(table))
-        self.assertIn(CHAT["few_shot_training"], few_shot_note({**table, "held_back": False}))
-
-    def test_verdict_rule(self):
-        v = lambda n, status: SimpleNamespace(number=n, status=status)  # noqa: E731
-        line, _, ok = verdict_view(v(1, "trained"), v(2, "training"))
-        self.assertFalse(ok)
-        self.assertIn("hasn’t finished", line.replace("'", "’"))
-        done = {"comparable": True, "percent": 40.}
-        line, _, ok = verdict_view(v(1, "trained"), v(2, "trained"), done)
-        self.assertTrue(ok)
-        self.assertIn("60%", line)
-        line, _, ok = verdict_view(v(1, "trained"), v(2, "trained"), {"comparable": False, "reason": "The runs have different total lengths."})
-        self.assertFalse(ok)
-        self.assertTrue(line.endswith("different total lengths."))
-
-    def test_layout_rows_marks_document_ends(self):
-        rows = layout_rows([40, 100], 64, 3, cells=8)
-        self.assertEqual(len(rows[0]), 8)
-        self.assertIn(-1, rows[0])
-        self.assertTrue(set(rows[0]) <= {-1, 0, 1})
 
 
 class RecommendedCollection(unittest.TestCase):
@@ -264,59 +131,6 @@ class RecommendedCollection(unittest.TestCase):
         self.assertEqual(self.states()["tinystories"], "downloaded")
 
 
-class StorageCard(unittest.TestCase):
-    class Fake(FakeServices):
-        def storage(self, days=None, data=False):
-            self.asked = (days, data)
-            return (3, 2_500_000)
-
-    def test_choice_maps_to_days_and_data_only_with_all_history(self):
-        f = self.Fake()
-        self.assertEqual(storage_state(f, "Older than 30 days", True)[:3], (30, False, False))
-        self.assertEqual(f.asked, (30, False))
-        days, data, box, line, ok = storage_state(f, "All history", True)
-        self.assertEqual((days, data, box, ok), (None, True, True, True))
-        self.assertEqual(line, "This frees 2.5 MB in 3 items")
-
-    def test_nothing_to_delete_disables_the_button(self):
-        days, data, box, line, ok = storage_state(FakeServices(), "Older than 7 days")
-        self.assertEqual((days, ok, line), (7, False, "Nothing to delete"))
-
-    def test_one_day_choice(self):
-        f = self.Fake()
-        self.assertEqual(storage_state(f, "Older than 1 day")[0], 1)
-
-    def test_sizes(self):
-        self.assertEqual((size_text(2_500_000), size_text(3_200_000_000)), ("2.5 MB", "3.2 GB"))
-
-
-class ExportCard(unittest.TestCase):
-    def test_only_trained_versions_are_listed_and_gguf_says_why_not(self):
-        config = {"name": "x", "tokenizer": "byte", "width": 32, "layers": 1, "heads": 4, "context": 32, "expansion": 4}
-        gpt2 = {**config, "architecture": gpt2_spec()}
-        rows = export_rows([SimpleNamespace(number=1, name="a", spec=gpt2, best_checkpoint=None),
-                            SimpleNamespace(number=2, name="b", spec=gpt2, best_checkpoint="b.pt"),
-                            SimpleNamespace(number=3, name="c", spec={**config, "tokenizer": "character"}, best_checkpoint="c.pt")])
-        self.assertEqual([(n, name) for n, name, _ in rows], [(2, "b"), (3, "c")])
-        self.assertEqual(rows[0][2], "")
-        self.assertIn("character tokenizer", rows[1][2])
-
-    def test_file_name_stem(self):
-        self.assertEqual(export_default_name("Wider / deeper: v2"), "Wider---deeper--v2")
-        self.assertEqual(export_default_name(" /: "), "model")
-
-    def test_run_reports_the_path_or_the_plain_reason(self):
-        f = FakeServices()
-        line = export_run(f, 2, "b", "gguf", "out/b.gguf")
-        self.assertEqual(f.exports, [(2, "gguf", "out/b.gguf")])
-        self.assertIn("out/b.gguf", line)
-
-        class Refuses(FakeServices):
-            def export_version(self, version, kind, path):
-                raise ValueError("GGUF export covers GPT-2's architecture only.")
-        self.assertEqual(export_run(Refuses(), 2, "b", "gguf", "x"), "GGUF export covers GPT-2's architecture only.")
-
-
 class GateRules(unittest.TestCase):
     def test_rise_inside_the_noise_band_passes_beyond_it_fails(self):
         before, band = {"bpc": 2.0, "pass_k": 3, "pass_n": 5}, (1.95, 2.1)
@@ -333,30 +147,6 @@ class GateRules(unittest.TestCase):
         self.assertFalse(studio_gate.moves_chat(None, 2.0, better))
         self.assertTrue(studio_gate.moves_chat(1.97, 2.0))             # no held-back text to pair on: lower is enough
         self.assertFalse(studio_gate.moves_chat(2.03, 2.0))
-
-
-class SwitchNote(unittest.TestCase):
-    def test_while_the_run_goes_it_is_a_first_look_only(self):
-        self.assertEqual(switch_note(True, 1.9, 2.0, None)[0], "held_back_below")
-        self.assertEqual(switch_note(True, 2.1, 2.0, None)[0], "held_back_inside")
-        self.assertEqual(switch_note(True, None, 2.0, None)[0], "no_band_yet")
-        self.assertEqual(switch_note(True, 1.9, 2.0, {"better": True, "diff": -.1})[0], "held_back_below")  # a verdict waits for the end
-
-    def test_after_the_run_the_paired_verdict_says_better_not_sure_or_not_better(self):
-        self.assertEqual(switch_note(False, None, None, {"better": True, "diff": -.0412, "upper": -.01}), ("gate_better", {"gap": "0.041"}))
-        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": -.02, "upper": .01})[0], "gate_not_sure")
-        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": .03, "upper": .1})[0], "gate_not_better")
-        self.assertEqual(switch_note(False, None, None, {"better": False, "diff": float("nan"), "upper": float("nan")})[0], "no_band_yet")
-        self.assertEqual(switch_note(False, None, None, None)[0], "no_band_yet")
-        few = {"better": False, "diff": -.5, "upper": float("nan"), "docs": 5, "reason": "few_docs"}
-        self.assertEqual(switch_note(False, None, None, few), ("gate_few_docs", {"docs": 5, "need": 20}))  # however big the gap looks
-        self.assertEqual(T["gate_few_docs"].format(parent="version 1", **switch_note(False, None, None, few)[1]),
-                         "Not sure: only 5 held-back documents; at least 20 are needed to tell a real gain from luck. Chat keeps using version 1.")
-
-    def test_every_note_fills_in_from_the_words_the_page_has(self):
-        words = {"Version": "Version 2", "version": "version 2", "parent": "version 1", "gap": "0.041", "docs": 5, "need": 20}
-        for key in ("held_back_below", "held_back_inside", "no_band_yet", "gate_better", "gate_not_sure", "gate_not_better", "gate_few_docs"):
-            self.assertNotIn("{", T[key].format(**words))
 
 
 class WorkspaceRows(unittest.TestCase):
@@ -465,82 +255,6 @@ def _problems():
 
     from studio_rules import generate
     return generate("copy", random.Random(1), 6)
-
-
-class PostTrainingHonesty(unittest.TestCase):
-    def test_spread_text(self):
-        self.assertEqual(spread_text(12, 40), "12 of 40 groups had both a better and a worse answer; only those teach the model.")
-        self.assertEqual(spread_text(1, 1), "1 of 1 group had both a better and a worse answer; only those teach the model.")
-        self.assertIn("None of the 40 groups", spread_text(0, 40))
-        self.assertEqual(spread_text(0, 0), "")
-
-    def test_teachers_share_the_word_list_and_window(self):
-        def v(n, tokenizer=BYTE, n_ctx=32, checkpoint=True):
-            return SimpleNamespace(number=n, spec={"tokenizer": tokenizer, "dims": {"n_ctx": n_ctx}}, best_checkpoint=f"v{n}.npz" if checkpoint else None)
-        current = v(2)
-        versions = [v(1), current, v(3), v(4, BPE), v(5, n_ctx=64), v(6, checkpoint=False)]
-        options = teacher_options(versions, current)
-        self.assertEqual([o.number for o in options], [1, 3])          # not itself, other word list, other window, untrained
-        self.assertEqual(default_teacher(options, current).number, 1)   # the previous best
-        self.assertEqual(default_teacher(options[1:], current).number, 3)
-        self.assertIsNone(default_teacher([], current))
-        self.assertEqual(teacher_options(versions, None), [])
-
-
-class PostTrainingLive(unittest.TestCase):
-    """Live events must not rebuild the page for every one of them, nor when the open round shows nothing new."""
-
-    def page(self):
-        page = PostTrainingPage.__new__(PostTrainingPage)  # no window: only the event logic is used
-        page.selected, page.group, page.heat, page.moved, page.live_gate = 1, None, None, None, {}
-        page.spread = None
-        page.gates, page._ticking, page._pending, page._step, page.services = {}, False, False, None, FakeServices()
-        page.timers, page.redraws, page.reloads = [], [], []
-        page.after = lambda ms, fn: page.timers.append((ms, fn))
-        page.refresh = lambda: (page.redraws.append(1), setattr(page, "_drawn", live_view(page.selected, page.group, page.heat, page.moved, {**page.gates, **page.live_gate})))
-        page.reload = lambda: page.reloads.append(1)
-        page._drawn = live_view(1, None, None, None, {})
-        return page
-
-    def test_a_burst_draws_its_first_at_once_and_the_rest_once(self):
-        page = self.page()
-        for n in range(6):
-            page.on_event("train", {"type": "group", "prompt": "p", "rule": "sort", "mean": .5, "answers": [], "n": n})
-        self.assertEqual((len(page.timers), page.redraws), (1, [1]))
-        page.timers[0][1]()
-        self.assertEqual((page.redraws, page.reloads), ([1, 1], []))
-        page.timers[1][1]()  # the burst is over: the lane goes quiet
-        self.assertEqual((len(page.timers), page.redraws), (2, [1, 1]))
-
-    def test_nothing_new_for_the_open_round_does_not_redraw(self):
-        page = self.page()
-        page.on_event("train", {"type": "heat", "prompt": "p", "words": ["a"], "surprise": [.1]})  # round 3's visual; round 2 is open
-        page.timers[0][1]()
-        self.assertEqual(page.redraws, [])
-
-    def test_the_same_group_again_does_not_redraw_but_a_gate_does_at_once(self):
-        page = self.page()
-        group = {"type": "group", "prompt": "p", "rule": "sort", "mean": .5, "answers": []}
-        page.on_event("train", group)
-        page.on_event("train", dict(group))
-        page.timers[0][1]()
-        self.assertEqual(page.redraws, [1])
-        page.on_event("train", {"type": "gate", "round": 2, "ok": True, "checks": []})
-        self.assertEqual(page.redraws, [1, 1])
-
-    def test_round_2_step_metrics_redraw_only_when_the_count_changes(self):
-        page = self.page()
-        step = {"type": "metric", "step": 1, "groups": 4, "taught": 1, "groups_total": 4, "taught_total": 1}
-        page.on_event("train", step)
-        self.assertEqual((page.spread["taught_total"], len(page.redraws)), (1, 1))
-        page.on_event("train", {"type": "metric", "step": 1, "loss": 2.})   # another round's metric: not round 2's count
-        self.assertEqual(page.spread["taught_total"], 1)
-
-    def test_queue_job_and_version_events_still_reload(self):
-        page = self.page()
-        for kind in ("queue", "job", "versions"):
-            page.on_event(kind, {})
-        self.assertEqual((len(page.reloads), page.timers), (3, []))
 
 
 if __name__ == "__main__":

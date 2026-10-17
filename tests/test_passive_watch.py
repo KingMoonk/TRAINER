@@ -412,17 +412,6 @@ class InstallTests(unittest.TestCase):
             self.assertFalse(Path(path).exists())
             watch.uninstall(root, home=home, run=run, platform="darwin")  # already gone is fine
 
-    def test_frozen_build_points_at_its_own_executable(self):
-        run = MagicMock()
-        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as root, patch.object(sys, "frozen", True, create=True):
-            expected = [sys.executable, "--run-module", "studio_passive_watch", "--root", str(Path(root).resolve())]
-            self.assertEqual(watch._watch_command(root), expected)
-            path = watch.install(root, home=home, run=run, platform="darwin")
-            self.assertEqual(plistlib.loads(Path(path).read_bytes())["ProgramArguments"], expected)
-            watch.install(root, run=run, platform="win32")
-            script = run.call_args[0][0][run.call_args[0][0].index("/TR") + 1].strip('"')
-            self.assertIn(subprocess.list2cmdline(expected), Path(script).read_text())
-
     def test_windows_creates_and_deletes_a_scheduled_task(self):
         run = MagicMock()
         with tempfile.TemporaryDirectory() as root:

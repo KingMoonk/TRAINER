@@ -2,7 +2,6 @@
 import unittest
 
 import studio_viewer_ui as ui
-from studio_ia.theme import C
 from studio_scene import HEAD_STAGES, LEVELS, MODES
 
 
@@ -16,7 +15,7 @@ class ViewerControls(unittest.TestCase):
         self.assertEqual(ui.text_colors(True)[0], ui.rgba("bg"))
         self.assertEqual(ui.text_colors()[3], ui.rgba("muted"))
         self.assertTrue(all(len(c) == 4 for c in ui.button_colors() + ui.text_colors()))
-        self.assertIn("bg", C)
+        self.assertIn("bg", ui.C)
 
     def test_levels_are_ones_the_scene_draws(self):
         self.assertTrue(set(ui.LEVELS) <= set(LEVELS))
