@@ -283,7 +283,7 @@ class Runner:
         self._emit("queue", {"job": job_id})
 
     def remove(self, job_id):
-        remote = None
+        remote = gone = None
         with self.lock:
             job = next((j for j in self.jobs if j.id == job_id), None)
             if job is self.running:
@@ -292,9 +292,12 @@ class Runner:
                 remote = job           # running on a peer: it is told to stop, and the record is kept as stopped
             elif job:
                 self.jobs.remove(job)
+                gone = job
                 self._save()
         if remote:
             self.cluster.cancel(remote)
+        if gone:
+            self.cluster.removed(gone)  # a job that waited to be placed again leaves checkpoints in the store that nothing can resume
         self.wake.set()
         self._emit("queue", {"job": job_id})
 
