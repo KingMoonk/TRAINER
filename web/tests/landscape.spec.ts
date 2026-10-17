@@ -60,7 +60,8 @@ test("the landscape draws as a 3D surface on a wide screen and reads out the num
   await expect(page.getByTestId("landscape-here")).toContainText("nats");
   await expect(page.getByTestId("landscape-lowest")).toContainText("1.50 nats");
   await expect(page.getByTestId("landscape-measured")).toContainText("loss evaluations");
-  expect(state.requests[0]).toMatchObject({ version: 1, mode: "random", live: false });
+  expect(state.requests[0]).toMatchObject({ version: 1, mode: "random" });
+  expect(state.requests[0].live ?? false).toBe(false); // the API defaults `live` to false, so the page may leave it out
 });
 
 test("the heat map is the other view of the same grid", async ({ page }) => {
@@ -114,7 +115,7 @@ test("the training path directions are asked for by name", async ({ page }) => {
 test("a failed measurement shows the server's sentence and can be retried", async ({ page }) => {
   const state = await mockLandscape(page, { failure: "No held-back text yet, so there is nothing to measure the error on." });
   await page.goto("/landscape/");
-  await expect(page.getByRole("alert")).toContainText("No held-back text yet");
+  await expect(page.getByRole("alert").filter({ hasText: "No held-back text yet" })).toBeVisible();
   await page.getByRole("button", { name: "Try again" }).click();
   await expect.poll(() => state.requests.length).toBeGreaterThan(1);
 });
