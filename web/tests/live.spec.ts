@@ -102,6 +102,7 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
   await expect(tray).toContainText("Not saved · only this page sees these");
 
   await page.getByTestId("save").click();
+  if (existing.length) await page.getByTestId("guess-skip").click(); // a version after the first asks for a guess first
   await expect(page.getByTestId(`version-${next}`)).toBeVisible();
   await expect(tray).toContainText("No changes");
 });

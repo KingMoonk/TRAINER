@@ -208,7 +208,7 @@ function YourData() {
               onClick={() => show(k)}
               className={cn(
                 "flex flex-col gap-0.5 rounded-lg border-2 p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                k === kind ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
+                k === kind ? "selected-box" : "border-border hover:bg-muted/30",
               )}
             >
               <span className="font-semibold">{KIND[k].tab}</span>

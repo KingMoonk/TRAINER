@@ -84,11 +84,11 @@ Windows double-click `start_studio.bat`. The details below cover GPU support, th
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python tasks.py test                    # ruff + every window-free unit test (the local command)
 .venv/bin/python tasks.py test tests.test_queue   # ruff + only the named modules
-python tasks.py test:ci                           # + compileall + the window tests (tests/gui_*.py); CI only
-python tasks.py test:ci:e2e                       # + a real training run (tests.e2e_train); CI only
+python tasks.py test:ci                           # + compileall; every pull request runs it (Linux)
+python tasks.py test:ci:e2e                       # + a real training run (tests.e2e_train); nightly on macOS and Windows
 ```
 
-CI runs `test:ci:e2e` on each push and pull request. `test:ci` and `test:ci:e2e` refuse to run unless `CI` is set (GitHub Actions does), because the window tests open real Tk and 3D windows. Those tests live in `gui_*.py` and skip themselves unless `CI` is set or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
+CI runs `test:ci` on Linux for each push and pull request, and `test:ci:e2e` on macOS and Windows every night (and on demand: Actions, Nightly, Run workflow). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
 
 ## Web UI development
 

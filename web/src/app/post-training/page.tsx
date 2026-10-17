@@ -172,7 +172,7 @@ export default function PostTrainingPage() {
               onClick={() => setPicked(r.n)}
               className={cn(
                 "flex items-center gap-3 rounded-lg border-2 p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                on ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
+                on ? "selected-box" : "border-border hover:bg-muted/30",
               )}
             >
               <span
