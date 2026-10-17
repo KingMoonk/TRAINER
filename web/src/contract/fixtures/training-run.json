@@ -1,0 +1,43 @@
+{
+  "body": {
+    "change": "",
+    "chat_version": null,
+    "curve": {
+      "heldout": [],
+      "lr": [],
+      "phases": [],
+      "prompt": null,
+      "sample_every": null,
+      "samples": [],
+      "smooth": [],
+      "steps": [],
+      "total": 0
+    },
+    "gate_vs": null,
+    "job_id": null,
+    "parent": null,
+    "phase": "",
+    "references": {
+      "best_so_far_bpc": null,
+      "uniform_bpc": null,
+      "unigram_bpc": null
+    },
+    "running": false,
+    "status": null,
+    "step": 0,
+    "switch": {
+      "docs": null,
+      "gap": null,
+      "key": "no_band_yet",
+      "need": null
+    },
+    "total": 0,
+    "version": "v0.0.0"
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/training-run"
+  },
+  "status": 200
+}

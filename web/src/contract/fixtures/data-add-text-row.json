@@ -1,0 +1,15 @@
+{
+  "body": {
+    "added": true
+  },
+  "request": {
+    "body": {
+      "fields": {
+        "text": "A first line of text.\nAnd a second."
+      }
+    },
+    "method": "POST",
+    "path": "/data/text/rows"
+  },
+  "status": 200
+}

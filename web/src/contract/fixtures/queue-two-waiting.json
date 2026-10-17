@@ -1,0 +1,65 @@
+{
+  "body": {
+    "blocked": null,
+    "eta_s": null,
+    "gate": {
+      "reason": null,
+      "resumes_at": null,
+      "supported": true
+    },
+    "job": null,
+    "lr": null,
+    "paused": false,
+    "phase": "",
+    "plan": {
+      "chat_follows_best": true,
+      "end_hour": 7,
+      "hours": "any",
+      "idle_after_s": 60.0,
+      "idle_only": true,
+      "keep_awake": false,
+      "memory": "most",
+      "pause_on_battery": true,
+      "start_hour": 22
+    },
+    "step": 0,
+    "stopping": false,
+    "total": 0,
+    "up_next": [
+      {
+        "created_at": 1700000000.0,
+        "epoch": 0,
+        "error": "",
+        "eta_s": null,
+        "id": "job0001",
+        "kind": "pretrain",
+        "label": "Version 1 pretraining",
+        "node": "",
+        "note": "First try",
+        "owner": "",
+        "params": {},
+        "status": "waiting"
+      },
+      {
+        "created_at": 1700000000.0,
+        "epoch": 0,
+        "error": "",
+        "eta_s": null,
+        "id": "job0002",
+        "kind": "pretrain",
+        "label": "Version 2 pretraining",
+        "node": "",
+        "note": "",
+        "owner": "",
+        "params": {},
+        "status": "waiting"
+      }
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/queue"
+  },
+  "status": 200
+}

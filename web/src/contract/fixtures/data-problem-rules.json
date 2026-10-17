@@ -1,0 +1,42 @@
+{
+  "body": {
+    "max_drafts": 200,
+    "max_problems": 5000,
+    "rules": [
+      {
+        "id": "copy",
+        "label": "copy"
+      },
+      {
+        "id": "reverse",
+        "label": "reverse"
+      },
+      {
+        "id": "sort",
+        "label": "sort"
+      },
+      {
+        "id": "count",
+        "label": "count"
+      },
+      {
+        "id": "small_addition",
+        "label": "small addition"
+      },
+      {
+        "id": "max_length",
+        "label": "stay under N characters"
+      },
+      {
+        "id": "ends_cleanly",
+        "label": "end cleanly"
+      }
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/data/problems/rules"
+  },
+  "status": 200
+}

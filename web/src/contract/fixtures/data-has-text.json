@@ -1,0 +1,11 @@
+{
+  "body": {
+    "has_text": true
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/data/has_text"
+  },
+  "status": 200
+}

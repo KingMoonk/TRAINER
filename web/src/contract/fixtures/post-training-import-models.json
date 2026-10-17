@@ -1,0 +1,15 @@
+{
+  "body": [
+    {
+      "id": "gpt2",
+      "name": "GPT-2 (124M)",
+      "size": 548105171
+    }
+  ],
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/post-training/import-models"
+  },
+  "status": 200
+}
