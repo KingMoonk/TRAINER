@@ -15,8 +15,6 @@ ROUTES_TS = ROOT / "web" / "src" / "lib" / "routes.ts"
 APP = ROOT / "web" / "src" / "app"
 WEB_ROUTE = re.compile(r'\{\s*route:\s*"([^"]+)",\s*href:\s*"([^"]+)"')
 PLACEHOLDER = re.compile(r"\bPagePlaceholder\b|page-placeholder")
-# The new-run and run pages land in #344 and #349; until they do these routes have no page.tsx yet.
-PENDING_ROUTES = {"new_run", "run_view"}
 
 
 def web_routes(source=ROUTES_TS):
@@ -41,7 +39,7 @@ class RouteCheck(unittest.TestCase):
         self.assertTrue(web_routes(), f"no routes found in {ROUTES_TS}")
 
     def test_every_web_route_has_a_page(self):
-        missing = [route for route in unbuilt(web_routes()) if route not in PENDING_ROUTES]
+        missing = unbuilt(web_routes())
         self.assertEqual(missing, [], f"web routes with no page.tsx under web/src/app: {missing}")
 
     def test_no_web_page_renders_the_placeholder(self):

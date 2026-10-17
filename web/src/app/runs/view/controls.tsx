@@ -53,7 +53,7 @@ export function ConfirmButton({ label, ariaLabel, tip, title, body, confirm, onC
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{T.cancel}</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm} className={cn(danger && "bg-destructive text-white hover:bg-destructive/90")}>{confirm}</AlertDialogAction>
+          <AlertDialogAction onClick={onConfirm} variant={danger ? "destructive" : "default"}>{confirm}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

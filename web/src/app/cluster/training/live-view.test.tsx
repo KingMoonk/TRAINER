@@ -88,6 +88,12 @@ describe("Training tab: the live view", () => {
     expect(gpu.getByText("1 shard")).toBeInTheDocument();
   });
 
+  test("a run links to its Run view", async () => {
+    server([midRound()]);
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    expect(await screen.findByTestId("open-run-view-r1")).toHaveAttribute("href", expect.stringMatching(/^\/runs\/view\/?\?id=r1$/));
+  });
+
   test("an edge moves while its transfer runs and says how many bytes in which format", async () => {
     server([midRound()]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
