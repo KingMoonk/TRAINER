@@ -23,6 +23,7 @@ SCORE_WINDOWS = 512  # windows gathered before a scoring pass
 SCORE_ELEMENTS = 4_000_000  # most float64 logits (batch x window x vocabulary) one scoring pass holds
 SHOTS = (0, 1, 4)  # worked examples in front of each few-shot question: none, one, a few
 CHOICE_LINE = re.compile(r"([A-J])\) (.+)")
+SCORE_DEVICE = "cpu"  # score_docs reads a checkpoint path on this device, so held-back scores do not depend on the machine that scores
 SCORE_METHOD = "stride-half-2"  # how score_docs reads a document; scores stored under another value are stale
 MIN_DOCS = 20  # fewest held-back documents paired_gain will judge on; a percentile bootstrap over fewer undercovers
 BOOTSTRAP_ELEMENTS = 2_000_000  # most resampled indices one bootstrap pass holds
@@ -68,7 +69,7 @@ def score_docs(model, docs):
     as its end-of-text piece, so counting them would charge every position for the same piece three times.
     """
     from studio_model import LocalModel
-    local = model if isinstance(model, LocalModel) else LocalModel(model, device="cpu")
+    local = model if isinstance(model, LocalModel) else LocalModel(model, device=SCORE_DEVICE)
     tok, context, uniform = local.tokenizer, local.config["context"], math.log(local.tokenizer.vocab_size)
     nats = [0.] * len(docs)
     pending = []  # (document, inputs, targets, skip); scored and cleared once enough have gathered, so memory stays bounded

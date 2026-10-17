@@ -2,8 +2,9 @@
 
 Kept independent of studio_archdb (that store is keyed by architecture revisions); a version only
 references run directories and checkpoint paths. Version = {number, name, change, parent, spec, created_at,
-runs, best_checkpoint, status, scorecard, verdict, prediction, published}. prediction is the guess made on saving ({dimension: direction}, Build your model).
-published (absent until used) lists the version-store keys this version was published under, or was pulled from (studio_publish).
+runs, best_checkpoint, status, scorecard, verdict, prediction, published, train_device, score_device}. prediction is the guess made on saving ({dimension: direction}, Build your model).
+train_device is the device kind (cuda, mps, cpu) that trained the best checkpoint, score_device the one that scored it on the held-back text;
+both are absent until known. published (absent until used) lists the version-store keys this version was published under, or was pulled from (studio_publish).
 """
 from __future__ import annotations
 
@@ -123,7 +124,7 @@ class VersionStore:
             self._write(versions + [version])
             return copy.deepcopy(version)
 
-    def add_pulled(self, spec, name, change, checkpoint, key):
+    def add_pulled(self, spec, name, change, checkpoint, key, train_device=None):
         """A version another machine published, as a trained version here: its design, and `checkpoint` (the pulled file) as its weights.
         Its scorecard stays empty, because the numbers measured there were on that machine's held-back text. Returns the new row."""
         spec = validate_spec(spec)
@@ -131,7 +132,8 @@ class VersionStore:
             versions = self.versions()
             version = dict(number=len(versions) + 1, name=name, change=change, parent=None, spec=spec,
                            created_at=time.strftime("%Y-%m-%dT%H:%M:%S"), runs=[], best_checkpoint=str(checkpoint),
-                           status="trained", scorecard={}, verdict=None, prediction={}, published=[key])
+                           status="trained", scorecard={}, verdict=None, prediction={}, published=[key],
+                           **({"train_device": train_device} if train_device else {}))
             self._write(versions + [version])
             return copy.deepcopy(version)
 
@@ -183,6 +185,11 @@ class VersionStore:
 
     def set_best_checkpoint(self, number, path):
         return self._update(number, best_checkpoint=str(path))
+
+    def set_devices(self, number, train=None, score=None):
+        """Record the device kind that trained the version's checkpoint and/or the one that scored it; None leaves that one as it was."""
+        fields = {k: v for k, v in (('train_device', train), ('score_device', score)) if v}
+        return self._update(number, **fields) if fields else self.get(number)
 
     def set_scorecard(self, number, scorecard):
         return self._update(number, scorecard=dict(scorecard))

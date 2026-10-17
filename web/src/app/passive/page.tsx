@@ -56,6 +56,12 @@ export default function Page() {
     onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
     onSettled: () => client.invalidateQueries({ queryKey: ["passive"] }),
   });
+  const keepGoing = useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/passive/{session_id}/keep-going", { params: { path: { session_id: id } } })),
+    onSuccess: () => setNote(PASSIVE.keptGoing),
+    onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
+    onSettled: () => client.invalidateQueries({ queryKey: ["passive"] }),
+  });
   const signOut = useMutation({
     mutationFn: () => unwrap(api.DELETE("/passive/signin")),
     onSuccess: () => setNote(PASSIVE.signinRemoved),
@@ -106,6 +112,11 @@ export default function Page() {
                         </span>
                       ))}
                     </div>
+                    {view.canKeepGoing && (
+                      <Button size="sm" title={PASSIVE.keepGoingHint} disabled={keepGoing.isPending} onClick={() => keepGoing.mutate(row.id)}>
+                        {PASSIVE.keepGoing}
+                      </Button>
+                    )}
                     {view.canStop &&
                       (confirming === row.id ? (
                         <div className="flex max-w-xs shrink-0 flex-col items-end gap-2 text-right">

@@ -203,17 +203,18 @@ class QueueTests(unittest.TestCase):
     def test_queue_waits_while_a_passive_session_is_active(self):
         root = self.path.parent.parent
         self.assertFalse(studio_queue.passive_running(root))
+        self.assertIsNone(studio_queue.passive_session(root))
         self.assertFalse((root / "data" / "passive.sqlite").exists())  # asking never creates the record
         store = PassiveStore(root)
         session = store.create({})
         r = self.runner()
         r.enqueue(self.job("a"))
         r.start()
-        self.assertTrue(wait(lambda: r.state().gate.reason == PASSIVE))
+        self.assertTrue(wait(lambda: r.state().gate.reason == f"{PASSIVE} (session {session})"))
         for status in ("running", "paused"):  # a paused trainer still holds its model in memory
             store.update(session, status=status)
             time.sleep(.1)
-            self.assertEqual((self.fake.ran, r.state().blocked), ([], PASSIVE))
+            self.assertEqual((self.fake.ran, r.state().blocked), ([], f"{PASSIVE} (session {session})"))
         store.update(session, status="stopped")
         self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
         self.assertIsNone(r.state().gate.reason)
@@ -225,7 +226,7 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(wait(lambda: self.fake.steps > 3))
         store = PassiveStore(self.path.parent.parent)
         session = store.create({})
-        self.assertTrue(wait(lambda: r.state().blocked == PASSIVE))
+        self.assertTrue(wait(lambda: r.state().blocked == f"{PASSIVE} (session {session})"))
         time.sleep(.05)
         frozen = self.fake.steps
         time.sleep(.1)

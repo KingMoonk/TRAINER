@@ -23,7 +23,7 @@ A published artifact is two objects under one key, `<origin>/v<number>-<sha256[:
 * `<key>.npz`   the weights-only checkpoint. Written with fixed zip timestamps, so the same checkpoint always gives the same
                 bytes, the same hash and the same key: publishing twice uploads once, and a pull never races a re-publish.
 * `<key>.json`  what a node needs to list it without downloading it: version number, name, spec, scorecard, origin, the
-                device that trained it (when the checkpoint records one), publish time, size and sha256 of the .npz.
+                device that trained it (when the checkpoint records one) and the one that scored it (when known), publish time, size and sha256 of the .npz.
 
 The .json goes up last, so a version is listed only once its weights are complete, and an interrupted upload is simply redone.
 `pull` checks the sha256 before it widens anything.
@@ -278,7 +278,8 @@ def build_artifact(version, checkpoint_path, scratch, origin=None):
     key = f"{origin}/v{version['number']}-{digest[:12]}"
     meta = {"format": FORMAT, "key": key, "number": version["number"], "name": version.get("name"), "change": version.get("change"),
             "parent": version.get("parent"), "spec": version.get("spec"), "scorecard": version.get("scorecard") or {},
-            "origin": origin, "device": inner.get("device"), "step": inner.get("step"),
+            "origin": origin, "device": inner.get("device"), "train_device": inner.get("device"),
+            "score_device": version.get("score_device"), "step": inner.get("step"),
             "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "weights_dtype": "float16",
             "size": artifact.stat().st_size, "sha256": digest}
     return artifact, meta
@@ -308,7 +309,7 @@ def finish_pull(artifact, meta, dest_dir):
     return target
 
 
-_ROW = ("number", "name", "change", "parent", "spec", "scorecard")  # the parts of a version row that end up in the metadata
+_ROW = ("number", "name", "change", "parent", "spec", "scorecard", "score_device")  # the parts of a version row that end up in the metadata
 _shared = threading.Lock()
 
 

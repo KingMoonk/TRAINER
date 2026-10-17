@@ -8,6 +8,8 @@ files. Every clock and every peer is injected, so each rule is a window-free tes
 * `SelfFence`: the runner's side. It measures the lease on its own monotonic clock from the moment it *sent* the renewal that
   extended it, so it always gives up before the owner does. No clocks are compared between machines.
 * `decide`: where a waiting job goes: here, a peer, or nowhere yet.
+* `decide_gang` and `Gangs`: where a distributed run goes. A run takes `min_members` to `max_members` free machines in one decision,
+  or none, and each member slot is a lease. A slot that lapses is freed and refilled from the machines that are free then.
 * `Owner` and `Guest`: the two ends of a dispatch, as state machines that call `client_for(address)` (a `studio_peer.PeerClient`).
   `Owner.tick()` says which leases lapsed; the I/O edge (studio_remote.py) acts on it.
 * `resume_params`: the params a job has when it is placed again after its node was lost.
@@ -25,6 +27,7 @@ LEASE_S = 30.  # a lease's duration; the runner renews it every third of this
 DISPATCH_TIMEOUT = 120.  # the job spec carries its training data, so handing it over can take a while
 REFUSAL_COOLDOWN = 30.  # seconds before a job is offered again to a node that refused it
 UP, SUSPECT, DOWN = "up", "suspect", "down"
+JOIN_GRACE = 4  # a member slot gets this many lease durations to be heard from the first time: its machine has a member to start
 REMOTE_KINDS = ("pretrain",)  # kinds whose inputs are the dataset and a published version, so they can run on another machine
 EVENTS_RELAYED = ("metric", "telemetry", "info", "sample")  # what a runner passes to the owner; the rest names files on the runner
 
@@ -228,6 +231,118 @@ def _why_pinned(pinned, kind, nodes, health, remote_kind, store_ready, exclude):
     return f"It is pinned to {pinned}, which is busy or does not fit it."
 
 
+# ---- gang placement ------------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class GangPlacement:
+    nodes: tuple = ()  # the addresses that got a slot, in the order given; empty when the run waits
+    reason: str = ""  # when waiting: a sentence saying what the run is waiting for
+
+
+def free_for_gang(nodes, health, taken=(), exclude=()):
+    """The addresses a distributed run could use now, in the order given: online, not busy, not held by another run (`taken`) or just
+    lost (`exclude`), and a peer must be up by the failure detector. Members are `diloco_member` jobs on the peer's own queue, so
+    unlike a `pretrain` job they need no version store."""
+    out = []
+    for node in nodes:
+        local = node.address == studio_cluster.LOCAL
+        if node.free and node.address not in taken and node.address not in exclude and (local or health.state(node.address) == UP):
+            out.append(node.address)
+    return out
+
+
+def decide_gang(nodes, health, min_members, max_members, taken=(), exclude=()):
+    """A GangPlacement: the first `max_members` free machines when at least `min_members` are free, else none. All or nothing, so two
+    runs can never each hold part of what the other needs."""
+    free = free_for_gang(nodes, health, taken, exclude)
+    if len(free) < min_members:
+        listed = ", ".join(n.hostname or n.address for n in nodes if n.address in free) or "none"
+        return GangPlacement((), f"It needs {min_members} machine{'s' if min_members != 1 else ''} free at once; {len(free)} "
+                                 f"of the {len(nodes)} chosen {'is' if len(free) == 1 else 'are'} free ({listed}).")
+    return GangPlacement(tuple(free[:max_members]))
+
+
+@dataclass
+class _Slot:
+    lease: Lease
+    last: float  # when the owner last heard the member (or granted the slot)
+    heard: bool = False  # heard at least once since the grant: a slot that never was gets JOIN_GRACE durations
+
+
+class Gangs:
+    """The member slots of the distributed runs this node owns. A slot is a lease on one machine for one run; a run's slots are granted
+    together by `place` or not at all, and no machine holds slots of two runs. `heard` renews a slot; `lapsed` lists the slots whose
+    member has been silent for longer than its lease, which the owner then frees (`drop`) and offers to another free machine (`fill`),
+    which joins the run at the round after. Epochs are per slot and only go up."""
+
+    def __init__(self, clock=time.monotonic, lease_s=LEASE_S):
+        self.clock, self.lease_s = clock, lease_s
+        self._slots = {}  # run id -> {address: _Slot}
+        self._epochs = {}  # (run id, address) -> the highest epoch granted
+        self._lost = {}  # (run id, address) -> when it may be offered the run again
+
+    def runs(self):
+        return list(self._slots)
+
+    def held(self, run):
+        """{address: Lease} for the run's slots."""
+        return {a: slot.lease for a, slot in self._slots.get(run, {}).items()}
+
+    def taken(self, run=None):
+        """The addresses held by runs other than `run`."""
+        return {a for r, slots in self._slots.items() if r != run for a in slots}
+
+    def _grant(self, run, address):
+        epoch = self._epochs.get((run, address), 0) + 1
+        self._epochs[(run, address)] = epoch
+        lease = Lease(f"{run}@{address}", address, epoch, self.lease_s)
+        self._slots.setdefault(run, {})[address] = _Slot(lease, self.clock())
+        return lease
+
+    def place(self, run, nodes, health, min_members, max_members):
+        """Take the run's slots in one decision. A run that holds slots already gets them back unchanged, so asking again is harmless."""
+        if self._slots.get(run):
+            return GangPlacement(tuple(self._slots[run]))
+        placement = decide_gang(nodes, health, min_members, max_members, taken=self.taken(), exclude=self._excluded(run))
+        for address in placement.nodes:
+            self._grant(run, address)
+        return placement
+
+    def fill(self, run, nodes, health, max_members):
+        """Offer the run's open slots (up to `max_members` in all) to the machines that are free now. Returns the addresses that got one."""
+        slots = self._slots.get(run)
+        if slots is None:
+            return []
+        free = free_for_gang(nodes, health, taken=self.taken() | set(slots), exclude=self._excluded(run))
+        return [address for address in free[:max(0, max_members - len(slots))] if self._grant(run, address)]
+
+    def heard(self, run, address):
+        slot = self._slots.get(run, {}).get(address)
+        if slot is not None:
+            slot.last, slot.heard = self.clock(), True
+
+    def lapsed(self):
+        """[(run id, address)]: slots whose member has been silent for longer than its lease. This machine's own slot never lapses."""
+        now = self.clock()
+        return [(run, a) for run, slots in self._slots.items() for a, slot in slots.items()
+                if a != studio_cluster.LOCAL and now - slot.last > slot.lease.duration_s * (1 if slot.heard else JOIN_GRACE)]
+
+    def drop(self, run, address):
+        """Free a slot. The machine is not offered this run again for two leases, so one that is merely slow is not taken straight back."""
+        if self._slots.get(run, {}).pop(address, None) is not None:
+            self._lost[(run, address)] = self.clock() + 2 * self.lease_s
+
+    def end(self, run):
+        """The run is over: free all its slots."""
+        self._slots.pop(run, None)
+        for key in [k for k in self._lost if k[0] == run]:
+            del self._lost[key]
+
+    def _excluded(self, run):
+        now = self.clock()
+        return {a for (r, a), until in self._lost.items() if r == run and until > now}
+
+
 # ---- the two ends of a dispatch ------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -379,8 +494,19 @@ def resume_params(params, node):
     out.update(mode="catch_up", fetch={"init_from": checkpoint["key"]})
     out.pop("init_from", None)
     out["cluster"] = {**notes, "offset": done}
-    return out, (f"Interrupted on {node} at step {done}. It continues from that checkpoint, and the optimizer starts again from zero "
-                 "because only the weights are published."), False
+    return out, f"Interrupted on {node} at step {done}. It continues from that checkpoint.", False
+
+
+def resume_here(notes, address):
+    """{"epoch", "steps", "base"} when the job's last checkpoint was written on the node at `address`, which still holds the full one
+    (`last.npz` of that attempt's folder: optimizer, sampler and RNG), else None. `steps` is the length of the attempt that wrote it
+    and `base` the steps done before that attempt."""
+    checkpoint = notes.get("checkpoint") or {}
+    if checkpoint.get("node") != address or "epoch" not in checkpoint:
+        return None
+    base = int(checkpoint.get("base") or 0)
+    steps = int(notes.get("steps") or 0) - base
+    return {"epoch": int(checkpoint["epoch"]), "steps": steps, "base": base} if steps > 0 else None
 
 
 def interrupt(job):
