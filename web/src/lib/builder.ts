@@ -283,6 +283,8 @@ export type BlockView = {
 /** Every block row the tower paints, newest on top (builder.py _paint_tower). */
 export function blockViews(cur: Choices, draft: Choices, curTower: Tower | undefined, draftTower: Tower | undefined): BlockView[] {
   if (!curTower || !draftTower) return [];
+  // keepPreviousData holds the last draft's tower while a new one is read: a draft with more blocks than it has has no rows yet.
+  if (draftTower.blocks.length < draft.L || curTower.blocks.length < cur.L) return [];
   const knobs = draft.H !== cur.H || draft.W !== cur.W;
   const rows: BlockView[] = [];
   for (let i = 0; i < Math.max(cur.L, draft.L); i++) {
