@@ -265,6 +265,15 @@ class Placement(unittest.TestCase):
         self.assertIs(sc.place(Requirements(), self.nodes, pinned="windows-box"), self.pc)
         self.assertIs(sc.place(Requirements(), self.nodes, pinned=" macbook "), self.mac)
 
+    def test_a_hostname_two_nodes_share_places_nowhere_but_either_address_does(self):
+        one, two = node("10.0.0.2:8787", hostname="Box"), node("10.0.0.3:8787", hostname="box")
+        nodes = [self.mac, one, two]
+        for typed in ("box", "BOX", " Box "):
+            self.assertIsNone(sc.place(Requirements(), nodes, pinned=typed))
+        self.assertIs(sc.place(Requirements(), nodes, pinned="10.0.0.2:8787"), one)
+        self.assertIs(sc.place(Requirements(), nodes, pinned="10.0.0.3:8787"), two)
+        self.assertIs(sc.place(Requirements(), nodes, pinned="macbook"), self.mac)
+
     def test_a_pinned_node_that_cannot_run_it_is_none_not_another_node(self):
         busy = [self.mac, node("windows-box", "cuda", 24 * GB, busy=True)]
         self.assertIsNone(sc.place(sc.defaults_for("pretrain"), busy, pinned="windows-box"))

@@ -94,7 +94,9 @@ def own_node(cluster=None):
 
 
 def _find(nodes, ref):
-    return next((n for n in nodes if studio_cluster.matches(ref, n)), None)
+    """The one machine `ref` (an address or a typed pin) names, or None when none does or a hostname two machines share does."""
+    found = studio_cluster.pinned_nodes(ref, nodes)
+    return found[0] if len(found) == 1 else None
 
 
 def _name(node):

@@ -96,8 +96,11 @@ export function nodeLabel(node: QueueNode, nodes: QueueNode[]): string {
   return node.local ? `${name} (${T.thisMachine})` : node.online ? name : `${name} (${T.offline})`;
 }
 
-/** The `pin` of the machine a job is pinned to, as the "Run on" list spells it ("" for any machine; the raw pin when no machine answers to it). */
+/** The `pin` of the machine a job is pinned to, as the "Run on" list spells it ("" for any machine; the raw pin when no machine answers to it, or a name two machines share). */
 export function pinChoice(nodes: QueueNode[], pinned: string): string {
   const lower = pinned.trim().toLowerCase();
-  return nodes.find((n) => n.pin.toLowerCase() === lower || n.address.toLowerCase() === lower || n.hostname.toLowerCase() === lower)?.pin ?? pinned;
+  const byAddress = nodes.find((n) => n.pin.toLowerCase() === lower || n.address.toLowerCase() === lower);
+  if (byAddress) return byAddress.pin;
+  const byName = nodes.filter((n) => n.hostname.toLowerCase() === lower);
+  return byName.length === 1 ? byName[0].pin : pinned;
 }

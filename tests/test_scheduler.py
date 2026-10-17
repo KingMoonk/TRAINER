@@ -196,6 +196,29 @@ class Placement(unittest.TestCase):
         self.assertIn("just refused", self.decide(pinned="gpu-box", exclude={"gpu-box"}).reason)
         self.assertIn("busy", self.decide(nodes=[self.cpu, node("gpu-box", "cuda", busy=True)], pinned="gpu-box").reason)
 
+    def test_a_pin_to_a_hostname_two_machines_share_waits_and_names_them(self):
+        twin = node("100.64.0.3:8787", "cuda", hostname="GPU-Box")
+        first = node("100.64.0.2:8787", "cuda", hostname="gpu-box")
+        for address in (first.address, twin.address):
+            self.health.observe(address, True)
+        nodes = [self.cpu, first, twin]
+        placed = self.decide(nodes=nodes, pinned="gpu-box")
+        self.assertEqual(placed.where, "wait")
+        for text in ("gpu-box (100.64.0.2:8787)", "GPU-Box (100.64.0.3:8787)", "by its address"):
+            self.assertIn(text, placed.reason)
+        self.assertEqual(self.decide(nodes=nodes, pinned="GPU-BOX").where, "wait")  # however it is typed
+        self.assertEqual(self.decide(nodes=nodes, pinned=first.address), sched.Placement("remote", first.address))
+        self.assertEqual(self.decide(nodes=nodes, pinned=twin.address), sched.Placement("remote", twin.address))
+        self.assertEqual(self.decide(nodes=nodes, pinned="laptop").where, "local")  # a unique hostname is unchanged
+
+    def test_a_pin_to_a_hostname_this_machine_shares_can_still_name_this_machine_by_its_address(self):
+        twin = node("100.64.0.3:8787", "cuda", hostname="laptop")
+        self.health.observe(twin.address, True)
+        nodes = [self.cpu, twin]
+        self.assertIn("laptop (local)", self.decide(nodes=nodes, pinned="laptop").reason)
+        self.assertEqual(self.decide(nodes=nodes, pinned=sc.LOCAL).where, "local")
+        self.assertEqual(self.decide(nodes=nodes, pinned=twin.address).where, "remote")
+
     def test_a_job_with_no_fitting_node_waits(self):
         busy = [node(sc.LOCAL, busy=True), node("gpu-box", "cuda", busy=True)]
         self.assertEqual(self.decide(nodes=busy).where, "wait")
