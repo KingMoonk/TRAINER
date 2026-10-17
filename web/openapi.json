@@ -2623,6 +2623,11 @@
             "title": "Shard Count",
             "type": "integer"
           },
+          "term": {
+            "default": 1,
+            "title": "Term",
+            "type": "integer"
+          },
           "tokenizer": {
             "additionalProperties": true,
             "title": "Tokenizer",
@@ -6902,6 +6907,11 @@
           "state": {
             "title": "State",
             "type": "string"
+          },
+          "term": {
+            "default": 1,
+            "title": "Term",
+            "type": "integer"
           }
         },
         "required": [
@@ -9327,6 +9337,11 @@
             "default": true,
             "title": "Accepted",
             "type": "boolean"
+          },
+          "term": {
+            "default": 1,
+            "title": "Term",
+            "type": "integer"
           }
         },
         "title": "Accepted",
@@ -10405,7 +10420,7 @@
     },
     "/collective/{run}/join": {
       "post": {
-        "description": "Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.",
+        "description": "Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.\nA member that does not know the term yet sends 0 and learns it from the answer.",
         "operationId": "join_collective__run__join_post",
         "parameters": [
           {
@@ -10418,6 +10433,18 @@
               "pattern": "^[A-Za-z0-9_.-]{1,64}$",
               "title": "Run",
               "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
             }
           }
         ],
@@ -10474,6 +10501,18 @@
               "pattern": "^[A-Za-z0-9_.-]{1,64}$",
               "title": "Run",
               "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
             }
           }
         ],
@@ -10543,6 +10582,18 @@
               "title": "Node",
               "type": "string"
             }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -10589,6 +10640,18 @@
               "pattern": "^[A-Za-z0-9_.-]{1,64}$",
               "title": "Run",
               "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
             }
           }
         ],
@@ -10674,6 +10737,18 @@
               "default": 0.0,
               "title": "Wait",
               "type": "number"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
             }
           }
         ],
@@ -10801,6 +10876,18 @@
               ],
               "title": "Loss"
             }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
           }
         ],
         "requestBody": {
@@ -10866,6 +10953,18 @@
               "pattern": "^[A-Za-z0-9_.-]{1,64}$",
               "title": "Run",
               "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
             }
           }
         ],

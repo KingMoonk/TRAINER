@@ -402,6 +402,7 @@ export interface paths {
         /**
          * Join
          * @description Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.
+         *     A member that does not know the term yet sends 0 and learns it from the answer.
          */
         post: operations["join_collective__run__join_post"];
         delete?: never;
@@ -4341,6 +4342,11 @@ export interface components {
             seed: number;
             /** Shard Count */
             shard_count: number;
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
             /** Tokenizer */
             tokenizer: {
                 [key: string]: unknown;
@@ -6065,6 +6071,11 @@ export interface components {
             shards?: number[] | null;
             /** State */
             state: string;
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
         };
         /** RowsPage */
         RowsPage: {
@@ -7073,6 +7084,11 @@ export interface components {
              * @default true
              */
             accepted: boolean;
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
         };
         /** Started */
         studio_api__routers__data__Started: {
@@ -7809,7 +7825,10 @@ export interface operations {
     };
     join_collective__run__join_post: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -7845,7 +7864,10 @@ export interface operations {
     };
     leave_collective__run__leave_post: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -7882,6 +7904,8 @@ export interface operations {
             query: {
                 round: number;
                 node?: string;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -7914,7 +7938,10 @@ export interface operations {
     };
     progress_collective__run__progress_post: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 /** @description the run id: the pretrain_distributed job's id */
@@ -7950,9 +7977,11 @@ export interface operations {
     };
     round_state_collective__run__rounds__round__get: {
         parameters: {
-            query?: {
+            query: {
                 node?: string;
                 wait?: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -7994,6 +8023,8 @@ export interface operations {
                 steps: number;
                 seconds?: number;
                 loss?: number | null;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
             };
             header?: never;
             path: {
@@ -8031,7 +8062,10 @@ export interface operations {
     };
     shard_collective__run__shards__shard__get: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
             header?: never;
             path: {
                 shard: number;
