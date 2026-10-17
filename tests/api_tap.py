@@ -9,8 +9,10 @@ import time
 
 
 class EventTap:
-    def __init__(self, app):
+    def __init__(self, app, path="/events"):
+        """`path` may carry a query (`/traffic?last=5`): any route that sends `data: {"kind", "payload"}` messages and `: connected`."""
         self.app, self.events, self.connected = app, [], False
+        self.path, _, self.query = path.partition("?")
         self._cond = threading.Condition()
         self._loop = asyncio.new_event_loop()
         self._stop = None
@@ -32,8 +34,8 @@ class EventTap:
 
     async def _serve(self):
         self._stop = stop = asyncio.Event()
-        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET", "scheme": "http", "path": "/events",
-                 "raw_path": b"/events", "query_string": b"", "headers": [], "client": ("127.0.0.1", 1), "server": ("testserver", 80)}
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET", "scheme": "http", "path": self.path,
+                 "raw_path": self.path.encode(), "query_string": self.query.encode(), "headers": [], "client": ("127.0.0.1", 1), "server": ("testserver", 80)}
 
         async def receive():
             await stop.wait()

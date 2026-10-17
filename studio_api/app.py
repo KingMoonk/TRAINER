@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from studio_api import events, jobs
+from studio_api import events, jobs, traffic
 from studio_api.auth import TailscaleAuth
 from studio_api.hosts import ANY, HostCheck, HostNames
 from studio_api.static import ExportFiles
@@ -25,12 +25,13 @@ def get_services(request: Request):
     return request.app.state.services
 
 
-def create_app(services, open=False, origins=(), hosts=(), **auth):
+def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, **auth):
     """`auth` is TailscaleAuth's allow_tags, allow_users, whois and token (studio_cluster.allowed_callers gives the first two,
     studio_cluster.funnel_token the token). `origins` are the web origins (the Vercel site) allowed to call this API from a
     browser: their requests get the CORS headers only once authenticated, and only their preflight is answered without.
     `hosts` are the names the Host header may carry besides localhost and IP addresses (studio_api.hosts.own_names); the default
-    allows only those. Pass hosts=ANY to skip the check (tests over a TestClient, the OpenAPI dump)."""
+    allows only those. Pass hosts=ANY to skip the check (tests over a TestClient, the OpenAPI dump). `fake_traffic` (--fake) has a made-up
+    peer take part in the fake run, so the traffic console has DiLoCo exchanges to show (studio_api.traffic.simulate)."""
     @asynccontextmanager
     async def lifespan(app):
         yield
@@ -38,6 +39,7 @@ def create_app(services, open=False, origins=(), hosts=(), **auth):
             hosts.stop.set()  # the Tailscale-name refresh thread
         app.state.jobs.close()
         app.state.broadcaster.close()
+        app.state.traffic.close()
 
     app = FastAPI(title="Groundwork API", version=app_version(), lifespan=lifespan)
     app.state.services = services
@@ -45,6 +47,10 @@ def create_app(services, open=False, origins=(), hosts=(), **auth):
     app.state.hosts = hosts  # a HostNames knows this node's tailnet name (GET /cluster/nodes)
     app.state.broadcaster = events.Broadcaster(services)
     app.state.jobs = jobs.Jobs(services)
+    app.state.traffic = tap = traffic.Traffic(emit=services.emit)  # GET /traffic; the middleware below fills it
+    tap.watch_peers()  # the calls studio_peer makes from this process
+    if fake_traffic:
+        tap.own(traffic.simulate(tap, services))
     origins = tuple(origins)
     cors = dict(allow_methods=["*"], allow_headers=["*"])
     local_pages = open and not auth.get("token")  # a node with a token is not open: a localhost page could forge Tailscale-User-Login
@@ -53,6 +59,7 @@ def create_app(services, open=False, origins=(), hosts=(), **auth):
     app.add_middleware(TailscaleAuth, open=open, origins=origins, **auth)
     if local_pages and not origins:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
         app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, **cors)
+    app.add_middleware(traffic.TrafficMiddleware, traffic=tap)  # outside auth and CORS: a refused request is traffic too
     if hosts is not ANY:  # outermost: a request for a foreign name never reaches auth, CORS or a route
         app.add_middleware(HostCheck, hosts=hosts, origins=origins)
 
@@ -74,6 +81,7 @@ def create_app(services, open=False, origins=(), hosts=(), **auth):
             continue  # router not written yet
         app.include_router(module.router)
     app.include_router(events.router)
+    app.include_router(traffic.router)
     app.include_router(jobs.router)
     if WEB_OUT.is_dir():
         app.mount("/", ExportFiles(directory=WEB_OUT, html=True), name="web")

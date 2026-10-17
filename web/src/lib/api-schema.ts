@@ -2590,6 +2590,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Traffic
+         * @description Server-sent events: `record` events, each a full record (see the module docstring). The newest `last` records come first, then
+         *     every new one as it happens; a stream's record is sent again when it closes. A `hello` event first names this node and when its buffer began (ids restart with it).
+         */
+        get: operations["traffic_traffic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/traffic/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Rules
+         * @description The alert rules every browser applies: the saved ones, else the defaults.
+         */
+        get: operations["get_rules_traffic_rules_get"];
+        /**
+         * Put Rules
+         * @description Replace the alert rules; every connected browser is told (`traffic_rules` event).
+         */
+        put: operations["put_rules_traffic_rules_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/training-run": {
         parameters: {
             query?: never;
@@ -6035,6 +6080,56 @@ export interface components {
              * @enum {string}
              */
             kind: "conversations" | "problems" | "pairs" | "corrections" | "heldout_docs" | "heldout_problems";
+        };
+        /**
+         * Rule
+         * @description When the console raises an alert. `source` traffic: a record matches when its method (if given), route template or path (`*`
+         *     stands for one path segment) and status (a class like 5xx, or one code) do. `source` event: an /events event of this `kind`.
+         *     Either may then require the field at the dotted path `where` (in the record, or in the event payload) to equal `equals`, or with
+         *     `new_min` to be a new lowest number for the rule.
+         */
+        Rule: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Equals */
+            equals?: string | number | boolean | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind?: string | null;
+            /** Label */
+            label: string;
+            /** Method */
+            method?: string | null;
+            /**
+             * New Min
+             * @default false
+             */
+            new_min: boolean;
+            /** Path */
+            path?: string | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "success" | "info" | "warning" | "destructive";
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "traffic" | "event";
+            /** Status */
+            status?: string | null;
+            /** Where */
+            where?: string | null;
+        };
+        /** Rules */
+        Rules: {
+            /** Rules */
+            rules: components["schemas"]["Rule"][];
         };
         /** Run */
         Run: {
@@ -11133,6 +11228,91 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FreeSpace"];
+                };
+            };
+        };
+    };
+    traffic_traffic_get: {
+        parameters: {
+            query?: {
+                /** @description how many of the newest records to send first */
+                last?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_rules_traffic_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Rules"];
+                };
+            };
+        };
+    };
+    put_rules_traffic_rules_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Rules"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Rules"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

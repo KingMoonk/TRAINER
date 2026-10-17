@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronRight, Database, Layers3, MessageSquare, Network, Server, Settings } from "lucide-react";
+import { Boxes, ChevronRight, Database, Layers3, MessageSquare, Network, Server, Settings, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
+import { useTraffic } from "@/components/traffic/traffic-provider";
+import { TRAFFIC } from "@/lib/copy/traffic";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 const gearClass = (active: boolean) => cn("flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", active && "border-surface-border bg-surface-raised text-foreground");
 const icons = { models: Network, data: Database, runs: Layers3, eval: MessageSquare, machines: Server };
@@ -23,6 +25,17 @@ export function Sidebar() {
         </Link>
       </TooltipTrigger>
       <TooltipContent side="right">{APPEARANCE.settingsLabel}</TooltipContent>
+    </Tooltip>
+  );
+  const traffic = useTraffic();
+  const consoleButton = (className?: string) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" onClick={traffic.toggle} aria-pressed={traffic.open} aria-label={TRAFFIC.button} aria-keyshortcuts="Control+`" className={cn(gearClass(traffic.open), className)}>
+          <Terminal className="size-4" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{TRAFFIC.button} ({TRAFFIC.shortcut})</TooltipContent>
     </Tooltip>
   );
   return (
@@ -45,6 +58,7 @@ export function Sidebar() {
         })}
         {/* On a phone the sidebar is a bar across the top, so the gear joins the row; on a desktop it sits at the foot. */}
         {settingsGear("md:hidden")}
+        {consoleButton("md:hidden")}
       </nav>
       {pages.length > 1 && (
         <div role="group" aria-label="Pages in this area" className="flex gap-1 overflow-x-auto border-t border-surface-border px-3 py-2 md:mx-3 md:mt-3 md:flex-col md:gap-0.5 md:overflow-y-auto md:px-0 md:pt-4">
@@ -55,10 +69,10 @@ export function Sidebar() {
           ))}
         </div>
       )}
-      {/* Pinned to the foot of the nav (margin-top: auto). The API console button (#341) goes in the marked slot, beside the gear. */}
+      {/* Pinned to the foot of the nav (margin-top: auto): the gear and the API traffic console button (#341). */}
       <div className="mx-4 mb-4 hidden items-center gap-1 pt-4 md:mt-auto md:flex">
         {settingsGear()}
-        {/* CONSOLE SLOT (#341): API console button goes here. */}
+        {consoleButton()}
       </div>
     </aside>
   );

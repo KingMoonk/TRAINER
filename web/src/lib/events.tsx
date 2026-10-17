@@ -39,6 +39,21 @@ export function useEvent(kind: string, handler: (payload: unknown) => void): voi
   }, [kind]);
 }
 
+/** Call `handler` for every event of every kind on the shell's stream while mounted (the traffic console's alert rules). */
+export function useAnyEvent(handler: (event: ApiEvent) => void): void {
+  const latest = useRef(handler);
+  useEffect(() => {
+    latest.current = handler;
+  });
+  useEffect(() => {
+    const listener = (event: ApiEvent) => latest.current(event);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
+}
+
 /** Narrow a raw stream event to one the shell handles; any other kind is for the page that owns it. */
 export function asStudioEvent(event: ApiEvent): StudioEvent | null {
   return event.kind === "status" || event.kind === "problem_report" ? (event as StudioEvent) : null;
