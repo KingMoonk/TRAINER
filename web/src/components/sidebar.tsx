@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Settings, Sparkles } from "lucide-react";
+import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Server, Settings, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
 const gearClass = (active: boolean) => cn("flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", active && "border-surface-border bg-surface-raised text-foreground");
-const icons = { designer: Network, pretraining: Layers3, post: Sparkles, chat: MessageSquare, queue: ListOrdered, resources: Database };
+const icons = { designer: Network, pretraining: Layers3, post: Sparkles, chat: MessageSquare, queue: ListOrdered, cluster: Server, resources: Database };
 
 export function Sidebar() {
   const pathname = usePathname().replace(/\/$/, "");

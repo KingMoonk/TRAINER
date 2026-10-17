@@ -59,6 +59,60 @@
         "title": "AblateRequest",
         "type": "object"
       },
+      "Access": {
+        "description": "Who may call this node's API straight over the tailnet (studioConfig.cluster, docs/cluster.md, \"ACL\").",
+        "properties": {
+          "allow_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Tags",
+            "type": "array"
+          },
+          "allow_users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Users",
+            "type": "array"
+          },
+          "login": {
+            "default": "",
+            "title": "Login",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allow_users",
+          "allow_tags"
+        ],
+        "title": "Access",
+        "type": "object"
+      },
+      "AccessBody": {
+        "properties": {
+          "allow_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Tags",
+            "type": "array"
+          },
+          "allow_users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "allow_users",
+          "allow_tags"
+        ],
+        "title": "AccessBody",
+        "type": "object"
+      },
       "ActionOut": {
         "properties": {
           "answer": {
@@ -5010,6 +5064,17 @@
       },
       "QueueRow": {
         "properties": {
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta S"
+          },
           "hostname": {
             "title": "Hostname",
             "type": "string"
@@ -5041,6 +5106,11 @@
             "title": "Pinned",
             "type": "string"
           },
+          "queued_address": {
+            "default": "",
+            "title": "Queued Address",
+            "type": "string"
+          },
           "queued_here": {
             "title": "Queued Here",
             "type": "boolean"
@@ -5062,6 +5132,16 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
           },
           "waiting_reason": {
             "default": "",
@@ -5987,6 +6067,19 @@
           "heads"
         ],
         "title": "Registry",
+        "type": "object"
+      },
+      "RemoteStop": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "RemoteStop",
         "type": "object"
       },
       "Renewal": {
@@ -8900,6 +8993,68 @@
         ]
       }
     },
+    "/cluster/access": {
+      "get": {
+        "description": "The allow lists of this node and its owner's Tailscale login. The login is what a machine that answers 401 to this one must\nadd to its own allow_users. The funnel token and any other key of studioConfig.cluster are never returned.",
+        "operationId": "get_access_cluster_access_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Access"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Access",
+        "tags": [
+          "cluster"
+        ]
+      },
+      "put": {
+        "description": "Save the allow lists in the workspace config, keeping every other key of studioConfig.cluster. Entries are stripped and repeats\ndropped. 400 with a sentence for a bad entry. The API reads the lists when it starts: a change counts after it is restarted.",
+        "operationId": "save_access_cluster_access_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Access"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Access",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
     "/cluster/jobs": {
       "get": {
         "description": "Jobs queued here that run or wait to run on a peer (with the reason for a wait), and jobs this node runs for another.",
@@ -9194,6 +9349,52 @@
           }
         },
         "summary": "Save Nodes",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/remote/{job_id}/stop": {
+      "post": {
+        "description": "Stop, or drop, a job that another machine queued, by asking that machine (DELETE /queue/jobs/{id} there). The machine must be\none of the listed peers. A job queued here is stopped with DELETE /queue/jobs/{id} on this node. The peer's own refusal (401,\n404, a timeout) comes back as 502 with its sentence.",
+        "operationId": "stop_remote_cluster_remote__job_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteStop"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Remote",
         "tags": [
           "cluster"
         ]
@@ -12872,7 +13073,7 @@
     },
     "/queue/jobs/{job_id}": {
       "delete": {
-        "description": "Services.remove: drop a waiting job, or stop the running one.",
+        "description": "Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).",
         "operationId": "remove_queue_jobs__job_id__delete",
         "parameters": [
           {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { nodeName, seenText, type ClusterQueue, type QueueNode, type QueueRow } from "@/lib/cluster";
@@ -58,7 +59,9 @@ export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
         <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{T.elsewhere}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <p className="text-xs text-muted-foreground">{T.elsewhereTip}</p>
+        <p className="text-xs text-muted-foreground">
+          {T.elsewhereTip} <Link href="/cluster" className="underline underline-offset-2" data-testid="queue-cluster-link">{T.clusterLink}</Link>
+        </p>
         <ul className="flex flex-wrap gap-2" aria-label="Machines">
           {cluster.nodes.map((node) => (
             <li key={node.address} data-testid={`node-${node.address}`} className={cn(!node.online && "opacity-60")}>

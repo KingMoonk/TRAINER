@@ -62,6 +62,9 @@ class PeerClient:
         data = json.dumps(body if body is not None else {}).encode("utf-8")
         return _json(self._call("POST", path, params, data, "application/json", timeout))
 
+    def delete_json(self, path, params=None, timeout=None):
+        return _json(self._call("DELETE", path, params, None, None, timeout))
+
     def get_bytes(self, path, params=None, timeout=None):
         return self._call("GET", path, params, None, None, timeout)
 

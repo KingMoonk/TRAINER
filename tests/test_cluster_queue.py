@@ -28,8 +28,9 @@ class Net:
         return peer[path]
 
 
-def peer(name, *jobs, busy=False):
-    return {"node": node_payload(name, busy=busy), "queue/jobs": list(jobs)}
+def peer(name, *jobs, busy=False, running=None):
+    """`running` is the peer's own GET /queue: {"job": {"id": ...}, "step": n, "total": n, "eta_s": s}."""
+    return {"node": node_payload(name, busy=busy), "queue/jobs": list(jobs), "queue": running or {"job": None}}
 
 
 def job(job_id, status="waiting", **extra):
@@ -54,6 +55,25 @@ class Merge(unittest.TestCase):
                           ("", "", "here-box", True), ("", "ghost", "here-box", True)])
         self.assertEqual((rows["c"].pinned, rows["d"].pinned, rows["e"].waiting_reason), ("GPU-box", "", "It is pinned to ghost."))
         self.assertFalse(any(r.stale for r in rows.values()))
+
+    def test_a_running_row_carries_the_progress_its_machine_reports(self):
+        net = Net(gpu=peer("gpu-box", job("p1", "running"), job("p2"), job("p3", "running", owner="here-box"),
+                           running={"job": {"id": "p1"}, "step": 40, "total": 100, "eta_s": 90.5}))
+        peers = cq.Peers().survey(list(net.peers), net, timeout=1)
+        mine = {"job_id": "a", "step": 7, "total": 50, "eta_s": None}
+        rows = {r.id: r for r in cq.merge(OWN, peers, [Job("pretrain", "now", status="running", id="a"), Job("pretrain", "w", id="w"),
+                                                       Job("pretrain", "away", status="running", id="b", node="gpu")], progress=mine)}
+        self.assertEqual([(r.step, r.total, r.eta_s) for r in (rows[k] for k in ("a", "w", "p1", "p2"))],
+                         [(7, 50, None), (0, 0, None), (40, 100, 90.5), (0, 0, None)])
+        self.assertEqual((rows["a"].queued_address, rows["p1"].queued_address, rows["p2"].queued_address), ("local", "gpu", "gpu"))
+        self.assertEqual(rows["b"].step, 0)  # the peer reports p1, not b
+        away = cq.Peers().survey(["gpu"], Net(gpu=peer("gpu-box", running={"job": {"id": "b-e1"}, "step": 3, "total": 9, "eta_s": 1})), timeout=1)
+        self.assertEqual({r.id: r.step for r in cq.merge(OWN, away, [Job("pretrain", "away", status="running", id="b", node="gpu")])}, {"b": 3})
+
+    def test_a_peer_whose_queue_cannot_be_read_still_lists_its_jobs_without_progress(self):
+        net = Net(gpu={"node": node_payload("gpu-box"), "queue/jobs": [job("p1", "running")]})  # no "queue" answer: a KeyError
+        peers = cq.Peers().survey(["gpu"], net, timeout=1)
+        self.assertEqual([(r.id, r.step, r.total) for r in cq.merge(OWN, peers, [])], [("p1", 0, 0)])
 
     def test_a_job_note_comes_with_its_row_for_a_job_here_and_a_peers_job(self):
         note = "The checkpoint was not stored: the bucket is full."
