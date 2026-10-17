@@ -877,11 +877,19 @@ class Coordinator:
             if self.record:
                 self.record["status"] = "stopped"
                 atomic_json(self.directory / "run.json", self.record)
+            self._remember()
             self.cond.notify_all()
 
     # -- durability
     def _touch(self):
         self.touched = time.monotonic()
+
+    def _remember(self):
+        """Have the Training tab's record of this run (studio_distributed) kept with its account as it stands now. It takes the snapshot on
+        its own thread: this one holds the lock, and a snapshot advances the clock."""
+        import studio_distributed
+        if studio_distributed.keeps(self.run):
+            threading.Thread(target=studio_distributed.remember, args=(self.run, self), daemon=True).start()
 
     def _save(self, row, closed):
         """The round's files, in the order that keeps a crash recoverable: the state, last.npz, then diloco.json that names it."""
@@ -917,6 +925,7 @@ class Coordinator:
         if self.finished:
             self.record["finishedAt"] = now()
         atomic_json(self.directory / "run.json", self.record)
+        self._remember()
 
     @staticmethod
     def _write_npz(path, arrays):

@@ -11,17 +11,22 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 from studio_peer import PeerClient, PeerError
 
 KEPT = 20  # runs remembered, newest last
+RESTARTED = "The app restarted while this run was going, so it was stopped."
 INVITE_TIMEOUT = 5.  # seconds a peer has to take its member job
 ACTIVE = ("queued", "starting", "waiting", "running")
 STATES = ("queued", "starting", "waiting", "running", "finished", "stopped", "failed")
 
 RUNS = {}  # run id -> Run
 _LOCK = threading.Lock()
+_HOME = None  # data/distributed_runs.json of the workspace the runs are kept in (see load); None: they live in memory only
+_WRITE = threading.Lock()
+_REMEMBER = threading.Lock()
 
 
 @dataclass
@@ -52,6 +57,7 @@ class Run:
     machines: list = field(default_factory=list)
     final: dict | None = None  # the coordinator's last snapshot, kept when the coordinator is let go
     stopped: bool = False  # the person asked to stop it before it ran
+    restarted: bool = False  # read back from the workspace while its last account still said it was going
 
 
 def machines_of(rows):
@@ -71,13 +77,16 @@ def run_of(job):
     """The Run of an owner job; made from the job's params when this process has none (the app restarted with the job waiting)."""
     with _LOCK:
         run = RUNS.get(job.id)
-        if run is None:
+        made = run is None
+        if made:
             p = job.params
             run = RUNS[job.id] = Run(job.id, job.label, p.get("version"), job.created_at or time.time(), dict(p.get("settings") or {}),
                                      p.get("owner") or socket.gethostname(), machines_of(p.get("machines", [])))
             for key in list(RUNS)[:-KEPT]:
                 del RUNS[key]
-        return run
+    if made:
+        persist()
+    return run
 
 
 def open_run(job):
@@ -90,6 +99,74 @@ def archive(run_id, coordinator):
     run = RUNS.get(run_id)
     if run is not None and run.final is None:
         run.final = coordinator.snapshot()
+        persist()
+
+
+def keeps(run_id):
+    """Whether the account of this run is being kept in a workspace."""
+    return _HOME is not None and run_id in RUNS
+
+
+def remember(run_id, coordinator):
+    """Keep the coordinator's account of the run as it stands (after each round and when it stops), so it outlives the app."""
+    with _REMEMBER:  # two of these never write their snapshots out of order
+        run = RUNS.get(run_id)
+        if run is not None:
+            run.final = coordinator.snapshot()
+            persist()
+
+
+# ---- keeping the records ----------------------------------------------------------------------------------------------
+
+def persist():
+    """Write the runs to the workspace, atomically. Best effort: a record that cannot be written is only lost if the app restarts."""
+    if _HOME is None or not _HOME.parent.parent.exists():
+        return
+    from studio_core import atomic_json
+    with _WRITE:
+        try:
+            atomic_json(_HOME, {"format": 1, "runs": [asdict(run) for run in list(RUNS.values())]})
+        except (OSError, TypeError, ValueError):
+            pass
+
+
+def _run_from(row):
+    machines = [Machine(**{k: v for k, v in m.items() if k in Machine.__dataclass_fields__}) for m in row.get("machines", [])]
+    run = Run(**{k: v for k, v in row.items() if k in Run.__dataclass_fields__ and k != "machines"}, machines=machines)
+    if run.final is not None and run.final.get("state") in ("running", "waiting"):
+        run.restarted = True  # its coordinator went with the app; unless the queue resumes the job, the run is over
+    return run
+
+
+def unload(root):
+    """Stop writing to `root` (its services are closed); the runs stay in memory."""
+    global _HOME
+    if _HOME == Path(root) / "data" / "distributed_runs.json":
+        _HOME = None
+
+
+def load(root):
+    """Keep the runs in `root`/data/distributed_runs.json from now on, and read back the ones kept there (the newest KEPT). A missing,
+    unreadable or malformed file, or a row that does not read, gives no run and never fails the start. Runs this process already holds
+    are left as they are."""
+    global _HOME
+    from studio_core import read_json
+    _HOME = Path(root) / "data" / "distributed_runs.json"
+    try:
+        rows = read_json(_HOME)["runs"] if _HOME.exists() else []
+    except (OSError, ValueError, KeyError, TypeError):
+        rows = []
+    found = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            found.append(_run_from(row))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    with _LOCK:
+        for run in sorted(found, key=lambda r: r.started_at):
+            RUNS.setdefault(run.id, run)
+        for key in list(RUNS)[:-KEPT]:
+            del RUNS[key]
 
 
 # ---- inviting ---------------------------------------------------------------------------------------------------------
@@ -133,6 +210,7 @@ def invite(job, client_for=PeerClient):
     if todo:
         with ThreadPoolExecutor(max_workers=len(todo)) as pool:
             list(pool.map(ask, todo))
+        persist()  # who answered
 
 
 def release_member(run, node, client_for=PeerClient):
@@ -234,6 +312,8 @@ def view(run, coordinator, job):
         state = snap["state"]
         if state in ("running", "waiting") and coordinator is None:
             state = "stopped"  # a snapshot of a coordinator that was let go while it still ran
+            if run.restarted:  # or one that went with the app: stopped, unless the queue still holds the job and resumes it
+                state, note = ("queued", "") if job is not None and job.status in ("waiting", "held") else ("stopped", RESTARTED)
     elif run.stopped or job is None or job.status in ("stopped", "done"):
         state = "stopped"
         note = "" if run.stopped else "The app no longer holds this run."
@@ -261,5 +341,6 @@ def stop_run(run, coordinator, client_for=PeerClient):
     run.stopped = True
     if coordinator is not None:
         coordinator.stop()
+    persist()
     for machine in run.machines:
         release_member(run, machine.node, client_for)
