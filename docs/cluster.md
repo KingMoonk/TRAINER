@@ -169,10 +169,11 @@ a terminal, not something the app does on its own.
 
 It also lists the **job checkpoints left over**: checkpoint objects in the bucket (recognised by their metadata, `job:<id>` and
 `checkpoint at step N`) that no unfinished job in this machine's queue file can resume from, because the job is not in the queue or
-has ended. Each line gives the key (with the bucket prefix; delete its `.npz` and `.json` by hand), the job, the size and when it was
+has ended. The key a done job ends with is not listed, even when it has the bytes of a checkpoint. Each line gives the key (with the bucket prefix; delete its `.npz` and `.json` by hand), the job, the size and when it was
 published. It only lists and never deletes. Run it from the TRAINER folder, or pass `--queue` the path of `data/queue.json`; with no
-readable queue it only counts the checkpoints. A checkpoint of a job another machine owns is not in this machine's queue, so it shows
-up here too: look at that machine's queue before deleting.
+readable queue it only counts the checkpoints. A job this machine ran for another one (a restart marks it stopped, but its owner will
+place it again) is listed apart, marked "owned by another machine, do not delete". A checkpoint of a job another machine owns that this
+one never ran is not in this machine's queue, so it shows up as "job not in this queue": look at that machine's queue before deleting.
 
 ### The free tier is a hard limit
 
@@ -239,8 +240,11 @@ records the key of every checkpoint a runner reports, and deletes them once the 
 
 Only keys a runner reported for that job are deleted, never a prefix sweep of the bucket, and a key is first looked up: it is deleted
 only if its metadata says it is a checkpoint of that job (a key that is a published version, another job's checkpoint, or the
-result, or one a job that is still running counts on, is left alone). Deleting adds no bytes, so it does not go through the size
-check, and nothing in this cleanup uploads. A delete that fails is logged and tried again about a minute later; it never stops
+result, or one a job that has not ended counts on, is left alone: the key it was set to resume from counts as much as the newest it
+reported, and the result of a job counts even after the job was removed from the queue. The list is checked again, under a lock a
+finishing job also takes, just before each delete. A result whose key a cleanup took first fails the job with a sentence). Deleting adds no bytes, so it does not go through the size
+check, and nothing in this cleanup uploads. A key whose listing is missing is not deleted, and neither is any key in a store that cannot
+look keys up; the one exception is a key whose delete this app began and the store cut short. A delete that fails is logged and tried again about a minute later; it never stops
 the job or the queue. The keys still to delete are kept in the job's record in `data/queue.json` (`params.cluster.checkpoints`), so
 a restart carries on. What the owner never heard of stays: a checkpoint uploaded after the runner's last renewal, one from a runner
 that kept going after the job ended, one for a job taken out of the queue whose delete failed before the app restarted, or whose record has
