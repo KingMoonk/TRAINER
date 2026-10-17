@@ -3,8 +3,18 @@
 export const NEW_RUN = {
   back: "Runs",
   title: "New run",
-  couldNotLoad: "Could not read the settings for a run: {why}",
   loading: "Loading...",
+  loadingText: "Reading your text sets...",
+  loadingMachines: "Checking the machines...",
+  loadingSettings: "Reading the outer loop settings...",
+  slow: "Still waiting; this is taking longer than usual.",
+  textFailed: "Could not read your text sets: {why}",
+  machinesFailed: "Could not list the machines: {why}",
+  settingsFailed: "Could not read the outer loop settings: {why}",
+  textDown: "The text sets could not be read.",
+  machinesDown: "The machines could not be listed.",
+  settingsDown: "The outer loop settings could not be read.",
+  retry: "Try again",
 
   stage: "Stage",
   stageTip:

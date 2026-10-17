@@ -1,7 +1,7 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, test } from "vitest";
-import { json, mockApi, type Call } from "@/test/network";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { json, mockApi, type Call, type Handler } from "@/test/network";
 import { nav, resetNav } from "@/test/navigation";
 import { renderPage } from "@/test/render";
 import NewRunPage from "./page";
@@ -165,9 +165,78 @@ describe("New run", () => {
     expect(sent("POST", "/queue/jobs/job-9/pin")).toBeUndefined();
   });
 
-  test("a failed read says so", async () => {
-    mockApi({ "GET /cluster/nodes": { status: 500, body: { detail: "down" } }, "GET /distributed/defaults": json({}), "GET /pretraining/text_sets": json([]) });
+  test("a failed read says so in its own section and the rest of the page works", async () => {
+    mockApi({
+      "GET /cluster/nodes": { status: 500, body: { detail: "down" } },
+      "GET /distributed/defaults": json({}),
+      "GET /pretraining/text_sets": json([{ id: "stories", name: "Short stories", count: 1200, held: false, library: false, on: true }]),
+    });
     renderPage(<NewRunPage />, { route: "/runs/new/" });
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not read the settings for a run");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not list the machines: down");
+    expect(screen.getByRole("heading", { level: 1, name: "New run" })).toBeVisible();
+    expect(await screen.findByRole("checkbox", { name: /Short stories/ })).toBeChecked();
+    expect(await screen.findByTestId("blocker")).toHaveTextContent("The machines could not be listed.");
+  });
+});
+
+describe("New run while a read is slow", () => {
+  const TEXT = [{ id: "stories", name: "Short stories", count: 1200, held: false, library: false, on: true }];
+  // never answers; gives up when the page aborts the request
+  const hang: Handler = (_call, request) =>
+    new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+
+  afterEach(() => vi.useRealTimers());
+
+  function slowServer(text: Handler) {
+    return mockApi({
+      "GET /cluster/nodes": { body: NODES },
+      "GET /distributed/defaults": { body: { delta_dtype: "fp16", inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, rounds: 40 } },
+      "GET /pretraining/text_sets": text,
+      "GET /versions": { body: [] },
+      "GET /queue/outlook": { body: { outlook: "Starts now" } },
+      "POST /pretraining/plan": { body: { can_add: true, reason: "", job, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: false, can_continue: true } },
+    });
+  }
+
+  test("the page shows at once, the slow section says it is loading, and the other sections fill in", async () => {
+    slowServer(hang);
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    expect(screen.getByRole("heading", { level: 1, name: "New run" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: /Stage/ })).toBeVisible();
+    const loading = await screen.findByTestId("section-loading");
+    expect(loading).toHaveTextContent("Reading your text sets...");
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(await screen.findByTestId("worker-beast")).toBeVisible();
+    expect(await screen.findByTestId("blocker")).toHaveTextContent("Reading your text sets...");
+    expect(await cta()).toBeDisabled();
+  });
+
+  // Fake timers stop findBy/waitFor from settling (see events.test.tsx), so these advance the clock inside act and read at once.
+  const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+  test("a read still going after a few seconds says it is still waiting", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    slowServer(hang);
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await advance(1);
+    expect(screen.getByTestId("section-loading")).not.toHaveTextContent("taking longer");
+    await advance(7_000);
+    expect(within(screen.getByTestId("section-loading")).getByText(/taking longer than usual/)).toBeVisible();
+  });
+
+  test("a read that never answers ends in a plain sentence and can be tried again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let answer: Handler = hang;
+    slowServer((call, request) => answer(call, request));
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await advance(1);
+    expect(screen.getByTestId("section-loading")).toBeVisible();
+    await advance(21_000);
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not read your text sets: The server did not answer within 20 seconds.");
+    answer = () => ({ body: TEXT });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await advance(1);
+    expect(screen.getByRole("checkbox", { name: /Short stories/ })).toBeChecked();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
