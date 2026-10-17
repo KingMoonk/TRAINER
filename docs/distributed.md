@@ -245,6 +245,30 @@ about 20 s against H = 500 steps of compute, so communication is a small share o
 (`diloco.json` history, and an info event on the member with its upload time). Streaming fragments come later, once
 measurements show the transfer is the bottleneck.
 
+### Overlapping communication (#183)
+
+By default a member waits at the end of each round for the upload, the coordinator's round to open and the download of the new
+weights, so a slow link idles its GPU. With `overlap` (a member option: `member_options: {"overlap": true}` in the run's job params,
+which the owner's member and the invited members all get, or `python -m studio_diloco member --overlap`) the member does not wait.
+This is the "overlapping" variant of Streaming DiLoCo:
+
+1. At the end of round `r`'s steps the member computes `Δr = w_start - w`, hands it to a background thread (encode, upload, long-poll
+   for round `r + 1`, download its `θ` and shards) and starts round `r + 1`'s steps at once, from its own weights `w`.
+2. At the end of round `r + 1`'s steps it joins that thread (no wait when the exchange was shorter than the steps) and the outer
+   result of round `r` arrives one round late. The member keeps what it trained meanwhile: `w' = θ + (w - w_start) = θ - Δ`, then
+   sends `Δ(r+1)` and goes on from `w'`.
+3. The coordinator is unchanged: deltas still go to the open round in order, and it cannot tell an overlapped member apart. Members
+   of one run may mix modes.
+
+With one member, `η = 1` and `μ = 0` this is still exactly plain training (a test). With several members the global weights lag one
+round behind each member's local ones, which costs some convergence; the test that two overlapped members beat one is the guard.
+When the exchange is longer than a round of steps the member waits for it at the boundary, so the round time becomes the exchange time.
+
+What changes for the live view: a member's `training` reports for round `r + 1` are dropped (409) until the coordinator opens that
+round, and its shards are the ones dealt for the round before. A member that was left out of a round, or whose delta was refused as
+late, throws the work of that round away one round later than a non-overlapped member does. A fenced member or a finished run is
+noticed at the end of the round in progress. Memory: the member also holds the weights it started the round from and the delta.
+
 ### Live view
 
 The Cluster › Training tab shows a run as it happens. Each member reports where it is every 2 s or 20 steps, and at once when its phase
