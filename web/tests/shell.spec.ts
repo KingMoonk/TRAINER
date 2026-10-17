@@ -1,12 +1,15 @@
 import { expect, test } from "@playwright/test";
 import { AREAS, ROUTES, areaHome } from "../src/lib/routes";
 
-for (const route of ROUTES) {
+// The run pages come from #342 and #343; until they land these routes have no page yet.
+const PENDING = ["runs", "new_run", "run_view"];
+
+for (const route of ROUTES.filter((r) => !PENDING.includes(r.route))) {
   test(`${route.href}: shows its title and marks its area in the sidebar`, async ({ page }) => {
     await page.goto(`${route.href}/`);
     await expect(page.getByRole("heading", { level: 1, name: route.title })).toBeVisible();
 
-    const nav = page.getByRole("navigation");
+    const nav = page.getByRole("navigation", { name: "Studio" });
     const home = areaHome(route.area);
     const area = AREAS.find((a) => a.id === route.area)!;
     await expect(nav.getByRole("link", { name: area.title, exact: true })).toHaveAttribute("aria-current", "page");

@@ -44,8 +44,8 @@ test("a status strip full of long values still fits, and the connection light st
 
 test("the sidebar links stay reachable on a phone", async ({ page }) => {
   await page.goto("/queue/");
-  const nav = page.getByRole("navigation");
-  await expect(nav.getByRole("link", { name: "Resources", exact: true })).toBeVisible();
-  await nav.getByRole("link", { name: "Resources", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`${areaHome("resources").href}/?$`));
+  const nav = page.getByRole("navigation", { name: "Studio" });
+  await expect(nav.getByRole("link", { name: "Data", exact: true })).toBeVisible();
+  await nav.getByRole("link", { name: "Data", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${areaHome("data").href}/?$`));
 });
