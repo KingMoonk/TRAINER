@@ -15,6 +15,7 @@ import threading
 import time
 from pathlib import Path
 
+from studio_core import replace_file
 from studio_spec import block_at, structure_key, validate_spec
 
 STATUSES = ("draft", "saved", "queued", "training", "trained")
@@ -89,7 +90,7 @@ class VersionStore:
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
         with os.fdopen(fd, "w") as handle:
             json.dump({"versions": versions}, handle, indent=1)
-        os.replace(tmp, self.path)
+        replace_file(tmp, self.path)  # a reader with the file open fails a bare os.replace on Windows
 
     def get(self, number):
         for v in self.versions():
@@ -162,6 +163,14 @@ class VersionStore:
 
     def set_change(self, number, change):
         return self._update(number, change=change)
+
+    def leave_saved(self, number, note):
+        """A version whose job ended without weights: back to "saved" (when its status can go there) with `note` added to its
+        description, in one write, so a failure between two writes cannot leave the status changed and the note missing."""
+        with self._lock:
+            row = self.get(number)
+            status = "saved" if "saved" in NEXT.get(row["status"], ()) else row["status"]
+            return self._update(number, status=status, change=f"{row['change']}{note}")
 
     def set_status(self, number, status):
         now = self.get(number)["status"]

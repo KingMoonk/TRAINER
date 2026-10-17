@@ -16,6 +16,7 @@ the tailnet itself and listing nodes; this page covers one machine.
 | --- | --- |
 | `--bind HOST` | The address to listen on. Default `127.0.0.1`: only this machine, and `tailscale serve` (below) reaches it from there. |
 | `--port N` | The port. Use `8787`, the port `studio_cluster.DEFAULT_PORT` assumes when a node is listed as a bare name. |
+| `--allow-origin ORIGIN` | A web origin (the Vercel site, `https://trainer.example.vercel.app`) allowed to call the API from a browser. Repeat it for several, or list them comma-separated in the `STUDIO_API_ALLOW_ORIGINS` environment variable. Default: none (below). |
 | `--fake` | Serve `FakeServices` (empty, in-memory data) instead of the workspace, for frontend work. Needs no workspace and is always open. |
 | `--dump-openapi FILE` | Write the OpenAPI schema to `FILE` and exit. This is how `web/openapi.json` is made (see `web/README.md`). |
 
@@ -47,6 +48,54 @@ The allow-list lives in `data/workspace.json` and is read when the API starts:
 
 Both keys are optional (`allowTags` defaults to `["tag:trainer"]`, `allowUsers` to nobody). A bad value stops the API at start
 with a sentence saying which key to fix.
+
+### Funnel and a page on another origin (optional)
+
+Everything in this section is off until you configure it. With nothing set, the API behaves as described above.
+
+`tailscale funnel` publishes the node to the public internet. Its requests reach the API from the loopback address like
+`tailscale serve`'s, but with no `Tailscale-User-Login` header; Tailscale adds `Tailscale-Funnel-Request: ?1` to them (and strips
+any copy a client sent). **Never run Funnel without a token.** The API refuses a request carrying that header unless it sends the
+token, even on an open node, and with no token configured every Funnel request gets `401`. Funnel's TCP-forward mode is the
+exception: it carries no HTTP headers at all, so the API cannot tell such a request from a local one and it is unprotected whenever
+the node is open (a loopback bind with no token). Use the HTTPS mode (`tailscale funnel --bg 8787`), and give the node a token.
+
+To let a page hosted elsewhere (the Vercel site) use the node this way:
+
+1. Put a shared token in the workspace config, `data/workspace.json`, next to the allow-list (read when the API starts). It must
+   be at least 32 printable ASCII characters; make it random, for example the output of `openssl rand -hex 32`:
+
+   ```json
+   {"studioConfig": {"cluster": {"funnelToken": "<the token>"}}}
+   ```
+
+   The file stays on the node; keep the token out of the repository. A shorter, empty or non-ASCII value stops the API at start
+   with a sentence naming the setting (never the value), and no token means no Funnel access.
+2. Start the API with the page's origin (scheme, host, optional port; no path, no `*`; a default port such as `:443` is dropped):
+
+   ```bash
+   .venv/bin/python -m studio_api --port 8787 --allow-origin https://trainer.example.vercel.app
+   # or: STUDIO_API_ALLOW_ORIGINS=https://trainer.example.vercel.app,https://other.example.com
+   ```
+
+3. Publish the port: `tailscale funnel --bg 8787` (`tailscale funnel status` shows the public name).
+
+Then:
+
+- A Funnel request is let in only if it sends `X-Groundwork-Token: <the token>`, and is recorded as the user `funnel`; any
+  `Tailscale-User-Login` on it is ignored. Without the token, or with a wrong one, the answer is `401`. A loopback request that
+  has neither header (not Funnel, not `serve`) is let in the same way, by the token. The token is compared in constant time and is
+  never logged or echoed. Only loopback requests can use it; a node calling directly is still identified by `tailscale whois`.
+- **A node with a token is no longer open.** The loopback bind normally lets everything on the machine in without a header; with a
+  token set a loopback request needs the header or the token instead. Local use with `curl` then needs
+  `-H "X-Groundwork-Token: ..."`. Leave the token out of the config of a node you also use with `pnpm dev`.
+- A browser on an `--allow-origin` origin gets the CORS headers on its preflight (`OPTIONS`, which carries no token) and on
+  every response that was let in. A response the API refused with `401` carries none, and an origin that is not listed gets
+  none at all. Cookies are not allowed cross-origin; the page sends the token header. On a node that is open and has no token,
+  `http://localhost:*` pages keep their CORS access too, as before.
+- Anyone who holds the token can use the node, as anyone on the tailnet can with `tailscale serve`: keep it out of pages and
+  logs you do not control, and change it in the config (and restart) to revoke it. The API does not limit how often a caller may
+  try tokens; a long random token is the protection.
 
 ### Binding
 

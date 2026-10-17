@@ -13,13 +13,15 @@ from unittest import mock
 
 import numpy as np
 import studio_cluster as sc
+import studio_publish
 import studio_remote
 import studio_scheduler as sched
 from studio_peer import PeerError
-from studio_publish import NO_STORE, FolderStore, StoreLimitError, StoreUsageError, _Store
+from studio_publish import NO_STORE, FolderStore, S3Store, StoreLimitError, StoreUsageError, _Store
 from studio_queue import Job, Plan, Runner
 from studio_remote import Cluster
 from tests.fake_cluster import Clock, Net, refuse
+from tests.test_publish import CONFIG, StubS3
 
 ANY = Plan(hours="any", idle_only=False, pause_on_battery=False)
 GB = 2 ** 30
@@ -324,6 +326,195 @@ class OwnerSide(unittest.TestCase):
         job = self.interrupted(step=1000)
         self.assertEqual(job.status, "done")
         self.assertEqual(job.params["remote_result"]["key"], "gpu-box/v0-aaa")
+
+    # ---- the checkpoints a job leaves in the bucket ------------------------------------------------------------------
+    def use_bucket(self):
+        """A bucket (the fake S3 client) as the store; returns the store. Its `client.log` says every call the store made."""
+        self.client = StubS3()
+        self.bucket = S3Store(CONFIG, client=self.client, origin="gpu-box")
+        self.runner = self.make_runner(store=self.bucket)
+        return self.bucket
+
+    def report_checkpoint(self, job, step, epoch=1):
+        """The runner publishes a checkpoint of `job` and tells the owner on its next renewal; returns the key."""
+        path = self.root / f"checkpoint-{job.id}-{epoch}-{step}.npz"
+        write_checkpoint(path, step)
+        key = self.bucket.publish(studio_publish.checkpoint_version(job.id, step), path)
+        self.runner.cluster.renewed(job.id, {"epoch": epoch, "checkpoint": {"key": key, "step": step}})
+        return key
+
+    def publish_result(self, job, step=1000):
+        path = self.root / f"result-{job.id}.npz"
+        write_checkpoint(path, step)
+        return self.bucket.publish({"number": 0, "name": f"job:{job.id}", "change": f"result at step {step}"}, path)
+
+    def deleted(self):
+        return [c[2].rsplit("/", 1)[-1] for c in self.client.log if c[0] == "delete_object"]
+
+    def held(self, *keys):
+        return all(self.bucket.exists(key) for key in keys)
+
+    def lose_the_runner(self, job):
+        """The runner stops answering; the owner waits two leases and puts the job back to waiting."""
+        self.net.down.add("gpu-box")
+        for _ in range(7):
+            self.clock.advance(10)
+            self.runner.cluster.poll_once()
+            self.runner.cluster.tick()
+        self.assertEqual(job.status, "waiting")
+
+    def test_a_job_that_finishes_on_another_node_after_its_runner_was_lost_leaves_nothing_but_its_result(self):
+        Peer(self.net, "other-box")
+        self.nodes = ["gpu-box", "other-box"]
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.assertEqual(job.node, "gpu-box")
+        old = self.report_checkpoint(job, 100)
+        self.lose_the_runner(job)
+        self.runner.cluster.tick()
+        self.assertTrue(self.held(old), "the job waits to be placed again: it resumes from this checkpoint")
+        self.assertEqual(self.deleted(), [])
+        self.runner._place_waiting()
+        self.assertEqual((job.status, job.node, job.epoch), ("running", "other-box", 2))
+        self.runner.cluster.tick()
+        self.assertTrue(self.held(old))  # the new runner has only just pulled it
+        newer = self.report_checkpoint(job, 200, epoch=2)
+        self.runner.cluster.tick()
+        self.assertFalse(self.held(old))  # a newer checkpoint is what a resume would use: this one never will be
+        self.assertTrue(self.held(newer))
+        result = self.publish_result(job)
+        self.runner.cluster.finished(job.id, {"epoch": 2, "status": "done", "key": result, "step": 800})
+        self.runner.cluster.tick()
+        self.assertEqual(job.status, "done")
+        self.assertEqual([e["key"] for e in self.bucket.list()], [result])
+        self.assertEqual(job.params["cluster"]["checkpoints"], [])
+
+    def test_a_cancelled_job_loses_its_checkpoints(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        first, second = self.report_checkpoint(job, 100), self.report_checkpoint(job, 200)
+        self.runner.cluster.tick()
+        self.assertEqual((self.held(first), self.held(second)), (False, True))
+        self.runner.remove(job.id)
+        self.assertEqual(job.status, "stopped")
+        self.runner.cluster.tick()
+        self.assertEqual(self.bucket.list(), [])
+        self.assertEqual(job.params["cluster"]["checkpoints"], [])
+
+    def test_a_job_that_failed_for_good_loses_its_checkpoints(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.report_checkpoint(job, 100)
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "failed", "error": "The dataset is empty."})
+        self.runner.cluster.tick()
+        self.assertFalse(self.held(key))
+
+    def test_an_interrupted_job_waiting_to_be_placed_keeps_the_checkpoint_it_resumes_from(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.report_checkpoint(job, 400)
+        self.lose_the_runner(job)
+        for _ in range(3):
+            self.clock.advance(120)
+            self.runner.cluster.tick()
+        self.assertEqual(job.params["fetch"], {"init_from": key})
+        self.assertTrue(self.held(key))
+        self.assertEqual((self.deleted(), job.params["cluster"]["checkpoints"]), ([], [key]))
+
+    def test_a_waiting_job_taken_out_of_the_queue_loses_its_checkpoints_too(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.report_checkpoint(job, 400)
+        self.lose_the_runner(job)
+        self.runner.remove(job.id)
+        self.assertNotIn(job, self.runner.jobs)
+        self.runner.cluster.tick()
+        self.assertFalse(self.held(key))
+        self.assertEqual(self.runner.cluster._removed, {})
+
+    def test_a_job_with_no_checkpoint_costs_the_bucket_nothing_to_look_at(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "failed", "error": "x"})
+        self.runner.cluster.tick()
+        self.assertEqual(self.client.log, [])
+
+    def test_a_delete_that_fails_is_logged_kept_and_tried_again_later(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.report_checkpoint(job, 100)
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "failed", "error": "x"})
+        with mock.patch.object(S3Store, "_delete", side_effect=OSError("share went away")) as delete, \
+                self.assertLogs("studio_remote", "WARNING") as logged:
+            self.runner.cluster.tick()  # (the job's own end is not held up by it)
+            self.assertTrue(any("Could not delete checkpoint" in line for line in logged.output))
+            self.assertEqual(job.status, "failed")
+            self.runner.cluster.tick()
+            self.assertEqual(delete.call_count, 1)  # not again straight away
+        self.assertTrue(self.held(key))
+        self.assertEqual(job.params["cluster"]["checkpoints"], [key])
+        self.clock.advance(studio_remote.SWEEP_RETRY_S + 1)
+        self.runner.cluster.tick()
+        self.assertFalse(self.held(key))
+        self.assertEqual(job.params["cluster"]["checkpoints"], [])
+
+    def test_the_checkpoints_still_to_delete_survive_a_restart_of_the_app(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        key = self.report_checkpoint(job, 100)
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "done", "key": self.publish_result(job), "step": 1})
+        self.runner.shutdown()
+        self.runner = self.make_runner(store=self.bucket)
+        self.runner.cluster.tick()
+        self.assertFalse(self.held(key))
+
+    def test_only_a_key_the_runner_reported_for_that_job_and_nobody_needs_is_deleted(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        other = self.runner.enqueue(self.job())
+        self.place()
+        self.runner._place_waiting()
+        live = self.report_checkpoint(other, 50)  # the other job's, and it is still running
+        mine = self.report_checkpoint(job, 100)
+        stray = self.bucket.publish(studio_publish.checkpoint_version(job.id, 7), self.make_checkpoint(7))  # published, never reported
+        theirs = self.bucket.publish({"number": 4, "name": "Version 4", "change": "a version"}, self.make_checkpoint(8))
+        shared = self.bucket.publish(studio_publish.checkpoint_version("someone", 9), self.make_checkpoint(9))
+        result = self.publish_result(job)
+        with self.runner.lock:  # records that name keys that are not this job's checkpoints
+            job.params["cluster"]["checkpoints"] += [theirs, shared, result, live]
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "done", "key": result, "step": 5})
+        with self.assertLogs("studio_remote", "WARNING") as logged:
+            self.runner.cluster.tick()
+        self.assertEqual(sum("Not deleting" in line for line in logged.output), 2)  # a version, and another job's checkpoint
+        self.assertFalse(self.held(mine))
+        self.assertTrue(self.held(stray, theirs, shared, result, live))  # a version, another job's, the result, a live job's
+        self.assertEqual(sorted(self.deleted()), sorted(os.path.basename(mine) + e for e in (".json", ".npz")))
+
+    def make_checkpoint(self, step):
+        path = self.root / f"made-{step}.npz"
+        write_checkpoint(path, step)
+        return path
+
+    def test_deleting_never_uploads(self):
+        self.use_bucket()
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.report_checkpoint(job, 100)
+        self.report_checkpoint(job, 200)
+        self.runner.cluster.finished(job.id, {"epoch": 1, "status": "failed", "error": "x"})
+        before = len(self.client.log)
+        self.runner.cluster.tick()
+        calls = {c[0] for c in self.client.log[before:]}
+        self.assertTrue(calls <= {"delete_object", "get_object", "head_object"}, calls)
+        self.assertIn("delete_object", calls)
 
     def test_a_pinned_job_waits_for_its_node_and_is_never_moved_to_another(self):
         Peer(self.net, "other-box")

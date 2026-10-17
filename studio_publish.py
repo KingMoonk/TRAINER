@@ -33,7 +33,8 @@ same key, cached under `data/shared/` so a peer's metadata call and its weights 
 
 A bucket store never takes an upload that would pass 9.5 GB, half a GB under the provider's 10 GB free tier: see `S3Store._admit`
 and `DEFAULT_CAP_BYTES`.
-`python -m studio_publish --check` reads the TRAINER_STORE_* settings and says what the bucket holds (docs/cluster.md).
+`python -m studio_publish --check` reads the TRAINER_STORE_* settings and says what the bucket holds, and which job checkpoints no job
+of this queue is waiting on (docs/cluster.md).
 
 Everything here is slow (disk and network): call it from a worker, never the Tk thread.
 """
@@ -125,6 +126,20 @@ class StoreLimitError(StoreError):
 class StoreUsageError(StoreLimitError):
     """The bucket's size could not be read, or what it said did not add up, so the upload could not be checked and was refused. Unlike
     its parent this says nothing about the limit being reached: it is worth trying again."""
+
+
+def checkpoint_version(job_id, step):
+    """The version row a runner publishes a job's checkpoint under: the name and change are how a checkpoint is told from a version, and
+    which job it belongs to (`checkpoint_job`)."""
+    return {"number": 0, "name": f"job:{job_id}", "change": f"checkpoint at step {step}"}
+
+
+def checkpoint_job(meta):
+    """The id of the job whose checkpoint a published version is (see `checkpoint_version`); None for anything else."""
+    name, change = (meta or {}).get("name"), (meta or {}).get("change")
+    if isinstance(name, str) and name.startswith("job:") and len(name) > 4 and isinstance(change, str) and change.startswith("checkpoint at"):
+        return name[4:]
+    return None
 
 
 def size_text(count):
@@ -396,6 +411,17 @@ class _Store:
     @slow("look up a published version")
     def exists(self, key):
         return self._has(_check_key(key) + ".json")
+
+    @slow("look up a published version")
+    def metadata(self, key):
+        """The metadata of the published `key`: None when it is not there, {} when it is there and cannot be read."""
+        try:
+            meta = json.loads(self._get_bytes(_check_key(key) + ".json"))
+        except KeyError:
+            return None
+        except ValueError:
+            return {}
+        return meta if isinstance(meta, dict) else {}
 
 
 class FolderStore(_Store):
@@ -685,9 +711,52 @@ def _round_trip(store):
         store.client.delete_object(Bucket=store.bucket, Key=store.prefix + name)
 
 
-def check(environ=None, write=False, out=print):
-    """Report on the version store the TRAINER_STORE_* variables describe: what the bucket holds against its limit, and with `write` a
-    write, read and delete round trip. Prints plain lines (never the key or the secret); returns the exit code, 0 when everything works."""
+QUEUE_FILE = Path("data") / "queue.json"  # where a workspace keeps its queue, relative to the workspace folder
+_UNFINISHED = ("waiting", "held", "running")
+
+
+def queue_jobs(path):
+    """{job id: status} for the jobs in the queue file at `path`, or None when it cannot be read. A job this machine runs for another
+    node is listed under the owner's id (its own id is that and "-e<epoch>"), the one its checkpoints are published under."""
+    try:
+        jobs = json.loads(Path(path).read_text(encoding="utf-8"))["jobs"]
+        known = {}
+        for job in jobs:
+            job_id = str(job["id"])
+            if job.get("owner"):
+                job_id = job_id.rsplit("-e", 1)[0]
+            known[job_id] = job["status"]
+        return known
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def report_checkpoints(store, queue, out):
+    """Say which of the job checkpoints in `store` no unfinished job of the queue at `queue` can resume from: the job is not in the queue
+    at all, or it ended. Only lists them; deleting is by hand. Checkpoints of a job another machine owns show here too: check there."""
+    entries = [(entry, checkpoint_job(entry)) for entry in store.list()]
+    entries = [(entry, job_id) for entry, job_id in entries if job_id]
+    known = queue_jobs(queue)
+    if known is None:
+        out(f"Checkpoints: {len(entries)} job checkpoint object{'s' if len(entries) != 1 else ''}. The queue at {queue} could not be read, "
+            "so which of them are left over is not known. Run this from the TRAINER folder, or pass --queue.")
+        return
+    left = [(entry, job_id) for entry, job_id in entries if known.get(job_id) not in _UNFINISHED]
+    if not left:
+        out(f"Checkpoints: {len(entries)} job checkpoint object{'s' if len(entries) != 1 else ''}, none left over.")
+        return
+    out(f"Checkpoints left over: {len(left)} of {len(entries)}, {size_text(sum(int(e.get('size') or 0) for e, _ in left))}. No unfinished job "
+        f"in {queue} can resume from them. Delete each one's .npz and .json from the bucket by hand if no other machine's job needs it:")
+    for entry, job_id in left:
+        why = f"job ended here ({known[job_id]})" if job_id in known else "job not in this queue"
+        out(f"  {store.prefix}{entry['key']}  {why}, job {job_id}, {entry.get('change') or ''}, {size_text(int(entry.get('size') or 0))}, "
+            f"published {entry.get('published_at') or 'at an unknown time'}")
+
+
+def check(environ=None, write=False, out=print, queue=QUEUE_FILE):
+    """Report on the version store the TRAINER_STORE_* variables describe: what the bucket holds against its limit, the job checkpoints no
+    unfinished job of the queue file `queue` can use, and with `write` a write, read and delete round trip. Prints plain lines (never the
+    key or the secret); returns the exit code, 0 when everything works."""
     environ = os.environ if environ is None else environ
     folder = (environ.get("TRAINER_STORE_FOLDER") or "").strip()
     if folder:
@@ -716,6 +785,10 @@ def check(environ=None, write=False, out=print):
     out(f"Unfinished uploads: {uploads}, holding {size_text(pending)}" + (" (counted; abort them, see docs/cluster.md)." if uploads else "."))
     out(f"Limit: {size_text(limit)} ({limit_source(store.limit)})")
     out(f"Room left: {size_text(max(limit - used, 0))}" + ("  OVER THE LIMIT: uploads are refused until versions are deleted." if used > limit else ""))
+    try:
+        report_checkpoints(store, queue, out)
+    except Exception as error:  # noqa: BLE001 - the listing is extra: the rest of the check still runs
+        out(f"Checkpoints: could not be listed. {store_error(error, store)}")
     if write:
         try:
             _round_trip(store)
@@ -733,12 +806,14 @@ def check(environ=None, write=False, out=print):
 
 def main(argv=None, environ=None, out=print):
     parser = argparse.ArgumentParser(prog="python -m studio_publish", description="Check the version store (TRAINER_STORE_* variables).")
-    parser.add_argument("--check", action="store_true", help="read the settings, list the bucket, print objects, bytes used, limit and room left")
+    parser.add_argument("--check", action="store_true", help="read the settings, list the bucket, print objects, bytes used, limit and room left, and the job checkpoints left over")
     parser.add_argument("--write", action="store_true", help="with --check: also write, read back and delete a small test object")
+    parser.add_argument("--queue", default=str(QUEUE_FILE), help="with --check: this machine's queue file, to tell which job checkpoints "
+                        f"are left over (default {QUEUE_FILE}, run from the TRAINER folder)")
     args = parser.parse_args(argv)
     if not args.check:
         parser.error("say what to do: --check")
-    return check(environ, write=args.write, out=out)
+    return check(environ, write=args.write, out=out, queue=args.queue)
 
 
 if __name__ == "__main__":

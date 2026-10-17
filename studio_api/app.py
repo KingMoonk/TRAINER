@@ -24,8 +24,10 @@ def get_services(request: Request):
     return request.app.state.services
 
 
-def create_app(services, open=False, **auth):
-    """`auth` is TailscaleAuth's allow_tags, allow_users and whois (studio_cluster.allowed_callers gives the first two)."""
+def create_app(services, open=False, origins=(), **auth):
+    """`auth` is TailscaleAuth's allow_tags, allow_users, whois and token (studio_cluster.allowed_callers gives the first two,
+    studio_cluster.funnel_token the token). `origins` are the web origins (the Vercel site) allowed to call this API from a
+    browser: their requests get the CORS headers only once authenticated, and only their preflight is answered without."""
     @asynccontextmanager
     async def lifespan(app):
         yield
@@ -37,9 +39,13 @@ def create_app(services, open=False, **auth):
     app.state.open = open
     app.state.broadcaster = events.Broadcaster(services)
     app.state.jobs = jobs.Jobs(services)
-    app.add_middleware(TailscaleAuth, open=open, **auth)
-    if open:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
-        app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, allow_methods=["*"], allow_headers=["*"])
+    origins = tuple(origins)
+    cors = dict(allow_methods=["*"], allow_headers=["*"])
+    if origins:  # ONE CORS layer, inside the auth layer: a response the auth layer refused carries no CORS headers
+        app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_origin_regex=LOCAL_ORIGIN if open else None, **cors)
+    app.add_middleware(TailscaleAuth, open=open, origins=origins, **auth)
+    if open and not origins:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
+        app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, **cors)
 
     @app.exception_handler(ValueError)
     async def bad_request(request, exc):

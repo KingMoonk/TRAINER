@@ -168,6 +168,25 @@ def allowed_callers(state):
     return tuple(out)
 
 
+FUNNEL_TOKEN_MIN = 32
+
+
+def funnel_token(state):
+    """The shared token `tailscale funnel` callers send as `X-Groundwork-Token`, from `studioConfig.cluster.funnelToken` in the
+    workspace config; "" (no Funnel access) when absent. It must be printable ASCII (it travels in a header) and at least
+    FUNNEL_TOKEN_MIN characters, as `openssl rand -hex 32` makes. Raises ValueError naming the setting, never the value."""
+    config = state.get("studioConfig") if isinstance(state, dict) else None
+    cluster = (config or {}).get("cluster", {})
+    if not isinstance(cluster, dict) or "funnelToken" not in cluster:
+        return ""
+    token = cluster["funnelToken"]
+    token = token.strip() if isinstance(token, str) else ""
+    if len(token) < FUNNEL_TOKEN_MIN or not (token.isascii() and token.isprintable()):
+        raise ValueError(f"studioConfig.cluster.funnelToken in the workspace must be at least {FUNNEL_TOKEN_MIN} printable ASCII "
+                         "characters, such as the output of `openssl rand -hex 32` (or be left out).")
+    return token
+
+
 def own_info(busy=False, version="", status=None, memory=None):
     """This machine's NodeInfo. `status` is `studio_backend.gpu_status()` and `memory` the computer's memory in bytes; both are
     probed when not given. `busy` is whether the queue is running a job; the caller knows, this module does not."""

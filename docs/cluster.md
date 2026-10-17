@@ -159,12 +159,20 @@ except that a distributed run sends its training windows to its own members over
 ```bash
 python -m studio_publish --check            # reads the settings, lists the bucket, prints objects, bytes used, limit and room left
 python -m studio_publish --check --write    # also writes, reads back and deletes a small test object
+python -m studio_publish --check --queue data/queue.json   # (the default) which queue file tells the leftover job checkpoints
 ```
 
 With no keys set it prints `Not configured` and says what to set; a half-set environment names what is missing. A refused key, a
 wrong bucket or an unreachable endpoint ends with a sentence on what to check. It exits 0 when everything works and 1 otherwise,
 and it never prints the key id or the secret. The write test goes through the same limit as any upload. It is a command to run in
 a terminal, not something the app does on its own.
+
+It also lists the **job checkpoints left over**: checkpoint objects in the bucket (recognised by their metadata, `job:<id>` and
+`checkpoint at step N`) that no unfinished job in this machine's queue file can resume from, because the job is not in the queue or
+has ended. Each line gives the key (with the bucket prefix; delete its `.npz` and `.json` by hand), the job, the size and when it was
+published. It only lists and never deletes. Run it from the TRAINER folder, or pass `--queue` the path of `data/queue.json`; with no
+readable queue it only counts the checkpoints. A checkpoint of a job another machine owns is not in this machine's queue, so it shows
+up here too: look at that machine's queue before deleting.
 
 ### The free tier is a hard limit
 
@@ -217,7 +225,28 @@ Only one checkpoint per job is kept: **after the owner has taken a new checkpoin
 (the weights and their metadata), and when the result is stored it deletes the rest. It deletes only objects its own upload created,
 so a version someone else published, or one already in the bucket, is never touched. A delete that fails is logged and is not
 fatal; the key is tried again with the next cleanup. A checkpoint is never deleted before the owner has the key of its replacement,
-so the owner is never left pointing at something gone. When the store refuses:
+so the owner is never left pointing at something gone.
+
+**The owner deletes what the runner could not.** A runner that is lost, or a job that is cancelled or finishes on another node, leaves
+its last checkpoints in the bucket, where they count against the cap. The node that owns the job (the one whose queue holds it)
+records the key of every checkpoint a runner reports, and deletes them once the job can no longer be resumed from them:
+
+| the job | its checkpoints |
+| --- | --- |
+| running, or interrupted and waiting to be placed again | the newest is kept (a resume starts from it); the ones before it are deleted |
+| done (on any node, including after being placed again), failed, or cancelled | all deleted, except the key of the result when it has the same bytes |
+| removed from the queue while waiting | all deleted |
+
+Only keys a runner reported for that job are deleted, never a prefix sweep of the bucket, and a key is first looked up: it is deleted
+only if its metadata says it is a checkpoint of that job (a key that is a published version, another job's checkpoint, or the
+result, or one a job that is still running counts on, is left alone). Deleting adds no bytes, so it does not go through the size
+check, and nothing in this cleanup uploads. A delete that fails is logged and tried again about a minute later; it never stops
+the job or the queue. The keys still to delete are kept in the job's record in `data/queue.json` (`params.cluster.checkpoints`), so
+a restart carries on. What the owner never heard of stays: a checkpoint uploaded after the runner's last renewal, one from a runner
+that kept going after the job ended, one for a job taken out of the queue whose delete failed before the app restarted, or whose record has
+aged out of the queue's last 50 finished jobs. `python -m studio_publish --check` lists those. A folder store is cleaned the same way.
+
+When the store refuses:
 
 - **A checkpoint: the job keeps training.** The checkpoint is only a way to resume if the node is lost, so losing one is not worth
   stopping a run for. The runner does not offer that checkpoint again (it would be refused again, and each try lists the bucket); it

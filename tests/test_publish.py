@@ -402,6 +402,25 @@ class Bucket(Checkpoints):
         self.assertEqual([p for p in self.dest.iterdir()], [])
 
 
+class CheckpointMetadata(unittest.TestCase):
+    def test_a_checkpoint_is_told_from_a_version_by_its_name_and_change(self):
+        row = studio_publish.checkpoint_version("ab12", 40)
+        self.assertEqual(studio_publish.checkpoint_job(row), "ab12")
+        self.assertIsNone(studio_publish.checkpoint_job({**row, "change": "result at step 40"}))
+        self.assertIsNone(studio_publish.checkpoint_job({"name": "Version 3", "change": "checkpoint at step 4"}))
+        self.assertIsNone(studio_publish.checkpoint_job({"name": "job:", "change": "checkpoint at step 4"}))
+        self.assertIsNone(studio_publish.checkpoint_job(None))
+
+    def test_metadata_is_none_when_missing_and_empty_when_unreadable(self):
+        client = StubS3()
+        store = S3Store(CONFIG, client=client)
+        self.assertIsNone(store.metadata("gpu-box/v0-abc"))
+        client.objects["versions", "trainer/gpu-box/v0-abc.json"] = b"not json"
+        self.assertEqual(store.metadata("gpu-box/v0-abc"), {})
+        client.objects["versions", "trainer/gpu-box/v0-abc.json"] = b'{"name": "job:x"}'
+        self.assertEqual(store.metadata("gpu-box/v0-abc"), {"name": "job:x"})
+
+
 class Configuration(unittest.TestCase):
     ENVIRONMENT = {"TRAINER_STORE_ENDPOINT": "https://s3.us-west-004.backblazeb2.com", "TRAINER_STORE_BUCKET": "versions",
                    "TRAINER_STORE_PREFIX": "trainer", "TRAINER_STORE_KEY_ID": "AKID", "TRAINER_STORE_SECRET": "s3cr3t-value",
@@ -885,6 +904,58 @@ class Check(Checkpoints):
             self.assertEqual(code, 1)
             self.assertIn(expected, said)
             self.assertNotIn("s3cr3t-value", said)
+
+    # ---- the job checkpoints left over ----
+    def bucket_with_checkpoints(self, queue, jobs):
+        """A bucket holding a checkpoint for each of `jobs` ({id: step}), a published version, and a queue file with `queue` ([job rows])."""
+        client = StubS3()
+        store = S3Store(CONFIG, client=client, origin="gpu-box")
+        for job_id, step in jobs.items():
+            store.publish(studio_publish.checkpoint_version(job_id, step), self.base_for_check(step))
+        store.publish(VERSION, self.base_for_check(99))
+        path = Path(self.dir.name) / "queue.json"
+        path.write_text(json.dumps({"jobs": queue}), encoding="utf-8")
+        return client, path
+
+    def base_for_check(self, step):
+        path = Path(self.dir.name) / f"c{step}.npz"
+        meta = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "step": step}
+        np.savez(path, metadata=np.array(json.dumps(meta)), **{"weight::w": np.arange(4, dtype=np.float32)})
+        return path
+
+    def test_it_lists_the_checkpoints_no_unfinished_job_of_the_queue_can_resume_from(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        queue = [{"id": "live", "status": "waiting"}, {"id": "ended", "status": "stopped"}, {"id": "away-e2", "status": "running", "owner": "x:1"}]
+        client, path = self.bucket_with_checkpoints(queue, {"live": 1, "ended": 2, "away": 3, "gone": 4})
+        before = len(client.log)
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--queue", str(path)))
+        self.assertEqual(code, 0, said)
+        self.assertIn("Checkpoints left over: 2 of 4", said)
+        self.assertIn("job ended here (stopped), job ended,", said)
+        self.assertIn("job not in this queue, job gone,", said)
+        self.assertNotIn("job live", said)  # still waiting: it resumes from it
+        self.assertNotIn("job away", said)  # a job this machine runs for another node
+        self.assertNotIn("Version 3", said)  # a published version is not a checkpoint
+        self.assertIn("trainer/gpu-box/v0-", said)
+        self.assertEqual([c[0] for c in client.log[before:] if c[0] in UPLOADS + ("delete_object",)], [])  # it only lists
+
+    def test_with_every_checkpoint_in_use_it_says_none_are_left_over(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        client, path = self.bucket_with_checkpoints([{"id": "live", "status": "running"}], {"live": 1})
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--queue", str(path)))
+        self.assertIn("Checkpoints: 1 job checkpoint object, none left over.", said)
+
+    def test_without_a_readable_queue_it_counts_the_checkpoints_and_does_not_guess(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        client, _ = self.bucket_with_checkpoints([], {"a": 1, "b": 2})
+        code, said = self.run_check(self.ENVIRONMENT, client, ("--check", "--queue", str(Path(self.dir.name) / "nothing.json")))
+        self.assertEqual(code, 0, said)
+        self.assertIn("2 job checkpoint objects. The queue at", said)
+        self.assertIn("could not be read", said)
+        self.assertNotIn("left over:", said)
 
     def test_it_runs_as_a_module(self):
         import os

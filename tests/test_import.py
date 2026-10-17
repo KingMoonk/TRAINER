@@ -3,6 +3,7 @@ import errno
 import hashlib
 import http.client
 import json
+import os
 import tempfile
 import threading
 import time
@@ -680,6 +681,56 @@ class Services(unittest.TestCase):
         self.assertIn("did not finish", kept["change"])
         self.assertEqual(svc.store.get(later.number)["change"], "A later design")
         self.assertEqual(len(svc.versions()), later.number)
+
+    def waiting_import_with_a_later_design(self):
+        """An import that never starts (the queue is paused) and a newer version after it, so ending the import cannot remove it."""
+        svc = self.import_with(import_fails)
+        svc.runner.pause()
+        version = svc.import_pretrained("gpt2")
+        svc.save_version(imp.gpt2_spec(name="Another"), "A later design")
+        return svc, version, svc.runner.jobs[-1]
+
+    def end_the_import(self, svc, job):
+        """What the runner thread does when the import fails: it announces it, and an error in a listener is swallowed there."""
+        svc.runner._emit("job", {"job": job.id, "status": "failed"})
+
+    def with_versions_file_in_use(self, in_use):
+        """Windows refuses to replace a file another thread has open (the page reads versions.json all the time). `in_use()` says
+        whether it is open at this write; the writer's pause between tries is when the reader lets go, so `in_use` can see that."""
+        real = os.replace
+
+        def replace(source, target, *args, **kwargs):
+            if Path(target).name == "versions.json" and in_use():
+                raise PermissionError(13, "Access is denied", str(target))
+            return real(source, target, *args, **kwargs)
+        return mock.patch("os.replace", replace)
+
+    def test_a_write_that_meets_a_reader_is_tried_again(self):
+        svc, version, job = self.waiting_import_with_a_later_design()
+        reading = threading.Event()
+        reading.set()   # the reader has the file open when the import's end is recorded
+        main = threading.current_thread()
+
+        def pause(seconds):
+            if threading.current_thread() is main:
+                reading.clear()   # the writer waits; the reader finishes
+        with self.with_versions_file_in_use(reading.is_set), mock.patch("time.sleep", pause):
+            self.end_the_import(svc, job)
+        kept = svc.store.get(version.number)
+        self.assertEqual(kept["status"], "saved")
+        self.assertIn("did not finish", kept["change"])
+
+    def test_the_status_and_the_description_are_written_together(self):
+        svc, version, job = self.waiting_import_with_a_later_design()
+        writes = []
+
+        def second_write_is_lost():
+            writes.append(1)
+            return len(writes) > 1   # the file is in use from the second write on, for as long as the writer tries
+        with self.with_versions_file_in_use(second_write_is_lost), mock.patch("time.sleep", lambda seconds: None):
+            self.end_the_import(svc, job)
+        kept = svc.store.get(version.number)
+        self.assertEqual((kept["status"] == "saved", "no weights" in kept["change"]), (True, True))
 
     def test_a_second_import_is_refused_while_one_is_waiting_or_running(self):
         svc = self.import_with(import_slow)
