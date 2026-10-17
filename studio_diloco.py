@@ -475,7 +475,7 @@ class Coordinator:
                 known["term"], known["epoch"] = self.term, epoch
                 self.leaving.discard(node)
             else:
-                if len(self.members) + len(self.pending) >= self.settings.max_members:
+                if len(self.members) - len(self.leaving & set(self.members)) + len(self.pending) >= self.settings.max_members:  # a leaver's seat is free
                     raise Stale(f"The run already has its {self.settings.max_members} members.")
                 self.sequence += 1
                 entry = {"term": self.term, "epoch": epoch, "seq": self.sequence, "missed": 0}
@@ -500,6 +500,24 @@ class Coordinator:
                 self._event("left", node, self.next_round, f"{node} left the run.")
             else:
                 self.leaving.add(node)  # leaves at the round boundary; the round stops waiting for it now
+            self._advance()
+            self.cond.notify_all()
+
+    def lose(self, node):
+        """The scheduler's lease on `node`'s slot lapsed: it leaves at the round boundary (the round stops waiting for it now) and, unlike
+        `drop`, may join again. Does nothing for a node that is not a member."""
+        with self.cond:
+            self._touch()
+            if node in self.pending:
+                del self.pending[node]
+                self._event("left", node, self.next_round, f"{node} lost its lease before its first round.")
+            elif node in self.members and self.current is None:
+                del self.members[node]
+                self.gone[node] = ("left", "Its lease lapsed, so the run let it go.")
+                self._event("left", node, self.next_round, f"{node} lost its lease and left the run.")
+            elif node in self.members:
+                self.leaving.add(node)
+                self._event("left", node, self.next_round, f"{node} lost its lease; it leaves after round {self.next_round}.")
             self._advance()
             self.cond.notify_all()
 
@@ -877,11 +895,19 @@ class Coordinator:
             if self.record:
                 self.record["status"] = "stopped"
                 atomic_json(self.directory / "run.json", self.record)
+            self._remember()
             self.cond.notify_all()
 
     # -- durability
     def _touch(self):
         self.touched = time.monotonic()
+
+    def _remember(self):
+        """Have the Training tab's record of this run (studio_distributed) kept with its account as it stands now. It takes the snapshot on
+        its own thread: this one holds the lock, and a snapshot advances the clock."""
+        import studio_distributed
+        if studio_distributed.keeps(self.run):
+            threading.Thread(target=studio_distributed.remember, args=(self.run, self), daemon=True).start()
 
     def _save(self, row, closed):
         """The round's files, in the order that keeps a crash recoverable: the state, last.npz, then diloco.json that names it."""
@@ -917,6 +943,7 @@ class Coordinator:
         if self.finished:
             self.record["finishedAt"] = now()
         atomic_json(self.directory / "run.json", self.record)
+        self._remember()
 
     @staticmethod
     def _write_npz(path, arrays):

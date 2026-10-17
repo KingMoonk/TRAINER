@@ -5312,6 +5312,18 @@
             ],
             "title": "Published At"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device that scored it on the held-back text, when known",
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "description": "as measured on the machine that trained it",
@@ -5340,6 +5352,18 @@
               }
             ],
             "title": "Step"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the same, under the name the version row uses",
+            "title": "Train Device"
           }
         },
         "required": [
@@ -7565,6 +7589,17 @@
             "title": "Published At",
             "type": "string"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "description": "as measured on this machine",
@@ -7596,6 +7631,17 @@
               }
             ],
             "title": "Step"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Device"
           },
           "weights_dtype": {
             "default": "float16",
@@ -7983,6 +8029,32 @@
             },
             "title": "Machines",
             "type": "array"
+          },
+          "max_members": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Members"
+          },
+          "min_members": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Members"
           },
           "outer_lr": {
             "default": 0.7,
@@ -8766,6 +8838,17 @@
             "title": "Prediction",
             "type": "object"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "title": "Scorecard",
@@ -8780,6 +8863,17 @@
             "default": "draft",
             "title": "Status",
             "type": "string"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Device"
           },
           "verdict": {
             "default": "",
@@ -8836,6 +8930,18 @@
             "title": "Prediction",
             "type": "object"
           },
+          "score_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device kind that scored it on the held-back text",
+            "title": "Score Device"
+          },
           "scorecard": {
             "additionalProperties": true,
             "title": "Scorecard",
@@ -8850,6 +8956,18 @@
             "default": "draft",
             "title": "Status",
             "type": "string"
+          },
+          "train_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the device kind (cuda, mps, cpu) that trained best_checkpoint",
+            "title": "Train Device"
           },
           "verdict": {
             "default": "",
@@ -13806,6 +13924,49 @@
           }
         },
         "summary": "Remove Passive Signin",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/keep-going": {
+      "post": {
+        "description": "Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended.",
+        "operationId": "keep_passive_going_passive__session_id__keep_going_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep Passive Going",
         "tags": [
           "passive"
         ]

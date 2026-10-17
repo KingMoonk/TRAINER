@@ -37,6 +37,8 @@ class VersionOut(BaseModel):
     scorecard: dict[str, Any] = Field(default_factory=dict)
     verdict: str = ""
     prediction: dict[str, Any] = Field(default_factory=dict)
+    train_device: str | None = Field(None, description="the device kind (cuda, mps, cpu) that trained best_checkpoint")
+    score_device: str | None = Field(None, description="the device kind that scored it on the held-back text")
 
 
 def plain(value):

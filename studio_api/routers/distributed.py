@@ -51,6 +51,8 @@ class StartRun(BaseModel):
     inner_steps: int = Field(DEFAULTS.inner_steps, ge=1, le=1_000_000)
     outer_lr: float = Field(DEFAULTS.outer_lr, gt=0)
     outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
+    min_members: int | None = Field(None, ge=1, le=64)  # the run waits in the queue until this many machines (this one included) are free at once
+    max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
 
 
 class Sample(BaseModel):
@@ -272,8 +274,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     unknown = [d for d in dataset_ids if d not in known]
     if unknown or not dataset_ids:
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
+    shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum)  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, **shape)  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -287,12 +290,15 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
                 *({"node": peer.hostname or peer.address, "address": peer.address, "device": peer.device if peer.online else "",
                    "device_name": peer.device_name, "error": "" if peer.online else peer.error} for peer in peers)]
+    if settings.min_members > len(machines):
+        raise HTTPException(400, f"The run needs {settings.min_members} machines at once, but only {len(machines)} "
+                                 f"{'is' if len(machines) == 1 else 'are'} chosen, this computer included.")
     config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
     label = f"Version {version.number} across {len(machines)} machine{'s' if len(machines) != 1 else ''}"
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, "machines": machines, "owner": own.hostname,
         "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)

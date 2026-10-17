@@ -45,6 +45,15 @@ def stop_passive(session_id: str, services=Depends(get_services)):
     return PassiveStatus(status=status)
 
 
+@router.post("/{session_id}/keep-going", response_model=PassiveStatus)
+def keep_passive_going(session_id: str, services=Depends(get_services)):
+    """Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended."""
+    status = services.keep_passive_going(session_id)
+    if status is None:
+        raise HTTPException(404, f"No passive session {session_id}")
+    return PassiveStatus(status=status)
+
+
 @router.delete("/signin", status_code=204)
 def remove_passive_signin(services=Depends(get_services)):
     services.remove_passive_signin()

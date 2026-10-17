@@ -30,6 +30,8 @@ class Version:
     scorecard: dict = field(default_factory=dict)
     verdict: str = ""
     prediction: dict = field(default_factory=dict)  # the guess made on saving: {"error": "lower", "step": "slower", "memory": "more"}
+    train_device: str | None = None  # cuda | mps | cpu: what trained best_checkpoint
+    score_device: str | None = None  # what scored it on the held-back text
 
 
 @dataclass
@@ -409,6 +411,12 @@ class Services:
 
     def stop_passive(self, session_id):
         """Ask a passive session to stop. Returns its status afterwards."""
+        raise NotImplementedError
+
+    def keep_passive_going(self, session_id=None):
+        """Start the watchdog again for an active passive session whose watchdog is gone (it then restarts the trainer). Without
+        `session_id`, the active session, if any. Returns the session's status, or None when there is no such session; a session that
+        is stopped, failed or finished raises RuntimeError."""
         raise NotImplementedError
 
     def remove_passive_signin(self):
@@ -959,6 +967,21 @@ class FakeServices(Services):
                 return "stopped"
         return None
 
+    def resume_passive_at_start(self):
+        pass  # a fake has no watchdog to bring back
+
+    def keep_passive_going(self, session_id=None):
+        active = [r for r in self.passive_sessions if r["status"] in ("queued", "running", "paused")]
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None) if session_id else (active[0] if active else None)
+        if row is None:
+            return None
+        if row not in active:
+            raise RuntimeError(f"Passive session {row['id']} is {row['status']}, so there is nothing to keep going.")
+        if row.get("watchdog") != "Running":
+            row.update(watchdog="Running", trainer="Running")  # the real watchdog starts the trainer on its first check
+            self.passive_kept = [*getattr(self, "passive_kept", []), row["id"]]
+        return row["status"]
+
     def remove_passive_signin(self):
         self.passive_signin = False
 
@@ -1353,6 +1376,8 @@ class WorkspaceServices(Services):
                                           on_start=self.chat_job_started, on_end=self.chat_job_ended)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
+        import studio_distributed
+        studio_distributed.load(self.root)  # the Training tab's runs from before a restart
         workspace.progress = self.note
         # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
         self._schema = start_thread(workspace.ensure_schema) if workspace.schema_pending() else None
@@ -1389,6 +1414,8 @@ class WorkspaceServices(Services):
         if getattr(self, "_viz", None) is not None:
             self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
+        import studio_distributed
+        studio_distributed.unload(self.root)
         if self._schema is not None:  # its connection holds records.sqlite open, and Windows cannot delete an open file
             self._schema.join()
 
@@ -1655,6 +1682,7 @@ class WorkspaceServices(Services):
             card = {**(self.store.get(row["number"]).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                     "bpc_method": studio_eval.SCORE_METHOD}
             self.store.set_scorecard(row["number"], card)
+            self._note_devices(row["number"], self._abs(row["best_checkpoint"]), True)
             row["scorecard"] = card
 
     def checkpoint_step(self, version):
@@ -1701,7 +1729,7 @@ class WorkspaceServices(Services):
             row = self.store.get(number)
         except KeyError:
             raise ValueError(f"No version {number}.") from None
-        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard")}
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard", "score_device")}
         key = self._through(store, lambda: store.publish(version, self._abs(row.get("best_checkpoint"))))
         self.store.add_published(number, key)
         return {"key": key, "number": number, "origin": key.split("/")[0]}
@@ -1712,7 +1740,7 @@ class WorkspaceServices(Services):
         entries = self._through(store, store.list)
         own = studio_publish.own_origin(store)
         here = {key: row["number"] for row in self._rows() for key in row.get("published") or ()}
-        return [{**{k: entry.get(k) for k in ("key", "number", "name", "change", "origin", "device", "step", "published_at", "size")},
+        return [{**{k: entry.get(k) for k in ("key", "number", "name", "change", "origin", "device", "train_device", "score_device", "step", "published_at", "size")},
                  "scorecard": entry.get("scorecard") or {}, "mine": entry.get("origin") == own,
                  "local": entry["key"] in here, "local_number": here.get(entry["key"])} for entry in reversed(entries)]
 
@@ -1722,7 +1750,7 @@ class WorkspaceServices(Services):
             row = self.store.get(number)
         except KeyError:
             raise ValueError(f"No version {number}.") from None
-        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard")}
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard", "score_device")}
         return self._through(None, lambda: studio_publish.shared_copy(
             version, self._abs(row.get("best_checkpoint")), self.root / "data" / "shared", studio_publish.own_origin()))
 
@@ -1764,7 +1792,7 @@ class WorkspaceServices(Services):
         else:
             name = f"{entry.get('name') or 'Version ' + str(entry.get('number'))} from {entry.get('origin')}"
             change = f"pulled from {entry.get('origin')}: {entry.get('change') or 'no description'}"
-            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, entry["key"]))
+            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, entry["key"], entry.get("train_device") or entry.get("device")))
         v = self._version(row)
         self.emit("versions", v)
         return v
@@ -1888,6 +1916,29 @@ class WorkspaceServices(Services):
         import studio_passive_watch as watch
         from studio_passive import PassiveStore
         return watch.stop(PassiveStore(self.root), session_id)
+
+    def keep_passive_going(self, session_id=None, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""
+        import studio_passive_watch as watch
+        from studio_passive import ACTIVE, PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        session = store.get(session_id) if session_id else store.active()
+        if session is None:
+            return None
+        if session["status"] not in ACTIVE:
+            raise RuntimeError(f"Passive session {session['id']} is {session['status']}, so there is nothing to keep going.")
+        watch.start(self.root, session["id"], **hooks)
+        return store.get(session["id"])["status"]
+
+    def resume_passive_at_start(self, **hooks):
+        """Called once when the API starts: an active passive session left without a watchdog (it never started, it died, the
+        computer restarted without the sign-in entry) gets one again. Never stops the server from starting."""
+        try:
+            self.keep_passive_going(**hooks)
+        except Exception as exc:
+            print(f"passive training: could not start the watchdog again: {exc}", flush=True)
 
     def remove_passive_signin(self):
         import studio_passive_watch as watch
@@ -2169,6 +2220,7 @@ class WorkspaceServices(Services):
                 card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                         "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
+            self._note_devices(number, ckpt, scores is not None)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
         self.emit("versions", None)
 
@@ -2189,10 +2241,17 @@ class WorkspaceServices(Services):
             if scores is not None:
                 card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores), "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
+            self._note_devices(number, ckpt, scores is not None)
             self.store.set_change(number, f"{self.store.get(number)['change']} (trained in distributed run {job.id} on {', '.join(machines)})")
             studio_distributed.note_saved(job.id, number)
         self._to(number, "trained" if done else "saved")
         self.emit("versions", None)
+
+    def _note_devices(self, number, ckpt, scored=False):
+        """Record on the version the device kind that trained `ckpt` and, when the caller just scored it, the one that scored it."""
+        import studio_eval
+        from studio_model import checkpoint_device
+        self.store.set_devices(number, train=checkpoint_device(ckpt), score=studio_eval.SCORE_DEVICE if scored else None)
 
     def _drop_empty_import(self, number, how):
         """An import that ended without weights leaves a version that holds only a design. The newest can simply go; an older one
@@ -2228,6 +2287,7 @@ class WorkspaceServices(Services):
                 card["answers"] = True
             self.store.set_best_checkpoint(v.number, result["checkpoint"])
             self.store.set_scorecard(v.number, card)
+            self._note_devices(v.number, self._abs(result["checkpoint"]))
         self.emit("versions", None)
 
     def _human_pairs(self):

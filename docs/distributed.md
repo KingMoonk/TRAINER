@@ -147,11 +147,21 @@ Lease(job_id, node, epoch, duration_s)
   and the fence compares `(term, epoch)`.
 - **Reassignment.** When a lease expires, the owner waits `duration_s` more (the runner's self-fence has certainly fired by
   then), marks the job *interrupted* at its last checkpoint, and places it again. On a different node the job resumes from
-  the last published checkpoint with a fresh optimizer, and its record says so.
+  the last published checkpoint with a fresh optimizer, and its record says so. Placed again on the node that wrote that
+  checkpoint (#185), it continues from that node's own `last.npz` with the optimizer, sampler and RNG (a published
+  checkpoint is the weights only), on the dataset snapshot saved beside it; if the file is gone or training refuses it, the
+  node falls back to the published weights, and the record says which way it went.
 
 Placement stays `studio_cluster.place()`. A job that needs several nodes (a distributed run) is **gang-placed**: the
-scheduler takes leases on `min_nodes` to `max_nodes` free nodes in one decision, or none, so two half-placed runs never
-deadlock each other waiting for the last node.
+scheduler takes leases on `min_members` to `max_members` free nodes in one decision (`studio_scheduler.decide_gang`,
+`Gangs.place`), or none, so two half-placed runs never deadlock each other waiting for the last node. The nodes are the
+ones the run was given, this one included (it coordinates); the run waits in the queue, with the reason, until enough of
+them are free at once. Each member slot is a lease. The owner renews a slot while the coordinator hears from that member,
+and a slot silent for longer than its lease (more for a member that has not joined yet) is freed: the coordinator lets
+the member go at the round boundary (`Coordinator.lose`), its member job leaves the node's queue, and a node that is free
+then is leased the slot and invited, joining at the round after. A node that frees up later fills an open slot the same way,
+up to `max_members`. Two runs owned by different nodes decide on their own polls, so they can still pick the same free node
+in the same few seconds; the second member job then waits on that node's queue.
 
 ## Training runtime: DiLoCo (#132)
 
@@ -252,6 +262,12 @@ done), `WorkspaceServices._record_distributed` records the run folder on that ve
 `last.npz`, scores it on the held-back text like a local pretrain, and adds a change note naming the run and its machines. The
 run's view then names it (`saved_version`) and the Training tab links to it. A stopped or failed run saves nothing, even past
 some rounds (the round weights stay in the run folder): the version goes back to `saved`.
+
+**The Training tab's records (#334).** The runs the tab lists are kept in `data/distributed_runs.json` (`studio_distributed.persist`,
+written atomically when a run is opened, after each round, when it stops and once the invitations are answered) and read back when
+the services start (`load`, the newest `KEPT`). A missing or corrupt file gives no runs. A run whose last account still says it was
+going loads as stopped with a note that the app restarted, unless the queue still holds its job (then it waits as queued and the
+job rebuilds the coordinator from `diloco.json`).
 
 **Durability.** The latest completed round (`θ`, `v`, `diloco.json`, term) is on the coordinator and its `R` replicas, so
 it survives the loss of any `R` of those `R + 1` nodes without the bucket. Only the latest round is kept; runs are
