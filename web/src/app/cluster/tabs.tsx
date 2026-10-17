@@ -18,7 +18,7 @@ export function ClusterTabs() {
           <Link
             key={tab.id}
             href={tab.href}
-            aria-current={selected ? "page" : undefined}
+            aria-current={selected ? "location" : undefined}
             className={cn(
               "-mb-px shrink-0 border-b-2 border-transparent px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground",
               selected && "border-primary font-medium text-foreground",

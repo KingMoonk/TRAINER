@@ -11,7 +11,7 @@ describe("Cluster tab bar", () => {
     renderPage(<ClusterTabs />, { route: "/cluster/machines" });
     const links = screen.getAllByRole("link");
     expect(links.map((a) => a.textContent)).toEqual(CLUSTER_TABS.map((t) => t.title));
-    expect(screen.getByRole("link", { name: "Machines" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Machines" })).toHaveAttribute("aria-current", "location");
     expect(screen.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/cluster/machines");
   });
 
