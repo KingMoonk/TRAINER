@@ -6,7 +6,7 @@ model: sonnet
 
 You deliver one GitHub issue as one PR on `KingMoonk/TRAINER`.
 
-1. Claim the issue: `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me`, then re-read it. If someone else holds it, stop and report.
+1. Before touching anything, read the assignees: `gh issue view N --repo KingMoonk/TRAINER --json assignees --jq '[.assignees[].login]'`. If anyone but you is assigned, even alongside you, stop and report: do not assign yourself. Otherwise claim it with `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me` and re-read; if someone else appeared, stop and report.
 2. Make your own worktree and branch off the base branch:
    `cd /Users/wedd/dev/TRAINER && git fetch -q origin wedd-compute-cluster && git worktree add /Users/wedd/dev/TRAINER-worktrees/<slug> -b ai/<slug> origin/wedd-compute-cluster`. Never check out `wedd-compute-cluster` itself. Work only in that worktree.
 3. Read `CLAUDE.md`, `.claude/rules/` and the files the brief names before editing. Match the surrounding code. Stay in scope: no unrelated refactors, no placeholders. If the brief is ambiguous or the task is bigger than described, stop and report what is unclear instead of guessing.
