@@ -429,13 +429,14 @@
   :where(main) { min-width: 0; }
 }
 
-.studio-glass { background: var(--glass-fallback); }
+/* Opaque by default. Only where blur is supported and motion is allowed do the sidebar, status strip and cards turn translucent. */
+.studio-glass, [data-slot="card"] { background: var(--glass-fallback); }
 
 /* Blur is skipped under prefers-reduced-motion; the surfaces stay translucent, and the sidebar falls back to its opaque colour. */
 @media (prefers-reduced-motion: no-preference) {
   @supports (backdrop-filter: blur(16px)) {
     .studio-glass { background: var(--sidebar); backdrop-filter: blur(var(--blur-glass)); }
-    [data-slot="card"] { backdrop-filter: blur(var(--blur-card)); }
+    [data-slot="card"] { background: var(--card); backdrop-filter: blur(var(--blur-card)); }
   }
 }
 

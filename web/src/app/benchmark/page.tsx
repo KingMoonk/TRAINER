@@ -26,6 +26,7 @@ import {
   type BenchmarkRow,
   type FewShotOut,
 } from "./logic";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 const READ_KEY = ["benchmark", "read"] as const;
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -51,9 +52,8 @@ export default function Page() {
 
   const state = read.data;
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">{BENCH.h1}</h1>
-      <p className="max-w-prose text-muted-foreground">{BENCH.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={BENCH.h1} lead={BENCH.lead} />
       {read.isPending && <BenchmarkSkeleton />}
       {read.isError && (
         <Card>
