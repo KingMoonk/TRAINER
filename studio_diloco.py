@@ -29,6 +29,7 @@ import hashlib
 import io
 import json
 import random
+import re
 import shutil
 import tempfile
 import threading
@@ -40,6 +41,8 @@ from pathlib import Path
 import numpy as np
 
 FORMAT = 1
+TERM_HEADER = "X-Run-Term"  # every answer on /collective/{run} carries the coordinator's term here and in its JSON body
+TERM_STALE = "Stale term"  # the start of the 409 message for a term that is not the coordinator's
 LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
 STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
@@ -97,6 +100,15 @@ class Entered:
 
 class Stale(RuntimeError):
     """A request from an earlier round, generation or lease epoch, or into a closed or full run: the API answers 409."""
+
+
+class StaleTerm(Stale):
+    """A request under a lower term than the coordinator's, or a coordinator that has seen a higher term and no longer coordinates
+    the run. `term` is the highest term involved. The message begins TERM_STALE so a member can tell it from the other 409s."""
+
+    def __init__(self, message, term):
+        super().__init__(message)
+        self.term = term
 
 
 @dataclass(frozen=True)
@@ -325,7 +337,8 @@ class Coordinator:
     """The global state of one run. Thread-safe; every method that can change it first moves the clock's consequences along
     (_advance: close a round that is complete or past its deadline, open the next). `evaluate(theta)` returns the validation loss."""
 
-    def __init__(self, run, directory, cfg, tokenizer, train, val, settings, theta, evaluate, digest="", clock=time.monotonic, state=None):
+    def __init__(self, run, directory, cfg, tokenizer, train, val, settings, theta, evaluate, digest="", clock=time.monotonic, state=None,
+                 on_step_down=None):
         self.run, self.directory, self.cfg, self.tokenizer = run, Path(directory), cfg, tokenizer
         self.train, self.val, self.settings, self.evaluate, self.digest, self.clock = train, val, settings, evaluate, digest, clock
         self.theta = {name: np.array(value, dtype=np.float32) for name, value in theta.items()}
@@ -341,9 +354,11 @@ class Coordinator:
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
         self.reports, self.events, self.timelines = {}, deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT)  # the live view's state
         self.event_seq, self.stage, self._last = 0, "", None  # stage: "outer_step" or "validating" while a round closes (read without the lock)
+        self.term, self.superseded, self.on_step_down = 1, 0, on_step_down  # superseded: the higher term this coordinator was told of, else 0
         self.lock = threading.RLock()
         self.cond = threading.Condition(self.lock)
         if state:
+            self.term = state["term"]
             self.momentum = state["momentum"]
             self.next_round, self.generation = state["round"], state["generation"]
             self.history, self.step_time, self.state_file = state["history"], state.get("step_time"), state["state_file"]
@@ -408,7 +423,7 @@ class Coordinator:
             theta = {key[len(STATE_PREFIXES[0]):]: archive[key].copy() for key in archive.files if key.startswith(STATE_PREFIXES[0])}
             momentum = {key[len(STATE_PREFIXES[1]):]: archive[key].copy() for key in archive.files if key.startswith(STATE_PREFIXES[1])}
         return {"theta": theta, "momentum": momentum, "state_file": saved["state_file"], "round": saved["round"], "generation": saved["generation"],
-                "history": saved["history"], "step_time": saved.get("step_time")}
+                "history": saved["history"], "step_time": saved.get("step_time"), "term": saved.get("term", 1)}
 
     def _start_files(self, model):
         from studio_core import atomic_json, now
@@ -424,12 +439,42 @@ class Coordinator:
     # -- membership
     def info(self):
         """What a member needs to start: the config and tokenizer, and the run's shape."""
-        return {"generation": self.generation, "round": self.next_round, "config": self.cfg, "tokenizer": self.tokenizer.serialize(),
+        return {"term": self.term, "generation": self.generation, "round": self.next_round, "config": self.cfg, "tokenizer": self.tokenizer.serialize(),
                 "inner_steps": self.settings.inner_steps, "rounds": self.settings.rounds,
                 "total_steps": self.settings.rounds * self.settings.inner_steps, "delta_dtype": self.settings.delta_dtype,
                 "shard_count": self.shard_count, "seed": self.cfg["seed"], "vocab_size": self.tokenizer.vocab_size}
 
-    def join(self, node, epoch=0):
+    # -- terms
+    def check_term(self, term, learning=False):
+        """Admit a call that carries `term`. Lower than this coordinator's is StaleTerm (409), and changes nothing. Higher means a
+        later coordinator exists: this one steps down (see step_down) and refuses the call. Once stepped down every call is refused.
+        A member that does not know the term yet sends 0; only the call that joins (`learning`) is let through with it."""
+        if term > self.term:
+            self.step_down(term)
+        with self.lock:
+            if self.superseded:
+                raise StaleTerm(f"{TERM_STALE} {term}: the run is at term {self.superseded}, so this node no longer coordinates it.", self.superseded)
+            if term < self.term and not (learning and term == 0):
+                raise StaleTerm(f"{TERM_STALE} {term}: the run is at term {self.term}.", self.term)
+
+    def step_down(self, term):
+        """Told of a higher term (by a call that carries it, or by whoever watches the run's claims): stop closing rounds. The run's
+        state stays as it is on disk for the new coordinator's replicas; this node joins the new coordinator as a member (#361).
+        Idempotent; a term that is not higher than the coordinator's own changes nothing."""
+        with self.cond:
+            if term <= max(self.term, self.superseded):
+                return
+            self.superseded = term
+            self._event("stepped_down", "", self.next_round, f"Term {term} exists (this node held term {self.term}): no longer coordinating the run.")
+            self.cond.notify_all()
+        if self.on_step_down:
+            self.on_step_down(term)
+
+    def _lease(self, term, epoch):
+        """The fence a member's lease is compared by: the coordinator's term first, then the scheduler's lease epoch."""
+        return (self.term if term is None else term, epoch)
+
+    def join(self, node, epoch=0, term=None):
         with self.cond:
             self._touch()
             self._advance()
@@ -440,26 +485,26 @@ class Coordinator:
             self.gone.pop(node, None)
             known = self.members.get(node) or self.pending.get(node)
             if known:
-                if epoch < known["epoch"]:
+                if self._lease(term, epoch) < (known["term"], known["epoch"]):
                     raise Stale(f"Stale lease epoch {epoch} for {node}: the current one is {known['epoch']}.")
-                known["epoch"] = epoch
+                known["term"], known["epoch"] = self.term, epoch
                 self.leaving.discard(node)
             else:
                 if len(self.members) + len(self.pending) >= self.settings.max_members:
                     raise Stale(f"The run already has its {self.settings.max_members} members.")
                 self.sequence += 1
-                entry = {"epoch": epoch, "seq": self.sequence, "missed": 0}
+                entry = {"term": self.term, "epoch": epoch, "seq": self.sequence, "missed": 0}
                 (self.pending if self.current is not None else self.members)[node] = entry  # a boundary is now, or at the round's end
                 self._event("joined", node, self.next_round, f"{node} joined" + (" and starts with the next round." if self.current is not None else "."))
             self._advance()
             self.cond.notify_all()
             return {**self.info(), "node": node}
 
-    def leave(self, node, generation, epoch):
+    def leave(self, node, generation, epoch, term=None):
         with self.cond:
             self._touch()
             entry = self.members.get(node) or self.pending.get(node)
-            if entry is None or entry["epoch"] != epoch:
+            if entry is None or (entry["term"], entry["epoch"]) != self._lease(term, epoch):
                 raise Stale(f"{node} is not a member at lease epoch {epoch}.")
             if node in self.pending:
                 del self.pending[node]
@@ -483,7 +528,7 @@ class Coordinator:
         self.events.append({"seq": self.event_seq, "t": self.clock() - self.started, "kind": kind, "node": node, "round": number, "text": text})
 
     def _advance(self):
-        while not self.finished:
+        while not self.finished and not self.superseded:  # a coordinator that has seen a higher term closes and opens nothing
             now = self.clock()
             current = self.current
             if current is None:
@@ -594,7 +639,7 @@ class Coordinator:
 
     def _view(self, number, node):
         entry = self.members.get(node) or self.pending.get(node)
-        base = {"round": number, "member": entry is not None, "current": self.next_round}
+        base = {"term": self.term, "round": number, "member": entry is not None, "current": self.next_round}
         if self.finished:
             return {**base, "state": "finished"}
         if number < self.next_round:
@@ -637,7 +682,7 @@ class Coordinator:
                 self.current.marks.setdefault(node, {}).setdefault("theta_taken", self.clock())
             return self._params[1]
 
-    def progress(self, number, node, generation, epoch, phase, step=0, loss=None, tokens_per_second=None):
+    def progress(self, number, node, generation, epoch, phase, step=0, loss=None, tokens_per_second=None, term=None):
         """Take a member's report of where it is in its round (no weights): the latest per member is kept for the live view, and a
         training or uploading report also marks the round's timeline and adds a sample for its charts. Stale (409) for a node that
         is not a member or a lease epoch that is not its own, and for a training or uploading report about a round that is closed
@@ -652,7 +697,7 @@ class Coordinator:
             entry = self.members.get(node) or self.pending.get(node)
             if entry is None:
                 raise Stale(f"{node} is not a member of this run.")
-            if epoch != entry["epoch"]:
+            if self._lease(term, epoch) != (entry["term"], entry["epoch"]):
                 raise Stale(f"Stale lease epoch {epoch} for {node}: the current one is {entry['epoch']}.")
             now, current = self.clock(), self.current
             report = self.reports.setdefault(node, {"samples": [], "sample_round": None})
@@ -681,7 +726,7 @@ class Coordinator:
             raise KeyError(shard)
         return shard_blob(self.train, int(self.bounds[shard]), int(self.bounds[shard + 1]))
 
-    def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0):
+    def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0, term=None):
         """Take a member's pseudo-gradient for the open round. Stale is raised (409) for any other round or generation, a
         member that is not in the round, a lease epoch that is not the member's, or a second contribution."""
         with self.cond:
@@ -689,7 +734,7 @@ class Coordinator:
             self._advance()
             current = self.current
             try:
-                self._admit(current, number, node, generation, epoch)
+                self._admit(current, number, node, generation, epoch, term)
             except Stale as exc:
                 self._event("stale", node, number, f"A change from {node} for round {number} was refused: {exc}")
                 raise
@@ -707,7 +752,7 @@ class Coordinator:
             self._advance()
             self.cond.notify_all()
 
-    def _admit(self, current, number, node, generation, epoch):
+    def _admit(self, current, number, node, generation, epoch, term=None):
         if current is None or current.number != number or not current.open:
             raise Stale(f"Round {number} is closed (the open round is {current.number if current else 'none'}).")
         if generation != current.generation:
@@ -715,7 +760,7 @@ class Coordinator:
         entry = self.members.get(node)
         if node not in current.members or entry is None:
             raise Stale(f"{node} is not a member of round {number}.")
-        if epoch != entry["epoch"]:
+        if self._lease(term, epoch) != (entry["term"], entry["epoch"]):
             raise Stale(f"Stale lease epoch {epoch} for {node}: the current one is {entry['epoch']}.")
         if node in current.contributions:
             raise Stale(f"{node} already contributed to round {number}.")
@@ -849,7 +894,7 @@ class Coordinator:
         checkpoint.update({"weight::" + k: v for k, v in self.theta.items()})
         self._write_npz(self.directory / "last.npz", checkpoint)
         atomic_json(self.directory / "diloco.json", {
-            "format": FORMAT, "run": self.run, "round": self.next_round, "generation": self.generation, "state_file": self.state_file,
+            "format": FORMAT, "run": self.run, "term": self.term, "round": self.next_round, "generation": self.generation, "state_file": self.state_file,
             "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
             "members": closed.members, "shard_deal": closed.deal, "step_time": self.step_time, "history": self.history,
             "finished": self.finished})
@@ -950,6 +995,7 @@ class Member:
         self.base = f"/collective/{run}"
         self.train, self.val, self.sampler = Windows(), Windows(), random.Random(0)
         self.started, self.finished, self.fenced = False, False, False
+        self.term, self.superseded = 0, 0  # the coordinator's term (0: not learnt yet); superseded: a higher term seen, so nothing more goes to this coordinator
         self.loss = None
         self.shards = {}
         # what it tells the coordinator (POST /progress): the phase, its step in the round and the latest loss and speed
@@ -1022,7 +1068,7 @@ class Member:
             return
         number, weights = self.round, {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         delta = {name: self.anchor[name] - weights[name] for name in self.anchor}
-        params = {"node": self.node, "generation": entered.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
+        params = {"term": self.term, "node": self.node, "generation": entered.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
                   "steps": step - self.first_step, "seconds": self.clock() - self.began}
         if self.loss is not None:
             params["loss"] = self.loss
@@ -1060,15 +1106,17 @@ class Member:
     def report(self):
         """Send one progress report (no weights). A report that fails, for any reason, is dropped: it never raises, and never stops
         the training."""
-        if not self.progress or self.report_round is None:
+        if not self.progress or self.report_round is None or self.superseded:
             return False
         step, phase = self.round_step, self.phase
         body = {"node": self.node, "generation": getattr(self, "generation", self.info["generation"]), "epoch": self.epoch,
                 "round": self.report_round, "phase": phase, "step": step, "loss": self.live["loss"],
                 "tokens_per_second": self.live["tokens_per_second"]}
         try:
-            self.client.post_json(f"{self.base}/progress", body, timeout=PROGRESS_TIMEOUT)
-        except Exception:  # noqa: BLE001 - a stale 409, an unreachable coordinator, a timeout: the report is only a courtesy
+            self._seen(self.client.post_json(f"{self.base}/progress", body, self._q(), timeout=PROGRESS_TIMEOUT))
+        except Exception as exc:  # noqa: BLE001 - a stale 409, an unreachable coordinator, a timeout: the report is only a courtesy
+            if hasattr(exc, "detail"):
+                self._refused(exc)
             return False
         self.reported_step, self.reported_phase = step, phase
         return True
@@ -1085,21 +1133,50 @@ class Member:
             self.report()
             last = time.monotonic()
 
+    # -- terms
+    def follow(self, term):
+        """A term above this member's own has been seen (in an answer, or by whoever watches the run's claims, #361): the
+        coordinator it talks to is an old one. Nothing more is sent to it, and the member stops (it rejoins the new coordinator)."""
+        if term > max(self.term, self.superseded):
+            self.superseded, self.fenced = term, True
+            self.emit({"type": "info", "text": f"Term {term} exists (this member is at term {self.term}): no longer sending to the coordinator it joined."})
+            self.wake.set()
+
+    def _seen(self, answer):
+        if isinstance(answer, dict) and isinstance(answer.get("term"), int) and self.term:
+            self.follow(answer["term"])
+        return answer
+
+    def _refused(self, exc):
+        """A 409 for a term that is not the coordinator's: when it names a higher one, follow it."""
+        found = re.search(r"at term (\d+)", exc.detail) if exc.status == 409 and exc.detail.startswith(TERM_STALE) else None
+        if found:
+            self.follow(int(found.group(1)))
+
+    def _q(self, params=None):
+        return {**(params or {}), "term": self.term}
+
     # -- talking to the coordinator
     def _call(self, call):
-        """Run a client call, waiting for the coordinator to come back if it cannot be reached (a restart) for up to `patience`."""
+        """Run a client call, waiting for the coordinator to come back if it cannot be reached (a restart) for up to `patience`.
+        Once a higher term has been seen it sends nothing: the call is a 409 without leaving this process."""
         from studio_peer import PeerError
         end = self.clock() + self.patience
         while True:
+            if self.superseded:
+                raise PeerError(f"{TERM_STALE} {self.term}: the run is at term {self.superseded}.", status=409,
+                                detail=f"{TERM_STALE} {self.term}: the run is at term {self.superseded}.")
             try:
-                return call()
+                return self._seen(call())
             except PeerError as exc:
+                self._refused(exc)
                 if exc.status is not None or self.clock() >= end or self.stop.is_set():
                     raise
                 self.sleep(2.)
 
     def join(self):
-        self.info = self._call(lambda: self.client.post_json(f"{self.base}/join", {"node": self.node, "epoch": self.epoch}))
+        self.info = self._call(lambda: self.client.post_json(f"{self.base}/join", {"node": self.node, "epoch": self.epoch}, self._q()))
+        self.term = self.info["term"]
         from studio_modules.tokenizer.byte import Tokenizer
         self.tokenizer = Tokenizer.restore(self.info["tokenizer"])
         self.report_round = self.info["round"]
@@ -1127,7 +1204,7 @@ class Member:
                 self.report_round = want
                 self._phase("waiting")
             try:
-                view = self._call(lambda: self.client.get_json(f"{self.base}/rounds/{want}", {"node": self.node, "wait": self.wait},
+                view = self._call(lambda: self.client.get_json(f"{self.base}/rounds/{want}", self._q({"node": self.node, "wait": self.wait}),
                                                                timeout=self.wait + 15))
             except PeerError as exc:
                 if exc.status == 409:
@@ -1147,7 +1224,7 @@ class Member:
                 if not quiet:
                     self._phase("downloading")
                 try:
-                    theta = decode_arrays(self._call(lambda: self.client.get_bytes(f"{self.base}/params", {"round": want, "node": self.node})))
+                    theta = decode_arrays(self._call(lambda: self.client.get_bytes(f"{self.base}/params", self._q({"round": want, "node": self.node}))))
                     shards = [int(s) for s in view["shards"]]
                     self._fetch(shards)
                 except PeerError as exc:
@@ -1161,7 +1238,7 @@ class Member:
     def _fetch(self, wanted):
         for shard in wanted:
             if shard not in self.shards:
-                blob = self._call(lambda shard=shard: self.client.get_bytes(f"{self.base}/shards/{shard}"))
+                blob = self._call(lambda shard=shard: self.client.get_bytes(f"{self.base}/shards/{shard}", self._q()))
                 self.shards[shard] = install_shard(self.shard_dir, shard, blob, self.info["vocab_size"])
 
     def _send(self, step, trained_tokens, model):
@@ -1170,7 +1247,7 @@ class Member:
         weights = model.state_arrays()
         delta = {name: self.theta[name] - weights[name].astype(np.float32) for name in self.theta}
         body = encode_arrays(delta, self.info["delta_dtype"])
-        params = {"node": self.node, "generation": self.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
+        params = {"term": self.term, "node": self.node, "generation": self.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
                   "steps": step - self.first_step, "seconds": self.clock() - self.began}
         if self.loss is not None:
             params["loss"] = self.loss
@@ -1188,7 +1265,7 @@ class Member:
         except PeerError as exc:
             if exc.status != 409:
                 raise
-            if "lease epoch" in exc.detail:
+            if "lease epoch" in exc.detail or self.superseded:
                 self.emit({"type": "info", "text": f"Fenced: {exc.detail}"})
                 self.fenced = True
             else:  # late, or the membership moved on: this round's work is dropped; take the new theta and carry on
@@ -1196,8 +1273,10 @@ class Member:
 
     def leave(self):
         from studio_peer import PeerError
+        if self.superseded:  # the old coordinator is not written to any more
+            return
         try:
-            self.client.post_json(f"{self.base}/leave", {"node": self.node, "generation": getattr(self, "generation", 0), "epoch": self.epoch})
+            self.client.post_json(f"{self.base}/leave", {"node": self.node, "generation": getattr(self, "generation", 0), "epoch": self.epoch}, self._q())
         except (PeerError, AttributeError):
             pass
 

@@ -138,9 +138,32 @@ class Merge(unittest.TestCase):
                          (False, "gpu-box", True, 100., ["p1"]))
         self.assertIn("did not answer", gone.info.error)
         self.assertEqual([(r.id, r.stale) for r in cq.merge(OWN, [gone], [])], [("p1", True)])
-        net.peers["gpu"] = peer("gpu-box")  # back, with an empty queue: the old rows go
+        net.peers["gpu"], clock[0] = peer("gpu-box"), 220.  # back, with an empty queue: the old rows go
         [back] = peers.survey(["gpu"], net, 1)
         self.assertEqual((back.info.online, back.stale, back.jobs), (True, False, ()))
+
+    def test_a_silent_peer_is_asked_less_and_less_often_and_by_node_alone(self):
+        net = Net(gpu=DOWN)
+        clock = [100.]
+        peers = cq.Peers(clock=lambda: clock[0])
+        for now, calls in ((100., 3), (105., 0), (110., 1), (120., 0), (130., 1), (170., 1), (230., 1), (260., 0)):
+            clock[0], before = now, len(net.calls)
+            [peer_] = peers.survey(["gpu"], net, 1)
+            self.assertEqual(len(net.calls) - before, calls, now)
+            self.assertFalse(peer_.info.online)
+            self.assertIn("did not answer", peer_.info.error)
+        self.assertEqual({path for _, path, _ in net.calls[3:]}, {"node"})  # a probe asks /node only
+        net.peers["gpu"], clock[0], before = peer("gpu-box", job("p1")), 290., len(net.calls)
+        [back] = peers.survey(["gpu"], net, 1)
+        self.assertEqual((back.info.online, [j["id"] for j in back.jobs], len(net.calls) - before), (True, ["p1"], 3))
+        [again] = peers.survey(["gpu"], net, 1)  # answered: asked in full on every survey again
+        self.assertEqual(len(net.calls) - before, 6)
+
+    def test_a_gateway_error_without_a_body_says_the_app_is_not_behind_the_proxy(self):
+        net = Net(gpu=PeerError("gpu answered 502 to GET /node: ", status=502, detail=""))
+        [peer_] = cq.Peers().survey(["gpu"], net, 1)
+        self.assertIn("tailscale serve", peer_.info.error)
+        self.assertIn("direct address", peer_.info.error)
 
     def test_a_peer_that_never_answered_has_no_rows_and_one_removed_from_the_list_is_forgotten(self):
         net = Net(gpu=peer("gpu-box", job("p1")), down=DOWN)

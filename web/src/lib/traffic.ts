@@ -193,14 +193,17 @@ export function filterChoices(records: TrafficRecord[]): { methods: string[]; no
 const shell = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /**
- * A curl command for a record, against `origin`. Secrets were masked by the server, so the token header is the placeholder
- * $GROUNDWORK_TOKEN. A JSON body is repeated as the server kept it; a binary or oversize body is left out, with a comment.
+ * A curl command for a record, against `base` (the API's absolute URL). Secrets in the record were masked by the server, so
+ * the token header carries this browser's own token, and is left out when it has none (a node reached through
+ * `tailscale serve` needs none). A JSON body is repeated as the server kept it; a binary or oversize body is left out, with
+ * a comment.
  */
-export function curl(record: TrafficRecord, origin: string): string {
+export function curl(record: TrafficRecord, base: string, token = ""): string {
   const query = Object.entries(record.request.query).flatMap(([key, value]) =>
     (Array.isArray(value) ? value : [value]).map((v) => `${encodeURIComponent(key)}=${encodeURIComponent(String(v))}`));
-  const url = `${origin}${record.path}${query.length ? `?${query.join("&")}` : ""}`;
-  const lines = [`curl -X ${record.method} ${shell(url)}`, `  -H 'X-Groundwork-Token: '"$GROUNDWORK_TOKEN"`];
+  const url = `${base}${record.path}${query.length ? `?${query.join("&")}` : ""}`;
+  const lines = [`curl -X ${record.method} ${shell(url)}`];
+  if (token) lines.push(`  -H ${shell(`X-Groundwork-Token: ${token}`)}`);
   const body = record.request.body;
   if (body?.json !== undefined) lines.push(`  -H 'Content-Type: application/json'`, `  --data ${shell(JSON.stringify(body.json))}`);
   else if (body) lines.push(`  # the ${body.binary ? "binary" : "oversize"} ${body.type || "body"} (${bytes(body.bytes)}) is not kept`);
@@ -289,4 +292,9 @@ export function pushAlert(alerts: Alert[], next: Omit<Alert, "key" | "count">, l
   const earlier = alerts.find((a) => a.key === key);
   const added: Alert = { ...next, key, count: (earlier?.count ?? 0) + 1 };
   return [added, ...alerts.filter((a) => a.key !== key)].slice(0, limit);
+}
+
+/** The API's absolute base URL: `NEXT_PUBLIC_API_URL` when it is absolute, otherwise that path (or none) on the page's origin. */
+export function absoluteBase(base: string, href: string): string {
+  return new URL(base || "/", href).href.replace(/\/$/, "");
 }
