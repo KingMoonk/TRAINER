@@ -17,6 +17,7 @@ the tailnet itself and listing nodes; this page covers one machine.
 | `--bind HOST` | The address to listen on. Default `127.0.0.1`: only this machine, and `tailscale serve` (below) reaches it from there. |
 | `--port N` | The port. Use `8787`, the port `studio_cluster.DEFAULT_PORT` assumes when a node is listed as a bare name. |
 | `--allow-origin ORIGIN` | A web origin (the Vercel site, `https://trainer.example.vercel.app`) allowed to call the API from a browser. Repeat it for several, or list them comma-separated in the `STUDIO_API_ALLOW_ORIGINS` environment variable. Default: none (below). |
+| `--allow-host NAME` | A host name the API answers to besides the defaults (below): a custom DNS name or a reverse proxy's name. Repeat it for several. |
 | `--fake` | Serve `FakeServices` (empty, in-memory data) instead of the workspace, for frontend work. Needs no workspace and is always open. |
 | `--dump-openapi FILE` | Write the OpenAPI schema to `FILE` and exit. This is how `web/openapi.json` is made (see `web/README.md`). |
 
@@ -48,6 +49,15 @@ The allow-list lives in `data/workspace.json` and is read when the API starts:
 
 Both keys are optional (`allowTags` defaults to `["tag:trainer"]`, `allowUsers` to nobody). A bad value stops the API at start
 with a sentence saying which key to fix.
+
+### Host names
+
+Every request and websocket must carry a `Host` header naming this node; anything else gets `421`. This stops DNS rebinding: a
+web page that rebinds its own name to `127.0.0.1` could otherwise call a loopback node and forge `Tailscale-User-Login`. Allowed,
+with any port: `localhost`, any IP address (`127.0.0.1`, `[::1]`, the tailnet address other nodes may use), this machine's name,
+the node's Tailscale name and short name (read once at start with `tailscale status --json`, skipped if `tailscale` is missing or
+slow), the `--bind` address, and each `--allow-host`. Other nodes address this one by the name in their `studioConfig.nodes`
+entry, so list the node under its machine name, Tailscale name or IP; a node reached under any other name needs `--allow-host`.
 
 ### Funnel and a page on another origin (optional)
 
