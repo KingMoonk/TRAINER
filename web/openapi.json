@@ -1522,6 +1522,145 @@
         "title": "Expectations",
         "type": "object"
       },
+      "Experiment": {
+        "properties": {
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "tries": {
+            "items": {
+              "$ref": "#/components/schemas/Try"
+            },
+            "title": "Tries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "question",
+          "tries"
+        ],
+        "title": "Experiment",
+        "type": "object"
+      },
+      "ExperimentBody": {
+        "properties": {
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          }
+        },
+        "required": [
+          "choices"
+        ],
+        "title": "ExperimentBody",
+        "type": "object"
+      },
+      "ExplainBody": {
+        "properties": {
+          "block": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the block a sub-layer was clicked in; absent for a model-wide part or every block",
+            "title": "Block"
+          },
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "part": {
+            "enum": [
+              "embedding",
+              "position",
+              "mixer",
+              "channel",
+              "norm",
+              "final_norm",
+              "head"
+            ],
+            "title": "Part",
+            "type": "string"
+          },
+          "pieces": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the example sentence cut by the draft's word list; absent while the lists are read",
+            "title": "Pieces"
+          },
+          "sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentence"
+          }
+        },
+        "required": [
+          "choices",
+          "part"
+        ],
+        "title": "ExplainBody",
+        "type": "object"
+      },
+      "Explained": {
+        "properties": {
+          "example": {
+            "title": "Example",
+            "type": "string"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/PartLink"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "module": {
+            "title": "Module",
+            "type": "string"
+          },
+          "module_text": {
+            "title": "Module Text",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "what": {
+            "title": "What",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "what",
+          "module",
+          "module_text",
+          "example",
+          "links"
+        ],
+        "title": "Explained",
+        "type": "object"
+      },
       "ExportRow": {
         "properties": {
           "gguf_problem": {
@@ -3256,6 +3395,12 @@
             "title": "Number",
             "type": "integer"
           },
+          "question": {
+            "default": "",
+            "description": "the starting question the version was made to ask, when it was",
+            "title": "Question",
+            "type": "string"
+          },
           "state": {
             "enum": [
               "attention",
@@ -3530,6 +3675,29 @@
           }
         },
         "title": "PairSaved",
+        "type": "object"
+      },
+      "PartLink": {
+        "properties": {
+          "block": {
+            "title": "Block",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "route": {
+            "title": "Route",
+            "type": "string"
+          }
+        },
+        "required": [
+          "route",
+          "label",
+          "block"
+        ],
+        "title": "PartLink",
         "type": "object"
       },
       "Parts": {
@@ -7191,6 +7359,89 @@
         "title": "TraceRequest",
         "type": "object"
       },
+      "Tried": {
+        "properties": {
+          "choices": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Choices"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the current version's choices with that one change; null when it cannot be tried"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "choices",
+          "why",
+          "question"
+        ],
+        "title": "Tried",
+        "type": "object"
+      },
+      "Try": {
+        "properties": {
+          "key": {
+            "enum": [
+              "heads",
+              "words",
+              "depth",
+              "width"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "why": {
+            "description": "why it cannot be tried here; empty when it can",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "why"
+        ],
+        "title": "Try",
+        "type": "object"
+      },
+      "TryBody": {
+        "properties": {
+          "choices": {
+            "$ref": "#/components/schemas/Choices"
+          },
+          "key": {
+            "enum": [
+              "heads",
+              "words",
+              "depth",
+              "width"
+            ],
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "choices",
+          "key"
+        ],
+        "title": "TryBody",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -10402,6 +10653,136 @@
           }
         },
         "summary": "Expectations",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/experiment": {
+      "post": {
+        "description": "experiment_draft: the draft that puts one starting question to the current version, and the question that goes with it.",
+        "operationId": "experiment_design_experiment_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TryBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tried"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Experiment",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/experiments": {
+      "post": {
+        "description": "experiment_rows: the starting questions for the current version's choices, each with its ways to try it.",
+        "operationId": "experiments_design_experiments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExperimentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Experiment"
+                  },
+                  "title": "Response Experiments Design Experiments Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Experiments",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/explain": {
+      "post": {
+        "description": "explain: what the side panel says about one part of the draft, with the example sentence worked through it.",
+        "operationId": "explain_design_explain_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplainBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Explained"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Explain",
         "tags": [
           "design"
         ]

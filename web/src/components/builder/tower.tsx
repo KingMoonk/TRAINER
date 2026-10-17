@@ -20,6 +20,8 @@ import {
   partName,
   type BlockView,
   type Choices,
+  type Explaining,
+  type Part,
   type Registry,
   type Slot,
   type Spec,
@@ -81,12 +83,38 @@ function Picker({ registry, slot, block, value, before, writeBase, draft, was, o
   );
 }
 
-function Row({ label, tip, children, className }: { label: string; tip?: string; children: React.ReactNode; className?: string }) {
+type Explain = { explaining: Explaining | null; onExplain: (part: Part, block: number | null) => void };
+
+const isExplained = (explaining: Explaining | null, part: Part, block: number | null) => explaining?.part === part && explaining.block === block;
+
+/** A part's name; clicking it opens the explain panel on that part. */
+function PartName({ part, block, label, tip, className, explain }: { part: Part; block: number | null; label: string; tip?: string; className?: string; explain: Explain }) {
+  const on = isExplained(explain.explaining, part, block);
+  return (
+    <button
+      type="button"
+      className={cn("rounded-sm border border-transparent px-1 text-left text-sm hover:underline", on && "selected-box", className)}
+      title={tip}
+      aria-pressed={on}
+      aria-label={fill(BUILDER.explain_open, { part: label })}
+      data-testid={`explain-${part}${block === null ? "" : `-${block}`}`}
+      onClick={() => explain.onExplain(part, block)}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Row({ label, tip, children, className, part, explain }: { label: string; tip?: string; children: React.ReactNode; className?: string; part?: Part; explain?: Explain }) {
   return (
     <div className={cn("flex flex-wrap items-center gap-3 rounded-md border px-3 py-2", className)}>
-      <span className="w-28 shrink-0 text-sm font-medium" title={tip}>
-        {label}
-      </span>
+      {part && explain ? (
+        <PartName part={part} block={null} label={label} tip={tip} className="w-28 shrink-0 font-medium" explain={explain} />
+      ) : (
+        <span className="w-28 shrink-0 text-sm font-medium" title={tip}>
+          {label}
+        </span>
+      )}
       {children}
     </div>
   );
@@ -103,9 +131,10 @@ type TowerProps = {
   onPick: (slot: Slot, short: string, block: number | null) => void;
   onResize: (n: number) => void;
   onWords: (v: number) => void;
-};
+} & Explain;
 
-export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, was, onPick, onResize, onWords }: TowerProps) {
+export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, was, onPick, onResize, onWords, explaining, onExplain }: TowerProps) {
+  const explain = { explaining, onExplain };
   const picker = (slot: Slot, block: number | null, value: string, before: string | null) => (
     <Picker registry={registry} slot={slot} block={block} value={value} before={before} writeBase={writeBase} draft={draft} was={was} onPick={onPick} />
   );
@@ -113,16 +142,16 @@ export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, w
   const normChanged = draft.M.norm !== cur.M.norm;
   return (
     <section className="flex flex-col gap-2" aria-label={BUILDER.h1}>
-      <Row label={BUILDER.next_word} tip={BUILDER.next_word_desc}>
+      <Row label={BUILDER.next_word} tip={BUILDER.next_word_desc} part="head" explain={explain}>
         {picker("head", null, draft.M.head, cur.M.head)}
       </Row>
-      <Row label={BUILDER.final_norm} tip={BUILDER.final_norm_tip}>
+      <Row label={BUILDER.final_norm} tip={BUILDER.final_norm_tip} part="final_norm" explain={explain}>
         <span className={cn("text-sm", normChanged && AMBER)}>{moduleName(registry, "norm", draft.M.norm)}</span>
         <span className="text-xs text-muted-foreground">{BUILDER.same_as_blocks}</span>
       </Row>
       <div className="flex flex-col gap-1" data-testid="blocks">
         {blocks.map((view) => (
-          <Block key={view.index} view={view} registry={registry} draft={draft} picker={picker} />
+          <Block key={view.index} view={view} registry={registry} draft={draft} picker={picker} explain={explain} />
         ))}
       </div>
       <Row label={BUILDER.blocks} tip={BUILDER.blocks_desc}>
@@ -137,10 +166,10 @@ export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, w
         </Button>
         {draft.L !== cur.L && <span className="text-xs text-muted-foreground">{fill(BUILDER.was, { name: String(cur.L) })}</span>}
       </Row>
-      <Row label={partName("position")} tip={registry.slots.find((s) => s.slot === "position")?.tip}>
+      <Row label={partName("position")} tip={registry.slots.find((s) => s.slot === "position")?.tip} part="position" explain={explain}>
         {picker("position", null, draft.M.position, cur.M.position)}
       </Row>
-      <Row label={partName("embedding")} tip={registry.slots.find((s) => s.slot === "embedding")?.tip}>
+      <Row label={partName("embedding")} tip={registry.slots.find((s) => s.slot === "embedding")?.tip} part="embedding" explain={explain}>
         {picker("embedding", null, draft.M.embedding, cur.M.embedding)}
       </Row>
       <Row label={BUILDER.your_text_title}>
@@ -194,9 +223,10 @@ type BlockProps = {
   registry: Registry;
   draft: Choices;
   picker: (slot: Slot, block: number | null, value: string, before: string | null) => React.ReactNode;
+  explain: Explain;
 };
 
-function Block({ view, registry, draft, picker }: BlockProps) {
+function Block({ view, registry, draft, picker, explain }: BlockProps) {
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState<"all" | "one">("all");
   const { index: i, parts, own, added, removed, tag, before } = view;
@@ -214,8 +244,28 @@ function Block({ view, registry, draft, picker }: BlockProps) {
           {showDetail ? "▾" : "▸"}
         </Button>
         <span className={cn("w-16 text-sm font-medium", removed && "text-muted-foreground line-through")}>Block {i + 1}</span>
-        {heads > 0 && <span className="text-xs text-part-attention">{"●".repeat(heads)}</span>}
-        {width > 0 && <span className="h-2 rounded-sm bg-part-mlp" style={{ width }} aria-hidden="true" />}
+        {heads > 0 && (
+          <button
+            type="button"
+            className={cn("rounded-sm border border-transparent px-1 text-xs text-part-attention", isExplained(explain.explaining, "mixer", i) && "selected-box")}
+            aria-label={fill(BUILDER.explain_open, { part: `${partName("mixer")} · block ${i + 1}` })}
+            data-testid={`explain-heads-${i}`}
+            onClick={() => explain.onExplain("mixer", i)}
+          >
+            {"●".repeat(heads)}
+          </button>
+        )}
+        {width > 0 && (
+          <button
+            type="button"
+            className={cn("rounded-sm border border-transparent px-1 py-1", isExplained(explain.explaining, "channel", i) && "selected-box")}
+            aria-label={fill(BUILDER.explain_open, { part: `${partName("channel")} · block ${i + 1}` })}
+            data-testid={`explain-room-${i}`}
+            onClick={() => explain.onExplain("channel", i)}
+          >
+            <span className="block h-2 rounded-sm bg-part-mlp" style={{ width }} aria-hidden="true" />
+          </button>
+        )}
         <span className="text-xs text-muted-foreground">
           {moduleName(registry, "mixer", parts.mixer)} · {moduleName(registry, "channel", parts.channel)}
         </span>
@@ -238,8 +288,8 @@ function Block({ view, registry, draft, picker }: BlockProps) {
               </div>
             ) : (
               <div key={line} className="flex flex-wrap items-center gap-3">
-                <span className="w-28 shrink-0 text-sm" title={registry.slots.find((s) => s.slot === slot)?.tip}>
-                  {partName(slot)}
+                <span className="w-28 shrink-0">
+                  <PartName part={slot} block={block} label={partName(slot)} tip={registry.slots.find((s) => s.slot === slot)?.tip} explain={explain} />
                 </span>
                 {picker(slot, block, parts[slot], before?.[slot] ?? null)}
                 {draft.O.some((o) => o.block === i && o.slot === slot) && <span className={cn("text-xs", VIOLET)}>{BUILDER.only_here}</span>}

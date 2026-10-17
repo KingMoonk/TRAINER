@@ -890,6 +890,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/experiment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Experiment
+         * @description experiment_draft: the draft that puts one starting question to the current version, and the question that goes with it.
+         */
+        post: operations["experiment_design_experiment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Experiments
+         * @description experiment_rows: the starting questions for the current version's choices, each with its ways to try it.
+         */
+        post: operations["experiments_design_experiments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/design/explain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Explain
+         * @description explain: what the side panel says about one part of the draft, with the example sentence worked through it.
+         */
+        post: operations["explain_design_explain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/design/guess-check": {
         parameters: {
             query?: never;
@@ -3549,6 +3609,53 @@ export interface components {
             /** Lines */
             lines: string[];
         };
+        /** Experiment */
+        Experiment: {
+            /** Question */
+            question: string;
+            /** Tries */
+            tries: components["schemas"]["Try"][];
+        };
+        /** ExperimentBody */
+        ExperimentBody: {
+            choices: components["schemas"]["Choices"];
+        };
+        /** ExplainBody */
+        ExplainBody: {
+            /**
+             * Block
+             * @description the block a sub-layer was clicked in; absent for a model-wide part or every block
+             */
+            block?: number | null;
+            choices: components["schemas"]["Choices"];
+            /**
+             * Part
+             * @enum {string}
+             */
+            part: "embedding" | "position" | "mixer" | "channel" | "norm" | "final_norm" | "head";
+            /**
+             * Pieces
+             * @description the example sentence cut by the draft's word list; absent while the lists are read
+             */
+            pieces?: string[] | null;
+            /** Sentence */
+            sentence?: string | null;
+        };
+        /** Explained */
+        Explained: {
+            /** Example */
+            example: string;
+            /** Links */
+            links: components["schemas"]["PartLink"][];
+            /** Module */
+            module: string;
+            /** Module Text */
+            module_text: string;
+            /** Title */
+            title: string;
+            /** What */
+            what: string;
+        };
         /** ExportRow */
         ExportRow: {
             /**
@@ -4327,6 +4434,12 @@ export interface components {
             /** Number */
             number: number;
             /**
+             * Question
+             * @description the starting question the version was made to ask, when it was
+             * @default
+             */
+            question: string;
+            /**
              * State
              * @enum {string}
              */
@@ -4421,6 +4534,15 @@ export interface components {
             record?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** PartLink */
+        PartLink: {
+            /** Block */
+            block: number;
+            /** Label */
+            label: string;
+            /** Route */
+            route: string;
         };
         /** Parts */
         Parts: {
@@ -5965,6 +6087,39 @@ export interface components {
             text: string;
             /** Version */
             version?: number | null;
+        };
+        /** Tried */
+        Tried: {
+            /** @description the current version's choices with that one change; null when it cannot be tried */
+            choices: components["schemas"]["Choices"] | null;
+            /** Question */
+            question: string;
+            /** Why */
+            why: string;
+        };
+        /** Try */
+        Try: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "heads" | "words" | "depth" | "width";
+            /** Label */
+            label: string;
+            /**
+             * Why
+             * @description why it cannot be tried here; empty when it can
+             */
+            why: string;
+        };
+        /** TryBody */
+        TryBody: {
+            choices: components["schemas"]["Choices"];
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "heads" | "words" | "depth" | "width";
         };
         /** ValidationError */
         ValidationError: {
@@ -7854,6 +8009,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Expectations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    experiment_design_experiment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TryBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tried"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    experiments_design_experiments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExperimentBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Experiment"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    explain_design_explain_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExplainBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Explained"];
                 };
             };
             /** @description Validation Error */

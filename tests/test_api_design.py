@@ -134,6 +134,31 @@ class DesignRouterTests(ApiCase):
             self.assertEqual(notebook["status"], "done", notebook)
             rows = D.notebook([old, new], speeds)
             self.assertEqual(notebook["result"], {"rows": rows, "lines": D.notebook_lines(rows)})
+        self.parts_routes(base, cur)
+
+    def parts_routes(self, base, cur):
+        sentence = "The cat sat."
+        pieces = ["The", " cat", " sat", "."]
+        said = self.call("POST", "/design/explain", json={"choices": cur, "part": "embedding", "pieces": pieces, "sentence": sentence})
+        want = D.explain_for("embedding", D.read_spec(base), None, pieces, sentence)
+        self.assertEqual({k: said[k] for k in ("title", "what", "module", "module_text", "example")}, {k: want[k] for k in ("title", "what", "module", "module_text", "example")})
+        self.assertIn(sentence, said["example"])
+        self.assertEqual([(link["route"], link["block"]) for link in said["links"]], [(route, at) for route, _label, at in want["links"]])
+        late = self.call("POST", "/design/explain", json={"choices": cur, "part": "mixer", "block": 99})  # past the last block: the last one
+        self.assertIn(f"block {cur['L']}", late["title"])
+        self.call("POST", "/design/explain", 422, json={"choices": cur, "part": "tokenizer"})
+
+        rows = self.call("POST", "/design/experiments", json={"choices": cur})
+        self.assertEqual([(r["question"], [(t["key"], t["label"], t["why"]) for t in r["tries"]]) for r in rows], D.experiment_rows(D.read_spec(base)))
+        self.assertEqual([[t["key"] for t in r["tries"]] for r in rows][-1], ["depth", "width"])  # depth and width ask one question
+        deeper = self.call("POST", "/design/experiment", json={"choices": cur, "key": "depth"})
+        self.assertEqual((deeper["choices"]["L"], deeper["why"], deeper["question"]), (cur["L"] + 1, "", D.T["exp_depth"]))
+        words = self.call("POST", "/design/experiment", json={"choices": cur, "key": "words"})
+        self.assertEqual(words["choices"]["V"], 1 if cur["V"] == 0 else 0)
+        flat = {**cur, "M": {**cur["M"], "mixer": next(m.short for m in D.registry.for_slot("mixer") if "heads" not in D.fields_of("mixer", m.short))}}
+        none = self.call("POST", "/design/experiment", json={"choices": flat, "key": "heads"})
+        self.assertEqual((none["choices"], none["why"]), (None, D.T["exp_no_heads"]))
+        self.call("POST", "/design/experiment", 422, json={"choices": cur, "key": "luck"})
 
     def test_learning_routes_reject_bad_inputs_and_handle_empty_history(self):
         self.services._versions.clear()

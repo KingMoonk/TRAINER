@@ -113,6 +113,30 @@ export const BUILDER = {
   text_sets_failed: "Your text sets could not be read, so these changes cannot be split here: {reason}",
   split_partial: "Saved {saved}; queued {queued} of {total} jobs. {reason}",
   guess_checking: "Checking your guess…",
+  predict_question: "Your question: “{question}”",
+  // the lab notebook, the explain panel and the starting questions (studio_ia/copy.py, #83)
+  notebook: "Lab notebook · one line per version",
+  notebook_tip:
+    "What each version changed, what that did to held-back error, step time and memory, and whether your guess was right. Error is measured; memory is estimated from the design; step time is measured when both runs logged their speed.",
+  notebook_empty: "Save and train a version to start the notebook.",
+  notebook_reading: "Reading the runs…",
+  notebook_failed: "The notebook could not be read:",
+  notebook_version: "Version {n}",
+  notebook_asked: "asked “{question}”",
+  explain: "What this part does",
+  explain_hint:
+    "Click any part of the model to read what it does and see it work on the example sentence. In a block, click its heads (the dots) or its thinking-room bar.",
+  explain_example: "On the example sentence",
+  explain_see: "See it working:",
+  explain_close: "Close",
+  explain_failed: "This part could not be explained:",
+  explain_loading: "Reading the part…",
+  explain_open: "Explain {part}",
+  experiments: "Starting questions",
+  experiments_tip:
+    "Each one sets up a single change from the current version, so what training shows is the effect of that change alone. The question is saved with the version and shows in the lab notebook.",
+  experiments_failed: "The starting questions could not be read:",
+  exp_asking: "You are asking: “{question}”",
 } as const;
 
 /** The label of a guess question (`key` is the server's: error, step or memory). */
