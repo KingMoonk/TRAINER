@@ -38,6 +38,7 @@ FORMAT = 1
 LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
 STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
+STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
 PHASES = ("downloading", "training", "uploading", "waiting")  # what a member says it is doing (POST /progress)
@@ -73,6 +74,7 @@ class Settings:
     grace_seconds: float = 120.     # after the deadline, for the member's download of theta and upload of its delta
     first_round_seconds: float = 900.  # the deadline of a round nobody has timed yet
     missed_limit: int = 3           # rounds in a row without a contribution before a member is dropped from the run
+    replicas: int = 2               # R: the lowest-ranked members keep a copy of the latest round, so it outlives the coordinator
 
     def __post_init__(self):
         if self.inner_steps < 1 or self.rounds < 1 or self.shards < 1:
@@ -81,6 +83,8 @@ class Settings:
             raise ValueError("min_members must be between 1 and max_members.")
         if self.delta_dtype not in DELTA_DTYPES:
             raise ValueError(f"delta_dtype must be one of {', '.join(DELTA_DTYPES)}.")
+        if self.replicas < 0:
+            raise ValueError("replicas must not be negative.")
         if self.outer_lr <= 0 or not 0 <= self.outer_momentum < 1:
             raise ValueError("outer_lr must be positive and outer_momentum in [0, 1).")
 
@@ -113,6 +117,11 @@ def outer_step(theta, momentum, delta, lr, mu):
         momentum[name] *= np.float32(mu)
         momentum[name] += gradient
         theta[name] -= np.float32(lr) * (gradient + np.float32(mu) * momentum[name])
+
+
+def replica_nodes(members, count):
+    """The replicas of a round: the `count` lowest-ranked of its members (a member's rank is its place in the round's list)."""
+    return list(members)[:max(0, count)]
 
 
 def deal_shards(seed, round_number, members, shard_count):
@@ -178,6 +187,24 @@ def decode_arrays(data):
             return out
     except Exception as exc:  # noqa: BLE001 - zip and numpy raise many types for a bad body
         raise ValueError(f"The body is not an .npz archive of arrays ({exc}).") from None
+
+
+def encode_state(momentum, record):
+    """A replica's per-round state as one .npz body: the outer momentum (fp32, under STATE_PREFIXES[1]) and diloco.json's bytes."""
+    buffer = io.BytesIO()
+    np.savez(buffer, **{STATE_PREFIXES[1] + name: np.asarray(value, dtype=np.float32) for name, value in momentum.items()},
+             **{STATE_FILE: np.frombuffer(record, dtype=np.uint8)})
+    return buffer.getvalue()
+
+
+def decode_state(data):
+    """(momentum, diloco.json bytes) of an encode_state body. ValueError when it is not one."""
+    try:
+        with np.load(io.BytesIO(data), allow_pickle=False) as archive:
+            momentum = {key[len(STATE_PREFIXES[1]):]: archive[key].astype(np.float32) for key in archive.files if key.startswith(STATE_PREFIXES[1])}
+            return momentum, archive[STATE_FILE].tobytes()
+    except Exception as exc:  # noqa: BLE001 - zip and numpy raise many types for a bad body
+        raise ValueError(f"The body is not a replica state archive ({exc}).") from None
 
 
 # ---- shards -----------------------------------------------------------------------------------------------------------
@@ -295,7 +322,7 @@ class Coordinator:
         self.split, self.split_hash, self.state_file, self.record = {"strategy": "lineage-v1"}, "", None, {}
         self.shard_count = max(1, min(settings.shards, len(train)))
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
-        self._params = (None, b"")
+        self._params, self._state = (None, b""), (None, b"")
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
         self.reports, self.events, self.timelines = {}, deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT)  # the live view's state
         self.event_seq, self.stage, self._last = 0, "", None  # stage: "outer_step" or "validating" while a round closes (read without the lock)
@@ -559,7 +586,9 @@ class Coordinator:
             return {**base, "state": "closed"}
         current = self.current
         if number == self.next_round and current is not None and node in current.members and node not in self.leaving:
-            return {**base, "state": "open", "generation": current.generation, "rank": current.members.index(node),
+            rank = current.members.index(node)
+            return {**base, "state": "open", "generation": current.generation, "rank": rank,
+                    "replica": node in replica_nodes(current.members, self.settings.replicas),
                     "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members)}
         return {**base, "state": "pending"}
 
@@ -594,6 +623,26 @@ class Coordinator:
             if node in self.current.members:
                 self.current.marks.setdefault(node, {}).setdefault("theta_taken", self.clock())
             return self._params[1]
+
+    def state_bytes(self, number):
+        """What a replica keeps beside theta of round `number` (the latest, `next_round`): the outer momentum, fp32, and the text of
+        diloco.json as written when the round before closed, in one .npz. Stale for any other round; LookupError before a round has
+        closed (nothing is saved yet, and theta is the seeded initialization)."""
+        with self.cond:
+            self._touch()
+            self._advance()
+            if number != self.next_round:
+                raise Stale(f"Round {number} is not the latest (it is {self.next_round}).")
+            path = self.directory / "diloco.json"
+            if not path.is_file():
+                raise LookupError("No round has closed yet.")
+            if self._state[0] != number:
+                self._state = (number, encode_state(self.momentum, path.read_bytes()))
+            return self._state[1]
+
+    def validation_bytes(self):
+        """The validation windows, as a shard is: for a replica, once per run. A replica never trains on them."""
+        return shard_blob(self.val, 0, len(self.val))
 
     def progress(self, number, node, generation, epoch, phase, step=0, loss=None, tokens_per_second=None):
         """Take a member's report of where it is in its round (no weights): the latest per member is kept for the live view, and a
@@ -835,7 +884,7 @@ class Coordinator:
     def release(self):
         """Drop the big arrays once the run is over; the files on disk are the result."""
         with self.cond:
-            self.theta, self.momentum, self._params = {}, {}, (None, b"")
+            self.theta, self.momentum, self._params, self._state = {}, {}, (None, b""), (None, b"")
 
 
 def _evaluator(model, val, size, limit=None):
@@ -900,8 +949,10 @@ class Member:
     its round, after H steps (or at the round's deadline) it sends delta and waits for the next round, whose theta it loads."""
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
-                 progress=True):
+                 progress=True, replica_dir=None):
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
+        self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
+        self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
         self.clock, self.emit, self.wait, self.patience, self.sleep = clock, emit or (lambda event: None), wait, patience, sleep
         self.base = f"/collective/{run}"
         self.train, self.val, self.sampler = Windows(), Windows(), random.Random(0)
@@ -1025,7 +1076,12 @@ class Member:
             elif view["state"] == "open":
                 self._phase("downloading")
                 try:
-                    self.theta = decode_arrays(self._call(lambda: self.client.get_bytes(f"{self.base}/params", {"round": want, "node": self.node})))
+                    body = self._call(lambda: self.client.get_bytes(f"{self.base}/params", {"round": want, "node": self.node}))
+                    self.theta = decode_arrays(body)
+                    if view.get("replica") and self.replica_dir is not None:
+                        self._replicate(want, body)
+                    elif self.replica_dir is not None:
+                        shutil.rmtree(self.replica_dir, ignore_errors=True)  # no longer a replica: a stale copy would pass for a round it is not
                     self._fetch([int(s) for s in view["shards"]])
                 except PeerError as exc:
                     if exc.status == 409:  # the round moved on while this member was downloading
@@ -1037,10 +1093,61 @@ class Member:
 
     def _fetch(self, wanted):
         for shard in wanted:
-            if shard not in self.shards:
-                blob = self._call(lambda shard=shard: self.client.get_bytes(f"{self.base}/shards/{shard}"))
-                self.shards[shard] = install_shard(self.shard_dir, shard, blob, self.info["vocab_size"])
+            self._shard(shard)
         self.train.set([self.shards[s] for s in wanted])
+
+    def _shard(self, shard):
+        """Download and install one shard unless it is held; the training thread and a replica's prefetch may both want it."""
+        with self.replica_lock:
+            lock = self.shard_locks.setdefault(shard, threading.Lock())
+        with lock:
+            if shard not in self.shards:
+                blob = self._call(lambda: self.client.get_bytes(f"{self.base}/shards/{shard}"))
+                self.shards[shard] = install_shard(self.shard_dir, shard, blob, self.info["vocab_size"])
+
+    # -- a replica
+    def _replicate(self, number, theta):
+        """Keep theta (the bytes just downloaded) of round `number` with the outer momentum and diloco.json that go with it, replacing
+        the round before; then, once, start fetching the validation windows and the shards this member lacks in the background. A round
+        that moved on while the state downloaded (409) or one before any closed (404) leaves the folder as it was."""
+        from studio_peer import PeerError
+        if number > 0:
+            try:
+                momentum, record = decode_state(self._call(lambda: self.client.get_bytes(f"{self.base}/state", {"round": number})))
+            except PeerError as exc:
+                if exc.status not in (404, 409):
+                    raise
+                return
+            self.replica_dir.mkdir(parents=True, exist_ok=True)
+            for name, data in (("theta.npz", theta), ("momentum.npz", encode_arrays(momentum)), (STATE_FILE, record)):
+                temporary = self.replica_dir / (name + ".tmp")
+                temporary.write_bytes(data)
+                temporary.replace(self.replica_dir / name)
+            self.emit({"type": "info", "text": f"Holding round {number} as a replica."})
+        if not self.prefetched and (self.prefetch is None or not self.prefetch.is_alive()):
+            self.prefetch = threading.Thread(target=self._prefetch, name=f"diloco-replica-{self.node}", daemon=True)
+            self.prefetch.start()
+
+    def _prefetch(self):
+        """The once-per-run part of a replica, off the training thread: the validation windows (kept, never trained on) and every shard
+        not held. A failure ends it; the next round that finds this member a replica starts it again."""
+        from studio_peer import PeerError
+        try:
+            self.replica_dir.mkdir(parents=True, exist_ok=True)
+            target = self.replica_dir / "validation.npz"
+            if not target.is_file():
+                data = self._call(lambda: self.client.get_bytes(f"{self.base}/validation"))
+                temporary = target.with_suffix(".tmp")
+                temporary.write_bytes(data)
+                temporary.replace(target)
+            for shard in range(self.info["shard_count"]):
+                if self.stop.is_set() or self.halt.is_set():
+                    return
+                self._shard(shard)
+            self.prefetched = True
+            self.emit({"type": "info", "text": "Replica holds the validation windows and every shard."})
+        except (PeerError, OSError):
+            return
 
     def _send(self, step, trained_tokens, model):
         from studio_peer import PeerError
@@ -1109,6 +1216,10 @@ class Member:
             self.halt.set()
             self.wake.set()
             self.leave()
+            if self.prefetch is not None:
+                self.prefetch.join(60)
+            if self.replica_dir is not None:
+                shutil.rmtree(self.replica_dir, ignore_errors=True)
             self.train.set([])
             self.shards.clear()
             gc.collect()  # a memory map keeps its file open (on Windows, undeletable) until it is collected
@@ -1117,8 +1228,10 @@ class Member:
 
 def run_member(client, run, node, epoch, root, directory, emit, stop, **options):
     """Run one member against `client` (a studio_peer.PeerClient or anything with its methods); shards are cached under
-    <root>/data/remote_shards/<run>/ and deleted at the end."""
-    member = Member(client, run, node, epoch, Path(root) / "data" / "remote_shards" / run, stop, emit=emit, **options)
+    <root>/data/remote_shards/<run>/ and deleted at the end; a replica keeps the latest round under <root>/data/replicas/<run>/ and
+    deletes it then too."""
+    member = Member(client, run, node, epoch, Path(root) / "data" / "remote_shards" / run, stop, emit=emit,
+                    replica_dir=Path(root) / "data" / "replicas" / run, **options)
     return member.work(directory, emit)
 
 

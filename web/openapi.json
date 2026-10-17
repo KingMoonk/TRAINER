@@ -6881,6 +6881,11 @@
             ],
             "title": "Rank"
           },
+          "replica": {
+            "default": false,
+            "title": "Replica",
+            "type": "boolean"
+          },
           "round": {
             "title": "Round",
             "type": "integer"
@@ -10893,6 +10898,109 @@
           }
         },
         "summary": "Shard",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/state": {
+      "get": {
+        "description": "A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.\n409 when `round` is not the latest, 404 before any round has closed.",
+        "operationId": "state_collective__run__state_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "State",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/validation": {
+      "get": {
+        "description": "The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them.",
+        "operationId": "validation_collective__run__validation_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validation",
         "tags": [
           "collective"
         ]
