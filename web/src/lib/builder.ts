@@ -4,6 +4,7 @@
 
 import { api, apiFetch, ApiError, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
+import { awaitJob } from "@/lib/job-result";
 import { BUILDER, fill } from "@/lib/copy/builder";
 
 export type Choices = components["schemas"]["Choices"];
@@ -19,6 +20,12 @@ export type Line = components["schemas"]["Line"];
 export type Expectations = components["schemas"]["Expectations"];
 export type Changes = components["schemas"]["Changes"];
 export type Option = components["schemas"]["Option"];
+export type Question = components["schemas"]["Question"];
+export type SplitStep = components["schemas"]["SplitStep"];
+export type SplitPreview = components["schemas"]["SplitPreview"];
+export type LearningCheck = components["schemas"]["LearningCheck"];
+/** A guess: {error: "lower", step: "faster"}; a question left alone has no key. Skipped is the empty guess. */
+export type Guess = Record<string, string>;
 export type Version = components["schemas"]["Version"];
 export type Slot = components["schemas"]["OptionsBody"]["slot"];
 export type Preview = components["schemas"]["ComputeBody"]["preview"];
@@ -55,6 +62,24 @@ export const design = {
     unwrap(api.POST("/design/expectations", { body: { cur, draft, base, draft_spec: draftSpec } })),
   changes: (base: Spec, draftSpec: Spec, cur: Choices, draft: Choices) =>
     unwrap(api.POST("/design/changes", { body: { base, draft_spec: draftSpec, cur, draft } })),
+  /** The dimensions worth a guess for the change from `oldSpec` to `newSpec` (design.prediction_questions). */
+  questions: (oldSpec: Spec, newSpec: Spec) => unwrap(api.POST("/design/questions", { body: { old_spec: oldSpec, new_spec: newSpec } })),
+  /** The draft as one version per change, with the chained pretrain jobs (design.split_plan, split_jobs); nothing is saved. */
+  splitPlan: (base: Spec, was: Choices, cur: Choices, draft: Choices, parentVersion: number | null, datasets: string[]) =>
+    unwrap(api.POST("/design/split-plan", { body: { base, was, cur, draft, parent_version: parentVersion, datasets } })),
+  /** Version `newVersion`'s stored guess against what version `oldVersion` and it did (a job; follow it to its result). */
+  guessCheck: async (oldVersion: number, newVersion: number, signal: AbortSignal) => {
+    const job = await unwrap(api.POST("/design/guess-check", { body: { old_version: oldVersion, new_version: newVersion }, signal }));
+    return (await awaitJob<LearningCheck | null>(job, signal, { events: true })) ?? null;
+  },
+};
+
+/** The sets of text to train on (the ids a catch-up job reads), and the queue. */
+export const queueJobs = {
+  textSets: () => unwrap(api.GET("/pretraining/text_sets")),
+  /** Add a split plan's job to the end of Up next. */
+  enqueue: (job: SplitPreview["jobs"][number]) =>
+    unwrap(api.POST("/queue/jobs", { body: { kind: job.kind, label: job.label, note: job.note, params: job.params ?? {}, eta_s: job.eta_s } })),
 };
 
 /** The cached count of your text (null while the words are still being counted), for compute-lines. */
@@ -65,7 +90,9 @@ export const pretraining = {
 export const versions = {
   list: () => unwrap(api.GET("/versions")),
   current: () => unwrap(api.GET("/versions/current")),
-  save: (spec: Spec, change: string) => unwrap(api.POST("/versions", { body: { spec, change } })),
+  /** `prediction` is the guess made before saving; none (or an empty one) when it was skipped. */
+  save: (spec: Spec, change: string, prediction?: Guess) =>
+    unwrap(api.POST("/versions", { body: { spec, change, ...(prediction && Object.keys(prediction).length ? { prediction } : {}) } })),
   /** Start from a pretrained open model (POST /post-training/imports, a form as the Post-training page sends it): its
    * design is saved as a new version now; its weights come when the queue finishes the download and conversion. */
   importPretrained: async (name: string): Promise<Version> => {
@@ -120,6 +147,17 @@ export function sameChoices(a: Choices, b: Choices): boolean {
 /** The change text a save records: the chips, or what the Tk page says when there are none. */
 export function changeText(chips: string[], base: number | null): string {
   return chips.join(", ") || (base === null ? "first design" : "no change");
+}
+
+/** The picks of a guess panel as a stored guess: the questions left unpicked are left out. */
+export function guessOf(picks: Guess | undefined): Guess {
+  return Object.fromEntries(Object.entries(picks ?? {}).filter(([, value]) => value));
+}
+
+/** A split plan's step is saved as `number`, which can differ from the one planned if a version was saved meanwhile: the job follows the number. */
+export function jobFor(job: SplitPreview["jobs"][number], planned: number, number: number): SplitPreview["jobs"][number] {
+  if (planned === number) return job;
+  return { ...job, label: job.label.replace(`Version ${planned}`, `Version ${number}`), params: { ...job.params, version: number } };
 }
 
 export const versionName = (n: number) => `version ${n}`;
