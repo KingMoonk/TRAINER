@@ -12,6 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { runViewHref } from "@/app/runs/view/logic";
+import { T as RUN_VIEW } from "@/app/runs/view/copy";
 import { fill, STATUS, T } from "./copy";
 import { bits, chartSeries, last, phaseBands, progressLine, sampleRows, switchText, type JobParams } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
@@ -152,6 +154,11 @@ export default function Page() {
           <p className="text-sm text-muted-foreground" data-testid="progress">
             {progress}
           </p>
+          {job && (
+            <Link href={runViewHref(job.id)} className="w-fit text-sm text-highlight underline-offset-4 hover:underline" data-testid="open-run-view">
+              {RUN_VIEW.openRunView}
+            </Link>
+          )}
 
           <Card>
             <CardContent className="flex flex-col gap-3">

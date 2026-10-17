@@ -4,7 +4,7 @@ import {
   otherRuns, OTHER_RUNS_SHOWN, percent, progressFraction, recentTimeline, reportedText, roundNumber, shardsText, stageIndex, stateColor, stepsText, timelineEnd,
   timelineExtent, tokensSeries, TIMELINE_ROUNDS,
 } from "./live";
-import { event, lane, line, member, run } from "./test-data";
+import { event, lane, line, member, run } from "@/app/cluster/training/test-data";
 
 describe("which run is live", () => {
   const going = run({ id: "going", state: "running" });

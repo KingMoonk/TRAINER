@@ -17,6 +17,7 @@ const round = (n: number, loss: number | null, val: number | null, seconds = 600
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id, label: "from scratch", version: 5, state: "running", note: "", started_at: 100, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
   delta_dtype: "float16", can_stop: true, history: [round(6, 3.5, 3.6), round(7, 3.41, 3.47)],
+  phase: "training", deadline_s: null, grace_s: 2, window_s: null, contributed: 0, expected: 2, theta_bytes: 0, now_s: 0, timeline: [], events: [],
   members: [
     { node: "mac", address: "local", local: true, state: "training" },
     { node: "beast", address: "beast:8000", local: false, state: "training" },

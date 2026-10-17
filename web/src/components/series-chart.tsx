@@ -19,6 +19,8 @@ export type Series = {
   strokeWidth?: number;
   dash?: string;
   interpolation?: "linear" | "monotone";
+  /** Mark each point with a dot (the held-out loss, which is measured now and then, not every step). */
+  dots?: boolean;
 };
 export type Band = { id: string; label: string; from: number; to: number; color?: string };
 
@@ -73,7 +75,7 @@ export function SeriesChart({
         {series.map((s) => (
           <Line key={s.id} dataKey={s.id} yAxisId={s.axis ?? "left"} type={s.interpolation ?? "monotone"}
             className={`series-${s.id}`} stroke={`var(--color-${s.id})`} strokeOpacity={s.opacity ?? 1}
-            strokeWidth={s.strokeWidth ?? 2} strokeDasharray={s.dash} dot={false} connectNulls isAnimationActive={false} />
+            strokeWidth={s.strokeWidth ?? 2} strokeDasharray={s.dash} dot={s.dots ? { r: 3 } : false} connectNulls isAnimationActive={false} />
         ))}
       </LineChart>
     </ChartContainer>
