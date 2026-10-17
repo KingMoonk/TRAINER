@@ -101,7 +101,7 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
             {rows.map((version) => <li key={version.number}>
               <button type="button" aria-pressed={selected?.number === version.number} onClick={() => setPicked(version.number)}
                 className={cn("flex h-full w-full flex-col gap-3 rounded-xl border p-4 text-left transition-colors hover:bg-surface-overlay",
-                  selected?.number === version.number ? "border-surface-border-active bg-surface-overlay" : "border-border bg-surface-faint")}>
+                  selected?.number === version.number ? "selected-box" : "border-border bg-surface-faint")}>
                 <span className="flex w-full flex-wrap items-center justify-between gap-2"><span className="font-medium">{T.version} {version.number}</span>
                   <Badge variant="outline">{versionState(version, queue.data, editingVersion)}</Badge></span>
                 <span className="text-sm text-muted-foreground">{version.change || version.name || T.savedDesign}</span>

@@ -49,7 +49,7 @@ function HeatRow({ row, size, label }: { row: (number | null)[]; size: number; l
             height: size,
             backgroundColor:
               value === null
-                ? "color-mix(in oklch, var(--background) 70%, black)"
+                ? "var(--cell-masked)"
                 : `color-mix(in oklch, var(--primary) ${Math.round(Math.min(1, Math.max(0, value)) * 100)}%, var(--muted))`,
           }}
         />

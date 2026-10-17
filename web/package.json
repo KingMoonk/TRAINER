@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint && node scripts/check-theme.mjs",
+    "lint": "eslint && node scripts/check-theme.mjs && node --test scripts/theme-guard.test.mjs",
     "typecheck": "tsc --noEmit",
     "test": "playwright test",
     "gen:api": "openapi-typescript openapi.json -o src/lib/api-schema.ts"

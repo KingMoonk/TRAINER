@@ -1,24 +1,15 @@
 // The theme guard (run by `pnpm lint`): every colour lives in src/app/globals.css as a token, so nothing else in src/
-// may name a Tailwind palette colour (text-amber-500, bg-white/5) or write a colour literal (#fff, rgb(...), oklch(...)).
-// Use a semantic utility (bg-card, text-warning, bg-surface-overlay) or var(--token). See the top of globals.css.
+// may name a Tailwind palette colour (text-amber-500, bg-white/5), a named colour (fill="red") or write a colour literal
+// (#fff, rgb(...), oklch(...)). Use a semantic utility (bg-card, text-warning, bg-surface-overlay) or var(--token).
+// See the top of globals.css. The rules are in theme-guard.mjs and tested by theme-guard.test.mjs.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { checkSource } from "./theme-guard.mjs";
 
 const SRC = new URL("../src/", import.meta.url).pathname;
 const THEME = "app/globals.css";
-// Files exempt from the guard, each with the reason. Keep this short.
-const ALLOW = new Map([
-  ["lib/api-schema.ts", "generated from openapi.json"],
-  ["components/ui/chart.tsx", "shadcn selectors that match the literal colours recharts writes into its own markup"],
-]);
-
-const PALETTE = "white|black|slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
-const UTILITY = "bg|text|border|ring|ring-offset|fill|stroke|from|via|to|divide|outline|shadow|decoration|accent|caret|placeholder";
-const RULES = [
-  [new RegExp(`(?<![\\w-])(?:${UTILITY})-(?:${PALETTE})(?![a-z])`), "raw Tailwind palette class"],
-  [/#[0-9a-fA-F]{3,8}\b/, "hex colour literal"],
-  [/\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb|color)\(/, "colour function literal"],
-];
+// Skipped whole, with the reason. (The one narrow exemption, for chart.tsx, is in theme-guard.mjs.)
+const SKIP = new Map([["lib/api-schema.ts", "generated from openapi.json"]]);
 
 function* walk(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -28,37 +19,11 @@ function* walk(dir) {
   }
 }
 
-/** The line without comments, so a note like "issue #148" or "(text-amber-500)" in a comment does not trip the guard. */
-function code(line, state) {
-  let out = "";
-  for (let i = 0; i < line.length; i++) {
-    if (state.block) {
-      const end = line.indexOf("*/", i);
-      if (end < 0) return out;
-      state.block = false;
-      i = end + 1;
-    } else if (line.startsWith("/*", i)) {
-      state.block = true;
-      i++;
-    } else if (line.startsWith("//", i) && line[i - 1] !== ":") {
-      return out;
-    } else out += line[i];
-  }
-  return out;
-}
-
 const problems = [];
 for (const path of walk(SRC)) {
   const file = relative(SRC, path).split(sep).join("/");
-  if (file === THEME || ALLOW.has(file)) continue;
-  const state = { block: false };
-  readFileSync(path, "utf8").split("\n").forEach((line, index) => {
-    const text = code(line, state);
-    for (const [rule, what] of RULES) {
-      const hit = text.match(rule);
-      if (hit) problems.push(`src/${file}:${index + 1}: ${what} \`${hit[0].trim()}\``);
-    }
-  });
+  if (file === THEME || SKIP.has(file)) continue;
+  problems.push(...checkSource(file, readFileSync(path, "utf8")));
 }
 
 if (problems.length) {
