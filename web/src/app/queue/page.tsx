@@ -9,6 +9,7 @@ import { NowCard } from "./now-card";
 import { PlanCard } from "./plan-card";
 import { UpNextCard } from "./up-next-card";
 import { useQueue, useQueueActions } from "./use-queue";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 export default function QueuePage() {
   const queue = useQueue();
@@ -22,11 +23,8 @@ export default function QueuePage() {
   }, [queue.isError]);
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-8">
-      <div className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
-        <p className="max-w-prose text-muted-foreground">{T.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={T.title} lead={T.lead} />
       <NowCard queue={queue.data} actions={actions} cluster={cluster} />
       <UpNextCard queue={queue.data} actions={actions} cluster={cluster} />
       {others && <OtherMachinesCard cluster={others} />}

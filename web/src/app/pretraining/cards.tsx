@@ -7,6 +7,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
 import { END, HOLD, PALETTE, ROWS, enoughView, perStepLine, selectedLine, type Plan, type Preview, type TextSet } from "./logic";
+import { optionBox } from "@/components/option-box";
 
 /** A row of choices (rows per step, held back, how long) as a labelled radio group. */
 export function Choice<V extends string>({ label, hint, value, items, onChange }: { label: string; hint?: string; value: V; items: readonly V[]; onChange: (v: V) => void }) {
@@ -53,10 +54,7 @@ export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] 
                     aria-checked={on}
                     data-testid={`set-${s.id}`}
                     onClick={() => onToggle(s)}
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-lg border-2 px-3 py-2 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                      on ? "selected-box" : "border-border hover:bg-muted/30",
-                    )}
+                    className={optionBox(on, "flex w-full items-center gap-3 px-3 py-2")}
                   >
                     <span className={cn("flex size-5 shrink-0 items-center justify-center rounded text-xs", on ? "bg-highlight-strong text-background" : "border")}>{on ? "✓" : ""}</span>
                     <span className="font-medium">{s.name}</span>

@@ -14,7 +14,7 @@ import studio_cluster_queue
 import studio_scheduler as sched
 from fastapi.testclient import TestClient
 from studio_api.app import create_app
-from studio_api.hosts import ANY
+from studio_api.hosts import ANY, HostNames
 from studio_api.routers import cluster as cluster_routes
 from studio_api.version import app_version
 from studio_core import Workspace
@@ -243,6 +243,15 @@ class NodeList(ApiCase):
         self.assertEqual((me["address"], me["local"], me["online"], me["error"], me["busy"]), ("local", True, True, "", False))
         self.assertEqual((me["device"], me["device_name"], me["memory_bytes"], me["version"]), ("cuda", "Test GPU", 8 * 2 ** 30, app_version()))
         self.assertEqual(self.peers.calls, [])
+
+    def test_only_this_machine_carries_its_tailnet_name(self):
+        self.assertEqual(self.call("GET", "/cluster/nodes")[0]["tailnet_name"], "")  # no Tailscale names known (hosts=ANY)
+        hosts = HostNames(tailscale=lambda: ("mini.tail1234.ts.net", "mini"), binary=lambda: "tailscale")
+        hosts.refresh()
+        self.app.state.hosts = hosts
+        self.save("up")
+        me, up = self.call("GET", "/cluster/nodes")
+        self.assertEqual((me["tailnet_name"], up["tailnet_name"]), ("mini.tail1234.ts.net", ""))
 
     def test_all_three_peers_are_listed_and_the_slow_one_holds_up_nobody(self):
         self.save("up", "down", "slow")

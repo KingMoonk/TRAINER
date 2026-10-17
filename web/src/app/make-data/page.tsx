@@ -16,6 +16,8 @@ import { errorText } from "../your-data/logic";
 import type { Kind } from "../your-data/copy";
 import { MAKE as T } from "./copy";
 import { Review, refreshData } from "./review";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { optionBox } from "@/components/option-box";
 
 type Report = components["schemas"]["GenerateReport"];
 type Rules = components["schemas"]["ProblemRules"];
@@ -40,12 +42,12 @@ function MakeData({ initialKind }: { initialKind: Kind }) {
   useApiEvents((event) => {
     if (event.kind === "data" || event.kind === "downloads_finished") void refreshData(cache);
   });
-  return <main className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-4 p-4 md:p-8">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1><p className="text-muted-foreground">{T.lead}</p></div>
+  return <main className={PAGE_MAIN}>
+    <div className="flex flex-wrap items-start justify-between gap-3"><PageHeader title={T.title} lead={T.lead} />
       <Link href="/your-data/" className={buttonVariants({ variant: "outline" })}>{T.yourData}</Link></div>
     <div role="group" aria-label="What to make" className="grid gap-3 md:grid-cols-3">
       {KINDS.map((value) => <button key={value} type="button" disabled={making} aria-pressed={kind === value} onClick={() => setKind(value)}
-        className={`rounded-xl border p-4 text-left transition-colors disabled:opacity-50 ${kind === value ? "selected-box" : "border-border bg-card hover:bg-muted"}`}>
+        className={optionBox(kind === value, "p-4 disabled:opacity-50")}>
         <span className="block font-medium">{T.cards[value].title}</span><span className={`mt-2 block text-xs ${value === "problems" ? "text-info" : "text-warning"}`}>{T.cards[value].safety}</span>
       </button>)}
     </div>

@@ -10,6 +10,7 @@ import { api, apiFetch, ApiError, subscribe, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
 import { EXPORT, STORAGE as T } from "./copy";
 import { AGES, ALL, DEFAULT_CHOICE, choiceDays, dataApplies, downloadName, errorText, fill, sizeText } from "./logic";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 type ExportKind = "hf" | "gguf";
 
@@ -29,11 +30,8 @@ export default function Page() {
   );
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 sm:p-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-        <p className="max-w-prose text-muted-foreground">{route.lead}</p>
-      </div>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={route.title} lead={route.lead} />
       <StorageCard />
       <ExportCard />
     </main>

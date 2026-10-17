@@ -9,7 +9,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap, type ApiEvent } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { CollectionCard } from "./collection-card";
 import { KIND, KINDS, MAKE_LABELS, T, fill, type Kind } from "./copy";
 import { useApiEvents } from "./events";
@@ -18,6 +17,8 @@ import { ImportCard } from "./import-card";
 import { runJob, type JobLike } from "./jobs";
 import { backLink, collectionShown, dupLabel, errorText, kindOf, setsLine, type DataRow, type Summary } from "./logic";
 import { RowsTable, useRows } from "./rows-table";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { optionBox } from "@/components/option-box";
 
 const SEARCH_MS = 250; // after the last key before a search runs
 let refreshed = false; // downloads an older app converted are rebuilt once per page load
@@ -181,17 +182,15 @@ function YourData() {
   const duplicates = summary?.near_duplicates ?? 0;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-8">
-      <div className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{T.h1}</h1>
-        <p className="max-w-prose text-muted-foreground">{T.lead}</p>
+    <main className={PAGE_MAIN}>
+      <PageHeader title={T.h1} lead={T.lead}>
         <div className="flex flex-wrap gap-6 text-sm">
           <Link href="/storage" className="text-highlight hover:underline">
             {T.storageLink}
           </Link>
           <Link href="/passive/" className="text-highlight hover:underline">{T.passiveLink}</Link>
         </div>
-      </div>
+      </PageHeader>
       <Link href={back.href} className="w-fit text-sm text-highlight hover:underline">
         ‹ {back.label}
       </Link>
@@ -206,10 +205,7 @@ function YourData() {
               aria-selected={k === kind}
               title={KIND[k].lead}
               onClick={() => show(k)}
-              className={cn(
-                "flex flex-col gap-0.5 rounded-lg border-2 p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                k === kind ? "selected-box" : "border-border hover:bg-muted/30",
-              )}
+              className={optionBox(k === kind, "flex flex-col gap-0.5 p-3")}
             >
               <span className="font-semibold">{KIND[k].tab}</span>
               <span className="text-xs text-muted-foreground">{s.data?.used_by || KIND[k].used}</span>

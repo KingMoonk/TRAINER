@@ -156,6 +156,18 @@ class Refresh(unittest.TestCase):
             got.refresh()
         self.assertTrue(got.allowed("mini.tail1234.ts.net"))
 
+    def test_the_tailnet_name_is_the_magicdns_name_and_a_failed_read_keeps_it(self):
+        answers = [("mini",), ("mini.tail1234.ts.net", "mini"), ()]
+        got = own_names(tailscale=lambda: answers.pop(0), hostname=lambda: "box", binary=lambda: "tailscale")
+        self.assertEqual(got.tailnet_name, "")
+        got.refresh()
+        self.assertEqual(got.tailnet_name, "")  # a bare host name is not a name another machine can reach
+        got.refresh()
+        self.assertEqual(got.tailnet_name, "mini.tail1234.ts.net")
+        with self.assertLogs("studio_api.hosts", "WARNING"):
+            got.refresh()
+        self.assertEqual(got.tailnet_name, "mini.tail1234.ts.net")
+
     def test_the_background_thread_reads_again_and_a_request_never_does(self):
         reads = []
 

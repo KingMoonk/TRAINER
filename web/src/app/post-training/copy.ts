@@ -2,6 +2,9 @@
 // stays while the Tk page uses it.
 
 export const T = {
+  title: "Post-training",
+  lead: "Four rounds, always in this order. Same design throughout; only the weights shift.",
+  noVersions: "No versions yet. Build one in the Network designer, or start from a pretrained model below.",
   startsFrom: "Starts from",
   noVersion: "No trained version yet",
   atThisSize: "At this size the gain from each round is small. The shape of the pipeline is what you are learning.",
