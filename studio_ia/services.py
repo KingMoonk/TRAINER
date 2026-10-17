@@ -872,6 +872,8 @@ class FakeServices(Services):
             q.step = coordinator.round
             self.emit("queue", q)
         job.status = "stopped" if coordinator.stopped else "done"
+        if job.status == "done":
+            studio_distributed.note_saved(job.id, job.params.get("version"))  # the made-up run "saves" the version it was for
         q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
         self.emit("job", {"job": job.id, "status": job.status, "error": ""})
         self.emit("queue", q)
@@ -1301,7 +1303,7 @@ from studio_ia.snapshots import start_thread  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION_JOBS = ("pretrain", "import_pretrained")  # queue jobs that carry a version through queued, training and trained
+VERSION_JOBS = ("pretrain", "import_pretrained", "pretrain_distributed")  # queue jobs that carry a version through queued, training and trained
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
@@ -2236,6 +2238,8 @@ class WorkspaceServices(Services):
         if payload["status"] == "running":
             return self._to(number, "training")
         out = Path(job.params.get("output_dir") or "")
+        if job.kind == "pretrain_distributed":
+            return self._record_distributed(job, number, payload["status"], out)
         ckpt = next((p for p in (out / "best.npz", out / "last.npz") if p.exists()), None)
         if not ckpt and job.kind == "import_pretrained" and payload["status"] in ("failed", "stopped"):
             return self._drop_empty_import(number, payload["status"])
@@ -2250,6 +2254,29 @@ class WorkspaceServices(Services):
                 self.store.set_scorecard(number, card)
             self._note_devices(number, ckpt, scores is not None)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
+        self.emit("versions", None)
+
+    def _record_distributed(self, job, number, status, out):
+        """A distributed run ends: only a run that finished all its rounds gives its coordinator's final weights (`last.npz` in the
+        run's folder) to the version it trained, scored like a local pretrain's, with a change note naming the run and its machines.
+        A stopped or failed run saves nothing, even past some rounds: the version goes back to saved."""
+        import studio_distributed
+        import studio_eval
+        from studio_core import read_json
+        record, ckpt = out / "run.json", out / "last.npz"
+        done = status == "done" and ckpt.exists() and record.exists() and read_json(record).get("status") == "completed"
+        if done:
+            machines = [m.node for m in studio_distributed.run_of(job).machines if m.state != "unreachable"]
+            self.store.add_run(number, out)
+            self.store.set_best_checkpoint(number, ckpt)
+            scores = self._held_scores(self._abs(ckpt))
+            if scores is not None:
+                card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores), "bpc_method": studio_eval.SCORE_METHOD}
+                self.store.set_scorecard(number, card)
+            self._note_devices(number, ckpt, scores is not None)
+            self.store.set_change(number, f"{self.store.get(number)['change']} (trained in distributed run {job.id} on {', '.join(machines)})")
+            studio_distributed.note_saved(job.id, number)
+        self._to(number, "trained" if done else "saved")
         self.emit("versions", None)
 
     def _note_devices(self, number, ckpt, scored=False):

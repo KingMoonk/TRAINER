@@ -7248,6 +7248,17 @@
             "title": "Rounds",
             "type": "integer"
           },
+          "saved_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saved Version"
+          },
           "started_at": {
             "title": "Started At",
             "type": "number"
@@ -7307,6 +7318,7 @@
           "note",
           "started_at",
           "owner",
+          "saved_version",
           "round",
           "rounds",
           "inner_steps",
