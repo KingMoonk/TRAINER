@@ -36,7 +36,8 @@ test("the view moves on its own: progress, a phase, the countdown, the timeline 
   await expect(card.getByTestId("topology").locator("[data-phase]").first()).toBeVisible();
   await expect(card.getByRole("list", { name: "Phases of a round" }).locator("[aria-current='step']")).toHaveCount(1, { timeout: 15_000 });
   await expect(card.getByRole("region", { name: "Round timeline" })).toBeVisible();
-  await expect(card.getByTestId("lane-1-gpu-box")).toBeVisible();
+  // the timeline keeps only the last few rounds, so by now the demo run's round 1 may have rolled off: any round's lane for the machine will do
+  await expect(card.locator("[data-testid^='lane-'][data-testid$='-gpu-box']").first()).toBeVisible();
   await expect(card.getByRole("region", { name: "Events" }).getByRole("listitem").first()).toBeVisible();
   await expect(card.getByRole("region", { name: "Loss over the rounds" })).toBeVisible();
   await expect(card.getByRole("region", { name: "Tokens per second" })).toBeVisible();

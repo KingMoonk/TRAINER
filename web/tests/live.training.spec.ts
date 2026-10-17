@@ -24,13 +24,13 @@ test("starts a run with an unreachable machine, shows why it is out, then stops 
 
   await page.goto("/cluster/");
   await expect(page).toHaveURL(/\/cluster\/training\/?$/); // Training is the default tab
-  await expect(page.getByLabel("Rounds")).toHaveCount(0); // a run is going, so the form is folded
+  await expect(page.getByLabel("Rounds", { exact: true })).toHaveCount(0); // a run is going, so the form is folded
   await page.getByRole("button", { name: "Start a run" }).click();
-  await expect(page.getByLabel("Rounds")).toHaveValue("10");
+  await expect(page.getByLabel("Rounds", { exact: true })).toHaveValue("10");
   await expect(page.getByText(/This computer coordinates/)).toBeVisible();
 
   await page.getByRole("checkbox", { name: new RegExp(NOBODY) }).check();
-  await page.getByLabel("Rounds").fill("500"); // long enough that the run is still going when it is stopped
+  await page.getByLabel("Rounds", { exact: true }).fill("500"); // long enough that the run is still going when it is stopped
   const started = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname.replace(/\/$/, "") === "/distributed/runs");
   await page.getByRole("button", { name: "Start run" }).click();
   const id = ((await (await started).json()) as Run).id;
