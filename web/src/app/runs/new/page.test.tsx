@@ -12,6 +12,7 @@ const node = (address: string, over: Record<string, unknown> = {}) => ({
 const NODES = [node("local", { local: true, hostname: "mac", device: "mps", device_name: "Apple silicon" }), node("beast"), node("lab", { online: false, error: "timed out" })];
 const MORE = [...NODES.slice(0, 2), node("lab")];
 
+const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
 const job = { kind: "pretrain", label: "Version 2 from scratch", params: { version: 2, datasets: ["stories"], mode: "from_scratch" } };
 
 function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false } = {}) {
@@ -31,6 +32,7 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
       ],
     },
     "GET /queue/outlook": { body: { outlook } },
+    "GET /queue": { body: { job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next: [], plan: PLAN } },
     "POST /pretraining/plan": ({ body }) => ({ body: { can_add: true, reason: "", job: { ...job, params: { ...job.params, mode: (body as { mode: string }).mode } }, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: false, can_continue: true } }),
     "POST /queue/jobs": { body: { id: "job-7", kind: "pretrain", label: "x", status: "waiting" } },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
@@ -56,7 +58,9 @@ describe("New run", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Local");
     expect(screen.getByTestId("coordinator")).toHaveTextContent("This computer");
     await waitFor(() => expect(screen.getByTestId("outlook")).toHaveTextContent("Starts after Version 1 (about 4 min)."));
-    expect(screen.getByRole("link", { name: "Allowed hours" })).toHaveAttribute("href", "/queue");
+    await user.click(screen.getByRole("button", { name: "Allowed hours" }));
+    expect(await screen.findByTestId("plan-card")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
     await waitFor(async () => expect(await cta()).toBeEnabled());
     await user.click(await cta());
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-7"));

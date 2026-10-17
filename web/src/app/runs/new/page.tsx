@@ -16,6 +16,7 @@ import { useEvent } from "@/lib/events";
 import { cn } from "@/lib/utils";
 import { initialForm, startBody, toggled, type Defaults, type Form, type TextSet } from "../../cluster/training/logic";
 import { useDefaults, useMachines, useTextSets, useVersions } from "../../cluster/training/use-training";
+import { AllowedHours } from "../allowed-hours";
 import { planBody } from "../../pretraining/logic";
 import { QUICKTEST } from "../../quick-test/copy";
 import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fields";
@@ -212,7 +213,9 @@ function Fields({ defaults, sets, nodes }: { defaults: Defaults; sets: TextSet[]
         <h2 className="text-xl font-semibold"><Hint tip={T.scheduleTip}>{T.schedule}</Hint></h2>
         <p className="text-base" data-testid="outlook">
           {outlook.data?.outlook ? `${outlook.data.outlook}. ` : outlook.isPending ? `${T.outlookLoading} ` : ""}
-          <Link href="/queue" className="text-highlight hover:underline">{T.allowedHours}</Link>
+          <AllowedHours>
+            <button type="button" className="text-highlight hover:underline">{T.allowedHours}</button>
+          </AllowedHours>
         </p>
       </section>
 
