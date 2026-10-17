@@ -1,4 +1,4 @@
-"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--reload] [--dump-openapi FILE]"""
+"""python -m studio_api [--fake | --workspace DIR] [--bind HOST] [--port N] [--allow-origin ORIGIN] [--reload] [--dump-openapi FILE]"""
 
 import argparse
 import json
@@ -6,10 +6,12 @@ import math
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import studio_cluster
 
 LOCAL = ("127.0.0.1", "localhost", "::1")
+ORIGINS = "STUDIO_API_ALLOW_ORIGINS"  # comma-separated web origins, added to every --allow-origin
 ARGV = "STUDIO_API_ARGV"  # how --reload hands the command line to the process uvicorn restarts
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,6 +35,20 @@ def schema_json():
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
+def origin(value):
+    """`https://app.vercel.app` from a typed origin: a scheme, a host and an optional port, nothing else (no path, no `*`)."""
+    text = value.strip().rstrip("/")
+    try:
+        parts = urlsplit(text)
+        _ = parts.port  # raises ValueError for a bad port
+    except ValueError:
+        parts = None
+    if not parts or parts.scheme not in ("http", "https") or not parts.hostname or text != f"{parts.scheme}://{parts.netloc}" \
+            or parts.username or parts.password or "*" in text:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a web origin like https://app.example.com (scheme, host, optional port).")
+    return text.lower()
+
+
 def parse(argv=None):
     parser = argparse.ArgumentParser(prog="python -m studio_api")
     source = parser.add_mutually_exclusive_group()
@@ -42,9 +58,17 @@ def parse(argv=None):
                         help="seconds per simulated training step with --fake (default: 0.05)")
     parser.add_argument("--bind", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=studio_cluster.DEFAULT_PORT, help="port (default: the port other nodes expect)")
+    parser.add_argument("--allow-origin", action="append", default=[], type=origin, metavar="ORIGIN",
+                        help=f"a web origin (the Vercel site) allowed to call the API from a browser once authenticated; repeat for "
+                             f"several, or list them comma-separated in ${ORIGINS} (default: none)")
     parser.add_argument("--reload", action="store_true", help="restart when a .py file changes (development)")
     parser.add_argument("--dump-openapi", metavar="FILE", help="write the OpenAPI schema to FILE and exit (pnpm gen:api reads web/openapi.json)")
     args = parser.parse_args(argv)
+    try:
+        from_env = [origin(v) for v in os.environ.get(ORIGINS, "").split(",") if v.strip()]
+    except argparse.ArgumentTypeError as exc:
+        parser.error(f"{ORIGINS}: {exc}")
+    args.allow_origin = list(dict.fromkeys(args.allow_origin + from_env))
     if args.workspace is not None:
         args.workspace = args.workspace.expanduser().resolve()
         if not args.workspace.is_dir():
@@ -66,8 +90,9 @@ def build(args):
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
         tags, users = studio_cluster.allowed_callers(workspace.state)
-        return create_app(services, open=args.bind in LOCAL, allow_tags=tags, allow_users=users)
-    return create_app(services, open=True)
+        return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, allow_tags=tags, allow_users=users,
+                          token=studio_cluster.funnel_token(workspace.state))
+    return create_app(services, open=True, origins=args.allow_origin)
 
 
 def make(argv=None):

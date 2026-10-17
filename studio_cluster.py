@@ -168,6 +168,19 @@ def allowed_callers(state):
     return tuple(out)
 
 
+def funnel_token(state):
+    """The shared token `tailscale funnel` callers send as `X-Groundwork-Token`, from `studioConfig.cluster.funnelToken` in the
+    workspace config; "" (no Funnel access) when absent. Raises ValueError, without the value, when it is not a non-empty text."""
+    config = state.get("studioConfig") if isinstance(state, dict) else None
+    cluster = (config or {}).get("cluster", {})
+    if not isinstance(cluster, dict) or "funnelToken" not in cluster:
+        return ""
+    token = cluster["funnelToken"]
+    if not isinstance(token, str) or not token.strip():
+        raise ValueError("studioConfig.cluster.funnelToken in the workspace must be a non-empty text value (or left out).")
+    return token.strip()
+
+
 def own_info(busy=False, version="", status=None, memory=None):
     """This machine's NodeInfo. `status` is `studio_backend.gpu_status()` and `memory` the computer's memory in bytes; both are
     probed when not given. `busy` is whether the queue is running a job; the caller knows, this module does not."""
