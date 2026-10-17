@@ -75,24 +75,27 @@ STEPS = [
     ("viewer-status", "GET", "/viewer/status", None),
 ]
 
+# (fixture name, beat of the demo run's clock): the demo run's first round is about five beats, a second round follows at six
+DEMO_MOMENTS = [("distributed-run-demo-training", 2.5), ("distributed-run-demo-collecting", 4.2), ("distributed-run-demo-second-round", 8.)]
+
 HOST = {"hostname": "this-computer", "version": "v0.0.0", "device": "cpu", "device_name": "CPU", "memory_bytes": 17179869184, "dtypes": ["float32"]}
 STAMP = 1700000000.0
 
 
-def _steady(value, ids):
-    """`value` with the parts that differ between runs and machines replaced by fixed ones of the same type."""
+def _steady(value, ids, host=HOST):
+    """`value` with the parts that differ between runs and machines replaced by fixed ones of the same type (`host` holds the replacements for the machine's own facts)."""
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():
-            if key in HOST:
-                out[key] = HOST[key]
+            if key in host:
+                out[key] = host[key]
             elif key.endswith("_at") and isinstance(item, (int, float)) and item > 1e9:
                 out[key] = STAMP
             else:
-                out[key] = _steady(item, ids)
+                out[key] = _steady(item, ids, host)
         return out
     if isinstance(value, list):
-        return [_steady(item, ids) for item in value]
+        return [_steady(item, ids, host) for item in value]
     if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{8}", value):  # a job id
         return ids.setdefault(value, f"job{len(ids) + 1:04d}")
     return value
@@ -100,18 +103,58 @@ def _steady(value, ids):
 
 def record() -> dict[str, str]:
     """{fixture file name: its text}, from one pass of STEPS over a fresh FakeServices."""
-    client = TestClient(create_app(FakeServices(), open=True, hosts=ANY))
-    ids: dict[str, str] = {}
-    jobs: list[str] = []
-    out = {}
-    for name, method, path, body in STEPS:
-        sent = path.format(job1=jobs[0] if jobs else "", job2=jobs[1] if len(jobs) > 1 else "")
-        response = client.request(method, sent, json=body)
-        reply = response.json() if response.content else None
-        if name.startswith("queue-enqueue"):
-            jobs.append(reply["id"])
-        fixture = {"request": {"method": method, "path": path, "body": body}, "status": response.status_code, "body": reply}
-        out[f"{name}.json"] = json.dumps(_steady(fixture, ids), indent=2, sort_keys=True) + "\n"
+    import studio_distributed
+
+    kept = dict(studio_distributed.RUNS)  # runs another test left in the process are not part of a fresh app's answers
+    studio_distributed.RUNS.clear()
+    try:
+        services = FakeServices()
+        client = TestClient(create_app(services, open=True, hosts=ANY))
+        ids: dict[str, str] = {}
+        jobs: list[str] = []
+        out = {}
+        for name, method, path, body in STEPS:
+            sent = path.format(job1=jobs[0] if jobs else "", job2=jobs[1] if len(jobs) > 1 else "")
+            response = client.request(method, sent, json=body)
+            reply = response.json() if response.content else None
+            if name.startswith("queue-enqueue"):
+                jobs.append(reply["id"])
+            fixture = {"request": {"method": method, "path": path, "body": body}, "status": response.status_code, "body": reply}
+            out[f"{name}.json"] = json.dumps(_steady(fixture, ids), indent=2, sort_keys=True) + "\n"
+        out.update(_demo(client, services, ids))
+    finally:
+        studio_distributed.RUNS.clear()
+        studio_distributed.RUNS.update(kept)
+    return out
+
+
+class Beat:
+    """A clock that stands still, in beats of one second."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+def _demo(client, services, ids):
+    """The demo run (`studio_api --fake` opens on it) read at fixed moments of its first round, on a clock that does not move."""
+    import studio_diloco
+    import studio_distributed
+
+    out, clock = {}, Beat(0.)
+    run = services.demo_run(clock=clock)
+    try:
+        for name, now in DEMO_MOMENTS:
+            clock.now = now
+            response = client.get(f"/distributed/runs/{run.id}")
+            fixture = {"request": {"method": "GET", "path": f"/distributed/runs/{run.id}", "body": None}, "status": response.status_code,
+                       "body": response.json()}
+            out[f"{name}.json"] = json.dumps(_steady(fixture, ids, host={}), indent=2, sort_keys=True) + "\n"  # host={}: the demo machines are the simulation's own, one CUDA and one MPS
+    finally:
+        studio_distributed.RUNS.pop(run.id, None)
+        studio_diloco.COORDINATORS.pop(run.id, None)
     return out
 
 

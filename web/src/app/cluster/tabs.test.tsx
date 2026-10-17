@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { nav } from "@/test/navigation";
 import { renderPage } from "@/test/render";
-import { AREAS, ROUTES, areaHome } from "@/lib/routes";
+import { ROUTES, routeFor } from "@/lib/routes";
 import ClusterHome from "./page";
 import { CLUSTER_TABS, ClusterTabs } from "./tabs";
 
@@ -15,11 +15,10 @@ describe("Cluster tab bar", () => {
     expect(screen.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/cluster/machines");
   });
 
-  test("every tab is a route of the Cluster area, and the first one is the area's home", () => {
-    const area = ROUTES.filter((r) => r.area === "cluster").map((r) => r.href);
-    for (const tab of CLUSTER_TABS) expect(area).toContain(tab.href);
-    expect(AREAS.some((a) => a.id === "cluster")).toBe(true);
-    expect(areaHome("cluster").href).toBe(CLUSTER_TABS[0].href);
+  test("every tab is a listed route, and the first one is the default", () => {
+    const hrefs = ROUTES.map((r) => r.href);
+    for (const tab of CLUSTER_TABS) expect(hrefs).toContain(tab.href);
+    expect(CLUSTER_TABS[0].href).toBe(routeFor("cluster_training").href);
   });
 
   test("/cluster/ opens the first tab", async () => {

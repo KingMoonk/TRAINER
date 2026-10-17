@@ -9,11 +9,11 @@ import { useEvent } from "@/lib/events";
 import { isActive, type Run, type StartRun } from "./logic";
 
 const RUNS = ["distributed", "runs"] as const;
-const ACTIVE_MS = 2_000;
+const ACTIVE_MS = 1_000;
 
 /**
- * The runs this computer coordinates (GET /distributed/runs), newest first. Re-read on every `queue` event and every couple of
- * seconds while one is going, since the members report to the coordinator without telling this page.
+ * The runs this computer coordinates (GET /distributed/runs), newest first. Re-read on every `queue` event and every
+ * second while one is going (nothing polls otherwise), since the members report to the coordinator without telling this page.
  */
 export function useRuns() {
   const client = useQueryClient();
@@ -58,14 +58,14 @@ function useRunWrite() {
   };
 }
 
-export function useStart(onStarted: () => void, onProblem: (why: string) => void) {
+export function useStart(onStarted: (run: Run) => void, onProblem: (why: string) => void) {
   const write = useRunWrite();
   return useMutation({
     mutationFn: (body: StartRun) => unwrap(api.POST("/distributed/runs", { body })),
     onSuccess: (run) => {
       write(run);
       toast.success(T.started);
-      onStarted();
+      onStarted(run);
     },
     onError: (error) => onProblem(T.couldNotStart.replace("{why}", problem(error))),
   });

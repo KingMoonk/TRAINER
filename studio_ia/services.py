@@ -671,6 +671,9 @@ class Services:
         raise NotImplementedError
 
 
+DEMO_RUN = "demo-run"  # the id of the run `studio_api --fake` starts with (FakeServices.demo_run)
+
+
 class FakeServices(Services):
     """Empty, in-memory placeholder data so pages render before real services exist. A test fixture and `studio_api --fake`
     only, never the real app. start_queue() runs the queued pretrain jobs one after another in a worker thread: `job_steps`
@@ -837,12 +840,12 @@ class FakeServices(Services):
                     self._worker = None
 
     def _run_distributed(self, job):
-        """A distributed pretraining run with a made-up coordinator (studio_ia.fake_distributed): a round every eight steps' time."""
+        """A distributed pretraining run with a made-up coordinator (studio_ia.fake_distributed): a round takes about nine steps' time."""
         import studio_diloco
         import studio_distributed
         from studio_ia.fake_distributed import FakeCoordinator
         q = self._queue
-        coordinator = FakeCoordinator(studio_distributed.run_of(job), job.params.get("settings") or {})
+        coordinator = FakeCoordinator(studio_distributed.run_of(job), job.params.get("settings") or {}, unit=self.step_seconds * 1.5)
         studio_diloco.register(job.id, coordinator)
         studio_distributed.invite(job)
         coordinator.start()
@@ -850,7 +853,7 @@ class FakeServices(Services):
         self.emit("job", {"job": job.id, "status": "running"})
         self.emit("queue", q)
         while not coordinator.finished:
-            self._sleep(self.step_seconds * 8)
+            self._sleep(self.step_seconds * 2)
             coordinator.advance()
             q.step = coordinator.round
             self.emit("queue", q)
@@ -858,6 +861,23 @@ class FakeServices(Services):
         q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
         self.emit("job", {"job": job.id, "status": job.status, "error": ""})
         self.emit("queue", q)
+
+    def demo_run(self, clock=time.monotonic, unit=1.):
+        """A distributed run already under way, with no queue job behind it: a CUDA and an MPS machine training in rounds of about
+        six seconds, so `studio_api --fake` opens the Training tab on a live run. Stop it from the tab like any other."""
+        import studio_diloco
+        import studio_distributed
+        from studio_ia.fake_distributed import FakeCoordinator
+        machines = [studio_distributed.Machine(node="mac-mini", address="local", device="mps", device_name="Apple M2"),
+                    studio_distributed.Machine(node="gpu-box", address="gpu-box:8787", device="cuda", device_name="NVIDIA GeForce RTX 4090")]
+        settings = {"rounds": 400, "inner_steps": 100, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "float16"}
+        run = studio_distributed.Run(DEMO_RUN, "Demo run on a Mac mini and a GPU box", 1, time.time(), settings, "mac-mini", machines)
+        with studio_distributed._LOCK:
+            studio_distributed.RUNS[run.id] = run
+        coordinator = FakeCoordinator(run, settings, clock=clock, unit=unit)
+        studio_diloco.register(run.id, coordinator)
+        coordinator.start()
+        return run
 
     def _run_job(self, job):
         if job.kind == "pretrain_distributed":

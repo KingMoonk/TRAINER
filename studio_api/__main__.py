@@ -108,6 +108,7 @@ def build(args):
         from studio_ia.services import FakeServices
 
         services = FakeServices(step_seconds=args.fake_step_seconds, snapshot_every=2)
+        services.demo_run()  # the Training tab opens on a live run
     else:
         from studio_core import Workspace
         from studio_ia.services import WorkspaceServices

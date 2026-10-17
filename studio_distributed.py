@@ -183,10 +183,33 @@ def member_rows(run, snap, ended):
     return rows
 
 
+def live_fields(known):
+    """What the member last reported (studio_diloco.Coordinator.snapshot: `progress`, `shards`); empty for a node not heard from."""
+    progress = (known or {}).get("progress") or {}
+    return {"phase": progress.get("phase"), "step_in_round": progress.get("step", 0), "round_steps": progress.get("steps", 0),
+            "loss": progress.get("loss"), "live_tokens_per_second": progress.get("tokens_per_second"),
+            "reported_ago": progress.get("reported_ago"), "shards": (known or {}).get("shards", 0), "samples": list(progress.get("samples", []))}
+
+
+def timeline_rows(timeline):
+    """The coordinator's per-round timelines with the swimlanes as a list, in the order the members joined."""
+    return [{**line, "lanes": [{"node": node, **lane} for node, lane in line["lanes"].items()]} for line in timeline]
+
+
+def phase_of(snap, state):
+    """The run's phase for the live view: the coordinator's while it is going, finished or stopped once it is over."""
+    if state in ("finished", "stopped"):
+        return state
+    if state == "failed":
+        return "stopped"
+    return (snap or {}).get("phase") or "waiting"
+
+
 def _member(node, machine, known, history, ended):
     local = machine is not None and machine.local
     row = {"node": node, "address": machine.address if machine else "", "local": local, "device": machine.device if machine else "",
-           "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, **member_stats(history, node)}
+           "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, **member_stats(history, node),
+           **live_fields(known)}
     if machine is not None and machine.state == "unreachable":
         state, note = "unreachable", machine.reason
     elif known is not None:
@@ -226,7 +249,11 @@ def view(run, coordinator, job):
             "owner": run.owner, "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or ""),
-            "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE}
+            "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,
+            "phase": phase_of(snap, state), "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
+            "window_s": (snap or {}).get("window_s"), "contributed": (snap or {}).get("contributed", 0), "expected": (snap or {}).get("expected", 0),
+            "theta_bytes": (snap or {}).get("theta_bytes", 0), "now_s": (snap or {}).get("now_s", 0.),
+            "timeline": timeline_rows((snap or {}).get("timeline", [])), "events": list((snap or {}).get("events", []))}
 
 
 def stop_run(run, coordinator, client_for=PeerClient):

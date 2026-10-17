@@ -153,12 +153,26 @@ All routes are on the coordinator's API, behind node-to-node auth, under `/colle
 | `GET /shards/{s}` | | one training shard |
 | `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16, fp32 or int8 `.npz` (int8: per-tensor scale beside the values) | `202`, or `409` when stale |
 | `GET /rounds/{r}` | | `open` or `closed` with the next round; a `pending` round long-polls up to 30 s |
+| `POST /progress` | node, generation, epoch, round, phase (`downloading`, `training`, `uploading`, `waiting`), step, loss, tokens/s | `{accepted}`, or `409` for a stale generation or epoch, a non-member, or a closed round |
 | `POST /leave` | generation, epoch | `204` |
 
 Bytes per member per round for a 25M-parameter model: 100 MB down (fp32) and 50 MB up (fp16). At 20 Mbps up, the upload is
 about 20 s against H = 500 steps of compute, so communication is a small share of the round. `delta_dtype: int8` sends a quarter of fp32 (25 MB up for that model). Each round logs the delta bytes and round seconds
 (`diloco.json` history, and an info event on the member with its upload time). Streaming fragments come later, once
 measurements show the transfer is the bottleneck.
+
+### Live view
+
+The Cluster › Training tab shows a run as it happens. Each member reports where it is every 2 s or 20 steps, and at once when its phase
+changes (`POST /progress`, from a daemon thread; a failed report is dropped and never slows or stops training). The coordinator keeps the
+latest report per member, a bounded run of loss and speed samples for each, and the moments of each round on its own clock: `θ` taken, first
+step, `Δ` sent, `Δ` received. The last 8 rounds' timelines stay in memory and each finished round's timeline is appended to `metrics.jsonl`.
+A bounded event log (200 entries) records joins, leaves, drops, late and refused (stale) changes, each outer step with its size, and each
+checkpoint. `GET /distributed/runs` carries all of it on the run (phase, deadline, `θ` size, timeline, events) and on each member (phase, step,
+loss, speed, seconds since the report, shards, samples); the page polls it once a second while a run is going. Taking the lock for a report or a
+snapshot waits at most a quarter second, so a round that is closing (the held-back text is checked then) never blocks the page.
+
+`studio_api --fake` opens on a simulated run (`demo-run`: one MPS and one CUDA machine) that advances over time, so the tab can be seen without a second machine.
 
 ### Checkpoints
 

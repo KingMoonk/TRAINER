@@ -53,6 +53,13 @@ class StartRun(BaseModel):
     outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
 
 
+class Sample(BaseModel):
+    step: int
+    t: float  # seconds since the round opened
+    loss: float | None
+    tokens_per_second: float | None
+
+
 class Member(BaseModel):
     node: str  # the name it joins under
     address: str  # "local" for this computer
@@ -69,6 +76,15 @@ class Member(BaseModel):
     last_delta_bytes: int | None
     last_delta_dtype: str
     can_stop: bool
+    # what it last reported (about every 2 s while it runs); empty until the coordinator has heard from it
+    phase: Literal["downloading", "training", "uploading", "waiting"] | None
+    step_in_round: int  # inner steps done in the open round
+    round_steps: int  # inner steps in a round (H)
+    loss: float | None  # its live inner loss in the open round
+    live_tokens_per_second: float | None
+    reported_ago: float | None  # seconds since the report, on the coordinator's clock
+    shards: int  # training shards it holds
+    samples: list[Sample]  # its reports in the open round, for the live charts
 
 
 class Round(BaseModel):
@@ -82,6 +98,38 @@ class Round(BaseModel):
     members: int
     contributed: int
     dropped: list[str]
+
+
+class Lane(BaseModel):
+    """One member's round on the coordinator's clock: seconds since the round opened. A moment is null when it never reported it."""
+
+    node: str
+    theta_taken: float | None  # it started downloading θ (the coordinator served it)
+    first_step: float | None  # its first training report
+    delta_sent: float | None  # it began sending its change
+    delta_received: float | None  # the change arrived
+    counted: bool | None  # null while the round is open and the change has not come; false: counted for nothing this round
+    tokens: int
+    steps: int
+    delta_bytes: int
+
+
+class RoundTimeline(BaseModel):
+    round: int
+    open: bool
+    deadline: float  # seconds after the round opened
+    window: float  # the deadline's length
+    closed: float | None
+    lanes: list[Lane]
+
+
+class RunEvent(BaseModel):
+    seq: int
+    t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
+    kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished"]
+    node: str  # "" for the run
+    round: int
+    text: str
 
 
 class Run(BaseModel):
@@ -101,6 +149,16 @@ class Run(BaseModel):
     members: list[Member]
     history: list[Round]
     can_stop: bool
+    phase: Literal["waiting", "next_round", "training", "collecting", "outer_step", "validating", "finished", "stopped"]
+    deadline_s: float | None  # seconds left to the open round's deadline
+    grace_s: float  # the wait after the deadline for a member's download and upload
+    window_s: float | None  # the open round's deadline length
+    contributed: int  # changes in for the open round ...
+    expected: int  # ... of the members it waits for
+    theta_bytes: int  # the weights, as a member downloads them
+    now_s: float  # the coordinator's clock now, to place events and timelines
+    timeline: list[RoundTimeline]  # the last few rounds, then the open one
+    events: list[RunEvent]  # oldest first; the page shows them newest first
 
 
 @router.get("/defaults")

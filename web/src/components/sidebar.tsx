@@ -2,25 +2,41 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, ChevronRight, Database, Layers3, ListOrdered, MessageSquare, Network, Server, Settings, Sparkles, Terminal } from "lucide-react";
-import { useTraffic } from "@/components/traffic/traffic-provider";
-import { TRAFFIC } from "@/lib/copy/traffic";
+import { Boxes, ChevronRight, Database, Layers3, MessageSquare, Network, Server, Settings, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
+import { useTraffic } from "@/components/traffic/traffic-provider";
+import { TRAFFIC } from "@/lib/copy/traffic";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 const gearClass = (active: boolean) => cn("flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", active && "border-surface-border bg-surface-raised text-foreground");
-const icons = { designer: Network, pretraining: Layers3, post: Sparkles, chat: MessageSquare, queue: ListOrdered, cluster: Server, resources: Database };
+const icons = { models: Network, data: Database, runs: Layers3, eval: MessageSquare, machines: Server };
 
 export function Sidebar() {
   const pathname = usePathname().replace(/\/$/, "");
   const current = ROUTES.find((route) => route.href === pathname);
-  const pages = ROUTES.filter((route) => route.area === current?.area);
+  const pages = ROUTES.filter((route) => route.area === current?.area && !route.hidden);
+  const settingsActive = pathname === "/settings";
+  const settingsGear = (className?: string) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link href="/settings" aria-current={settingsActive ? "page" : undefined} aria-label={APPEARANCE.settingsLabel} className={cn(gearClass(settingsActive), className)}>
+          <Settings className="size-4" aria-hidden="true" />
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent side="right">{APPEARANCE.settingsLabel}</TooltipContent>
+    </Tooltip>
+  );
   const traffic = useTraffic();
-  const consoleButton = (className: string) => (
-    <button type="button" onClick={traffic.toggle} aria-pressed={traffic.open} title={`${TRAFFIC.button} (${TRAFFIC.shortcut})`} aria-label={TRAFFIC.button} aria-keyshortcuts="Control+`"
-      className={cn(gearClass(traffic.open), className)}>
-      <Terminal className="size-4" aria-hidden="true" />
-    </button>
+  const consoleButton = (className?: string) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" onClick={traffic.toggle} aria-pressed={traffic.open} aria-label={TRAFFIC.button} aria-keyshortcuts="Control+`" className={cn(gearClass(traffic.open), className)}>
+          <Terminal className="size-4" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{TRAFFIC.button} ({TRAFFIC.shortcut})</TooltipContent>
+    </Tooltip>
   );
   return (
     <aside className="studio-glass z-20 flex w-full shrink-0 flex-col border-b border-sidebar-border md:sticky md:top-0 md:h-dvh md:w-60 md:border-r md:border-b-0">
@@ -34,16 +50,14 @@ export function Sidebar() {
           const selected = current?.area === area.id;
           return (
             <Link key={area.id} href={areaHome(area.id).href} aria-current={selected ? "page" : undefined}
-              className={cn("flex shrink-0 items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", area.id === "queue" && "md:mt-5", selected && "border-surface-border bg-surface-raised font-medium text-foreground shadow-sm")}>
+              className={cn("flex shrink-0 items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", area.id === "machines" && "md:mt-5", selected && "border-surface-border bg-surface-raised font-medium text-foreground shadow-sm")}>
               <Icon className="size-4" aria-hidden="true" />{area.title}
               {selected && <ChevronRight className="ml-auto hidden size-3.5 text-muted-foreground md:block" aria-hidden="true" />}
             </Link>
           );
         })}
         {/* On a phone the sidebar is a bar across the top, so the gear joins the row; on a desktop it sits at the foot. */}
-        <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined} title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel} className={cn(gearClass(pathname === "/settings"), "md:hidden")}>
-          <Settings className="size-4" aria-hidden="true" />
-        </Link>
+        {settingsGear("md:hidden")}
         {consoleButton("md:hidden")}
       </nav>
       {pages.length > 1 && (
@@ -55,12 +69,10 @@ export function Sidebar() {
           ))}
         </div>
       )}
-      <div className="mx-4 mb-4 hidden gap-1 md:mt-auto md:flex">
-        <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined}
-          title={APPEARANCE.settingsLabel} aria-label={APPEARANCE.settingsLabel} className={gearClass(pathname === "/settings")}>
-          <Settings className="size-4" aria-hidden="true" />
-        </Link>
-        {consoleButton("")}
+      {/* Pinned to the foot of the nav (margin-top: auto): the gear and the API traffic console button (#341). */}
+      <div className="mx-4 mb-4 hidden items-center gap-1 pt-4 md:mt-auto md:flex">
+        {settingsGear()}
+        {consoleButton()}
       </div>
     </aside>
   );

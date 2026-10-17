@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
+import TrainingPage from "@/app/cluster/training/page";
 import StoragePage from "@/app/storage/page";
 import PassivePage from "@/app/passive/page";
 import QueuePage from "@/app/queue/page";
@@ -91,5 +92,53 @@ describe("pages on recorded responses", () => {
     renderPage(<StoragePage />, { route: "/storage/" });
     expect(await screen.findByRole("heading", { name: "Storage" })).toBeVisible();
     expect(await screen.findByText(/free on this computer's disk/)).toBeVisible();
+  });
+});
+
+describe("the Training tab's live view on the recorded demo run", () => {
+  // The run `studio_api --fake` opens on, read at three moments of its first rounds (tests/web_fixtures.py DEMO_MOMENTS). The page reads the list,
+  // so each fixture is served as a list of one, with the rest of what the page reads recorded or empty.
+  const moment = (name: string) => {
+    const body = fixtures[name].body;
+    replay(["distributed-defaults", "pretraining-text-sets", "versions", "cluster-nodes"], { "GET /distributed/runs": () => json([body]) });
+    return body as {
+      round: number; rounds: number; deadline_s: number | null; contributed: number; expected: number;
+      members: { node: string; device: string; step_in_round: number }[]; timeline: { round: number; lanes: { node: string }[] }[]; events: { kind: string; text: string }[];
+    };
+  };
+
+  test("while the members train: one CUDA and one MPS machine, each with progress, and a lane for each in the open round", async () => {
+    const run = moment("distributed-run-demo-training");
+    renderPage(<TrainingPage />, { route: "/cluster/training/" });
+    expect(await screen.findByTestId("round-title")).toHaveTextContent(`Round ${run.round + 1} of ${run.rounds}`);
+    expect(screen.getByTestId("stage-training")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByTestId("countdown")).toHaveTextContent(`${Math.ceil(run.deadline_s as number)} s to the deadline`);
+    expect(run.members.map((m) => m.device).sort()).toEqual(["cuda", "mps"]);
+    for (const m of run.members) {
+      const node = within(screen.getByTestId(`node-${m.node}`));
+      expect(node.getByTestId(`device-${m.node}`)).toHaveTextContent(m.device.toUpperCase());
+      expect(node.getByRole("progressbar")).toHaveAttribute("aria-valuenow", String(m.step_in_round));
+    }
+    expect(screen.getByTestId("lane-1-mac-mini")).toBeInTheDocument();
+    expect(screen.getByTestId("lane-1-gpu-box")).toBeInTheDocument();
+  });
+
+  test("while changes are collected: how many are in, and the finished machine's upload edge", async () => {
+    const run = moment("distributed-run-demo-collecting");
+    renderPage(<TrainingPage />, { route: "/cluster/training/" });
+    expect(await screen.findByTestId("stage-collecting")).toHaveTextContent(`(${run.contributed} of ${run.expected} in)`);
+    expect(screen.getByTestId("stage-collecting")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByTestId("edge-up-gpu-box")).toHaveTextContent("float16");
+  });
+
+  test("in the second round: the first is on the timeline, closed, and its outer step and checkpoint are in the log", async () => {
+    const run = moment("distributed-run-demo-second-round");
+    renderPage(<TrainingPage />, { route: "/cluster/training/" });
+    expect(await screen.findByTestId("round-title")).toHaveTextContent(`Round ${run.round + 1} of ${run.rounds}`);
+    expect(screen.getByTestId("timeline-round-1")).toHaveAttribute("data-open", "false");
+    expect(screen.getByTestId("timeline-round-2")).toHaveAttribute("data-open", "true");
+    const kinds = within(screen.getByRole("region", { name: "Events" })).getAllByRole("listitem").map((li) => li.getAttribute("data-kind"));
+    expect(kinds).toEqual(run.events.map((e) => e.kind).reverse());
+    expect(kinds.slice(0, 2)).toEqual(["checkpoint", "outer_step"]);
   });
 });

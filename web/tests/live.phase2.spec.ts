@@ -22,7 +22,8 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("main").getByText(text, { exact: true })).toBeVisible();
 
-  await page.getByRole("navigation").getByRole("link", { name: "Pretraining", exact: true }).click();
+  // Pretraining is a page of the Data area, so it is listed in the page list, not the Studio nav.
+  await page.getByRole("group", { name: "Pages in this area" }).getByRole("link", { name: "Pretraining", exact: true }).click();
   const sets = page.getByRole("list", { name: "Text sets" });
   const imported = sets.getByRole("checkbox", { name: new RegExp(source) });
   await expect(imported).toBeVisible();
@@ -37,7 +38,8 @@ test("import text, queue pretraining, watch progress and see the trained version
   await add.click();
   await expect(page.getByText(/^Added to the queue:/)).toBeVisible();
 
-  await page.getByRole("navigation").getByRole("link", { name: "Queue", exact: true }).click();
+  // Queue is a Runs page, and the Runs area home (/runs) has no page until #344 lands, so open the page by its href.
+  await page.goto("/queue/");
   await expect(page.getByRole("main").getByText(new RegExp(`Version ${version.number} from scratch`))).toBeVisible();
   await page.getByRole("main").getByRole("button", { name: "Resume", exact: true }).click();
   const start = page.getByRole("button", { name: "Start the waiting jobs", exact: true });
