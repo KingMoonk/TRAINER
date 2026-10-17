@@ -10,7 +10,7 @@
     python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
     python tasks.py setup                     once per machine: .venv, the right torch (MPS on a Mac, CUDA with nvidia-smi), requirements, pnpm install; prints the device. Any Python 3.12+.
-    python tasks.py dev                       the live loop: the API (--reload) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both; points `tailscale serve` at them. docs/node.md, "Developing".
+    python tasks.py dev                       the live loop: the API (restarts on a .py change) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both; points `tailscale serve` at them. docs/node.md, "Developing".
     python tasks.py run                       the built app (app.py on 127.0.0.1:8787); points `tailscale serve` at it.
 
 Each level includes the one before it. Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
@@ -157,11 +157,18 @@ def setup():
     run(str(VENV_PY), "-c", "from studio_api import accelerator; print('+', accelerator.check())")
 
 
-def dev_commands(pnpm_exe="pnpm"):
+def reload_by_uvicorn():
+    """uvicorn's --reload everywhere but Windows: there it restarts its worker with CTRL_C_EVENT, which Windows delivers to every
+    process on the console, so one edited .py file would stop `dev` and Next too. `dev` watches the sources itself instead."""
+    return sys.platform != "win32"
+
+
+def dev_commands(pnpm_exe="pnpm", reload=None):
     """(API command, web command, web env) for `dev`. Both bind 127.0.0.1 whatever happens: the API trusts the
     Tailscale-User-Login header of a loopback peer (studio_api/auth.py), so only `tailscale serve`, which runs on this machine
     and writes that header itself, may reach it. `dev` takes no arguments, so neither bind can be widened from here."""
-    api = [PY, "-m", "studio_api", "--reload", "--bind", "127.0.0.1", "--port", str(API_PORT)]
+    api = [PY, "-m", "studio_api", *(["--reload"] if (reload_by_uvicorn() if reload is None else reload) else []),
+           "--bind", "127.0.0.1", "--port", str(API_PORT)]
     web = [pnpm_exe, "dev", "--hostname", "127.0.0.1", "--port", str(WEB_PORT)]
     return api, web, {"NEXT_PUBLIC_API_URL": "/api"}  # same origin: `tailscale serve` sends /api/* to the API, prefix stripped
 
@@ -265,8 +272,55 @@ def stop(proc):
         os.killpg(proc.pid, signal.SIGTERM)
 
 
+WATCH_SKIP = {"web", "data", "runs", "node_modules", "__pycache__"}  # besides every directory starting with "." (.venv, .git, .claude/worktrees)
+
+
+def scan_sources(root=Path(__file__).parent, walk=os.walk):
+    """{path: mtime} of the *.py files under `root` that uvicorn --reload would have watched: not .venv, web, data, runs, .git or worktrees."""
+    found = {}
+    for here, dirs, files in walk(root):
+        dirs[:] = [d for d in dirs if d not in WATCH_SKIP and not d.startswith(".")]
+        for name in files:
+            if name.endswith(".py"):
+                path = os.path.join(here, name)
+                try:
+                    found[path] = os.stat(path).st_mtime_ns
+                except OSError:
+                    pass  # deleted between the listing and the stat
+    return found
+
+
+class SourceWatcher:
+    """True once when the Python sources changed and then stopped changing (a `git pull` writes many files over a moment).
+    `scan()` returns {path: mtime}; call `poll()` every second or so."""
+
+    def __init__(self, scan=scan_sources):
+        self.scan, self.seen, self.pending = scan, scan(), None
+
+    def poll(self):
+        now = self.scan()
+        if now == self.seen:
+            self.pending = None
+            return False
+        if now != self.pending:
+            self.pending = now
+            return False
+        self.seen, self.pending = now, None
+        return True
+
+
+def dev_step(api_alive, web_alive, changed, watching):
+    """What the dev loop does next: "stop" (the web server ended, or the API did and nothing watches), "restart" (sources changed
+    and the API is ours to restart), "wait" (the API ended and stays down until the next change) or "keep"."""
+    if not web_alive or (not api_alive and not watching):
+        return "stop"
+    if watching and changed:
+        return "restart"
+    return "wait" if watching and not api_alive else "keep"
+
+
 def dev():
-    """The live dev loop on this machine: the API with --reload and the Next dev server, both on 127.0.0.1, with both outputs in
+    """The live dev loop on this machine: the API (restarting on a .py change) and the Next dev server, both on 127.0.0.1, with both outputs in
     this terminal. Run it with the .venv interpreter (`python tasks.py setup` makes it), on the host so torch sees the GPU (Metal, CUDA).
     When Tailscale is running it points `tailscale serve` at them first (`/` the page, `/api/` the API); `run` points it back."""
     for name, port in (("API", API_PORT), ("web", WEB_PORT)):
@@ -276,17 +330,30 @@ def dev():
     if not exe:
         sys.exit("pnpm is not installed. See web/README.md.")
     api, web, env = dev_commands(exe)
+    watcher = None if reload_by_uvicorn() else SourceWatcher()
     if not (WEB / "node_modules").is_dir():
         run(exe, "install", "--frozen-lockfile", cwd=WEB)
     tailnet(DEV_SERVE)
     procs = [spawn(api), spawn(web, cwd=WEB, env={**os.environ, **env})]
     threading.Thread(target=announce, name="device-notice", daemon=True).start()
-    code = 0
+    code, told = 0, False
     try:
-        while all(p.poll() is None for p in procs):
+        while True:
+            step = dev_step(procs[0].poll() is None, procs[1].poll() is None, bool(watcher and watcher.poll()), watcher is not None)
+            if step == "stop":
+                code = next(p.returncode for p in procs if p.returncode is not None) or 1  # one stopped by itself: say so
+                print(f"+ a dev process exited with {code}; stopping the other", flush=True)
+                break
+            if step == "restart":
+                print("+ a .py file changed; restarting the API", flush=True)
+                stop(procs[0])
+                procs[0].wait()
+                procs[0], told = spawn(api), False
+                threading.Thread(target=announce, name="device-notice", daemon=True).start()
+            elif step == "wait" and not told:
+                told = True
+                print(f"+ the API exited with {procs[0].returncode}; it starts again on the next .py change", flush=True)
             time.sleep(1)
-        code = next(p.returncode for p in procs if p.returncode is not None) or 1  # one stopped by itself: say so
-        print(f"+ a dev process exited with {code}; stopping the other", flush=True)
     except KeyboardInterrupt:
         pass
     finally:
