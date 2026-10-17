@@ -5,11 +5,13 @@
 
 import { ThemeProvider } from "next-themes";
 import { useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { CLIENT_SCRIPT_TYPE } from "@/components/inline-script";
 import { ACCENT_KEY, ACCENTS, type Accent } from "@/lib/theme";
 
 export function AppearanceProvider({ children }: { children: ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange
+      scriptProps={{ type: CLIENT_SCRIPT_TYPE }}>{/* its mode script: as InlineScript, no React 19 warning */}
       {children}
     </ThemeProvider>
   );
