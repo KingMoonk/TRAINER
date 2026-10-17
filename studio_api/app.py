@@ -40,11 +40,12 @@ def create_app(services, open=False, origins=(), **auth):
     app.state.broadcaster = events.Broadcaster(services)
     app.state.jobs = jobs.Jobs(services)
     origins = tuple(origins)
-    if origins:  # inside the auth layer: a response the auth layer refused carries no CORS headers
-        app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_methods=["*"], allow_headers=["*"])
+    cors = dict(allow_methods=["*"], allow_headers=["*"])
+    if origins:  # ONE CORS layer, inside the auth layer: a response the auth layer refused carries no CORS headers
+        app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_origin_regex=LOCAL_ORIGIN if open else None, **cors)
     app.add_middleware(TailscaleAuth, open=open, origins=origins, **auth)
-    if open:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
-        app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, allow_methods=["*"], allow_headers=["*"])
+    if open and not origins:  # loopback or --fake: let `pnpm dev` (http://localhost:3000) call this server from another origin
+        app.add_middleware(CORSMiddleware, allow_origin_regex=LOCAL_ORIGIN, **cors)
 
     @app.exception_handler(ValueError)
     async def bad_request(request, exc):

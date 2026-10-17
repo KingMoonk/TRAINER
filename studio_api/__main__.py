@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import studio_cluster
 
 LOCAL = ("127.0.0.1", "localhost", "::1")
+DEFAULT_PORTS = {"http": 80, "https": 443}
 ORIGINS = "STUDIO_API_ALLOW_ORIGINS"  # comma-separated web origins, added to every --allow-origin
 ARGV = "STUDIO_API_ARGV"  # how --reload hands the command line to the process uvicorn restarts
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,7 +47,10 @@ def origin(value):
     if not parts or parts.scheme not in ("http", "https") or not parts.hostname or text != f"{parts.scheme}://{parts.netloc}" \
             or parts.username or parts.password or "*" in text:
         raise argparse.ArgumentTypeError(f"{value!r} is not a web origin like https://app.example.com (scheme, host, optional port).")
-    return text.lower()
+    host = parts.hostname.lower()
+    host = f"[{host}]" if ":" in host else host
+    port = parts.port
+    return f"{parts.scheme}://{host}" + (f":{port}" if port and port != DEFAULT_PORTS[parts.scheme] else "")
 
 
 def parse(argv=None):
