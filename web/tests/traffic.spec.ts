@@ -12,6 +12,8 @@ test("the terminal button opens the traffic console on any page; it filters, exp
   const body = {
     type: "application/json", bytes: 40, json: { node: "BEAST", token: "••••••" },
   };
+  // Playwright tries the newest route first, so mockApi's catch-all goes in before the stream route that must win over it.
+  await mockApi(page, { "GET /traffic/rules": () => ({ body: { rules: [] } }) });
   await page.route("**/traffic", (route) =>
     route.fulfill({
       status: 200,
@@ -23,7 +25,6 @@ test("the terminal button opens the traffic console on any page; it filters, exp
         frame("record", record(3, { method: "POST", path: "/queue/jobs", status: 503 })),
     }),
   );
-  await mockApi(page, { "GET /traffic/rules": () => ({ body: { rules: [] } }) });
 
   await page.goto("/queue/");
   await page.getByRole("button", { name: "API traffic console" }).locator("visible=true").click();
