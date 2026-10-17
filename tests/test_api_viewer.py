@@ -55,6 +55,22 @@ class ViewerApiTest(unittest.TestCase):
         self.assertEqual(self.client.get("/viewer/scene", params={"snapshot": 9}).json()["stats"]["step"], 2)  # past the end is the last
         self.assertEqual(self.client.get("/viewer/scene", params={"level": "Roof"}).status_code, 422)
 
+    def test_the_thermal_look_is_a_control_the_server_keeps_and_gives_the_tiles_token_text(self):
+        plain = self.client.get("/viewer/scene", params={"level": "Head"}).json()
+        self.assertFalse(plain["view"]["thermal"])
+        self.assertNotIn("tiles", plain["groups"]["matrix"])
+        words = ["a", " b", "c", "d", "e", "f"]
+        with patch.object(self.services, "viewer_token_text", create=True, side_effect=lambda number, ids: words[: len(ids)]) as text:
+            scene = self.client.get("/viewer/scene", params={"level": "Head", "thermal": "true"}).json()
+        text.assert_called_once()
+        self.assertEqual(text.call_args.args[1], [1, 2, 3, 4, 5, 6])
+        self.assertTrue(scene["view"]["thermal"])
+        self.assertIn("pattern", {tile["id"] for tile in scene["groups"]["matrix"]["tiles"]})
+        axis = [label["text"] for label in scene["groups"]["matrix"]["labels"] if label["kind"] == "tile_axis"]
+        self.assertIn("\u00b7b", axis)
+        out = self.client.post("/viewer/action", json={"thermal": True, "action": {"type": "level", "value": "Head"}}).json()
+        self.assertTrue(out["state"]["thermal"])  # the controls come back with it, so the next call keeps the look
+
     def test_scene_without_a_snapshot_still_draws_the_design(self):
         self.services.snapshot_paths = []
         scene = self.client.get("/viewer/scene").json()

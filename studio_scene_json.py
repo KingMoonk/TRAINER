@@ -13,6 +13,12 @@ Shape of a payload (a frame has the same keys, only for what changed, plus `remo
     groups    {key: group}: `gate:<i>` per block at Model and Window, `matrix` at Head and Weights. A group has an
               `origin`, `boxes` and `lines` (one entry per colour kind, columns as {shape, data}) and `labels`
 A box is centred on its position, `size` is its full extent. Colours are kind ids; `palette` maps each to a colour.
+
+Thermal look (`ViewState.thermal`, the browser's default): the Head, Weights and Model levels carry `tiles` in their groups instead of
+bars. A tile is a real matrix to draw as a heat-map plane facing the camera: `values` (rows x columns, at most TILE_CAP each way,
+block-averaged when the matrix is larger; `shape` is the true size), `range` (the ramp's low and high, from the whole matrix), its
+`origin` (centre) and `size` (width, height) in the group, and optionally a `mask` (1 = hidden cell) and `selected`. A tile keeps its
+`id` from frame to frame, so a client updates it in place. Connectors are `connector` lines (arrow shafts and heads).
 """
 from __future__ import annotations
 
@@ -32,19 +38,27 @@ SCHEMA = 1
 VIEWER_LEVELS = ('Model', 'Window', 'Head', 'Weights')  # the viewer offers these four; Run needs loss paths the studio no longer sends
 GATE_SPACING, LANE_PITCH, MATRIX_PITCH = 3., .38, .4  # between blocks (y), between tokens (x), between matrix cells
 BIN_START, BIN_SPAN = -5.5, 11.  # the Model level's bins run along x from here, this far
+TILE_CAP = 32  # a tile carries at most this many rows and columns of values, so a payload stays small however large the matrix
+STACK_HEADS = 16  # a layer's head stack draws at most this many query heads
+STACK_X, STACK_WIDTH = 7.2, 7.  # where the Model level's head stacks start (beside a block, which spans x -6..6), and how wide they may be
+POSTER_TOKENS = 16  # token labels per tile axis: more are thinned to every n-th
 
-# the theme colours the scene uses (studio_ia.theme.C, which imports Tk; a test keeps them equal)
+# the theme colours the scene uses (studio_viewer_ui.C; a test keeps them equal)
 THEME = {'bg': '#0e1014', 'panel': '#15181e', 'panel2': '#1b1f27', 'border': '#2a2f3a', 'text': '#e6e8ec', 'text2': '#c3c8d1',
          'violet': '#9f8cff', 'amber': '#e5b567', 'blue': '#6cb4ee', 'pink': '#e58fb0', 'violet_bg': '#1a1730'}
 # kind id -> (theme colour, alpha): one colour per meaning (studio_viewer_ui.SCENE; a test keeps them equal)
 KINDS = {'activation': ('blue', .85), 'mixer': ('pink', .85), 'channel': ('violet', .7), 'token': ('amber', 1.),
          'lane': ('border', 1.), 'gate': ('border', 1.), 'positive': ('amber', .95), 'negative': ('blue', .95),
-         'masked': ('panel2', 1.), 'picked': ('text', 1.), 'update': ('violet', .8)}  # update: colour is per box
+         'masked': ('panel2', 1.), 'picked': ('text', 1.), 'update': ('violet', .8),  # update: colour is per box
+         'connector': ('text', .9)}
 PALETTE = {kind: {'color': THEME[name], 'alpha': alpha} for kind, (name, alpha) in KINDS.items()}
 PALETTE['background'] = {'color': THEME['bg'], 'alpha': 1.}
 PALETTE['note'] = {'color': '#e0ebff', 'alpha': 1.}  # label_at: token numbers and the empty-matrix note
 PALETTE['label'] = {'color': THEME['text2'], 'alpha': 1., 'frame': THEME['panel'], 'frame_alpha': .9}
 PALETTE['label_selected'] = {'color': THEME['violet'], 'alpha': 1., 'frame': THEME['violet_bg'], 'frame_alpha': .9}
+PALETTE['tile_title'] = {'color': THEME['text'], 'alpha': 1.}  # a tile's name (W_Q, QK^T, A)
+PALETTE['tile_dims'] = {'color': THEME['text2'], 'alpha': 1.}  # a tile's shape (16 x 64)
+PALETTE['tile_axis'] = {'color': THEME['text2'], 'alpha': 1.}  # a token under a tile's rows or columns
 
 
 @dataclass
@@ -57,6 +71,8 @@ class ViewState:
     snapshot_paths: list = field(default_factory=list)  # server-side; the payload carries only the count and position
     snapshot_index: int = -1
     probing: bool = False
+    thermal: bool = False  # heat-map tiles in place of bars (see the module doc)
+    token_text: list | None = None  # the snapshot's first sequence as text, one entry per token, for labels (None: the ids)
     linked: bool = True  # False = a demo with no studio behind it: no snapshot buttons
     auto_orbit: bool = False  # the demo's slow camera orbit
     stats: dict = field(default_factory=dict)
@@ -110,12 +126,23 @@ def _digest(node, path):
     return digest.hexdigest()
 
 
+def _fit(matrix, cap=TILE_CAP):
+    """`matrix` (rows x columns) shrunk to at most `cap` rows and columns by averaging neighbouring blocks."""
+    out = np.asarray(matrix, dtype=float)
+    for axis in (0, 1):
+        n = out.shape[axis]
+        if n > cap:
+            edges = np.linspace(0, n, cap + 1).astype(int)
+            out = np.add.reduceat(out, edges[:-1], axis=axis) / np.diff(edges).reshape((-1, 1) if axis == 0 else (1, -1))
+    return out
+
+
 # --- one keyed piece of geometry ----------------------------------------------------------------------------------------
 
 class _Group:
     def __init__(self, origin=(0., 0., 0.), **meta):
         self.origin, self.meta = origin, meta
-        self._boxes, self._lines, self._labels = {}, {}, []
+        self._boxes, self._lines, self._labels, self._tiles = {}, {}, [], []
 
     def box(self, kind, position, size, alpha=None, **extra):
         """extra columns (value, color, cell) group boxes with the same columns into one entry."""
@@ -128,6 +155,29 @@ class _Group:
     def label(self, text, position, kind='label', selected=False, size=.28):
         self._labels.append({'text': str(text), 'position': [float(v) for v in position], 'kind': kind, 'selected': selected, 'size': size})
 
+    def tile(self, tid, values, origin, size, *, label='', shape=None, mask=None, selected=False, low=None, high=None):
+        """A heat-map plane (facing -y) centred on `origin`, `size` = (width, height). `values` None draws it empty (no data yet)."""
+        entry = {'id': tid, 'label': label, 'origin': [float(v) for v in origin], 'size': [float(v) for v in size], 'selected': bool(selected)}
+        if values is None:
+            entry.update(shape=list(shape or (0, 0)), range=[0., 1.])
+        else:
+            whole = np.nan_to_num(np.asarray(values, dtype=float), nan=0., posinf=0., neginf=0.)
+            fitted = _fit(whole)
+            entry.update(shape=list(shape or whole.shape), values=_Array(fitted),
+                         range=[float(whole.min() if low is None else low), float(whole.max() if high is None else high)])
+            if mask is not None:
+                entry['mask'] = _Array(_fit(np.asarray(mask, dtype=float)) > .5)
+        self._tiles.append(entry)
+
+    def arrow(self, start, end, head=.28):
+        """A thin connector from `start` to `end` with an open arrowhead at `end` (in the xz plane the tiles stand in)."""
+        dx, dz = end[0] - start[0], end[2] - start[2]
+        length = math.hypot(dx, dz) or 1.
+        ux, uz = dx / length, dz / length
+        self.line('connector', [tuple(start), tuple(end)], .8)
+        wing = lambda sign: (end[0] - ux * head - sign * uz * head * .5, end[1], end[2] - uz * head + sign * ux * head * .5)  # noqa: E731
+        self.line('connector', [wing(1), tuple(end), wing(-1)], .8)
+
     def encode(self):
         boxes = []
         for (kind, names), rows in self._boxes.items():
@@ -137,10 +187,13 @@ class _Group:
             boxes.append(entry)
         lines = [{'kind': kind, 'count': len(rows), 'points': _Array([r[0] for r in rows]), 'width': _Array([r[1] for r in rows])}
                  for (kind, _), rows in self._lines.items()]
-        return {'origin': [float(v) for v in self.origin], **self.meta, 'boxes': boxes, 'lines': lines, 'labels': self._labels}
+        out = {'origin': [float(v) for v in self.origin], **self.meta, 'boxes': boxes, 'lines': lines, 'labels': self._labels}
+        if self._tiles:
+            out['tiles'] = self._tiles
+        return out
 
 
-# --- the controls' decisions (studio_viewer_ui.py imports Tk through the theme; tests keep these equal to it) -------------
+# --- the controls' decisions (tests keep these equal to studio_viewer_ui) -------------
 
 def block_matrices(names, layer):
     """The matrices the menu offers: the selected block's, plus the ones outside any block (token, position embeddings)."""
@@ -234,7 +287,7 @@ def pulse_pose(blocks, elapsed, reduce_motion=False):
 
 # --- the scene ----------------------------------------------------------------------------------------------------------
 
-def _gate_group(model, frame, gate):
+def _gate_group(model, frame, gate, view=None):
     """One block at Model or Window (studio_brain3d.draw_gate), in coordinates local to the block."""
     index, selected = gate['index'], gate['index'] == model.selection.layer
     entry = gate['entry']
@@ -267,6 +320,8 @@ def _gate_group(model, frame, gate):
                         continue
                     x1, x2 = (BIN_START + BIN_SPAN * i / max(1, bins - 1) for i in (query, key))
                     group.line('mixer', [(x1, 0., 2.), ((x1 + x2) / 2, 0., 2.5 + abs(x1 - x2) / 3), (x2, 0., 2.)], 1 + weight * 3)
+        if view is not None and view.thermal:
+            _head_stack(group, model, view, frame, gate)
         return group
     count = len(frame['tokens'])
     pattern = frame['patterns'].get(f'block{index}.attn.pattern')
@@ -350,6 +405,251 @@ def _matrix_group(model, frame, view):
         group.meta['caption'] += f'\n{numbers}'
     return group, rows
 
+# --- the thermal look: real matrices as heat-map tiles --------------------------------------------------------------------
+
+POSTER_HEIGHT = 3.  # a tile of tokens is this tall (scene units)
+QKV_ROWS = (4.2, 0., -4.2)  # the z of the Q, K and V rows of a head's poster
+VARIANTS = ((lambda heads, shared: shared == heads, 'MHA'), (lambda heads, shared: shared == 1, 'MQA'), (lambda heads, shared: True, 'GQA'))
+
+
+def token_names(view, ids, start, count):
+    """The window's tokens as readable labels: the text when `view` has it, else the ids. A space shows as a dot, a break as a return sign."""
+    text = view.token_text or []
+    names = []
+    for i in range(start, start + count):
+        raw = text[i] if i < len(text) else None
+        if raw is None:
+            raw = str(int(ids[i])) if i < len(ids) else str(i)
+        elif raw == '':
+            raw = f'#{int(ids[i])}' if i < len(ids) else '#'
+        names.append(raw.replace(' ', '\u00b7').replace('\n', '\u21b5').replace('\t', '\u2192')[:6])
+    return names
+
+
+def _axis_labels(group, tile, names, rows=False, columns=False):
+    """Token labels beside a tile's rows and above its columns, thinned to POSTER_TOKENS each."""
+    (x, _, z), (w, h) = tile['origin'], tile['size']
+    count = len(names)
+    step = max(1, math.ceil(count / POSTER_TOKENS))
+    for i in range(0, count, step):
+        if rows:
+            group.label(names[i], (x - w / 2 - .08, 0., z + h / 2 - (i + .5) * h / count), kind='tile_axis', size=.14)
+        if columns:
+            group.label(names[i], (x - w / 2 + (i + .5) * w / count, 0., z + h / 2 + .14), kind='tile_axis', size=.14)
+
+
+def _caption(group, tile, name, shape_text):
+    (x, _, z), (_, h) = tile['origin'], tile['size']
+    group.label(name, (x, 0., z + h / 2 + .38), kind='tile_title', size=.3)
+    group.label(shape_text, (x, 0., z - h / 2 - .3), kind='tile_dims', size=.16)
+
+
+def _place(group, tid, values, centre, size, *, name, shape, mask=None, selected=False, low=None, high=None, names=None, rows=False, columns=False):
+    """One tile with its name above, its shape below and the token labels asked for."""
+    group.tile(tid, values, centre, size, label=name, shape=shape, mask=mask, selected=selected, low=low, high=high)
+    tile = {'origin': centre, 'size': size}
+    _caption(group, tile, name, ' \u00d7 '.join(str(n) for n in shape))
+    if names is not None:
+        _axis_labels(group, tile, names, rows, columns)
+    return tile
+
+
+def _edge(tile, side):
+    """The middle of a tile's left, right, top or bottom edge, nudged off it so an arrow does not touch."""
+    (x, y, z), (w, h) = tile['origin'], tile['size']
+    return {'left': (x - w / 2 - .12, y, z), 'right': (x + w / 2 + .12, y, z), 'top': (x, y, z + h / 2 + .12), 'bottom': (x, y, z - h / 2 - .12)}[side]
+
+
+def _head_weights(arrays, block, mixer_id, head, kv_group, width, heads, kv_heads):
+    """(W_Q, W_K, W_V) columns of one head, each (d_model x head size), or Nones when the snapshot does not hold them."""
+    depth = max(1, width // max(1, heads))
+    prefix = f'weight::block{block}.'
+    if mixer_id.endswith('gqa'):
+        sources = ((f'{prefix}gqa.q.w', head), (f'{prefix}gqa.k.w', kv_group), (f'{prefix}gqa.v.w', kv_group))
+        picks = [(arrays.get(name), index) for name, index in sources]
+    else:
+        fused = arrays.get(f'{prefix}qkv.w')
+        picks = [(fused, part * heads + head) for part in range(3)] if fused is not None else [(None, 0)] * 3
+    out = []
+    for matrix, index in picks:
+        out.append(None if matrix is None or matrix.ndim != 2 or matrix.shape[1] < (index + 1) * depth else matrix[:, index * depth:(index + 1) * depth])
+    return out
+
+
+def _head_poster(group, model, view, frame):
+    """The Head level as the real matrices of one head, left to right: X, W_Q W_K W_V, Q K V, QK^T, A (the causal mask visible), head out."""
+    arrays = model.snapshot['arrays'] if model.snapshot else {}
+    block, selection = model.selection.layer, model.selection
+    start, end = frame['start'], frame['end']
+    count = end - start
+    q = arrays.get(f'hook::block{block}.attn.q')
+    if q is None or q.ndim != 4:
+        return False
+    heads = q.shape[1]
+    head = min(selection.head, heads - 1)
+    k, v = arrays.get(f'hook::block{block}.attn.k'), arrays.get(f'hook::block{block}.attn.v')
+    kv_heads = k.shape[1] if k is not None else heads
+    kv_group = min(kv_heads - 1, head // max(1, heads // kv_heads))
+    x = arrays.get(f'hook::block{block}.resid.pre')
+    ids = arrays['ids'][0].tolist() if 'ids' in arrays else list(range(count))
+    names = token_names(view, ids, start, count)
+    mixer_id = model.gates[block]['entry']['mixer']['id']
+    width = model.spec['dims']['d_model']
+    weights = _head_weights(arrays, block, mixer_id, head, kv_group, width, heads, kv_heads)
+    window = slice(start, end)
+    depth = q.shape[3]
+    stage = view.head_stage
+    mask = np.arange(start, end)[None, :] > np.arange(start, end)[:, None]
+    tall = POSTER_HEIGHT
+    tiles = {}
+
+    def put(tid, values, centre, size, name, shape, **extra):
+        tiles[tid] = _place(group, tid, values, centre, size, name=name, shape=shape, **extra)
+
+    put('x', x[0, window] if x is not None else None, (-15.5, 0., 0.), (3.6, tall), 'X', (count, width), names=names, rows=True)
+    for row, (tid, label, source, matrix, kind) in zip(QKV_ROWS, (('q', 'Q', q, weights[0], 'wq'), ('k', 'K', k, weights[1], 'wk'), ('v', 'V', v, weights[2], 'wv'))):
+        part = None if source is None else source[0, head if tid == 'q' else kv_group, window]
+        if matrix is not None:
+            put(kind, matrix, (-10., 0., row), (1.4, tall), 'W_' + label, matrix.shape)
+            group.arrow(_edge(tiles['x'], 'right') if row == 0 else (_edge(tiles['x'], 'right')[0], 0., row * .45), _edge(tiles[kind], 'left'))
+            group.arrow(_edge(tiles[kind], 'right'), (-6.6, 0., row))
+        else:
+            group.arrow((_edge(tiles['x'], 'right')[0], 0., row * .45), (-6.6, 0., row))
+        put(tid, part, (-5.5, 0., row), (1.8, tall), label + ('' if tid == 'q' or kv_heads == heads else f' (shared by {heads // kv_heads})'),
+            (count, depth))
+    scores = arrays.get(f'hook::block{block}.attn.scores')
+    pattern = arrays.get(f'hook::block{block}.attn.pattern')
+    out = arrays.get(f'hook::block{block}.attn.head_out')
+    middle = (QKV_ROWS[0] + QKV_ROWS[1]) / 2
+    sources = [tiles['q'], tiles['k']]
+    here = None
+    if scores is not None:
+        here = (.8, 0., middle)
+        put('scores', scores[0, head, window, window], here, (tall, tall), 'QK\u1d40', (count, count), mask=mask,
+            selected=stage in ('scores', 'scale', 'mask'), names=names, rows=True, columns=True)
+        for source, side in zip(sources, ('top', 'bottom')):
+            group.arrow(_edge(source, 'right'), _edge(tiles['scores'], 'left')[:2] + (tiles['scores']['origin'][2] + (tall * .3 if side == 'top' else -tall * .3),))
+    if pattern is not None:
+        centre = (5.6, 0., middle)
+        put('pattern', pattern[0, head, window, window], centre, (tall, tall), 'A = softmax (masked)', (count, count), mask=mask,
+            selected=stage == 'pattern', names=names, rows=True, columns=True, low=0.)
+        if 'scores' in tiles:
+            group.arrow(_edge(tiles['scores'], 'right'), _edge(tiles['pattern'], 'left'))
+        else:
+            for source, side in zip(sources, (.3, -.3)):
+                group.arrow(_edge(source, 'right'), (_edge(tiles['pattern'], 'left')[0], 0., middle + tall * side))
+        here = centre
+    if out is not None:
+        lower = (here[2] if here else middle) + QKV_ROWS[2]
+        put('out', out[0, head, window], (11.2, 0., lower / 2), (1.8, tall), 'A\u00b7V (head out)', (count, depth), selected=stage == 'values', names=names, rows=True)
+        if 'pattern' in tiles:
+            group.arrow(_edge(tiles['pattern'], 'right'), _edge(tiles['out'], 'left')[:2] + (tiles['out']['origin'][2] + tall * .3,))
+        group.arrow(_edge(tiles['v'], 'right'), (_edge(tiles['out'], 'left')[0], 0., tiles['out']['origin'][2] - tall * .3))
+    return True
+
+
+def _weights_tile(group, model, view, frame):
+    """The Weights level: the visible 16 x 16 piece of one matrix as a heat map, the picked cell framed."""
+    tile = np.nan_to_num(np.asarray(frame.get(view.tile_kind, []), dtype=float), nan=0., posinf=0., neginf=0.)
+    rows, columns = tile.shape
+    size = 6.
+    where = frame['origin'] if frame.get('origin') else (0, 0)
+    group.tile('weights', tile, (0., 0., 0.), (size, size), label=frame.get('weight_name') or '', shape=frame.get('shape') or tile.shape)
+    shape = frame.get('shape') or tile.shape
+    group.label(f"{frame.get('weight_name')}  {shape[0]} \u00d7 {shape[1]}", (0., 0., size / 2 + .45), kind='tile_title', size=.3)
+    group.label(f'rows {where[0]}-{where[0] + rows - 1}, columns {where[1]}-{where[1] + columns - 1}', (0., 0., -size / 2 - .3), kind='tile_dims', size=.16)
+    row, column = min(view.cell[0], rows - 1), min(view.cell[1], columns - 1)
+    x, z = (column + .5) * size / columns - size / 2, size / 2 - (row + .5) * size / rows
+    dx, dz = size / columns / 2, size / rows / 2
+    group.line('connector', [(x - dx, -.02, z - dz), (x + dx, -.02, z - dz), (x + dx, -.02, z + dz), (x - dx, -.02, z + dz), (x - dx, -.02, z - dz)], 2.)
+
+
+def _thermal_matrix_group(model, frame, view):
+    """_matrix_group's counterpart for the thermal look: same meta (caption, weight name, shape), tiles instead of bars."""
+    level = frame['level']
+    group = _Group(level=level, kind=view.tile_kind if level == 'Weights' else view.head_stage,
+                   weight_name=frame.get('weight_name'), shape=list(frame['shape']) if frame.get('shape') else None,
+                   origin_cell=list(frame['origin']) if frame.get('origin') else [0, 0], pitch=MATRIX_PITCH, caption='')
+    drawn = False
+    if level == 'Weights':
+        tile = np.asarray(frame.get(view.tile_kind, []), dtype=float)
+        if tile.ndim == 2 and tile.size:
+            _weights_tile(group, model, view, frame)
+            drawn = True
+    elif model.snapshot:
+        drawn = _head_poster(group, model, view, frame)
+    if not drawn:
+        gate = model.gates[model.selection.layer]
+        group.label(empty_matrix_note(level, bool(model.snapshot), model.selection.layer, gate['entry']['mixer']['id'],
+                                      gate['glyphs']['mixer']['kind'] == 'beams'), (0., 0., 2.), kind='note')
+        return group, 16
+    group.meta['caption'] = thermal_legend(level)
+    if model.show_numbers and level == 'Weights':
+        tile = np.asarray(frame.get(view.tile_kind), dtype=float)
+        cell = (min(view.cell[0], tile.shape[0] - 1), min(view.cell[1], tile.shape[1] - 1))
+        group.meta['caption'] += f'\n{tile.shape[0]}x{tile.shape[1]} | range {tile.min():.3g} to {tile.max():.3g} | cell {cell[0]},{cell[1]} = {float(tile[cell]):.4g} (I J K L move)'
+    return group, 16
+
+
+def thermal_legend(level):
+    ramp = 'colour = value, dark purple low to yellow high'
+    if level == 'Head':
+        return f'{ramp} | rows = queries, columns = keys | dark = masked (a later key)'
+    return f'{ramp} | the white frame is the picked cell'
+
+
+def thermal_camera(level, blocks, target, distance):
+    """The camera for the tiles: the poster is about 30 wide, a weight tile 6, the Model level has the head stacks to the right."""
+    if level == 'Head':
+        return (-2.5, 0., 0.), 32.
+    if level == 'Weights':
+        return (0., 0., 0.), 11.
+    return (target[0] + 4., target[1], target[2]), max(distance, 26.)
+
+
+def head_variant(heads, shared):
+    """MHA (every head has its own keys and values), MQA (all share one set) or GQA (groups of heads share a set)."""
+    return next(name for test, name in VARIANTS if test(heads, shared))
+
+
+def _head_stack(group, model, view, frame, gate):
+    """A layer's heads at the Model level, beside its block: one tile per query head (that head's attention), and under them the
+    key/value slabs, each as wide as the heads that share it (MHA: one per head; GQA: one per group; MQA: one for all)."""
+    index = gate['index']
+    config = gate['entry']['mixer']['config']
+    if gate['glyphs']['mixer']['kind'] != 'beams' or int(config.get('heads', 0)) < 1:
+        return
+    heads = int(config['heads'])
+    shared = int(config.get('kv_heads', heads))
+    shared = shared if 1 <= shared <= heads and heads % shared == 0 else heads
+    per = heads // shared  # heads sharing one key/value set
+    shown = min(heads, STACK_HEADS)
+    pitch = min(1., STACK_WIDTH / shown)
+    arrays = model.snapshot['arrays'] if model.snapshot else {}
+    pattern = frame['attention'].get(f'block{index}.attn.pattern')
+    pattern = np.asarray(pattern) if pattern is not None else arrays.get(f'hook::block{index}.attn.pattern')
+    pattern = pattern[0] if pattern is not None and pattern.ndim == 4 else pattern
+    keys, values = arrays.get(f'hook::block{index}.attn.k'), arrays.get(f'hook::block{index}.attn.v')
+    label_x = STACK_X + shown * pitch / 2
+    for h in range(shown):
+        x = STACK_X + (h + .5) * pitch
+        view_of = pattern[h] if pattern is not None and h < len(pattern) else None
+        group.tile(f'head:{h}', view_of, (x, 0., 2.3), (pitch * .86, pitch * .86), label=f'head {h + 1}', shape=view_of.shape if view_of is not None else None,
+                   mask=np.arange(view_of.shape[1])[None, :] > np.arange(view_of.shape[0])[:, None] if view_of is not None else None,
+                   selected=gate['index'] == model.selection.layer and h == model.selection.head, low=0.)
+    for g in range(math.ceil(shown / per)):
+        first, last = g * per, min(shown, (g + 1) * per)
+        centre = STACK_X + (first + last) / 2 * pitch
+        wide = (last - first) * pitch * .86
+        for z, kind, source in ((1.15, 'k', keys), (.55, 'v', values)):
+            part = source[0, g] if source is not None and g < source.shape[1] else None
+            group.tile(f'{kind}:{g}', part, (centre, 0., z), (wide, .48), label=f'{kind.upper()} {g + 1}', shape=part.shape if part is not None else None)
+        for h in range(first, last):
+            x = STACK_X + (h + .5) * pitch
+            group.arrow((x, 0., 2.3 - pitch * .43 - .04), (x, 0., 1.15 + .24 + .06), head=.12)
+    variant = head_variant(heads, shared)
+    group.label(f'{variant}: {heads} heads, {shared} key/value set' + ('s' if shared != 1 else ''), (label_x, 0., 3.35), kind='tile_title', size=.22)
+
 
 def _info(model, frame):
     info = f"{model.spec['name']} | {frame['level']} | {frame['mode']} | block {model.selection.layer + 1}"
@@ -392,16 +692,18 @@ def _parts(model, view):
     level, selection = frame['level'], model.selection
     groups, rows = {}, 16
     if level in ('Model', 'Window'):
-        groups = {f"groups/gate:{gate['index']}": _gate_group(model, frame, gate).encode() for gate in frame['gates']}
+        groups = {f"groups/gate:{gate['index']}": _gate_group(model, frame, gate, view).encode() for gate in frame['gates']}
     elif level in ('Head', 'Weights'):
-        group, rows = _matrix_group(model, frame, view)
+        group, rows = (_thermal_matrix_group if view.thermal else _matrix_group)(model, frame, view)
         groups = {'groups/matrix': group.encode()}
     names = block_matrices(weight_names(model), selection.layer)
     snap = snapshot_buttons(view.linked, view.probing)
     target, distance = camera_view(level, len(model.gates), rows)
+    if view.thermal:
+        target, distance = thermal_camera(level, len(model.gates), target, distance)
     return {
         'view': {'level': level, 'mode': model.mode, 'head_stage': view.head_stage, 'tile_kind': view.tile_kind,
-                 'reduce_motion': model.reduce_motion, 'show_numbers': model.show_numbers, 'levels': list(VIEWER_LEVELS),
+                 'thermal': view.thermal, 'reduce_motion': model.reduce_motion, 'show_numbers': model.show_numbers, 'levels': list(VIEWER_LEVELS),
                  'modes': list(MODES), 'head_stages': list(HEAD_STAGES), 'tile_kinds': list(TILE_KINDS),
                  'controls': {'rows': view_rows(level, model.mode, names), 'matrices': names, 'snapshots': snap,
                               'toggles': toggle_names(level, view.snapshot_paths, view.auto_orbit)}},

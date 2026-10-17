@@ -5,7 +5,6 @@ import unittest
 
 import studio_data_kinds as dk
 from studio_core import Workspace
-from studio_ia.pages import your_data as yd
 from studio_ia.services import FakeServices, WorkspaceServices
 
 
@@ -135,35 +134,6 @@ class WorkspaceServicesPageTest(unittest.TestCase):
         self.assertEqual([r["a"] for r in fake.data_page("conversations", "hello")[0]], ["Say hello."])
 
 
-class FitCellTest(unittest.TestCase):
-    wide = staticmethod(len)  # one pixel per character
-
-    def test_newlines_and_runs_of_spaces_become_one_space(self):
-        self.assertEqual(yd.fit_cell("There are many.\n- Services:   a\r\n\n- Food: b", 99, self.wide), "There are many. - Services: a - Food: b")
-
-    def test_a_short_line_is_left_alone(self):
-        self.assertEqual(yd.fit_cell("fits", 4, self.wide), "fits")
-
-    def test_a_long_line_ends_in_an_ellipsis_within_the_width(self):
-        cell = yd.fit_cell("value of the stuff and more", 12, self.wide)
-        self.assertEqual(cell, "value of th…")
-
-    def test_no_trailing_space_before_the_ellipsis(self):
-        self.assertEqual(yd.fit_cell("one two three", 8, self.wide), "one two…")
-
-    def test_a_huge_cell_is_cut_without_reading_it_all(self):
-        seen = []
-        cell = yd.fit_cell("word " * 100000, 30, lambda t: seen.append(len(t)) or len(t))
-        self.assertTrue(cell.endswith("…") and len(cell) <= 30)
-        self.assertLessEqual(max(seen), yd.CELL_READ)
-
-    def test_a_proportional_measure_is_respected(self):
-        measure = lambda t: sum(3 if c in "iltf " else 8 for c in t)  # noqa: E731
-        cell = yd.fit_cell("little little little little", 60, measure)
-        self.assertLessEqual(measure(cell), 60)
-        self.assertGreater(len(cell), 5)
-
-
 class Clock:
     """after/after_cancel stand-in: timers run only when the test says so."""
 
@@ -181,59 +151,6 @@ class Clock:
     def fire(self):
         for handle in sorted(self.timers):
             self.timers.pop(handle)[1]()
-
-
-class SearchTest(unittest.TestCase):
-    def setUp(self):
-        self.clock, self.ran = Clock(), []
-        self.search = yd.Search(self.clock.after, self.clock.cancel, self.ran.append)
-
-    def test_a_burst_of_keys_runs_one_search_after_the_delay(self):
-        for _ in range(5):
-            self.search.type()
-        self.assertEqual((len(self.clock.timers), [ms for ms, _ in self.clock.timers.values()]), (1, [yd.SEARCH_DELAY]))
-        self.assertEqual(self.ran, [])
-        self.clock.fire()
-        self.assertEqual(len(self.ran), 1)
-        self.assertEqual(self.clock.timers, {})
-
-    def test_typing_drops_a_read_still_in_flight(self):
-        self.search.type()
-        self.clock.fire()
-        in_flight = self.ran[-1]
-        self.assertTrue(self.search.wanted(in_flight))
-        self.search.type()
-        self.assertFalse(self.search.wanted(in_flight))
-        self.clock.fire()
-        self.assertTrue(self.search.wanted(self.ran[-1]))
-        self.assertFalse(self.search.wanted(in_flight))
-
-    def test_claim_cancels_a_pending_search(self):
-        self.search.type()
-        token = self.search.claim()
-        self.assertEqual((self.clock.timers, self.ran), ({}, []))
-        self.assertTrue(self.search.wanted(token))
-
-
-class ThrottleTest(unittest.TestCase):
-    def test_one_pass_per_interval(self):
-        throttle = yd.Throttle(1.0)
-        self.assertEqual([throttle.ready(t) for t in (0.0, 0.2, 0.9, 1.0, 1.5, 2.1)], [True, False, False, True, False, True])
-
-    def test_wait_is_the_time_left(self):
-        throttle = yd.Throttle(1.0)
-        self.assertEqual(throttle.wait(5.0), 0.0)
-        throttle.ready(5.0)
-        self.assertAlmostEqual(throttle.wait(5.25), 0.75)
-        self.assertEqual(throttle.wait(7.0), 0.0)
-
-
-class ShownLineTest(unittest.TestCase):
-    def test_only_while_more_waits(self):
-        self.assertEqual(yd.shown_line(200, 1000, "", False), "")
-        self.assertEqual(yd.shown_line(200, 1000, "", True), "Showing the first 200 of 1,000.")
-        self.assertEqual(yd.shown_line(400, 1000, " tide ", True), "Showing the first 400 matches.")
-        self.assertEqual(yd.shown_line(30, 1000, "tide", False), "")
 
 
 if __name__ == "__main__":

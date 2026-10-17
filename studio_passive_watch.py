@@ -192,8 +192,6 @@ def _label(root):
 
 
 def _watch_command(root):
-    if getattr(sys, "frozen", False):
-        return module_command("studio_passive_watch", "--root", str(Path(root).resolve()))
     python = Path(sys.executable)
     if sys.platform == "win32" and python.with_name("pythonw.exe").exists():
         python = python.with_name("pythonw.exe")  # no console window
@@ -224,7 +222,7 @@ def install(root, *, home=None, run=subprocess.run, platform=sys.platform):
             python = Path(sys.executable)
             python = python.with_name("pythonw.exe") if python.with_name("pythonw.exe").exists() else python
             name = f"GroundworkPassive-{_label(root)}"
-            command = module_command("studio_passive_watch", "--root", str(root)) if getattr(sys, "frozen", False) else [str(python), str(REPO / "studio_passive_watch.py"), "--root", str(root)]
+            command = [str(python), str(REPO / "studio_passive_watch.py"), "--root", str(root)]
             script = _script(root)  # schtasks /TR holds at most 261 characters; the command line itself can be longer
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text('@echo off\r\nstart "" ' + subprocess.list2cmdline(command).replace("%", "%%") + "\r\n", encoding="utf-8")

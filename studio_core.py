@@ -53,8 +53,8 @@ def _root():
 
 
 def module_command(module, *args):
-    """Command line that runs `module` as a script in a new process. A frozen app has no python: its executable dispatches on --run-module (see app.py)."""
-    return [sys.executable, *(["--run-module"] if getattr(sys, "frozen", False) else ["-m"]), module, *args]
+    """Command line that runs `module` as a script in a new process."""
+    return [sys.executable, "-m", module, *args]
 
 
 ROOT = _root()

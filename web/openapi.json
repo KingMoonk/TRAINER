@@ -204,6 +204,11 @@
             ],
             "title": "Spec"
           },
+          "thermal": {
+            "default": false,
+            "title": "Thermal",
+            "type": "boolean"
+          },
           "tileKind": {
             "default": "weight",
             "enum": [
@@ -1782,6 +1787,11 @@
               }
             ],
             "title": "Spec"
+          },
+          "thermal": {
+            "default": false,
+            "title": "Thermal",
+            "type": "boolean"
           },
           "tileKind": {
             "default": "weight",
@@ -7543,6 +7553,11 @@
               }
             ],
             "title": "Spec"
+          },
+          "thermal": {
+            "default": false,
+            "title": "Thermal",
+            "type": "boolean"
           },
           "tileKind": {
             "default": "weight",
@@ -14169,6 +14184,16 @@
               "default": 0,
               "title": "Snapshot",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thermal",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Thermal",
+              "type": "boolean"
             }
           }
         ],

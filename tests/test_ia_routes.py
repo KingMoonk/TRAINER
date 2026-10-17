@@ -1,30 +1,20 @@
-"""Every route in the Tk shell has a web page, and no web page still renders the placeholder.
+"""Every web route has a page, and no web page still renders the placeholder.
 
-The Tk routes are the keys of studio_ia/shell.py's ROUTES dict. The file is read with ast, not imported: importing the shell
-imports tkinter. The web routes are the {route, href} entries of web/src/lib/routes.ts. The page for a web route is
+The web routes are the {route, href} entries of web/src/lib/routes.ts. The page for a web route is
 web/src/app/<href>/page.tsx. A page is a placeholder when its page.tsx renders PagePlaceholder
 (web/src/components/page-placeholder.tsx): the test looks for that name, or its module path, in the page source.
 """
 
-import ast
 import re
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SHELL = ROOT / "studio_ia" / "shell.py"
 ROUTES_TS = ROOT / "web" / "src" / "lib" / "routes.ts"
 APP = ROOT / "web" / "src" / "app"
 WEB_ROUTE = re.compile(r'\{\s*route:\s*"([^"]+)",\s*href:\s*"([^"]+)"')
 PLACEHOLDER = re.compile(r"\bPagePlaceholder\b|page-placeholder")
-
-
-def tk_routes(source=SHELL):
-    for node in ast.parse(source.read_text(encoding="utf-8")).body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "ROUTES" for t in node.targets):
-            return [k.value for k in node.value.keys if isinstance(k, ast.Constant)]
-    raise AssertionError(f"no ROUTES dict in {source}")
 
 
 def web_routes(source=ROUTES_TS):
@@ -45,14 +35,8 @@ def placeholders(pairs, app=APP):
 
 
 class RouteCheck(unittest.TestCase):
-    def test_both_route_lists_are_read(self):
-        self.assertTrue(tk_routes(), f"no routes found in {SHELL}")
+    def test_the_route_list_is_read(self):
         self.assertTrue(web_routes(), f"no routes found in {ROUTES_TS}")
-
-    def test_every_tk_route_has_a_web_route(self):
-        web = {route for route, _ in web_routes()}
-        missing = [route for route in tk_routes() if route not in web]
-        self.assertEqual(missing, [], f"Tk routes with no entry in {ROUTES_TS.relative_to(ROOT)}: {missing}")
 
     def test_every_web_route_has_a_page(self):
         missing = unbuilt(web_routes())

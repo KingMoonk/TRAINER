@@ -4,13 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from studio_core import Workspace
 from studio_ia import attribution as A
 from studio_ia import design as D
-from studio_ia.pages import builder as B
 from studio_ia.services import FakeServices, Version, WorkspaceServices
 from studio_spec import default_spec
 
@@ -272,78 +270,6 @@ class Services(unittest.TestCase):
                              facts=lambda n: calls.append(n) or FACTS)
         self.assertEqual(calls, [1, 2])
         self.assertTrue(any("effect of the change" in t for t in out))
-
-
-class TkThread(unittest.TestCase):
-    """The page never reads run files while painting: a worker does, and the line is painted again when it is done."""
-
-    def page(self):
-        queued, services = [], mock.Mock()
-        services.run_facts.return_value = FACTS
-        services.compare_runs.return_value = []
-        page = SimpleNamespace(services=services, attr_cache={}, attr_fresh=set(), attr_busy=set(), painting_expect=False,
-                               guide_label=None, quietly=lambda work, then, lane="fast": queued.append((work, then, lane)))
-        return page, services, queued
-
-    def test_painting_reads_nothing_and_asks_for_the_slow_lane_once(self):
-        page, services, queued = self.page()
-        vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
-        for _ in range(3):  # every redraw
-            facts, compares = B.BuilderPage.attribution_inputs(page, vs)
-            self.assertEqual((facts, compares), (None, None))
-        services.run_facts.assert_not_called()
-        services.compare_runs.assert_not_called()
-        self.assertEqual([lane for _, _, lane in queued], ["slow"])
-        out = D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6), vs, facts=facts, compares=compares)
-        self.assertTrue(any("checking what else changed" in t for t in out))
-        self.assertFalse(any("effect of the change" in t for t in out))
-
-    def test_the_worker_result_is_kept_per_pair_and_used(self):
-        page, services, queued = self.page()
-        vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
-        B.BuilderPage.attribution_inputs(page, vs)
-        work, then, _ = queued[0]
-        then(work())
-        self.assertEqual([c.args[0] for c in services.run_facts.call_args_list], [1, 2])
-        facts, compares = B.BuilderPage.attribution_inputs(page, vs)
-        self.assertEqual((facts(1), facts(2), compares()), (FACTS, FACTS, []))
-        self.assertEqual(len(queued), 1)  # nothing asked again
-        out = D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6), vs, facts=facts, compares=compares)
-        self.assertTrue(any("effect of the change" in t for t in out))
-        page.attr_fresh.clear()  # the page was refreshed: read again, showing the last result meanwhile
-        self.assertIsNotNone(B.BuilderPage.attribution_inputs(page, vs)[0])
-        self.assertEqual(len(queued), 2)
-
-    def test_a_worker_that_cannot_read_says_so_instead_of_staying_pending(self):
-        page, services, queued = self.page()
-        services.run_facts.side_effect = OSError("gone")
-        vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
-        B.BuilderPage.attribution_inputs(page, vs)
-        work, then, _ = queued[0]
-        then(work())
-        facts, compares = B.BuilderPage.attribution_inputs(page, vs)
-        self.assertEqual(facts(1), {})
-        self.assertIn("could not check", D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6),
-                                                         vs, facts=facts, compares=compares)[-1])
-
-    def test_a_worker_that_fails_in_an_unexpected_way_still_frees_the_pair(self):
-        page, services, queued = self.page()
-        services.compare_runs.side_effect = RuntimeError("boom")
-        vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
-        B.BuilderPage.attribution_inputs(page, vs)
-        work, then, _ = queued[0]
-        then(work())
-        self.assertEqual(page.attr_busy, set())
-        facts, compares = B.BuilderPage.attribution_inputs(page, vs)
-        self.assertEqual(facts(1), {})
-        self.assertEqual(len(queued), 1)  # shown as could not check, not asked again until the page refreshes
-        self.assertIn("could not check", D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6),
-                                                         vs, facts=facts, compares=compares)[-1])
-
-    def test_without_a_block_change_nothing_is_gathered(self):
-        page, services, queued = self.page()
-        self.assertEqual(B.BuilderPage.attribution_inputs(page, [version(1, 2, 3.0), version(2, 2, 2.5)]), (None, None))
-        self.assertEqual(queued, [])
 
 
 class Records(unittest.TestCase):
