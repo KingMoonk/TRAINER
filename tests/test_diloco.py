@@ -1,11 +1,13 @@
 """studio_diloco: the outer optimizer, the shard deal, the coordinator's rules on a fake clock, restart from diloco.json, and one
 member against the real routes giving the weights plain training gives."""
+import json
 import random
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -301,6 +303,176 @@ class Rounds(Directory):
             store = studio_diloco.install_shard(self.dir / "cache", shard, c.shard_bytes(shard), c.tokenizer.vocab_size)
             windows += [(x.tolist(), y.tolist()) for x, y in store]
         self.assertEqual(windows, [(x.tolist(), y.tolist()) for x, y in c.train])
+
+
+class LiveView(Directory):
+    """What the Training tab's live view reads: member reports, the round timeline, the event log and the run's phase."""
+
+    def setUp(self):
+        super().setUp()
+        self.clock = Clock()
+
+    def coordinator(self, **changes):
+        return support.build(self.dir, clock=self.clock, **changes)
+
+    def report(self, c, node, number, phase, step=0, loss=None, tps=None, epoch=0):
+        view = c.round_view(number, node)
+        return c.progress(number, node, view.get("generation", c.generation), epoch, phase, step, loss, tps)
+
+    def test_the_latest_report_per_member_is_kept_with_its_samples(self):
+        c = self.coordinator(inner_steps=4, first_round_seconds=100.)
+        c.join("a")
+        self.assertTrue(self.report(c, "a", 0, "downloading"))
+        self.clock.now = 3.
+        self.assertTrue(self.report(c, "a", 0, "training", 2, 3.5, 900.))
+        self.clock.now = 5.
+        self.assertTrue(self.report(c, "a", 0, "training", 3, 3.2, 950.))
+        self.clock.now = 6.
+        node = c.snapshot()["nodes"]["a"]
+        self.assertEqual({k: node["progress"][k] for k in ("phase", "step", "steps", "loss", "tokens_per_second")},
+                         {"phase": "training", "step": 3, "steps": 4, "loss": 3.2, "tokens_per_second": 950.})
+        self.assertEqual(node["progress"]["reported_ago"], 1.)
+        self.assertEqual([(s["step"], s["t"]) for s in node["progress"]["samples"]], [(2, 3.), (3, 5.)])
+        self.assertEqual(node["shards"], c.shard_count)
+
+    def test_a_training_or_uploading_report_for_a_closed_round_or_generation_is_stale_but_waiting_is_not(self):
+        c = self.coordinator(inner_steps=2, first_round_seconds=100.)
+        c.join("a", epoch=2)
+        generation = c.round_view(0, "a")["generation"]
+        with self.assertRaises(Stale):
+            c.progress(0, "a", generation + 1, 2, "training", 1)
+        with self.assertRaises(Stale):
+            c.progress(0, "a", generation, 1, "training", 1)  # another lease epoch
+        with self.assertRaises(Stale):
+            c.progress(0, "stranger", generation, 0, "waiting")
+        self.assertTrue(c.progress(0, "a", generation, 2, "uploading", 2))
+        self.send_as(c, "a", 0, epoch=2)
+        with self.assertRaises(Stale):
+            c.progress(0, "a", generation, 2, "training", 1)  # round 0 closed
+        self.assertTrue(c.progress(0, "a", generation, 2, "waiting"))  # but saying "waiting" is always fine
+        with self.assertRaises(ValueError):
+            c.progress(1, "a", generation, 2, "sleeping")
+
+    def send_as(self, c, node, number, epoch=0):
+        view = c.round_view(number, node)
+        c.submit(number, node, view["generation"], epoch, 10, 2, support.constant_delta(c), 1.)
+
+    def test_the_timeline_marks_each_members_download_first_step_upload_and_receipt_on_the_coordinators_clock(self):
+        c = self.coordinator(inner_steps=2, rounds=3, min_members=2, first_round_seconds=100., grace_seconds=10.)
+        c.join("a")
+        c.join("b")
+        self.clock.now = 1.
+        c.params_bytes(0, "a")
+        self.clock.now = 2.
+        c.params_bytes(0, "b")
+        self.clock.now = 3.
+        self.report(c, "a", 0, "training", 0)
+        self.clock.now = 5.
+        self.report(c, "a", 0, "uploading", 2)
+        self.clock.now = 6.
+        self.send_as(c, "a", 0)
+        line = c.snapshot()["timeline"][-1]
+        self.assertEqual((line["round"], line["open"], line["deadline"]), (0, True, 100.))
+        self.assertEqual({k: line["lanes"]["a"][k] for k in ("theta_taken", "first_step", "delta_sent", "delta_received", "counted")},
+                         {"theta_taken": 1., "first_step": 3., "delta_sent": 5., "delta_received": 6., "counted": True})
+        self.assertEqual(line["lanes"]["b"]["theta_taken"], 2.)
+        self.assertIsNone(line["lanes"]["b"]["counted"])  # not in yet
+        self.clock.now = 111.  # b misses the deadline and the grace period
+        c.round_view(0, "b")
+        closed = c.snapshot()["timeline"][0]
+        self.assertEqual((closed["round"], closed["open"], closed["closed"]), (0, False, 111.))
+        self.assertFalse(closed["lanes"]["b"]["counted"])  # counted for nothing this round
+        self.assertTrue(closed["lanes"]["a"]["counted"])
+
+    def test_a_finished_round_s_timeline_is_appended_to_metrics_jsonl_and_only_the_last_few_stay_in_memory(self):
+        c = self.coordinator(inner_steps=2, rounds=studio_diloco.TIMELINES_KEPT + 3, first_round_seconds=100.)
+        c.join("a")
+        for number in range(studio_diloco.TIMELINES_KEPT + 3):
+            self.clock.now += 1.
+            c.params_bytes(number, "a")
+            self.send_as(c, "a", number)
+        lines = [json.loads(line) for line in (self.dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(lines), studio_diloco.TIMELINES_KEPT + 3)
+        self.assertEqual(lines[0]["timeline"]["round"], 0)
+        self.assertEqual(lines[0]["timeline"]["lanes"]["a"]["theta_taken"], 1.)
+        self.assertEqual(len(c.snapshot()["timeline"]), studio_diloco.TIMELINES_KEPT)
+        self.assertEqual(c.snapshot()["timeline"][-1]["round"], studio_diloco.TIMELINES_KEPT + 2)
+
+    def test_the_event_log_records_joins_leaves_drops_late_members_refused_changes_outer_steps_and_checkpoints(self):
+        c = self.coordinator(inner_steps=2, rounds=5, min_members=1, missed_limit=2, grace_seconds=1., first_round_seconds=5.)
+        c.join("a")
+        c.join("b")
+        self.send_as(c, "a", 0)  # b joined mid-round 0
+        with self.assertRaises(Stale):
+            c.submit(0, "a", c.generation, 0, 10, 2, support.constant_delta(c), 1.)  # round 0 is closed
+        for number in (1, 2):
+            self.send_as(c, "a", number)
+            self.clock.now += 100.
+            c.round_view(number, "a")
+        c.drop("a")
+        kinds = [(event["kind"], event["node"]) for event in c.snapshot()["events"]]
+        for expected in (("joined", "a"), ("joined", "b"), ("outer_step", ""), ("checkpoint", ""), ("stale", "a"), ("late", "b"), ("dropped", "b"), ("left", "a")):
+            self.assertIn(expected, kinds)
+        events = c.snapshot()["events"]
+        self.assertEqual([e["seq"] for e in events], sorted(e["seq"] for e in events))
+        outer = next(e for e in events if e["kind"] == "outer_step")
+        self.assertIn("size", outer["text"])
+        self.assertGreater(c.history[0]["outer_step_norm"], 0.)
+
+    def test_the_event_log_is_bounded(self):
+        c = self.coordinator(inner_steps=2, first_round_seconds=100.)
+        for index in range(studio_diloco.EVENTS_KEPT + 20):
+            c._event("joined", f"n{index}", 0, "x")
+        events = c.snapshot()["events"]
+        self.assertEqual(len(events), studio_diloco.EVENTS_KEPT)
+        self.assertEqual(events[-1]["seq"], studio_diloco.EVENTS_KEPT + 20)
+
+    def test_the_phase_follows_the_round_from_taking_theta_to_collecting_changes(self):
+        c = self.coordinator(inner_steps=2, rounds=2, min_members=2, first_round_seconds=100.)
+        self.assertEqual(c.snapshot()["phase"], "waiting")
+        c.join("a")
+        self.assertEqual(c.snapshot()["phase"], "waiting")  # below min_members
+        c.join("b")
+        self.assertEqual(c.snapshot()["phase"], "next_round")
+        self.report(c, "a", 0, "downloading")
+        self.assertEqual(c.snapshot()["phase"], "next_round")
+        self.report(c, "a", 0, "training", 1)
+        self.assertEqual(c.snapshot()["phase"], "training")
+        self.report(c, "b", 0, "uploading", 2)
+        view = c.snapshot()
+        self.assertEqual(view["phase"], "collecting")
+        self.send_as(c, "a", 0)
+        view = c.snapshot()
+        self.assertEqual((view["contributed"], view["expected"], view["deadline_s"]), (1, 2, 100.))
+        self.send_as(c, "b", 0)
+        self.assertEqual(c.snapshot()["phase"], "next_round")  # round 1 is open
+        self.send_as(c, "a", 1)
+        self.send_as(c, "b", 1)
+        self.assertEqual(c.snapshot()["phase"], "finished")
+
+    def test_a_snapshot_during_a_closing_round_answers_with_its_phase_instead_of_waiting_for_it(self):
+        c = self.coordinator(inner_steps=2, rounds=2, first_round_seconds=100.)
+        c.join("a")
+        c.snapshot()  # a first answer to fall back on
+        entered, release, answers = threading.Event(), threading.Event(), []
+
+        def slow(theta):
+            entered.set()
+            release.wait(10)
+            return 1.
+        c.evaluate = slow
+        closing = threading.Thread(target=lambda: self.send_as(c, "a", 0))
+        closing.start()
+        self.assertTrue(entered.wait(10))
+        with mock.patch.object(studio_diloco, "PROGRESS_WAIT", .05):
+            began = time.monotonic()
+            answers.append(c.snapshot())
+            answers.append(c.progress(0, "a", c.generation, 0, "waiting"))
+            self.assertLess(time.monotonic() - began, 5.)
+        release.set()
+        closing.join(10)
+        self.assertEqual(answers[0]["phase"], "validating")
+        self.assertFalse(answers[1])  # nothing taken; the next report says it all again
 
 
 class Hooked:

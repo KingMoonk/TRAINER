@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { emit, mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
-import type { Member, Round, Run, StartRun } from "./logic";
+import type { Run, StartRun } from "./logic";
 import TrainingPage from "./page";
+import { member, run } from "./test-data";
 
 // The Training tab against a mocked API: GET /distributed/defaults and /distributed/runs, POST /distributed/runs, the two stop routes,
 // and the lists the form reads. The live spec (tests/live.training.spec.ts) runs the same flow against a real --fake server.
@@ -19,23 +20,6 @@ const node = (address: string, over: Record<string, unknown> = {}) => ({
   address, local: false, hostname: address, version: "1", device: "cuda", device_name: "RTX 4090", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,
 });
 const NODES = [node("local", { local: true, hostname: "mac-mini", device: "mps", device_name: "Apple M2" }), node("gpu-box"), node("old-laptop", { online: false, error: "old-laptop did not answer within 2 seconds." })];
-
-const member = (name: string, over: Partial<Member> = {}): Member => ({
-  node: name, address: name, local: false, device: "cuda", device_name: "RTX 4090", state: "training", note: "", missed: 0, sent: false, rounds_done: 0, steps: 0,
-  tokens_per_second: null, last_delta_bytes: null, last_delta_dtype: "", can_stop: true, ...over,
-});
-const round = (n: number): Round => ({
-  round: n, step: (n + 1) * 100, loss: 4 - n, val_loss: 4.5 - n, bytes_up: 2 * 2 ** 20, bytes_down: 4 * 2 ** 20, seconds: 2, members: 2, contributed: 2, dropped: [],
-});
-const run = (over: Partial<Run> = {}): Run => ({
-  id: "r1", label: "Version 2 across machines", version: 2, state: "running", note: "", started_at: 100, owner: "mac-mini", round: 2, rounds: 10, inner_steps: 100,
-  outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", can_stop: true, history: [round(0), round(1)],
-  members: [
-    member("mac-mini", { address: "local", local: true, device: "mps", device_name: "Apple M2", rounds_done: 2, steps: 200, tokens_per_second: 2048, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", can_stop: false }),
-    member("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 5120.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16" }),
-  ],
-  ...over,
-});
 
 type Setup = { runs?: Run[]; start?: (body: StartRun) => Run | { status: number; detail: string }; sets?: typeof SETS; versions?: typeof VERSIONS };
 function server(opts: Setup = {}) {
@@ -80,7 +64,7 @@ describe("Training tab: the start form", () => {
     expect(screen.getByText(/This computer coordinates/)).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /Stories/ })).toBeChecked(); // the sets that are on
     expect(screen.getByRole("checkbox", { name: /Notes/ })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /gpu-box/ })).not.toBeChecked();
+    expect(await screen.findByRole("checkbox", { name: /gpu-box/ })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /old-laptop/ })).toBeInTheDocument();
     expect(screen.getByText("Not answering")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /Version 2 · Wider/ })).toBeInTheDocument();
@@ -131,7 +115,7 @@ describe("Training tab: the start form", () => {
 });
 
 describe("Training tab: a run", () => {
-  test("shows each machine with its device, round, steps, speed and last change, and the loss and bytes of each round", async () => {
+  test("shows each machine with its device kind, speed and last change, and the loss and bytes of each round", async () => {
     server({ runs: [run()] });
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     const card = within(await screen.findByTestId("run-r1"));
@@ -140,15 +124,18 @@ describe("Training tab: a run", () => {
     expect(card.getByText("2 of 10 rounds done")).toBeInTheDocument();
     const gpu = within(card.getByTestId("member-gpu-box"));
     expect(gpu.getByText("RTX 4090 (cuda)")).toBeInTheDocument();
+    expect(gpu.getByTestId("device-gpu-box")).toHaveTextContent("CUDA");
     expect(gpu.getByText("5,120 tokens/s")).toBeInTheDocument();
-    expect(gpu.getByText("3.8 MB, float16")).toBeInTheDocument();
+    expect(gpu.getByText("3.8 MB, float16")).toBeInTheDocument(); // on the edge that carries the change up
     expect(gpu.getByText("Training")).toBeInTheDocument();
     const me = within(card.getByTestId("member-mac-mini"));
     expect(me.getByText("This computer")).toBeInTheDocument();
     expect(me.getByText("Apple M2 (mps)")).toBeInTheDocument(); // an Apple GPU is a machine like any other
+    expect(me.getByTestId("device-mac-mini")).toHaveTextContent("MPS");
     expect(me.queryByRole("button")).toBeNull(); // this computer cannot be stopped on its own
+    await userEvent.setup().click(card.getByText("Rounds"));
     expect(card.getByTestId("round-2")).toHaveTextContent("3.000");
-    expect(card.getByTestId("round-2")).toHaveTextContent("4.0 MB");
+    expect(card.getByTestId("round-2")).toHaveTextContent("2.0 MB");
     expect(card.getByTestId("round-2")).toHaveTextContent("2 of 2");
   });
 
