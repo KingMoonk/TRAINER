@@ -27,6 +27,7 @@ import {
   nextVersionName,
   optionLabel,
   partName,
+  piecesFor,
   PART_SLOTS,
   pretraining,
   queueJobs,
@@ -597,5 +598,40 @@ describe("where the size goes", () => {
     expect(paramNote(now)).toBe("");
     expect(paramNote({ table: 60, position: 0, blocks: 30, head: 10 })).toBe(BUILDER.params_table_heavy);
     expect(paramNote({ table: 50, position: 0, blocks: 50, head: 0 })).toBe(BUILDER.params_table_heavy);
+  });
+});
+
+describe("piecesFor", () => {
+  const chip = (label: string, known = true) => ({ label, known });
+  const lists = {
+    sentence: "Hi there",
+    lists: [
+      { id: "letters", vocab_size: 256, count: 8, chips: [chip("H"), chip("i")] },
+      { id: "small", vocab_size: 500, count: 1234, chips: [chip("Hi"), chip("there")] },
+      null,
+      { id: "words", vocab_size: 900, count: 2, chips: [chip("Hi"), chip("there", false)] },
+    ],
+  } as unknown as Parameters<typeof piecesFor>[1];
+
+  test("while the lists are being read it says so and shows dashes", () => {
+    expect(piecesFor(1, undefined)).toEqual({ chips: [], note: BUILDER.pieces_reading, line: "– · – · – · – pieces" });
+  });
+
+  test("chips and the count line for a list, with thousands separators", () => {
+    const view = piecesFor(1, lists);
+    expect(view.chips).toEqual([{ label: "Hi", state: "pieces" }, { label: "there", state: "pieces" }]);
+    expect(view.line).toBe("8 · 1,234 · – · 2 pieces");
+    expect(view.note).toBeNull();
+  });
+
+  test("words the whole-word list lacks are counted as lost", () => {
+    expect(piecesFor(3, lists).line).toBe("8 · 1,234 · – · 2 pieces, 1 word lost to “unknown”");
+    expect(piecesFor(3, lists).chips[1]).toEqual({ label: "there", state: "lost" });
+  });
+
+  test("a list that is not available says why", () => {
+    expect(piecesFor(2, lists).note).toBe(BUILDER.pieces_gpt2_missing);
+    const own = { ...lists!, lists: [lists!.lists[0], null, null, null] } as typeof lists;
+    expect(piecesFor(1, own).note).toBe(BUILDER.pieces_needs_text);
   });
 });

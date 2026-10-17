@@ -282,6 +282,25 @@ export function paramNote(parts: Record<string, number>): string {
   return (parts.table ?? 0) >= 0.5 * total ? BUILDER.params_table_heavy : "";
 }
 
+// ------------------------------------------------------------------------------------------------ your text, cut into pieces
+
+export type PieceChip = { label: string; state: "pieces" | "lost" };
+export type PiecesView = { chips: PieceChip[]; note: string | null; line: string };
+
+/** The example sentence under word list v, and the count line that puts every list's count side by side (design.pieces_for).
+ *  `lists` is the word-lists job's result, or undefined while it is still being read. */
+export function piecesFor(v: number, lists: WordLists | undefined): PiecesView {
+  const counts = lists ? lists.lists.map((l) => (l ? l.count.toLocaleString("en-US") : "–")) : ["–", "–", "–", "–"];
+  let line = `${counts.join(" · ")} ${BUILDER.pieces_unit}`;
+  if (!lists) return { chips: [], note: BUILDER.pieces_reading, line };
+  const found = lists.lists[v] ?? null;
+  if (!found) return { chips: [], note: v === 2 ? BUILDER.pieces_gpt2_missing : BUILDER.pieces_needs_text, line };
+  const chips = found.chips.map((c): PieceChip => ({ label: c.label, state: c.known ? "pieces" : "lost" }));
+  const lost = chips.filter((c) => c.state === "lost").length;
+  if (lost) line += `, ${fill(lost > 1 ? BUILDER.pieces_lost_many : BUILDER.pieces_lost_one, { n: String(lost) })}`;
+  return { chips, note: null, line };
+}
+
 // ------------------------------------------------------------------------------------------------ the tower
 
 /** The registry's entry for a module, for its name and settings. */

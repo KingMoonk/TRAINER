@@ -19,6 +19,12 @@ export const BUILDER = {
   training_memory_fits: "unknown (memory size not reported)",
   training_memory_desc:
     "on this computer at 16 rows per step. The bars compare weights, gradients and optimizer state (16 bytes per parameter at 32-bit); the engine adds activations, which grow with rows per step.",
+  pieces_unit: "pieces",
+  pieces_reading: "Reading your text…",
+  pieces_needs_text: "Built from your text: add some in Your data to see these pieces.",
+  pieces_gpt2_missing: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
+  pieces_lost_one: "{n} word lost to “unknown”",
+  pieces_lost_many: "{n} words lost to “unknown”",
   params_where: "Where the size goes",
   params_where_tip:
     "Every parameter is one number the model learns. The bar splits them by part: the word table, the blocks and the word scores. The faint bar is the current version, the bright one your draft.",
