@@ -83,7 +83,7 @@ export function RowsTable({
                       onSelect(row.id);
                     }
                   }}
-                  className={cn("cursor-pointer border-t outline-none hover:bg-muted/30 focus-visible:bg-muted/50", row.id === selected && "bg-violet-500/15")}
+                  className={cn("cursor-pointer border-t outline-none hover:bg-muted/30 focus-visible:bg-muted/50", row.id === selected && "bg-highlight-strong/15")}
                 >
                   <td className={cn("truncate px-3 py-1.5", mono && "font-mono text-[13px]")}>{row.a}</td>
                   <td className={cn("truncate px-3 py-1.5", mono && "font-mono text-[13px]")}>{row.b}</td>

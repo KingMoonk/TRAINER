@@ -73,7 +73,7 @@ function Gate({ queue }: { queue: Queue }) {
   const reason = queue.gate.reason ?? queue.blocked;
   if (!reason) return null;
   return (
-    <div role="status" data-testid="gate" className="rounded-lg border border-violet-500/50 bg-violet-500/10 p-3 text-sm">
+    <div role="status" data-testid="gate" className="rounded-lg border border-highlight-strong/50 bg-part-own/10 p-3 text-sm">
       <span className="font-medium">{T.blockedHead}: </span>
       {reason}. {resumesText(queue.gate.resumes_at)}
     </div>

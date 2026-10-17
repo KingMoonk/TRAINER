@@ -154,7 +154,7 @@ export default function PostTrainingPage() {
               : T.noVersion}
           </p>
         )}
-        {running && <p className="mt-1 text-sm text-violet-400">Running now: {running.label}</p>}
+        {running && <p className="mt-1 text-sm text-highlight">Running now: {running.label}</p>}
       </div>
 
       <div role="tablist" aria-label="Rounds" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -172,13 +172,13 @@ export default function PostTrainingPage() {
               onClick={() => setPicked(r.n)}
               className={cn(
                 "flex items-center gap-3 rounded-lg border-2 p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                on ? "border-violet-500 bg-muted/50" : "border-border hover:bg-muted/30",
+                on ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
               )}
             >
               <span
                 className={cn(
                   "flex size-7 shrink-0 items-center justify-center rounded font-bold",
-                  s === "done" ? "bg-sky-500 text-background" : s === "running" ? "bg-violet-500 text-background" : "text-muted-foreground",
+                  s === "done" ? "bg-info text-background" : s === "running" ? "bg-highlight-strong text-background" : "text-muted-foreground",
                 )}
               >
                 {s === "done" ? "✓" : r.n}
@@ -188,7 +188,7 @@ export default function PostTrainingPage() {
                 {reading ? (
                   <Skeleton className="mt-1 h-3 w-24" />
                 ) : (
-                  <span className={cn("block text-xs", s === "done" ? "text-sky-400" : s === "running" ? "text-violet-400" : "text-muted-foreground")}>
+                  <span className={cn("block text-xs", s === "done" ? "text-info" : s === "running" ? "text-highlight" : "text-muted-foreground")}>
                     {label}
                   </span>
                 )}

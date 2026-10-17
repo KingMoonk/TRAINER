@@ -87,7 +87,7 @@ function SourceRow({ source, progress, onAct, disabled }: { source: Source; prog
           aria-valuemax={100}
           className="h-1.5 w-24 overflow-hidden rounded bg-muted"
         >
-          <span className="block h-full bg-violet-500" style={{ width: `${fraction * 100}%` }} />
+          <span className="block h-full bg-highlight-strong" style={{ width: `${fraction * 100}%` }} />
         </span>
       )}
       <span className="min-w-36 text-right">

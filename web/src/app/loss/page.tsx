@@ -121,7 +121,7 @@ function Prediction({ data, view, trained }: { data: LossResult; view: ReturnTyp
         <table className="w-full text-left text-xs sm:text-sm">
           <caption className="sr-only">{T.tableCaption}</caption>
           <thead><tr>{[T.token, T.probability, T.target, T.gradient].map((label) => <th key={label} scope="col" className="px-2 pb-3 font-medium text-muted-foreground">{label}</th>)}</tr></thead>
-          <tbody>{view.rows.map((row) => <tr key={row.index} className={row.target ? "bg-amber-400/10 text-amber-500" : "border-t border-white/5"}>
+          <tbody>{view.rows.map((row) => <tr key={row.index} className={row.target ? "bg-warning/10 text-warning" : "border-t border-border/50"}>
             <th scope="row" className="max-w-36 break-all px-2 py-3 font-mono font-normal">{showPiece(row.piece)}</th>
             <td className="px-2 py-3 font-mono">{probability(row.probability)}<div className="mt-1 h-1 w-full rounded bg-muted" aria-hidden="true"><div className="h-1 rounded bg-current" style={{ width: `${row.probability * 100}%` }} /></div></td>
             <td className="px-2 py-3 font-mono">{row.target}</td>

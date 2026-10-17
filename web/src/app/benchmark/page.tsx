@@ -58,7 +58,7 @@ export default function Page() {
       {read.isError && (
         <Card>
           <CardContent className="flex flex-col items-start gap-3">
-            <p role="alert" className="text-sm text-amber-500">
+            <p role="alert" className="text-sm text-warning">
               {BENCH.readFailed} {message(read.error)}
             </p>
             <Button variant="outline" onClick={() => void read.refetch()}>
@@ -125,7 +125,7 @@ function Loaded({ state }: { state: BenchmarkOut }) {
           {anyData && <p className="text-sm text-muted-foreground">{BENCH.fixed(sizes.docs ?? 0, sizes.choice ?? 0, sizes.problems ?? 0)}</p>}
           <p className="text-sm">{statusText(state)}</p>
           {Object.entries(failed).map(([number, error]) => (
-            <p key={number} className="text-sm text-amber-500">
+            <p key={number} className="text-sm text-warning">
               {BENCH.failed(Number(number), error)}
             </p>
           ))}
@@ -174,7 +174,7 @@ function MetricCard({ state, chart, shots }: { state: BenchmarkOut; chart: (type
             </p>
           </>
         )}
-        {unplaced.length > 0 && <p className="text-xs text-amber-500">{BENCH.unplaced(unplaced)}</p>}
+        {unplaced.length > 0 && <p className="text-xs text-warning">{BENCH.unplaced(unplaced)}</p>}
       </CardContent>
     </Card>
   );
@@ -298,10 +298,10 @@ function VerdictCard({ rows }: { rows: BenchmarkRow[] }) {
         </div>
         {!ready && <p className="text-sm text-muted-foreground">{BENCH.verdictPick}</p>}
         {ready && verdict.isPending && <Skeleton aria-label="Reading the verdict" className="h-10 w-full" />}
-        {ready && verdict.isError && <p className="text-sm text-amber-500">{message(verdict.error)}</p>}
+        {ready && verdict.isError && <p className="text-sm text-warning">{message(verdict.error)}</p>}
         {ready && v && (
           <div role="status" className="flex flex-col gap-1">
-            <p className={`text-lg font-semibold ${ok ? "" : "text-amber-500"}`}>
+            <p className={`text-lg font-semibold ${ok ? "" : "text-warning"}`}>
               {ok ? BENCH.verdictLine(name(newer), name(older), Math.round(100 - (v.percent ?? 0))) : BENCH.verdictNone(v.reason ?? "")}
             </p>
             <p className="text-xs text-muted-foreground">{ok ? BENCH.verdictSub : BENCH.verdictNoneSub}</p>

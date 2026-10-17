@@ -114,7 +114,7 @@ export function Inside3d({ version }: { version?: number }) {
 
   return (
     <main className="flex h-dvh min-w-0 flex-col md:flex-row">
-      <section className="relative min-h-80 flex-1 bg-[#0e1014]" aria-label="Inside the network">
+      <section className="relative min-h-80 flex-1 bg-scene-background" aria-label="Inside the network">
         {scene ? (
           <SceneCanvas scene={scene} playing={playing} reduceMotion={reduceMotion} showNumbers={showNumbers} onPassDone={onPassDone} />
         ) : (

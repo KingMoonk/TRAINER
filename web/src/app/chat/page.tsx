@@ -319,7 +319,7 @@ export default function Page() {
                 return (
                   <Card key={i}>
                     <CardHeader>
-                      <CardTitle className={i === 0 ? "text-violet-400" : "text-blue-400"}>
+                      <CardTitle className={i === 0 ? "text-side-left" : "text-side-right"}>
                         {version ? versionName(version) : "No version"}
                       </CardTitle>
                       {version && <CheckpointStep version={version} />}
@@ -456,7 +456,7 @@ export default function Page() {
                       aria-pressed={isLeft || isRight}
                       onClick={() => pick(v.number)}
                       className={`flex w-full flex-wrap items-center gap-3 rounded-lg border p-3 text-left text-sm transition-colors hover:bg-muted disabled:opacity-50 ${
-                        isLeft ? "border-violet-400 bg-muted/50" : isRight ? "border-blue-400 bg-muted/50" : ""
+                        isLeft ? "border-side-left bg-muted/50" : isRight ? "border-side-right bg-muted/50" : ""
                       }`}
                     >
                       <span className="w-24 font-semibold">{versionName(v)}</span>
@@ -467,7 +467,7 @@ export default function Page() {
                           on this machine{cameFrom(published, v.number) ? ` · pulled from ${cameFrom(published, v.number)}` : ""}
                         </span>
                       )}
-                      <span className={isLeft ? "text-violet-400" : isRight ? "text-blue-400" : "text-muted-foreground"}>{slot}</span>
+                      <span className={isLeft ? "text-side-left" : isRight ? "text-side-right" : "text-muted-foreground"}>{slot}</span>
                     </button>
                     <div className="mt-2"><CheckpointStep version={v} /></div>
                     </div>
@@ -575,7 +575,7 @@ function Verdict({
           <Skeleton className="h-6 w-2/3" />
         ) : (
           <>
-            <p className={`text-lg font-semibold ${view.ok ? "" : "text-amber-400"}`}>{view.line}</p>
+            <p className={`text-lg font-semibold ${view.ok ? "" : "text-warning"}`}>{view.line}</p>
             <p className="text-sm text-muted-foreground">{view.sub}</p>
           </>
         )}

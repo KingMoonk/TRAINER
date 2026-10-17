@@ -8,7 +8,7 @@ import { stepLine, type Gate, type Queue, type Status } from "./logic";
 function Progress({ fraction }: { fraction: number }) {
   return (
     <div role="progressbar" aria-label="Round progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction * 100)} className="h-2 w-full max-w-md rounded-full bg-muted">
-      <div className="h-2 rounded-full bg-violet-500 transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
+      <div className="h-2 rounded-full bg-highlight-strong transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
     </div>
   );
 }
@@ -47,7 +47,7 @@ export function GateCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xs font-medium uppercase tracking-wide text-violet-400">
+        <CardTitle className="text-xs font-medium uppercase tracking-wide text-highlight">
           {gate ? `Result · Round ${round}` : running ? `Training · Round ${round}` : "When this round ends"}
         </CardTitle>
       </CardHeader>
@@ -62,13 +62,13 @@ export function GateCard({
         )}
         <div>
           <div className="text-xs uppercase text-muted-foreground">Verdict</div>
-          <p className={cn("mt-1 text-lg", gate ? "text-emerald-400" : "text-muted-foreground")}>{verdict}</p>
+          <p className={cn("mt-1 text-lg", gate ? "text-success" : "text-muted-foreground")}>{verdict}</p>
         </div>
         <p className="text-xs text-muted-foreground">{T.chatMoves}</p>
         <ul className="flex flex-col gap-2">
           {checks.map((c) => (
             <li key={c.name} className="flex items-start gap-3">
-              <span aria-hidden className={cn("w-4 text-center font-bold", c.ok == null ? "text-muted-foreground" : c.ok ? "text-emerald-400" : "text-rose-400")}>
+              <span aria-hidden className={cn("w-4 text-center font-bold", c.ok == null ? "text-muted-foreground" : c.ok ? "text-success" : "text-destructive")}>
                 {c.ok == null ? "…" : c.ok ? "✓" : "✕"}
               </span>
               <span>

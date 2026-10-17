@@ -1,3 +1,36 @@
+/*
+ * THE THEME. Every colour, surface, blur, glow and shadow in the web app is a token defined in this file; components
+ * use the Tailwind utilities the tokens expose (bg-card, text-warning, bg-surface-overlay, ...) and never a raw
+ * palette class (text-amber-500) or a colour literal (#fff, rgb(...), oklch(...)). `pnpm lint` runs
+ * scripts/check-theme.mjs, which fails on either one anywhere in src/ except this file.
+ *
+ * Token list (each is defined in :root for light and in .dark for dark, and exposed to Tailwind as --color-<name>):
+ *   shadcn base     background foreground card popover primary secondary muted accent destructive border input ring
+ *                   chart-1..5 sidebar-* (each with its -foreground where it has one)
+ *   status          warning warning-soft success info notice (destructive is the error colour)
+ *   emphasis        highlight (links, active text) highlight-strong (active borders, progress fills)
+ *   surfaces        surface-faint surface-overlay surface-raised (translucent washes laid on any surface)
+ *                   surface-border surface-border-strong surface-border-active (their hairlines)
+ *   Builder parts   part-attention part-mlp part-cost part-own
+ *   comparisons     side-left side-right side-draft (Chat, Compare, Quick test: which design is which)
+ *   categorical     cat-1..8 (Value map's eight heads)
+ *   visualisations  viz-1..5 viz-end (Pretraining's size preview) scene-background (Inside 3D viewport)
+ *                   heat-positive heat-negative cell-masked (Inside a head)
+ *   non-colour      shadow-card canvas-glow selection selection-foreground glass-fallback blur-glass blur-card
+ *
+ * Modes: :root is light, .dark is dark (the default, set by next-themes on <html>). Per-mode details such as
+ * color-scheme, the body glow and the selection colour are tokens too, so they sit in the same two scopes.
+ *
+ * Accent themes: a [data-theme="<id>"] block overrides only the accent tokens (primary, ring, sidebar-primary,
+ * sidebar-ring, chart-*, highlight*, part-cost, part-own), once for light and once for `.dark[data-theme]`. No
+ * attribute is the neutral default. Switching is components/theme.tsx.
+ *
+ * To add an accent theme: copy an existing pair of blocks at the bottom, change the id and the values, and add the id
+ * to ACCENTS in components/theme.tsx and its label in lib/copy/appearance.ts.
+ * To add a token: define it in :root and .dark, expose it in @theme inline as --color-<name>, add it to the list above.
+ * To retheme: edit values in :root / .dark / the accent blocks only. Never edit a component.
+ */
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -39,6 +72,36 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-info: var(--info);
+  --color-notice: var(--notice);
+  --color-highlight: var(--highlight);
+  --color-highlight-strong: var(--highlight-strong);
+  --color-surface-faint: var(--surface-faint);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-border: var(--surface-border);
+  --color-surface-border-strong: var(--surface-border-strong);
+  --color-surface-border-active: var(--surface-border-active);
+  --color-part-attention: var(--part-attention);
+  --color-part-mlp: var(--part-mlp);
+  --color-part-cost: var(--part-cost);
+  --color-part-own: var(--part-own);
+  --color-side-left: var(--side-left);
+  --color-side-right: var(--side-right);
+  --color-side-draft: var(--side-draft);
+  --color-cat-1: var(--cat-1);
+  --color-cat-2: var(--cat-2);
+  --color-cat-3: var(--cat-3);
+  --color-cat-4: var(--cat-4);
+  --color-cat-5: var(--cat-5);
+  --color-cat-6: var(--cat-6);
+  --color-cat-7: var(--cat-7);
+  --color-cat-8: var(--cat-8);
+  --color-scene-background: var(--scene-background);
+  --shadow-card: var(--card-shadow);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,42 +111,98 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* Light. The same structure as dark: a pale canvas under translucent white surfaces, dark ink, darker status hues. */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  color-scheme: light;
+  --background: #f5f6f8;
+  --foreground: oklch(0.19 0.01 265);
+  --card: rgb(255 255 255 / 80%);
+  --card-foreground: oklch(0.19 0.01 265);
+  --popover: #ffffff;
+  --popover-foreground: oklch(0.19 0.01 265);
+  --primary: oklch(0.24 0.01 265);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --secondary: rgb(0 0 0 / 5%);
+  --secondary-foreground: oklch(0.24 0.01 265);
+  --muted: rgb(0 0 0 / 4%);
+  --muted-foreground: #565a66;
+  --accent: rgb(0 0 0 / 6%);
+  --accent-foreground: oklch(0.24 0.01 265);
+  --destructive: oklch(0.54 0.23 27);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 15%);
+  --ring: #5b6475;
+  --chart-1: oklch(0.55 0.17 255);
+  --chart-2: oklch(0.58 0.14 160);
+  --chart-3: oklch(0.65 0.15 70);
+  --chart-4: oklch(0.58 0.2 25);
+  --chart-5: oklch(0.55 0.17 305);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar: rgb(255 255 255 / 88%);
+  --sidebar-foreground: oklch(0.19 0.01 265);
+  --sidebar-primary: oklch(0.24 0.01 265);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-accent: rgb(0 0 0 / 6%);
+  --sidebar-accent-foreground: oklch(0.19 0.01 265);
+  --sidebar-border: oklch(0 0 0 / 10%);
+  --sidebar-ring: #5b6475;
+
+  --warning: oklch(0.555 0.163 49);
+  --warning-soft: oklch(0.47 0.13 46);
+  --success: oklch(0.508 0.118 165.6);
+  --info: oklch(0.5 0.134 242.7);
+  --notice: oklch(0.525 0.223 4);
+  --highlight: oklch(0.491 0.27 292.6);
+  --highlight-strong: oklch(0.541 0.281 293);
+
+  --surface-faint: rgb(0 0 0 / 2%);
+  --surface-overlay: rgb(0 0 0 / 4%);
+  --surface-raised: rgb(0 0 0 / 6%);
+  --surface-border: rgb(0 0 0 / 10%);
+  --surface-border-strong: rgb(0 0 0 / 16%);
+  --surface-border-active: rgb(0 0 0 / 40%);
+
+  --part-attention: oklch(0.525 0.223 4);
+  --part-mlp: oklch(0.5 0.134 242.7);
+  --part-cost: oklch(0.541 0.281 293);
+  --part-own: oklch(0.541 0.281 293);
+  --side-left: oklch(0.491 0.27 292.6);
+  --side-right: oklch(0.488 0.243 264.4);
+  --side-draft: oklch(0.555 0.163 49);
+
+  --cat-1: oklch(0.666 0.179 58.3);
+  --cat-2: oklch(0.546 0.245 262.9);
+  --cat-3: oklch(0.541 0.281 293);
+  --cat-4: oklch(0.592 0.249 0.6);
+  --cat-5: oklch(0.585 0.233 277.1);
+  --cat-6: oklch(0.596 0.145 163.2);
+  --cat-7: oklch(0.646 0.222 41.1);
+  --cat-8: oklch(0.627 0.265 303.9);
+
+  --viz-1: #c9c4ee;
+  --viz-2: #b9d3e6;
+  --viz-3: #e6d3b9;
+  --viz-4: #c0e0c7;
+  --viz-5: #e6c3da;
+  --viz-end: #e3e5ea;
+  /* The 3D viewport stays dark in every mode: the server paints the scene's boxes and labels for a dark canvas. */
+  --scene-background: #0e1014;
+  --heat-positive: oklch(0.78 0.15 75);
+  --heat-negative: oklch(0.62 0.16 250);
+  --cell-masked: color-mix(in oklch, var(--background) 94%, black);
+
+  --card-shadow: 0 8px 32px -16px rgb(30 40 70 / 28%);
+  --canvas-glow: radial-gradient(ellipse at 80% 0%, rgb(90 110 170 / 9%), transparent 55%);
+  --selection: rgb(90 110 170 / 28%);
+  --selection-foreground: inherit;
+  --glass-fallback: #f0f1f4;
+  --blur-glass: 16px;
+  --blur-card: 12px;
 }
 
+/* Dark: the default design (#174): a near-black canvas under translucent charcoal surfaces. */
 .dark {
+  color-scheme: dark;
   --background: #08090b;
   --foreground: oklch(0.985 0 0);
   --card: rgb(23 24 27 / 80%);
@@ -115,6 +234,161 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: #b8becb;
+
+  --warning: oklch(0.769 0.188 70.08);
+  --warning-soft: oklch(0.879 0.169 91.6);
+  --success: oklch(0.765 0.177 163.2);
+  --info: oklch(0.746 0.16 232.7);
+  --notice: oklch(0.718 0.202 349.8);
+  --highlight: oklch(0.702 0.183 293.5);
+  --highlight-strong: oklch(0.606 0.25 292.7);
+
+  --surface-faint: rgb(255 255 255 / 2%);
+  --surface-overlay: rgb(255 255 255 / 5%);
+  --surface-raised: rgb(255 255 255 / 7%);
+  --surface-border: rgb(255 255 255 / 10%);
+  --surface-border-strong: rgb(255 255 255 / 15%);
+  --surface-border-active: rgb(255 255 255 / 40%);
+
+  --part-attention: oklch(0.656 0.241 354.3);
+  --part-mlp: oklch(0.685 0.169 237.3);
+  --part-cost: oklch(0.606 0.25 292.7);
+  --part-own: oklch(0.606 0.25 292.7);
+  --side-left: oklch(0.702 0.183 293.5);
+  --side-right: oklch(0.707 0.165 254.6);
+  --side-draft: oklch(0.879 0.169 91.6);
+
+  --cat-1: oklch(0.769 0.188 70.08);
+  --cat-2: oklch(0.623 0.214 259.8);
+  --cat-3: oklch(0.606 0.25 292.7);
+  --cat-4: oklch(0.718 0.202 349.8);
+  --cat-5: oklch(0.785 0.115 274.7);
+  --cat-6: oklch(0.696 0.17 162.5);
+  --cat-7: oklch(0.75 0.183 55.9);
+  --cat-8: oklch(0.827 0.119 306.4);
+
+  --viz-1: #3a3560;
+  --viz-2: #2a4558;
+  --viz-3: #4a3a2a;
+  --viz-4: #2f4a36;
+  --viz-5: #4a2f45;
+  --viz-end: #0a0b0e;
+  --scene-background: #0e1014;
+  --heat-positive: oklch(0.8 0.16 80);
+  --heat-negative: oklch(0.65 0.15 250);
+  --cell-masked: color-mix(in oklch, var(--background) 70%, black);
+
+  --card-shadow: 0 8px 32px -16px rgb(0 0 0 / 60%);
+  --canvas-glow: radial-gradient(ellipse at 80% 0%, rgb(255 255 255 / 3%), transparent 55%);
+  --selection: rgb(176 190 218 / 30%);
+  --selection-foreground: #fff;
+  --glass-fallback: #101114;
+}
+
+/* Accent themes. Each overrides only the accent tokens, once for light and once for dark. No attribute = neutral. */
+[data-theme="ocean"] {
+  --primary: oklch(0.48 0.13 238);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.58 0.12 238);
+  --sidebar-primary: oklch(0.48 0.13 238);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-ring: oklch(0.58 0.12 238);
+  --chart-1: oklch(0.52 0.14 238);
+  --chart-2: oklch(0.56 0.12 195);
+  --chart-3: oklch(0.6 0.12 165);
+  --chart-4: oklch(0.5 0.15 265);
+  --chart-5: oklch(0.58 0.1 215);
+  --highlight: oklch(0.47 0.12 215);
+  --highlight-strong: oklch(0.52 0.12 215);
+  --part-cost: oklch(0.52 0.12 215);
+  --part-own: oklch(0.52 0.12 215);
+}
+.dark[data-theme="ocean"] {
+  --primary: oklch(0.8 0.11 228);
+  --primary-foreground: oklch(0.2 0.03 238);
+  --ring: oklch(0.78 0.1 228);
+  --sidebar-primary: oklch(0.8 0.11 228);
+  --sidebar-primary-foreground: oklch(0.2 0.03 238);
+  --sidebar-ring: oklch(0.78 0.1 228);
+  --chart-1: oklch(0.75 0.13 238);
+  --chart-2: oklch(0.78 0.12 195);
+  --chart-3: oklch(0.8 0.13 165);
+  --chart-4: oklch(0.7 0.15 265);
+  --chart-5: oklch(0.76 0.1 215);
+  --highlight: oklch(0.78 0.11 205);
+  --highlight-strong: oklch(0.65 0.12 205);
+  --part-cost: oklch(0.65 0.12 205);
+  --part-own: oklch(0.65 0.12 205);
+}
+
+[data-theme="ember"] {
+  --primary: oklch(0.56 0.18 40);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.64 0.16 45);
+  --sidebar-primary: oklch(0.56 0.18 40);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-ring: oklch(0.64 0.16 45);
+  --chart-1: oklch(0.58 0.18 40);
+  --chart-2: oklch(0.62 0.16 75);
+  --chart-3: oklch(0.55 0.2 20);
+  --chart-4: oklch(0.6 0.15 100);
+  --chart-5: oklch(0.52 0.17 355);
+  --highlight: oklch(0.52 0.17 38);
+  --highlight-strong: oklch(0.58 0.18 40);
+  --part-cost: oklch(0.58 0.18 40);
+  --part-own: oklch(0.58 0.18 40);
+}
+.dark[data-theme="ember"] {
+  --primary: oklch(0.78 0.15 55);
+  --primary-foreground: oklch(0.22 0.04 45);
+  --ring: oklch(0.76 0.14 55);
+  --sidebar-primary: oklch(0.78 0.15 55);
+  --sidebar-primary-foreground: oklch(0.22 0.04 45);
+  --sidebar-ring: oklch(0.76 0.14 55);
+  --chart-1: oklch(0.74 0.16 50);
+  --chart-2: oklch(0.8 0.15 85);
+  --chart-3: oklch(0.7 0.19 25);
+  --chart-4: oklch(0.82 0.14 105);
+  --chart-5: oklch(0.7 0.17 355);
+  --highlight: oklch(0.77 0.14 55);
+  --highlight-strong: oklch(0.68 0.17 45);
+  --part-cost: oklch(0.68 0.17 45);
+  --part-own: oklch(0.68 0.17 45);
+}
+
+[data-theme="forest"] {
+  --primary: oklch(0.46 0.11 155);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.56 0.11 155);
+  --sidebar-primary: oklch(0.46 0.11 155);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-ring: oklch(0.56 0.11 155);
+  --chart-1: oklch(0.5 0.12 155);
+  --chart-2: oklch(0.58 0.12 130);
+  --chart-3: oklch(0.55 0.1 185);
+  --chart-4: oklch(0.62 0.13 105);
+  --chart-5: oklch(0.5 0.09 210);
+  --highlight: oklch(0.45 0.11 155);
+  --highlight-strong: oklch(0.5 0.12 155);
+  --part-cost: oklch(0.5 0.12 155);
+  --part-own: oklch(0.5 0.12 155);
+}
+.dark[data-theme="forest"] {
+  --primary: oklch(0.8 0.13 155);
+  --primary-foreground: oklch(0.2 0.04 155);
+  --ring: oklch(0.78 0.12 155);
+  --sidebar-primary: oklch(0.8 0.13 155);
+  --sidebar-primary-foreground: oklch(0.2 0.04 155);
+  --sidebar-ring: oklch(0.78 0.12 155);
+  --chart-1: oklch(0.76 0.14 155);
+  --chart-2: oklch(0.8 0.14 130);
+  --chart-3: oklch(0.74 0.11 185);
+  --chart-4: oklch(0.83 0.14 105);
+  --chart-5: oklch(0.7 0.09 210);
+  --highlight: oklch(0.8 0.13 150);
+  --highlight-strong: oklch(0.65 0.14 155);
+  --part-cost: oklch(0.65 0.14 155);
+  --part-own: oklch(0.65 0.14 155);
 }
 
 @layer base {
@@ -123,24 +397,26 @@
   }
   body {
     @apply bg-background text-foreground;
-    background-image: radial-gradient(ellipse at 80% 0%, rgb(255 255 255 / 3%), transparent 55%);
+    background-image: var(--canvas-glow);
     background-attachment: fixed;
   }
   html {
     @apply font-sans;
-    color-scheme: dark;
   }
-  ::selection { background: rgb(176 190 218 / 30%); color: #fff; }
+  ::selection { background: var(--selection); color: var(--selection-foreground); }
   :focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
   :where(input, select, textarea) { accent-color: var(--primary); }
   :where(main) { min-width: 0; }
 }
 
-.studio-glass { background: #101114; }
+.studio-glass { background: var(--glass-fallback); }
 
-@supports (backdrop-filter: blur(16px)) {
-  .studio-glass { background: var(--sidebar); backdrop-filter: blur(16px); }
-  [data-slot="card"] { backdrop-filter: blur(12px); }
+/* Blur is skipped under prefers-reduced-motion; the surfaces stay translucent, and the sidebar falls back to its opaque colour. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (backdrop-filter: blur(16px)) {
+    .studio-glass { background: var(--sidebar); backdrop-filter: blur(var(--blur-glass)); }
+    [data-slot="card"] { backdrop-filter: blur(var(--blur-card)); }
+  }
 }
 
 @media (max-width: 767px) {

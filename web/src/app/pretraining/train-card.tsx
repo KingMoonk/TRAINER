@@ -79,11 +79,11 @@ export function TrainCard({
                     onClick={() => onMode(key)}
                     className={cn(
                       "flex flex-col gap-0.5 rounded-lg border-2 px-3 py-2 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                      on ? "border-violet-500 bg-muted/50" : "border-border hover:bg-muted/30",
+                      on ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
                     )}
                   >
                     <span className="font-medium">{texts[key].title}</span>
-                    <span className={cn("text-sm", blocked ? "text-amber-400" : "text-muted-foreground")}>{texts[key].note}</span>
+                    <span className={cn("text-sm", blocked ? "text-warning" : "text-muted-foreground")}>{texts[key].note}</span>
                   </button>
                 );
               })}

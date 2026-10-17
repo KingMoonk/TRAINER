@@ -73,7 +73,7 @@ export default function Page() {
       </div>
 
       {warning && (
-        <p role="alert" data-testid="passive-warning" className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-300">
+        <p role="alert" data-testid="passive-warning" className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning-soft">
           {warning}
         </p>
       )}

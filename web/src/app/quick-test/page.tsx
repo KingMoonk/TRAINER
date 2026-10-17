@@ -214,7 +214,7 @@ export default function Page() {
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-3">
-          <Badge variant="outline" className="border-amber-500/50 text-amber-300">
+          <Badge variant="outline" className="border-warning/50 text-warning-soft">
             {QUICKTEST.throwaway}
           </Badge>
           <span className="text-sm text-muted-foreground">{QUICKTEST.throwawayDesc}</span>
@@ -240,12 +240,12 @@ export default function Page() {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="flex flex-col gap-4 md:flex-row">
-                <Design kicker={QUICKTEST.currentDesign} title={name} description={state.data.current.description} tone="text-violet-400" />
+                <Design kicker={QUICKTEST.currentDesign} title={name} description={state.data.current.description} tone="text-side-left" />
                 <Design
                   kicker={QUICKTEST.yourIdea}
                   title={QUICKTEST.withChange(name)}
                   description={state.data.draft ? state.data.draft.cost : QUICKTEST.noChange}
-                  tone="text-amber-300"
+                  tone="text-side-draft"
                 >
                   {state.data.draft && state.data.draft.changes.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 py-1">
@@ -299,7 +299,7 @@ export default function Page() {
               {busy ? `${QUICKTEST.running}…` : result ? QUICKTEST.runAgain : QUICKTEST.run}
             </Button>
             {shownStatus && (
-              <p role="status" data-testid="quicktest-status" className="text-sm text-pink-400">
+              <p role="status" data-testid="quicktest-status" className="text-sm text-notice">
                 {shownStatus}
               </p>
             )}
@@ -371,8 +371,8 @@ function ResultCard({
     );
   }
   const rows: { which: Which; label: string; tone: string }[] = [
-    { which: "current", label: name, tone: "bg-violet-400" },
-    { which: "draft", label: QUICKTEST.yourIdeaName, tone: "bg-amber-300" },
+    { which: "current", label: name, tone: "bg-side-left" },
+    { which: "draft", label: QUICKTEST.yourIdeaName, tone: "bg-side-draft" },
   ];
   const checks = Object.fromEntries((result?.checks ?? []).map((c) => [c.id, c]));
   const curves: Series[] =
@@ -441,7 +441,7 @@ function ResultCard({
               <Kicker>{QUICKTEST.earlySignal}</Kicker>
               <p className="max-w-prose text-lg">{signalText(result, name, guess || null)}</p>
               <p className="max-w-prose text-xs text-muted-foreground">{QUICKTEST.onePrefix}</p>
-              {result.references && !result.learned_context && <p className="max-w-prose text-sm text-amber-300">{QUICKTEST.guard}</p>}
+              {result.references && !result.learned_context && <p className="max-w-prose text-sm text-warning-soft">{QUICKTEST.guard}</p>}
             </div>
 
             <div className="flex flex-col gap-1">
@@ -452,7 +452,7 @@ function ResultCard({
                   const ok = check?.ok;
                   return (
                     <li key={c.id} className="flex gap-3 text-sm" data-check={c.id}>
-                      <span className={cn("w-4 shrink-0", ok ? "text-violet-400" : ok === false ? "text-red-400" : "text-muted-foreground")}>
+                      <span className={cn("w-4 shrink-0", ok ? "text-highlight" : ok === false ? "text-destructive" : "text-muted-foreground")}>
                         {checkMark(ok)}
                       </span>
                       <span>

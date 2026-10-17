@@ -13,6 +13,13 @@ pnpm test           # Playwright smoke tests against out/, so build first; no AP
 
 `NEXT_PUBLIC_API_URL` points `src/lib/api.ts` at the API server; leave it unset when the API serves `out/` itself.
 
+## Theming
+
+Every colour is a token in `src/app/globals.css` (the token list and how to add a theme are at its top); components use
+semantic utilities (`bg-card`, `text-warning`, `bg-surface-overlay`) and never a palette class or a colour literal.
+`pnpm lint` runs `scripts/check-theme.mjs`, which fails on either one outside that file. Light / dark / system and the
+accent are chosen under Appearance on the Settings page (the gear in the sidebar, `/settings`).
+
 ## Running with the API
 
 On Windows, after `python tasks.py web:build`, run `start_web.bat` from the repository root and open

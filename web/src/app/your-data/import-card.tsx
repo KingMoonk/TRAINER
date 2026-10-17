@@ -59,7 +59,7 @@ function ServerPicker({ picked, setPicked }: { picked: string[]; setPicked: (pat
           {data?.entries.map((entry) => (
             <li key={entry.path} className="flex items-center gap-2 border-b px-2 py-1 text-sm last:border-b-0">
               {entry.is_dir ? (
-                <button type="button" className="flex-1 text-left text-violet-400 hover:underline" onClick={() => setPath(entry.path)}>
+                <button type="button" className="flex-1 text-left text-highlight hover:underline" onClick={() => setPath(entry.path)}>
                   {entry.name}/
                 </button>
               ) : (

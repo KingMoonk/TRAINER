@@ -55,10 +55,10 @@ export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] 
                     onClick={() => onToggle(s)}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg border-2 px-3 py-2 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                      on ? "border-violet-500 bg-muted/50" : "border-border hover:bg-muted/30",
+                      on ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
                     )}
                   >
-                    <span className={cn("flex size-5 shrink-0 items-center justify-center rounded text-xs", on ? "bg-violet-500 text-background" : "border")}>{on ? "✓" : ""}</span>
+                    <span className={cn("flex size-5 shrink-0 items-center justify-center rounded text-xs", on ? "bg-highlight-strong text-background" : "border")}>{on ? "✓" : ""}</span>
                     <span className="font-medium">{s.name}</span>
                     <span className="text-sm text-muted-foreground">
                       {s.count.toLocaleString("en-US")} {s.count === 1 ? "example" : "examples"}{s.held ? ` · ${T.heldOut}` : ""}
@@ -73,13 +73,13 @@ export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] 
           {loading ? "" : selectedLine(chosen.length)}
         </p>
         <div className="flex flex-wrap gap-6 text-sm">
-          <Link href="/your-data/?kind=text" className="text-violet-400 hover:underline">
+          <Link href="/your-data/?kind=text" className="text-highlight hover:underline">
             {T.browse}
           </Link>
         </div>
         <p className="text-sm text-muted-foreground">
           {T.textOnly}{" "}
-          <Link href="/post-training" className="text-violet-400 hover:underline">
+          <Link href="/post-training" className="text-highlight hover:underline">
             {T.postTrainingR1}
           </Link>
           {T.postTrainingR1End}
