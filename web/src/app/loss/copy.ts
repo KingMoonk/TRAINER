@@ -17,6 +17,7 @@ export const LOSS = {
   breadcrumb: "Network designer › Look inside",
   versionsFailed: "Could not load versions.",
   openPretraining: "Open Pretraining",
+  landscapeLink: "See the whole loss landscape: the error as the weights move",
   tableCaption: "Next-token probabilities and gradients",
   softmax: (count: number, token: string) => `Softmax over all ${count.toLocaleString()} tokens. The target is one-hot: 1 for “${token}”, 0 for everything else. The gradient on each logit is p − target.`,
   gradientCheck: (error: number) => `Checked against the engine’s backward pass: largest difference ${error.toExponential(1)}.`,
