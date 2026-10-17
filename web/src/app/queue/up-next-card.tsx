@@ -114,7 +114,7 @@ function Row({
         onDrop(e.dataTransfer.getData("text/plain"));
       }}
       onDragEnd={onDragEnd}
-      className={cn("flex flex-wrap items-center gap-3 rounded-lg border-2 bg-muted/20 p-2 transition-colors", active ? "border-highlight-strong" : "border-border")}
+      className={cn("flex flex-wrap items-center gap-3 rounded-lg border-2 p-2 transition-colors", active ? "selected-box" : "border-border bg-muted/20")}
     >
       <button
         type="button"

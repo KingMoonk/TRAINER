@@ -55,7 +55,7 @@ export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] 
                     onClick={() => onToggle(s)}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg border-2 px-3 py-2 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                      on ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
+                      on ? "selected-box" : "border-border hover:bg-muted/30",
                     )}
                   >
                     <span className={cn("flex size-5 shrink-0 items-center justify-center rounded text-xs", on ? "bg-highlight-strong text-background" : "border")}>{on ? "✓" : ""}</span>

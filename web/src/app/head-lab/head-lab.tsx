@@ -230,7 +230,7 @@ export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
                     aria-label={`Block ${block + 1} head ${head + 1}`}
                     onClick={() => setSel(key)}
                     className={`flex flex-col gap-1 rounded-lg border p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-                      key === current ? "border-primary bg-muted" : off.has(key) ? "border-warning" : "border-border"
+                      key === current ? "selected-box" : off.has(key) ? "border-warning" : "border-border"
                     }`}
                   >
                     <HeatMap cells={patternCells(pattern, off.has(key))} size={9} label={`Where block ${block + 1} head ${head + 1} looks`} />

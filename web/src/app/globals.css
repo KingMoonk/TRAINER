@@ -19,6 +19,9 @@
  *   categorical     cat-1..8 (Value map's eight heads)
  *   visualisations  viz-1..5 viz-end (Pretraining's size preview) scene-background (Inside 3D viewport)
  *                   heat-positive heat-negative cell-masked (Inside a head)
+ *   selection       selected-surface selected-border: how a chosen box, row, card or option looks everywhere. Neutral
+ *                   on purpose and not overridden by accents; apply it with the `selected-box` utility (below), and
+ *                   keep the accent for the small control inside (checkbox, radio dot) and for primary buttons/links.
  *   non-colour      shadow-card canvas-glow selection selection-foreground glass-fallback blur-glass blur-card
  *
  * Modes: :root is light, .dark is dark (the default, set by next-themes on <html>). Per-mode details such as
@@ -198,6 +201,8 @@
   --heat-negative: oklch(0.62 0.16 250);
   --cell-masked: color-mix(in oklch, var(--background) 94%, black);
 
+  --selected-surface: rgb(0 0 0 / 6%);
+  --selected-border: rgb(0 0 0 / 28%);
   --card-shadow: 0 8px 32px -16px rgb(30 40 70 / 28%);
   --canvas-glow: radial-gradient(ellipse at 80% 0%, rgb(90 110 170 / 9%), transparent 55%);
   --selection: rgb(90 110 170 / 28%);
@@ -285,6 +290,8 @@
   --heat-negative: oklch(0.65 0.15 250);
   --cell-masked: color-mix(in oklch, var(--background) 70%, black);
 
+  --selected-surface: rgb(255 255 255 / 7%);
+  --selected-border: rgb(255 255 255 / 22%);
   --card-shadow: 0 8px 32px -16px rgb(0 0 0 / 60%);
   --canvas-glow: radial-gradient(ellipse at 80% 0%, rgb(255 255 255 / 3%), transparent 55%);
   --selection: rgb(176 190 218 / 30%);
@@ -396,6 +403,12 @@
   --highlight-strong: oklch(0.65 0.14 155);
   --part-cost: oklch(0.65 0.14 155);
   --part-own: oklch(0.65 0.14 155);
+}
+
+/* The one selected look for a box, row, card or option. Change it with --selected-surface / --selected-border. */
+@utility selected-box {
+  background-color: var(--selected-surface);
+  border-color: var(--selected-border);
 }
 
 @layer base {

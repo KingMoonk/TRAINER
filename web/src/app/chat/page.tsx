@@ -456,7 +456,7 @@ export default function Page() {
                       aria-pressed={isLeft || isRight}
                       onClick={() => pick(v.number)}
                       className={`flex w-full flex-wrap items-center gap-3 rounded-lg border p-3 text-left text-sm transition-colors hover:bg-muted disabled:opacity-50 ${
-                        isLeft ? "border-side-left bg-muted/50" : isRight ? "border-side-right bg-muted/50" : ""
+                        isLeft || isRight ? "selected-box" : ""
                       }`}
                     >
                       <span className="w-24 font-semibold">{versionName(v)}</span>
