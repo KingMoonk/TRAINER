@@ -66,6 +66,9 @@ a node is *suspect* after one failed poll and *down* after `DOWN_AFTER` seconds 
 moves work. Every node runs its own detector; there is no shared view to agree on, because the scheduler below never needs
 two nodes to agree that a third is dead: the lease does that.
 
+A peer that does not answer is not asked at every poll: the wait between asks doubles (10 s, 20 s, ... up to 60 s) and is one
+`GET /node` until it answers, so a node that is down shows as down instead of as a stream of failed requests.
+
 ## Cluster state: what every node knows (#357, #358)
 
 Nodes join and leave, and any node's UI must show the whole cluster. State falls into two kinds with two consistency
