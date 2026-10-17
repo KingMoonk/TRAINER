@@ -45,9 +45,12 @@ export function PinSelect({ id, name, row, nodes, actions }: { id: string; name:
   );
 }
 
+/** A job the card lists: one queued on another machine, or running on one that is not this machine. */
+export const runsElsewhere = (row: ClusterQueue["jobs"][number]) => !row.queued_here || (row.status === "running" && row.node !== "local");
+
 /** What the other machines have: each machine, then the jobs that run or wait on it. A machine that stopped answering stays, greyed. */
 export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
-  const rows = cluster.jobs.filter((row) => !row.queued_here || (row.status === "running" && row.node !== "local"));
+  const rows = cluster.jobs.filter(runsElsewhere);
   return (
     <Card data-testid="other-machines">
       <CardHeader>

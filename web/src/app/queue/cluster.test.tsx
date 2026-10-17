@@ -250,10 +250,8 @@ describe("Queue page with several machines", () => {
     expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   });
 
-  // Known bug (#316, from #279): page.tsx keeps the Other machines card for any merged list with jobs, and a lone machine's own
-  // jobs are in that list, so an empty card appears. The Playwright version of this check passed only because it ran before the
-  // cluster read landed. test.fails turns red once the page is fixed, so drop `.fails` then.
-  test.fails("a cluster of one that lists itself alone shows no Other machines card", async () => {
+  // The card lists jobs that run on other machines, so a lone machine's own jobs do not show it (#316).
+  test("a cluster of one that lists itself alone shows no Other machines card", async () => {
     await aloneWithJobs();
     expect(screen.queryByTestId("other-machines")).toBeNull();
   });
