@@ -115,6 +115,7 @@ def build(args):
 
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
+        services.resume_passive_at_start()  # an active passive session without a watchdog gets one again
         tags, users = studio_cluster.allowed_callers(workspace.state)
         return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,
                           token=studio_cluster.funnel_token(workspace.state))

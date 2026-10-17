@@ -36,8 +36,9 @@ export function when(stamp: string | null | undefined): string {
 
 const text = (value: unknown) => (value === null || value === undefined ? "" : String(value));
 
-/** The headline, the lines under it (the stop plan, the facts, any error) and whether Stop applies for one session row. */
-export function sessionView(row: SessionRow): { headline: string; lines: string[]; canStop: boolean } {
+/** The headline, the lines under it (the stop plan, the facts, any error), whether Stop applies for one session row, and whether
+ * Keep it going does: the session is still active but its trainer and its watchdog are both gone. */
+export function sessionView(row: SessionRow): { headline: string; lines: string[]; canStop: boolean; canKeepGoing: boolean } {
   const status = PASSIVE.status[row.status] ?? row.status;
   const active = ACTIVE.includes(row.status);
   let facts = PASSIVE.facts(row.trainer ?? "", row.watchdog ?? "", row.restarts ?? 0);
@@ -46,6 +47,7 @@ export function sessionView(row: SessionRow): { headline: string; lines: string[
     headline: PASSIVE.started(status, when(row.created)),
     lines: [text(row.stop), facts, text(row.error)].filter(Boolean),
     canStop: active,
+    canKeepGoing: active && row.trainer === "Stopped" && row.watchdog === "Stopped",
   };
 }
 
