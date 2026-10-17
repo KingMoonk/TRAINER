@@ -15,6 +15,19 @@ export const PREVIEW_ROWS = 6; // rows of the size preview the page draws
 export const PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"];
 export const END = "var(--viz-end)";
 
+/** The request /pretraining/plan takes for these choices; its answer carries the job to post to /queue/jobs. */
+export function planBody(c: { version: number | null; datasetIds: string[]; mode: "catch_up" | "from_scratch"; rows: (typeof ROWS)[number]; hold: (typeof HOLD)[number]; length: Length }) {
+  return {
+    version: c.version,
+    dataset_ids: c.datasetIds,
+    mode: c.mode,
+    rows: Number(c.rows),
+    hold: Number(c.hold.slice(0, -1)) / 100,
+    passes: LENGTHS[c.length],
+    preview_rows: PREVIEW_ROWS,
+  };
+}
+
 const n = (value: number) => value.toLocaleString("en-US");
 
 /** The sets the run reads: each set is ticked as the person left it, else as the server starts it (held-out sets off). */

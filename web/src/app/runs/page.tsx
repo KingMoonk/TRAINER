@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { PlanCard } from "@/app/queue/plan-card";
 import { useQueueActions } from "@/app/queue/use-queue";
 import { PAGE_MAIN } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ActiveCard } from "./active-card";
+import { AllowedHours } from "./allowed-hours";
 import { CompletedList } from "./completed-list";
 import { T } from "./copy";
 import { Hint } from "./hint";
@@ -23,7 +22,7 @@ function Empty({ children }: { children: string }) {
 }
 
 export default function RunsPage() {
-  const { rows, queue, nodes, loading, failed } = useRunRows();
+  const { rows, nodes, loading, failed } = useRunRows();
   const actions = useQueueActions();
   useEffect(() => {
     if (failed) toast.error(T.couldNotLoad, { id: "runs-load" });
@@ -54,18 +53,9 @@ export default function RunsPage() {
       <section aria-labelledby="runs-scheduled" className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 id="runs-scheduled" className="text-lg font-semibold">{T.scheduled}</h2>
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button variant="outline" size="sm">{T.allowedHours}</Button>
-            </SheetTrigger>
-            <SheetContent>
-              <SheetHeader>
-                <SheetTitle>{T.allowedHoursTitle}</SheetTitle>
-                <SheetDescription>{T.allowedHoursLead}</SheetDescription>
-              </SheetHeader>
-              <PlanCard queue={queue.data} actions={actions} />
-            </SheetContent>
-          </Sheet>
+          <AllowedHours>
+            <Button variant="outline" size="sm">{T.allowedHours}</Button>
+          </AllowedHours>
         </div>
         {loading ? <Skeleton className="h-20 w-full" /> : scheduled.length === 0 ? <Empty>{T.nothingScheduled}</Empty> : <ScheduledTable rows={scheduled} actions={actions} />}
       </section>
