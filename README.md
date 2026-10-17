@@ -22,24 +22,27 @@ Tailscale setup (login, HTTPS certificates, `serve`, tags, the workspace node li
 
 | Machine | Setup (once) | Live dev | `/api/node` reports |
 | --- | --- | --- | --- |
-| Apple Silicon Mac (zsh) | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `mps` |
-| Windows with an NVIDIA GPU (PowerShell) | `py -3 tasks.py setup` | `.\.venv\Scripts\python.exe tasks.py dev` | `cuda` |
-| Linux with an NVIDIA GPU | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `cuda` |
+| Apple Silicon Mac (zsh) | `make setup` | `make dev` | `mps` |
+| Windows with an NVIDIA GPU (PowerShell) | `make setup` | `make dev` | `cuda` |
+| Linux with an NVIDIA GPU | `make setup` | `make dev` | `cuda` |
 
 ```bash
 git clone https://github.com/KingMoonk/TRAINER.git && cd TRAINER
-python3 tasks.py setup      # Windows (PowerShell): py -3 tasks.py setup
+make setup                  # no make? python3 tasks.py setup (Windows: py -3 tasks.py setup)
 ```
+
+macOS ships `make` with the Xcode command line tools; on Windows install it once with `winget install ezwinports.make`.
+`make help` lists every target; each one calls `tasks.py`, which also works on its own.
 
 `setup` creates `.venv`, installs the right PyTorch (the default wheel on a Mac, the CUDA wheel when `nvidia-smi` lists a GPU),
 the requirements and the web packages, prints the device PyTorch sees, and fails if the machine has a GPU PyTorch cannot use.
-The API refuses to start on the CPU when a GPU is present unless you pass `--allow-cpu`. `tasks.py dev` is the hot-reloading
+The API refuses to start on the CPU when a GPU is present unless you pass `--allow-cpu`. `make dev` is the hot-reloading
 loop; `docs/node.md` ("Setup and development, per machine") has the one-time `tailscale serve` step that puts it on your tailnet.
 
 **3. Build the web UI and start the API.**
 
 ```bash
-.venv/bin/python tasks.py web:build                         # writes web/out, which the API serves
+make web-build                                              # writes web/out, which the API serves
 .venv/bin/python -m studio_api --bind 127.0.0.1 --port 8787
 ```
 
@@ -67,20 +70,19 @@ policy's `tagOwners` (`docs/cluster.md`, ACL). The request stays pending and lea
 stops resolving); `sudo tailscale up --reset` clears it and logs in again. `tailscale set` has no `--advertise-tags`; tag a
 machine with `tailscale up --advertise-tags=...` or from the admin console's **Machines** page.
 
-`.venv/bin/python app.py` starts the API on this machine and opens the web UI in your browser (build it once with
-`.venv/bin/python tasks.py web:build`). The details below cover GPU support, the workflow and the command line.
+`make run` (`.venv/bin/python app.py`) starts the API on this machine and opens the web UI in your browser (build it once with
+`make web-build`). The details below cover GPU support, the workflow and the command line.
 
 
 ## Lint and tests
 
-`tasks.py` is the one entry point. Each level includes the one before it:
+`tasks.py` is the one entry point; the Makefile wraps it. Each level includes the one before it:
 
 ```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python tasks.py test                    # ruff + every window-free unit test (the local command)
-.venv/bin/python tasks.py test tests.test_queue   # ruff + only the named modules
-python tasks.py test:ci                           # + compileall; every pull request runs it (Linux)
-python tasks.py test:ci:e2e                       # + a real training run (tests.e2e_train); nightly on macOS and Windows
+make test                                         # ruff + every window-free unit test (the local command)
+make test T=tests.test_queue                      # ruff + only the named modules
+make test-ci                                      # + compileall; every pull request runs it (Linux)
+.venv/bin/python tasks.py test:ci:e2e             # + a real training run (tests.e2e_train); nightly on macOS and Windows
 ```
 
 CI runs `test:ci` on Linux for each push and pull request, and `test:ci:e2e` on macOS and Windows every night (and on demand: Actions, Nightly, Run workflow). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
@@ -91,11 +93,11 @@ CI runs `test:ci` on Linux for each push and pull request, and `test:ci:e2e` on 
 
 ```bash
 cd web && pnpm install && pnpm dev          # http://localhost:3000
-python tasks.py web:lint                    # eslint + tsc
-python tasks.py web:build                   # the static export, web/out
+make web-lint                               # eslint + tsc
+make web-build                              # the static export, web/out
 ```
 
-The API (`studio_api/`) is the server the web UI talks to. `python tasks.py dev` runs it (with `--reload`) and the Next.js dev server
+The API (`studio_api/`) is the server the web UI talks to. `make dev` runs it (with `--reload`) and the Next.js dev server
 together on the machine's GPU. By hand, over empty in-memory data:
 
 ```bash
@@ -104,7 +106,7 @@ cd web && NEXT_PUBLIC_API_URL=http://127.0.0.1:8787 pnpm dev   # terminal 2: htt
 ```
 
 `NEXT_PUBLIC_API_URL` is the API's origin; the dev page is on another origin, so it needs the API to allow it. For a single
-origin instead, build the export (`python tasks.py web:build`) and open the API's own URL, `http://127.0.0.1:8787`, which serves
+origin instead, build the export (`make web-build`) and open the API's own URL, `http://127.0.0.1:8787`, which serves
 `web/out`. The status strip says **Connected** when the event stream is up. To keep the API running on a machine, see `docs/node.md`.
 ## Finding hot spots
 
@@ -286,7 +288,7 @@ Created at run time and git-ignored:
 `tests/` contains focused `unittest` modules for the engine, modules, data, architecture, inspection services, viewer bridge and GUI integration. GPU and display-dependent tests may skip when that hardware or display is unavailable.
 
 ```powershell
-.\.venv\Scripts\python.exe tasks.py test
+make test
 ```
 
 Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, module estimates and checkpoint resumption. CUDA tests compare supported GPU operations against CPU and skip when CUDA is unavailable. The PyInstaller hook `packaging/hook-studio_modules.py` collects all discovered modules so registry lookup also works in packaged builds.

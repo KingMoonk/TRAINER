@@ -23,7 +23,7 @@ the tailnet itself and listing nodes; this page covers one machine.
 | `--dump-openapi FILE` | Write the OpenAPI schema to `FILE` and exit. This is how `web/openapi.json` is made (see `web/README.md`). |
 
 Install the requirements first (`python -m pip install -r requirements.txt`, as in the README); the API needs FastAPI,
-uvicorn and the training engine. The web UI is served from `web/out`: build it once with `python tasks.py web:build` (Node and
+uvicorn and the training engine. The web UI is served from `web/out`: build it once with `make web-build` (Node and
 pnpm needed; the API starts without it and then serves only the routes).
 
 ### Who is allowed in
@@ -142,14 +142,14 @@ Then:
 
 | Machine | Setup (once) | Live dev | `GET /node` reports |
 | --- | --- | --- | --- |
-| Apple Silicon Mac (zsh) | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `mps` |
-| Windows with an NVIDIA GPU (PowerShell) | `py -3 tasks.py setup` | `.\.venv\Scripts\python.exe tasks.py dev` | `cuda` |
-| Linux with an NVIDIA GPU | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `cuda` |
+| Apple Silicon Mac (zsh) | `make setup` | `make dev` | `mps` |
+| Windows with an NVIDIA GPU (PowerShell) | `make setup` | `make dev` | `cuda` |
+| Linux with an NVIDIA GPU | `make setup` | `make dev` | `cuda` |
 
 `setup` finds a Python 3.12 or newer, creates `.venv`, installs the right torch (the default wheel on a Mac, which includes
 Metal; the CUDA 12.6 wheel from `requirements-gpu.txt` when `nvidia-smi` lists a GPU), installs `requirements-dev.txt`, runs
 `pnpm install` in `web/`, and prints the device torch sees. It fails when the machine has a GPU that torch cannot use. It is
-safe to run again. The non-dev way to run is `.venv/bin/python app.py` (README, Launch).
+safe to run again. The non-dev way to run is `make run` (`.venv/bin/python app.py`) (README, Launch).
 
 `dev` runs the API with `--reload` on `127.0.0.1:8787` and `pnpm dev` on `127.0.0.1:3000`, with both outputs in the terminal;
 Ctrl+C stops both. It prints the tailnet URL, and the device once the API answers. A saved `.py` restarts the API within a few
@@ -170,7 +170,7 @@ Because the API stays on loopback, the only way to it from another machine is `t
 `Tailscale-User-Login` the client sent and writes its own (above). Nothing here widens a bind.
 
 **The CPU is never a silent fallback.** The API prints `device: ...` at startup. If the machine has a GPU (an Apple Silicon
-Mac, or `nvidia-smi` listing one) but torch reports `cpu`, it refuses to start and says how to fix it (`tasks.py setup`).
+Mac, or `nvidia-smi` listing one) but torch reports `cpu`, it refuses to start and says how to fix it (`make setup`).
 `--allow-cpu` or `--fake` is the only way past that.
 
 ## `tailscale serve`
