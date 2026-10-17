@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
-import ClusterPage from "./page";
+import MachinesPage from "./page";
 
 // The Cluster page (#319) against a mocked API: GET and PUT /cluster/nodes, GET /cluster/merged, GET /queue, GET and PUT
 // /cluster/access, DELETE /queue/jobs/{id} and POST /cluster/remote/{id}/stop. The live spec (tests/live.cluster-page.spec.ts)
@@ -91,7 +91,7 @@ describe("Cluster page", () => {
       addresses: [],
       queue: { ...quiet, job: job("run1", "Version 3 pretraining", { status: "running" }), step: 100, total: 1000, eta_s: 600, up_next: [job("w1", "First waiting")] },
     });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     const me = await screen.findByTestId("machine-local");
     expect(me).toHaveTextContent("mac-mini · This computer");
     expect(me).toHaveTextContent("Apple M2 (mps, 16 GB) · version 1.4.0");
@@ -112,7 +112,7 @@ describe("Cluster page", () => {
         row("g2", "Version 10 pretraining", { node: "gpu-box", hostname: "gpu-box", pinned: "gpu-box", queued_on: "gpu-box", queued_here: false, queued_address: "gpu-box" }),
       ],
     });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     const gpu = within(await screen.findByTestId("machine-gpu-box"));
     expect(await gpu.findByTestId("progress-g1")).toHaveTextContent(/^Step 40 of 100$/);
     expect(gpu.getByText("Online")).toBeInTheDocument();
@@ -132,7 +132,7 @@ describe("Cluster page", () => {
 
   test("a peer that answers 401 explains the login to add, using this computer's login", async () => {
     server({ addresses: ["gpu-box", "brother-pc"], login: "me@example.com" });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     const hint = await screen.findByTestId("machine-refused");
     expect(hint).toHaveTextContent("brother-pc refused this computer");
     expect(hint).toHaveTextContent("me@example.com");
@@ -142,14 +142,14 @@ describe("Cluster page", () => {
 
   test("a 401 with no known login says to tag this computer or add its login", async () => {
     server({ addresses: ["brother-pc"], login: "" });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     expect(await screen.findByTestId("machine-refused")).toHaveTextContent("Tag this computer tag:trainer");
   });
 
   test("adds and removes machines, and saves the list", async () => {
     const user = userEvent.setup();
     const state = server({ addresses: ["gpu-box", "old-laptop"] });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     const save = await screen.findByRole("button", { name: "Save" });
     await screen.findByTestId("machine-gpu-box");
     expect(save).toBeDisabled();
@@ -173,7 +173,7 @@ describe("Cluster page", () => {
   test("a refused list says why inline and saves nothing", async () => {
     const user = userEvent.setup();
     const state = server({ addresses: ["gpu-box"] });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     await screen.findByTestId("machine-gpu-box");
     await user.type(screen.getByLabelText("Machine to add"), "my box");
     await user.click(screen.getAllByRole("button", { name: "Add" })[0]);
@@ -188,7 +188,7 @@ describe("Cluster page", () => {
   test("shows this computer's tailnet name and copies it", async () => {
     const user = userEvent.setup();
     server({ addresses: [] });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     expect(await screen.findByTestId("tailnet-name")).toHaveTextContent(/^mac-mini\.tail1234\.ts\.net$/);
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(await screen.findByText("Copied this computer's name.")).toBeInTheDocument();
@@ -197,7 +197,7 @@ describe("Cluster page", () => {
 
   test("says so when Tailscale has not named this computer", async () => {
     server({ addresses: [], me: { ...ME, tailnet_name: "" } });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     expect(await screen.findByTestId("tailnet-name-missing")).toHaveTextContent("MagicDNS");
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
   });
@@ -205,7 +205,7 @@ describe("Cluster page", () => {
   test("edits who may call this computer, and says it counts after a restart", async () => {
     const user = userEvent.setup();
     const state = server({ addresses: [], login: "me@example.com", users: ["old@example.com"] });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     const access = within(await screen.findByTestId("access"));
     expect(await access.findByTestId("access-login")).toHaveTextContent("me@example.com");
     expect(screen.getByTestId("access")).toHaveTextContent("next time the app starts");
@@ -232,7 +232,7 @@ describe("Cluster page", () => {
         row("g1", "Version 9 pretraining", { status: "running", node: "gpu-box", hostname: "gpu-box", queued_on: "gpu-box", queued_here: false, queued_address: "gpu-box" }),
       ],
     });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     await user.click(await screen.findByRole("button", { name: "Stop Version 3 pretraining" }));
     await waitFor(() => expect(state.removes).toEqual(["run1"]));
     await user.click(screen.getByRole("button", { name: "Stop Version 9 pretraining" }));
@@ -246,7 +246,7 @@ describe("Cluster page", () => {
       addresses: ["gpu-box"],
       jobs: [row("run1", "Version 3 pretraining", { status: "running", node: "gpu-box", hostname: "gpu-box" })],
     });
-    renderPage(<ClusterPage />, { route: "/cluster" });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
     const gpu = within(await screen.findByTestId("machine-gpu-box"));
     expect(await gpu.findByTestId("run-link-run1")).toHaveAttribute("href", "/training-run");
     await user.click(screen.getByRole("button", { name: "Stop Version 3 pretraining" }));
@@ -255,7 +255,7 @@ describe("Cluster page", () => {
 
   test("the sidebar has a Cluster entry", async () => {
     server({ addresses: [] });
-    renderPage(<ClusterPage />, { route: "/cluster", shell: true });
-    expect(await screen.findByRole("link", { name: "Cluster" })).toHaveAttribute("href", "/cluster");
+    renderPage(<MachinesPage />, { route: "/cluster/machines", shell: true });
+    expect(await screen.findByRole("link", { name: "Cluster" })).toHaveAttribute("href", "/cluster/machines");
   });
 });

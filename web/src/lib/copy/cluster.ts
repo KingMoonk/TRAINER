@@ -1,8 +1,9 @@
 // The Cluster page's strings: the machines this one pools compute with (GET and PUT /cluster/nodes, GET and PUT /cluster/access, docs/cluster.md).
 
 export const CLUSTER = {
-  title: "Cluster",
+  title: "Machines",
   lead: "The computers this one shares training with, over your tailnet: whether each answers, what it is running, and who may call this computer.",
+  areaLabel: "Cluster",
   couldNotLoad: "Could not read the machines: {why}",
   machines: "What is running where",
   machinesLead: "This computer first, then each machine in the list. A machine that does not answer stays here with the reason.",

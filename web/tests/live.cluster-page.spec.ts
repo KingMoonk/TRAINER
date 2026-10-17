@@ -12,7 +12,7 @@ test.afterEach(async ({ request }) => {
 test("adds a machine, saves, shows why it does not answer, then removes it", async ({ page, request }) => {
   expect((await request.put("/cluster/nodes", { data: { addresses: [] } })).ok()).toBeTruthy();
   const hostname = (await (await request.get("/node")).json()).hostname as string;
-  await page.goto("/cluster/");
+  await page.goto("/cluster/machines/");
   await expect(page.getByTestId("machine-local")).toContainText(hostname);
 
   await page.getByLabel("Machine to add").fill("not a machine");

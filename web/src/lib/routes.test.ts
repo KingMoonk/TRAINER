@@ -14,8 +14,8 @@ describe("ROUTES and AREAS", () => {
     for (const a of AREAS) expect(ROUTES.some((r) => r.area === a.id), a.id).toBe(true);
   });
 
-  test("hrefs are absolute paths without a trailing slash", () => {
-    for (const r of ROUTES) expect(r.href, r.route).toMatch(/^\/[a-z0-9-]+$/);
+  test("hrefs are absolute paths without a trailing slash, at most one level deep", () => {
+    for (const r of ROUTES) expect(r.href, r.route).toMatch(/^\/[a-z0-9-]+(\/[a-z0-9-]+)?$/);
   });
 
   test("every route has a title and a lead", () => {
