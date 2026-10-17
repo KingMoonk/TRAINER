@@ -13960,6 +13960,92 @@
         ]
       }
     },
+    "/passive/{session_id}/pause": {
+      "post": {
+        "description": "Ask a session to pause at the trainer's next check. 409 when it has ended or is being stopped.",
+        "operationId": "pause_passive_passive__session_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause Passive",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/resume": {
+      "post": {
+        "description": "Ask a paused session to carry on. 409 when it has ended or is being stopped.",
+        "operationId": "resume_passive_passive__session_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Passive",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
     "/passive/{session_id}/stop": {
       "post": {
         "operationId": "stop_passive_passive__session_id__stop_post",

@@ -83,6 +83,39 @@ describe("Passive training page", () => {
     expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/passive/p1/keep-going"]);
   });
 
+  test("Pause shows on a running session and Resume on a paused one, each asking the API", async () => {
+    let sessions = [running, { ...running, id: "p3", status: "paused" }, stopped];
+    const calls = mockApi({
+      "GET /passive": () => ({ body: { sessions, signin: false } }),
+      "GET /queue": { body: idle },
+      "POST /passive/p1/pause": () => {
+        sessions = [{ ...running, status: "paused" }, sessions[1], sessions[2]];
+        return { body: { status: "paused" } };
+      },
+      "POST /passive/p3/resume": () => {
+        sessions = [sessions[0], { ...running, id: "p3" }, sessions[2]];
+        return { body: { status: "running" } };
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<PassivePage />);
+    const live = await screen.findByTestId("session-p1");
+    const held = screen.getByTestId("session-p3");
+    const old = screen.getByTestId("session-p0");
+    expect(within(live).queryByRole("button", { name: "Resume" })).toBeNull();
+    expect(within(held).queryByRole("button", { name: "Pause" })).toBeNull();
+    expect(within(old).queryByRole("button", { name: "Pause" })).toBeNull();
+    expect(within(old).queryByRole("button", { name: "Resume" })).toBeNull();
+
+    await user.click(within(live).getByRole("button", { name: "Pause" }));
+    expect(await within(screen.getByTestId("session-p1")).findByRole("button", { name: "Resume" })).toBeVisible();
+    expect(screen.getByTestId("passive-note")).toHaveTextContent("Asked it to pause.");
+    await user.click(within(screen.getByTestId("session-p3")).getByRole("button", { name: "Resume" }));
+    expect(await within(screen.getByTestId("session-p3")).findByRole("button", { name: "Pause" })).toBeVisible();
+    expect(screen.getByTestId("passive-note")).toHaveTextContent("Asked it to carry on.");
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/passive/p1/pause", "/passive/p3/resume"]);
+  });
+
   test("the sign-in start can be removed", async () => {
     let signin = true;
     const calls = mockApi({

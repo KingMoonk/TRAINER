@@ -413,6 +413,12 @@ class Services:
         """Ask a passive session to stop. Returns its status afterwards."""
         raise NotImplementedError
 
+    def command_passive(self, session_id, command):
+        """Ask a passive session to "pause" or "resume"; the trainer takes it at its next check and journals it. Returns the
+        session's status now (still the old one until the trainer has taken the command), or None for an unknown session. A
+        session that is stopped, failed or finished, or that is being stopped, raises RuntimeError."""
+        raise NotImplementedError
+
     def keep_passive_going(self, session_id=None):
         """Start the watchdog again for an active passive session whose watchdog is gone (it then restarts the trainer). Without
         `session_id`, the active session, if any. Returns the session's status, or None when there is no such session; a session that
@@ -964,6 +970,16 @@ class FakeServices(Services):
                 row.update(status="stopped", trainer="Stopped", watchdog="Stopped")
                 return "stopped"
         return None
+
+    def command_passive(self, session_id, command):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        if row["status"] not in ("queued", "running", "paused"):
+            raise RuntimeError(f"Passive session {session_id} is {row['status']}, so it cannot {command}.")
+        row["status"] = "paused" if command == "pause" else "running"  # the real trainer takes the command at its next check
+        self.passive_commands = [*getattr(self, "passive_commands", []), (session_id, command)]
+        return row["status"]
 
     def resume_passive_at_start(self):
         pass  # a fake has no watchdog to bring back
@@ -1914,6 +1930,22 @@ class WorkspaceServices(Services):
         import studio_passive_watch as watch
         from studio_passive import PassiveStore
         return watch.stop(PassiveStore(self.root), session_id)
+
+    def command_passive(self, session_id, command):
+        from studio_passive import ACTIVE, PassiveStore
+        if command not in ("pause", "resume"):
+            raise ValueError("Command must be pause or resume.")
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        session = store.get(session_id)
+        if session is None:
+            return None
+        if session["status"] not in ACTIVE:
+            raise RuntimeError(f"Passive session {session_id} is {session['status']}, so it cannot {command}.")
+        if not store.command(session_id, command):
+            raise RuntimeError(f"Passive session {session_id} is being stopped, so it cannot {command}.")
+        return session["status"]
 
     def keep_passive_going(self, session_id=None, **hooks):
         """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""

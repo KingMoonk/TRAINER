@@ -50,6 +50,19 @@ class PassiveApiTest(unittest.TestCase):
         self.client.post("/passive/p1/stop")
         self.assertEqual(self.client.post("/passive/p1/keep-going").status_code, 409)
 
+    def test_pause_and_resume_a_session(self):
+        paused = self.client.post("/passive/p1/pause")
+        self.assertEqual((paused.status_code, paused.json()), (200, {"status": "paused"}))
+        resumed = self.client.post("/passive/p1/resume")
+        self.assertEqual((resumed.status_code, resumed.json()), (200, {"status": "running"}))
+        self.assertEqual(self.services.passive_commands, [("p1", "pause"), ("p1", "resume")])
+
+    def test_pause_is_refused_for_an_ended_session_and_unknown_is_404(self):
+        self.client.post("/passive/p1/stop")
+        for route in ("pause", "resume"):
+            self.assertEqual(self.client.post(f"/passive/p1/{route}").status_code, 409)
+            self.assertEqual(self.client.post(f"/passive/nope/{route}").status_code, 404)
+
     def test_removing_the_signin_watchdog(self):
         self.assertEqual(self.client.delete("/passive/signin").status_code, 204)
         self.assertFalse(self.client.get("/passive").json()["signin"])
@@ -57,6 +70,8 @@ class PassiveApiTest(unittest.TestCase):
     def test_none_of_it_emits_events(self):
         self.client.get("/passive")
         self.client.post("/passive/p1/keep-going")
+        self.client.post("/passive/p1/pause")
+        self.client.post("/passive/p1/resume")
         self.client.post("/passive/p1/stop")
         self.client.delete("/passive/signin")
         self.assertEqual([event for event in self.tap.events if event[0] != "status"], [])  # initial shell snapshot is independent
