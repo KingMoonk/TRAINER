@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, api, apiUrl, unwrap } from "@/lib/api";
+import { ApiError, api, apiFetch, unwrap } from "@/lib/api";
 import { IMPORT, fill, type Kind } from "./copy";
 import { INPUT } from "./forms";
 import { runJob, type JobLike } from "./jobs";
@@ -20,7 +20,7 @@ const sizeText = (bytes: number | null | undefined) =>
 async function upload(kind: Kind, files: File[]): Promise<JobLike> {
   const form = new FormData();
   for (const file of files) form.append("files", file);
-  const res = await fetch(apiUrl(`/data/${kind}/import`), { method: "POST", body: form });
+  const res = await apiFetch(`/data/${kind}/import`, { method: "POST", body: form });
   if (!res.ok) throw new ApiError(res.status, `/data/${kind}/import`, await res.text());
   return (await res.json()) as JobLike;
 }

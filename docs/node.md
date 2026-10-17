@@ -97,11 +97,13 @@ Then:
 - The web app sends the token as `X-Groundwork-Token` on every request, and reads the live `/events` stream with `fetch` so the
   header can go on it (an `EventSource` cannot send headers, and the token never goes in a URL). The page takes the token from
   the browser's `localStorage` key `groundwork-token`; set it once in the page's console on the Funnel site:
-  `localStorage.setItem("groundwork-token", "<the token>")`. It stays in that browser only and is never baked into the build.
-- **No Host check.** The API does not compare the `Host` header with a list of names, so a DNS-rebinding page can reach an open
-  loopback node (`--bind 127.0.0.1`) under its own hostname. Such a page is cross-origin to the API's own pages, and the API
-  gives other origins no CORS headers, but the request itself is still served. If you open the browser on untrusted sites while
-  the node runs, give the node a token (which ends the open mode) or bind it only for the time you need it.
+  `localStorage.setItem("groundwork-token", "<the token>")`, then reload the page (the live stream is chosen when the page loads).
+  If the node answers `401` to the stored token, the stream stops, a notice says so, and it does not retry; fix the token and reload. It stays in that browser only and is never baked into the build.
+- **No Host check.** The API does not compare the `Host` header with a list of names, so a DNS-rebinding page can reach a
+  loopback node under its own hostname and the browser then treats the API as that page's own origin. **A token does not help
+  here**: a loopback request that carries `Tailscale-User-Login` is still trusted as that user even on a node with a token, and a
+  rebinding page can send that header itself, same-origin and with no CORS involved. Only a Host check would close this. Until
+  there is one, do not browse untrusted sites on a machine running the node (the same holds for `--bind 127.0.0.1` without a token).
 - Anyone who holds the token can use the node, as anyone on the tailnet can with `tailscale serve`: keep it out of pages and
   logs you do not control, and change it in the config (and restart) to revoke it. The API does not limit how often a caller may
   try tokens; a long random token is the protection.

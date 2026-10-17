@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, apiUrl, ApiError, subscribe, unwrap } from "@/lib/api";
+import { api, apiFetch, ApiError, subscribe, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
 import { EXPORT, STORAGE as T } from "./copy";
 import { AGES, ALL, DEFAULT_CHOICE, choiceDays, dataApplies, downloadName, errorText, fill, sizeText } from "./logic";
@@ -156,7 +156,7 @@ function ExportCard() {
   async function download(number: number, name: string, kind: ExportKind) {
     setBusy(`${number}:${kind}`);
     try {
-      const res = await fetch(apiUrl(`/versions/${number}/export?kind=${kind}`));
+      const res = await apiFetch(`/versions/${number}/export?kind=${kind}`);
       if (!res.ok) throw new ApiError(res.status, `/versions/${number}/export`, await res.text());
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);

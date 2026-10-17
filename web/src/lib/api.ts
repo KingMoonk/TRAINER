@@ -5,31 +5,18 @@
 
 import createClient from "openapi-fetch";
 import type { paths } from "@/lib/api-schema";
+import { toast } from "sonner";
+import { ApiError, apiFetch, apiUrl, BASE } from "@/lib/api-core";
 import { getStream } from "@/lib/sse-post";
-import { apiToken, authHeaders, TOKEN_HEADER } from "@/lib/token";
+import { apiToken, TOKEN_HEADER } from "@/lib/token";
 
-const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly path: string,
-    readonly body: string,
-  ) {
-    super(`${status} from ${path}`);
-    this.name = "ApiError";
-  }
-}
-
-export function apiUrl(path: string): string {
-  return `${BASE}${path.startsWith("/") ? path : `/${path}`}`;
-}
+export { ApiError, apiFetch, apiUrl } from "@/lib/api-core";
 
 /** GET (or `init.method`) `path` and parse the JSON reply as `T`. Throws ApiError on a non-2xx status. */
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(path), {
+  const res = await apiFetch(path, {
     ...init,
-    headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...authHeaders(), ...init?.headers },
+    headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
   });
   if (!res.ok) throw new ApiError(res.status, path, await res.text());
   if (res.status === 204) return undefined as T;
@@ -90,8 +77,14 @@ function subscribeWithHeaders(onEvent: (event: ApiEvent) => void, onError?: (err
     while (!abort.signal.aborted) {
       try {
         await getStream("/events", onEvent, abort.signal, onOpen);
-      } catch {
-        // a refused or dropped connection is reported below and retried
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {  // the server refused the stored token: retrying cannot help
+          if (!abort.signal.aborted) {
+            onError?.(new Event("error"));
+            toast.error("The node refused the stored token, so live updates are off. Fix it (docs/node.md) and reload the page.", { id: "token-refused" });
+          }
+          return;
+        }
       }
       if (abort.signal.aborted) return;
       onError?.(new Event("error"));

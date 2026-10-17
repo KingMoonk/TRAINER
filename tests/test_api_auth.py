@@ -272,11 +272,16 @@ class Config(unittest.TestCase):
 
     def test_junk_origins_are_refused_and_the_scheme_is_lowercased(self):
         for bad in ("https://a.com\\", "https://a .com", "https://a.com:0", "https://a.com:", "https://a.com:99999", "https://a.com:80:80",
-                    "https://-a.com", "https://a..com", "https://a.com\n.evil.com", "https://[::1", "https://[zz]", "https://a.com:٣"):
+                    "https://-a.com", "https://a..com", "https://a.com\n.evil.com", "https://[::1", "https://[zz]", "https://a.com:٣", "https://a.com//"):
             with mock.patch("sys.stderr"), self.assertRaises(SystemExit, msg=bad):
                 parse(["--fake", "--allow-origin", bad])
         args = parse(["--fake", "--allow-origin", "HTTPS://A.Example.com:8443/", "--allow-origin", "HTTP://[::1]:3000"])
         self.assertEqual(args.allow_origin, ["https://a.example.com:8443", "http://[::1]:3000"])
+
+    def test_ipv6_literals_are_written_in_their_compressed_form(self):
+        args = parse(["--fake", "--allow-origin", "http://[0:0:0:0:0:0:0:1]:3000", "--allow-origin", "http://[0:0:0:0:0:0:0:1]",
+                      "--allow-origin", "https://[2001:0DB8:0:0:0:0:0:1]"])
+        self.assertEqual(args.allow_origin, ["http://[::1]:3000", "http://[::1]", "https://[2001:db8::1]"])
 
     def test_a_malformed_origin_is_refused(self):
         for bad in ("*", "https://*.example.com", "example.com", "https://a.example.com/path", "ftp://a.example.com", "https://",

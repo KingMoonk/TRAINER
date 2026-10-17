@@ -1,7 +1,7 @@
 // Readers for a server-sent-events stream over fetch. EventSource can only GET and cannot send a header (the Funnel token goes in
 // `X-Groundwork-Token`), and POST /chat/reply streams on its own response, so these read the body with fetch. Abort the signal to stop the stream.
 
-import { ApiError, apiUrl } from "@/lib/api";
+import { ApiError, apiUrl } from "@/lib/api-core";
 import { authHeaders } from "@/lib/token";
 
 /** One message of the stream. The API frames each as `data: {"kind", "payload"}`; a frame without that shape is skipped. */

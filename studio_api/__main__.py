@@ -44,17 +44,17 @@ ORIGIN = re.compile(rf"(?P<scheme>[A-Za-z]+)://(?P<host>\[[0-9A-Fa-f:.]+\]|{LABE
 def origin(value):
     """`https://app.vercel.app` from a typed origin: a scheme, a host and an optional port, nothing else (no path, no `*`, no
     space). The scheme and host are lowercased; a port outside 1-65535 is refused, not rewritten to the default."""
-    found = ORIGIN.fullmatch(value.strip().rstrip("/"))
+    text = value.strip()
+    found = ORIGIN.fullmatch(text[:-1] if text.endswith("/") else text)  # one trailing slash only
     scheme = found and found["scheme"].lower()
     port = found and int(found["port"]) if found and found["port"] else None
     try:
-        if found and found["host"].startswith("["):
-            ipaddress.IPv6Address(found["host"][1:-1])
+        host = f"[{ipaddress.IPv6Address(found['host'][1:-1]).compressed}]" if found and found["host"].startswith("[") else None
     except ValueError:
         found = None
     if not found or scheme not in DEFAULT_PORTS or (found["port"] and not 0 < port < 65536):
         raise argparse.ArgumentTypeError(f"{value!r} is not a web origin like https://app.example.com (scheme, host, optional port 1-65535).")
-    return f"{scheme}://{found['host'].lower()}" + (f":{port}" if port and port != DEFAULT_PORTS[scheme] else "")
+    return f"{scheme}://{host or found['host'].lower()}" + (f":{port}" if port and port != DEFAULT_PORTS[scheme] else "")
 
 
 def parse(argv=None):
