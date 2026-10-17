@@ -413,7 +413,7 @@ class InstallTests(unittest.TestCase):
             watch.uninstall(root, home=home, run=run, platform="darwin")  # already gone is fine
 
     def test_windows_creates_and_deletes_a_scheduled_task(self):
-        run = MagicMock()
+        run = MagicMock(return_value=SimpleNamespace(returncode=0))
         with tempfile.TemporaryDirectory() as root:
             name = watch.install(root, run=run, platform="win32")
             args = run.call_args[0][0]
@@ -427,6 +427,42 @@ class InstallTests(unittest.TestCase):
             watch.uninstall(root, run=run, platform="win32")
             self.assertEqual(run.call_args[0][0], ["schtasks", "/Delete", "/TN", name, "/F"])
             self.assertFalse(Path(task.strip('"')).exists())
+
+    def test_windows_failed_create_leaves_nothing_installed(self):
+        with tempfile.TemporaryDirectory() as root:
+            def run(args, **kw):
+                if args[1] == "/Create":
+                    raise subprocess.CalledProcessError(1, args)
+                return SimpleNamespace(returncode=1)  # /Query: no such task
+            self.assertIsNone(watch.install(root, run=run, platform="win32"))
+            self.assertFalse(watch._script(root).exists())
+            self.assertFalse(watch.installed(root, run=run, platform="win32"))
+
+    def test_windows_installed_follows_the_task_query(self):
+        calls = []
+        def answer(code):
+            return lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=code)
+        with tempfile.TemporaryDirectory() as root:
+            self.assertTrue(watch.installed(root, run=answer(0), platform="win32"))
+            self.assertEqual(calls[0][:3], ["schtasks", "/Query", "/TN"])
+            self.assertFalse(watch.installed(root, run=answer(1), platform="win32"))
+            watch._script(root).parent.mkdir(parents=True, exist_ok=True)
+            watch._script(root).write_text("x")  # a script alone is not a registration
+            self.assertFalse(watch.installed(root, run=answer(1), platform="win32"))
+            self.assertFalse(watch.installed(root, run=MagicMock(side_effect=OSError), platform="win32"))
+
+    def test_windows_failed_delete_is_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            watch._script(root).parent.mkdir(parents=True, exist_ok=True)
+            watch._script(root).write_text("x")
+            stuck = lambda args, **kw: SimpleNamespace(returncode=1 if args[1] == "/Delete" else 0)  # noqa: E731 (/Query still finds it)
+            with patch("sys.stderr") as err:
+                self.assertFalse(watch.uninstall(root, run=stuck, platform="win32"))
+            self.assertIn("Could not delete", "".join(c.args[0] for c in err.write.call_args_list))
+            self.assertTrue(watch._script(root).exists())
+            gone = lambda args, **kw: SimpleNamespace(returncode=1)  # noqa: E731 (already deleted: /Delete and /Query both fail)
+            self.assertTrue(watch.uninstall(root, run=gone, platform="win32"))
+            self.assertFalse(watch._script(root).exists())
 
     def test_failures_never_raise(self):
         with tempfile.TemporaryDirectory() as root:

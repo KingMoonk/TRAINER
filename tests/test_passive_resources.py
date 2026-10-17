@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import studio_passive_watch as watch
 from studio_ia.services import WorkspaceServices
@@ -17,14 +17,21 @@ def row(**kw):
 
 class SignIn(unittest.TestCase):
     def test_installed_follows_install_and_uninstall_on_each_platform(self):
-        run = MagicMock()
+        tasks = set()  # a fake Task Scheduler: the real schtasks is never called
+
+        def run(args, **kw):
+            if args[1] == "/Create":
+                tasks.add(args[3])
+            elif args[1] == "/Delete":
+                tasks.discard(args[3])
+            return SimpleNamespace(returncode=0 if args[3] in tasks or args[1] != "/Query" else 1)
         for platform in ("darwin", "linux", "win32"):
             with self.subTest(platform), tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as root:
-                self.assertFalse(watch.installed(root, home=home, platform=platform))
+                self.assertFalse(watch.installed(root, home=home, run=run, platform=platform))
                 watch.install(root, home=home, run=run, platform=platform)
-                self.assertTrue(watch.installed(root, home=home, platform=platform))
+                self.assertTrue(watch.installed(root, home=home, run=run, platform=platform))
                 watch.uninstall(root, home=home, run=run, platform=platform)
-                self.assertFalse(watch.installed(root, home=home, platform=platform))
+                self.assertFalse(watch.installed(root, home=home, run=run, platform=platform))
 
     def test_other_platforms_never_start_at_sign_in(self):
         self.assertFalse(watch.installed("x", platform="freebsd"))
