@@ -67,9 +67,7 @@ name, Tailscale name or IP; any other name needs `--allow-host`.
 
 `--allow-host` takes a name, or a pattern where one `*` stands for exactly one label (`node.*.ts.net`; at least two literal labels
 are required). **Put a wildcard only under a domain you control**: `*.co.uk` or `*.duckdns.org` would let any stranger's
-name through and re-open DNS rebinding. A node without the `tailscale` command, such as the API container in `compose.yaml`, needs it: compose passes
-`--allow-host ${TS_HOSTNAME:-groundwork-dev}` and `--allow-host ${TS_HOSTNAME:-groundwork-dev}.*.ts.net`, which covers the
-`groundwork-dev.<tailnet>.ts.net` name `tailscale serve` forwards. Add others through `API_ARGS`.
+name through and re-open DNS rebinding.
 
 ### Funnel and a page on another origin (optional)
 
@@ -139,6 +137,41 @@ Then:
   but then `tailscale serve` cannot reach a loopback listener. If the same machine also serves browsers, bind `0.0.0.0` instead:
   `serve` connects over the loopback address and nodes over the tailnet, and a request from anywhere else (the LAN) is refused
   by the whois check. Either way, the ACL decides who gets as far as the port (`docs/cluster.md`).
+
+## Setup and development, per machine
+
+| Machine | Setup (once) | Live dev | `GET /node` reports |
+| --- | --- | --- | --- |
+| Apple Silicon Mac (zsh) | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `mps` |
+| Windows with an NVIDIA GPU (PowerShell) | `py -3 tasks.py setup` | `.\.venv\Scripts\python.exe tasks.py dev` | `cuda` |
+| Linux with an NVIDIA GPU | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `cuda` |
+
+`setup` finds a Python 3.12 or newer, creates `.venv`, installs the right torch (the default wheel on a Mac, which includes
+Metal; the CUDA 12.6 wheel from `requirements-gpu.txt` when `nvidia-smi` lists a GPU), installs `requirements-dev.txt`, runs
+`pnpm install` in `web/`, and prints the device torch sees. It fails when the machine has a GPU that torch cannot use. It is
+safe to run again. The non-dev way to run is `.venv/bin/python app.py` (README, Launch).
+
+`dev` runs the API with `--reload` on `127.0.0.1:8787` and `pnpm dev` on `127.0.0.1:3000`, with both outputs in the terminal;
+Ctrl+C stops both. It prints the tailnet URL, and the device once the API answers. A saved `.py` restarts the API within a few
+seconds (open `/events` streams are cut after 2 seconds, `GRACEFUL_SHUTDOWN` in `studio_api/__main__.py`); a saved file under
+`web/` hot-reloads. It takes no arguments, so neither server can be bound beyond loopback from there.
+
+To reach `dev` from the tailnet, run this **once** in another terminal. `dev` never runs it, and it changes what `tailscale serve`
+shows (undo with `tailscale serve reset`; to publish only the built app again, `tailscale serve --bg 8787`). The Tailscale
+CLI on a Mac is `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` is not on `PATH`:
+
+```bash
+tailscale serve --bg http://127.0.0.1:3000
+tailscale serve --bg --set-path=/api/ http://127.0.0.1:8787
+tailscale serve status          # / -> 3000, /api/ -> 8787 (the prefix is stripped, so the page and the API are one origin)
+```
+
+Because the API stays on loopback, the only way to it from another machine is `tailscale serve`, which deletes any
+`Tailscale-User-Login` the client sent and writes its own (above). Nothing here widens a bind.
+
+**The CPU is never a silent fallback.** The API prints `device: ...` at startup. If the machine has a GPU (an Apple Silicon
+Mac, or `nvidia-smi` listing one) but torch reports `cpu`, it refuses to start and says how to fix it (`tasks.py setup`).
+`--allow-cpu` or `--fake` is the only way past that.
 
 ## `tailscale serve`
 

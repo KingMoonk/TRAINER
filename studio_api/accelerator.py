@@ -1,5 +1,4 @@
-"""Never train on the CPU by accident. A machine with a GPU whose torch reports `cpu` (a CPU-only wheel, a container without the
-GPU passed in, a broken driver) is refused at startup unless `--allow-cpu` says the CPU is what you want. `--fake` serves no
+"""Never train on the CPU by accident. A machine with a GPU whose torch reports `cpu` (a CPU-only wheel, a broken driver) is refused at startup unless `--allow-cpu` says the CPU is what you want. `--fake` serves no
 training and is never checked."""
 
 import platform
@@ -31,8 +30,8 @@ def torch_device(status):
 
 
 FIXES = {
-    "mps": "run the API natively on the Mac from the .venv with the default torch wheel (Docker on a Mac has no Metal)",
-    "cuda": "install the CUDA build of torch (requirements-gpu.txt) or, in Docker, give the container the GPU (docs/dev-compose.md)",
+    "mps": "run `python tasks.py setup` to install the default torch wheel, which includes Metal",
+    "cuda": "run `python tasks.py setup` to install the CUDA build of torch (cu126, requirements-gpu.txt)",
 }
 
 

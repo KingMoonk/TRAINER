@@ -18,28 +18,23 @@ Tailscale setup (login, HTTPS certificates, `serve`, tags, the workspace node li
 - Node 24 and pnpm (`npm install -g pnpm`).
 - [Tailscale](https://tailscale.com/download), only to reach the UI from other devices or to join a cluster.
 
-**2. Get the code and install the dependencies.**
+**2. Get the code and set up this machine.**
 
-macOS / Linux:
+| Machine | Setup (once) | Live dev | `/api/node` reports |
+| --- | --- | --- | --- |
+| Apple Silicon Mac (zsh) | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `mps` |
+| Windows with an NVIDIA GPU (PowerShell) | `py -3 tasks.py setup` | `.\.venv\Scripts\python.exe tasks.py dev` | `cuda` |
+| Linux with an NVIDIA GPU | `python3 tasks.py setup` | `.venv/bin/python tasks.py dev` | `cuda` |
 
 ```bash
 git clone https://github.com/KingMoonk/TRAINER.git && cd TRAINER
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-cd web && pnpm install && cd ..
+python3 tasks.py setup      # Windows (PowerShell): py -3 tasks.py setup
 ```
 
-Windows (PowerShell):
-
-```powershell
-git clone https://github.com/KingMoonk/TRAINER.git; cd TRAINER
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-cd web; pnpm install; cd ..
-```
-
-`requirements-dev.txt` includes `requirements.txt` (PyTorch, the API server) plus ruff. For an NVIDIA GPU install the CUDA build of
-PyTorch first (`requirements-gpu.txt`, [GPU acceleration](#gpu-acceleration)); Apple GPUs need nothing extra.
+`setup` creates `.venv`, installs the right PyTorch (the default wheel on a Mac, the CUDA wheel when `nvidia-smi` lists a GPU),
+the requirements and the web packages, prints the device PyTorch sees, and fails if the machine has a GPU PyTorch cannot use.
+The API refuses to start on the CPU when a GPU is present unless you pass `--allow-cpu`. `tasks.py dev` is the hot-reloading
+loop; `docs/node.md` ("Setup and development, per machine") has the one-time `tailscale serve` step that puts it on your tailnet.
 
 **3. Build the web UI and start the API.**
 
@@ -100,7 +95,8 @@ python tasks.py web:lint                    # eslint + tsc
 python tasks.py web:build                   # the static export, web/out
 ```
 
-The API (`studio_api/`) is the server the web UI talks to. Run it and the Next.js dev server together:
+The API (`studio_api/`) is the server the web UI talks to. `python tasks.py dev` runs it (with `--reload`) and the Next.js dev server
+together on the machine's GPU. By hand, over empty in-memory data:
 
 ```bash
 .venv/bin/python -m studio_api --fake --port 8787     # terminal 1: the API over empty in-memory data (drop --fake for your workspace)

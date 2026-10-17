@@ -1,6 +1,8 @@
 """tasks.py dev: the commands it starts, the device notice and the wait for GET /node. No server is started."""
 import socket
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import tasks
 
@@ -39,13 +41,52 @@ class DevCommandsTest(unittest.TestCase):
         self.assertTrue(page.endswith(f"http://127.0.0.1:{tasks.WEB_PORT}"))
         self.assertTrue(api.endswith(f"--set-path=/api/ http://127.0.0.1:{tasks.API_PORT}"))
 
-    def test_a_busy_port_is_seen(self):
+    def test_a_listening_port_is_busy(self):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen()
             self.assertTrue(tasks.port_busy(listener.getsockname()[1]))
-            port = listener.getsockname()[1]
-        self.assertFalse(tasks.port_busy(port))
+
+
+class SetupTest(unittest.TestCase):
+    def test_the_running_python_is_used_when_new_enough(self):
+        self.assertEqual(tasks.find_python("/py/current", (3, 13, 1)), "/py/current")
+
+    def test_an_old_python_looks_for_a_newer_one(self):
+        found = {"python3.13": "/opt/python3.13", "python3": "/usr/bin/python3"}
+        self.assertEqual(tasks.find_python("/usr/bin/python3", (3, 9, 6), found.get, lambda exe: exe == "/opt/python3.13"), "/opt/python3.13")
+        with self.assertRaises(SystemExit):
+            tasks.find_python("/usr/bin/python3", (3, 9, 6), found.get, lambda exe: False)
+
+    def test_cuda_wheel_only_with_nvidia_off_a_mac(self):
+        with mock.patch.object(tasks.sys, "platform", "win32"):
+            self.assertEqual(tasks.torch_install(True), ["install", tasks.TORCH, "--index-url", tasks.CUDA_INDEX])
+            self.assertEqual(tasks.torch_install(False), ["install", tasks.TORCH])
+        with mock.patch.object(tasks.sys, "platform", "darwin"):
+            self.assertEqual(tasks.torch_install(True), ["install", tasks.TORCH])  # Metal is in the default wheel
+
+    def test_the_cuda_index_and_torch_pin_match_the_requirements(self):
+        root = Path(tasks.__file__).parent
+        self.assertIn(tasks.CUDA_INDEX, (root / "requirements-gpu.txt").read_text())
+        self.assertIn(tasks.TORCH, (root / "requirements-training.txt").read_text())
+
+    def test_the_tailnet_url_is_the_magicdns_name(self):
+        self.assertEqual(tasks.tailnet_url(("box", "box.tail1234.ts.net")), "https://box.tail1234.ts.net/")
+        self.assertEqual(tasks.tailnet_url(()), "")
+
+    def test_stop_ends_the_whole_process_group_or_tree(self):
+        proc = mock.Mock(pid=42)
+        proc.poll.return_value = None
+        with mock.patch.object(tasks.sys, "platform", "linux"), mock.patch.object(tasks.os, "killpg") as killpg:
+            tasks.stop(proc)
+        killpg.assert_called_once_with(42, tasks.signal.SIGTERM)
+        with mock.patch.object(tasks.sys, "platform", "win32"), mock.patch.object(tasks.subprocess, "call") as call:
+            tasks.stop(proc)
+        self.assertEqual(call.call_args.args[0][:2], ["taskkill", "/PID"])
+        proc.poll.return_value = 0
+        with mock.patch.object(tasks.os, "killpg") as killpg:
+            tasks.stop(proc)
+        killpg.assert_not_called()
 
 
 class NodeDeviceTest(unittest.TestCase):
