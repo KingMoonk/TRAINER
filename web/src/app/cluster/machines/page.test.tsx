@@ -256,6 +256,6 @@ describe("Cluster page", () => {
   test("the sidebar has a Cluster entry", async () => {
     server({ addresses: [] });
     renderPage(<MachinesPage />, { route: "/cluster/machines", shell: true });
-    expect(await screen.findByRole("link", { name: "Cluster" })).toHaveAttribute("href", "/cluster/machines");
+    expect(await screen.findByRole("link", { name: "Cluster" })).toHaveAttribute("href", "/cluster/training");
   });
 });

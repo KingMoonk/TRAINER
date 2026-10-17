@@ -60,7 +60,7 @@ export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <p className="text-xs text-muted-foreground">
-          {T.elsewhereTip} <Link href="/cluster" className="underline underline-offset-2" data-testid="queue-cluster-link">{T.clusterLink}</Link>
+          {T.elsewhereTip} <Link href="/cluster/machines" className="underline underline-offset-2" data-testid="queue-cluster-link">{T.clusterLink}</Link>
         </p>
         <ul className="flex flex-wrap gap-2" aria-label="Machines">
           {cluster.nodes.map((node) => (

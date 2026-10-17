@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { isCluster, useCluster } from "@/lib/cluster";
@@ -24,7 +25,13 @@ export default function QueuePage() {
 
   return (
     <main className={PAGE_MAIN}>
-      <PageHeader title={T.title} lead={T.lead} />
+      <PageHeader title={T.title} lead={T.lead}>
+        {cluster && (
+          <p className="text-sm text-muted-foreground">
+            {T.trainingTip} <Link href="/cluster/training" className="underline underline-offset-2" data-testid="queue-training-link">{T.trainingLink}</Link>
+          </p>
+        )}
+      </PageHeader>
       <NowCard queue={queue.data} actions={actions} cluster={cluster} />
       <UpNextCard queue={queue.data} actions={actions} cluster={cluster} />
       {others && <OtherMachinesCard cluster={others} />}

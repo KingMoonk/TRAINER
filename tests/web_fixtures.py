@@ -47,6 +47,8 @@ STEPS = [
     ("jobs-empty", "GET", "/jobs", None),
     ("cluster-merged", "GET", "/cluster/merged", None),
     ("cluster-nodes", "GET", "/cluster/nodes", None),
+    ("distributed-defaults", "GET", "/distributed/defaults", None),
+    ("distributed-runs-empty", "GET", "/distributed/runs", None),
     ("node", "GET", "/node", None),
     ("passive", "GET", "/passive", None),
     ("storage", "GET", "/storage", None),

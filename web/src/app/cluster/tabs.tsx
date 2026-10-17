@@ -5,7 +5,10 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 /** The tabs of the Cluster area, in order; the first is the default (`/cluster/` opens it). Add a tab by adding an entry here. */
-export const CLUSTER_TABS = [{ id: "machines", title: "Machines", href: "/cluster/machines" }] as const;
+export const CLUSTER_TABS = [
+  { id: "training", title: "Training", href: "/cluster/training" },
+  { id: "machines", title: "Machines", href: "/cluster/machines" },
+] as const;
 
 /** The horizontal tab bar across the top of every page under /cluster. */
 export function ClusterTabs() {
