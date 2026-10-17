@@ -325,5 +325,20 @@ class Invited(unittest.TestCase):
         self.assertEqual(peer.queue().up_next, [])
 
 
+class AddressForPeersTest(unittest.TestCase):
+    def request(self, tailnet):
+        from types import SimpleNamespace
+        return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(hosts=SimpleNamespace(tailnet_name=tailnet))),
+                               url=SimpleNamespace(port=8787), base_url="http://127.0.0.1:8787/")
+
+    def test_peers_reach_the_coordinator_through_tailscale_serve(self):
+        from studio_api.routers.distributed import _address_for_peers
+        with mock.patch.dict("os.environ", {"TRAINER_NODE_ADDRESS": ""}):
+            self.assertEqual(_address_for_peers(self.request("mac.tail.ts.net")), "https://mac.tail.ts.net")
+            self.assertEqual(_address_for_peers(self.request("")), "http://127.0.0.1:8787")
+        with mock.patch.dict("os.environ", {"TRAINER_NODE_ADDRESS": "https://other.tail.ts.net"}):
+            self.assertEqual(_address_for_peers(self.request("mac.tail.ts.net")), "https://other.tail.ts.net")
+
+
 if __name__ == "__main__":
     unittest.main()

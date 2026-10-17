@@ -153,14 +153,15 @@ def get_run(run_id: str, services: Services) -> Run:
 
 
 def _address_for_peers(request):
-    """How the other machines reach this one: TRAINER_NODE_ADDRESS, else its tailnet name on the port this app listens on, else
-    the address this request came to (which only a machine on the same computer can use)."""
+    """How the other machines reach this one: TRAINER_NODE_ADDRESS, else https://<its tailnet name>, where `tailscale serve`
+    listens in both `make run` (the API at /) and `make dev` (the API under /api/, which studio_peer finds), else the address this
+    request came to (which only a machine on the same computer can use). Never the API's own port: it listens on loopback."""
     named = (os.environ.get("TRAINER_NODE_ADDRESS") or "").strip()
     if named:
         return named
     tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
     if tailnet:
-        return f"{tailnet}:{request.url.port or studio_cluster.DEFAULT_PORT}"
+        return f"https://{tailnet}"
     return str(request.base_url).rstrip("/")
 
 

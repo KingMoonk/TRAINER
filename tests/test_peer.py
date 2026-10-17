@@ -121,5 +121,37 @@ class Calls(unittest.TestCase):
         self.assertEqual(len(opener.requests), 1)
 
 
+    def test_a_node_in_make_dev_is_called_under_api_from_then_on(self):
+        page = "<!DOCTYPE html><html><body>404</body></html>"
+        opener = Opener(http_error(404, page), b'{"device": "cuda"}', b'{"ok": true}')
+        client = PeerClient("https://beast.tail1234.ts.net", opener=opener, sleep=self.fail)
+        self.assertEqual(client.get_json("node"), {"device": "cuda"})
+        self.assertEqual(client.post_json("cluster/jobs", {"a": 1}), {"ok": True})
+        self.assertEqual([r.full_url for r, _ in opener.requests], ["https://beast.tail1234.ts.net/node",
+                         "https://beast.tail1234.ts.net/api/node", "https://beast.tail1234.ts.net/api/cluster/jobs"])
+        self.assertEqual(opener.requests[2][0].data, b'{"a": 1}')
+
+    def test_a_page_under_api_too_reports_the_first_answer_and_keeps_the_root(self):
+        opener = Opener(http_error(404, "<html>root</html>"), http_error(404, "<html>api</html>"), b"{}")
+        client = PeerClient("https://box.tail1234.ts.net", opener=opener, sleep=self.fail)
+        with self.assertRaises(PeerError) as caught:
+            client.get_json("node")
+        self.assertEqual((caught.exception.status, caught.exception.detail), (404, "<html>root</html>"))
+        client.get_json("node")
+        self.assertEqual(opener.requests[-1][0].full_url, "https://box.tail1234.ts.net/node")
+
+    def test_a_post_redirected_by_the_dev_web_server_goes_under_api(self):
+        opener = Opener(http_error(308, "/cluster/jobs/"), b'{"ok": true}')
+        client = PeerClient("https://beast.tail1234.ts.net", opener=opener, sleep=self.fail)
+        self.assertEqual(client.post_json("cluster/jobs", {}), {"ok": True})
+        self.assertEqual(opener.requests[1][0].full_url, "https://beast.tail1234.ts.net/api/cluster/jobs")
+
+    def test_a_json_error_from_the_api_is_not_retried_under_api(self):
+        opener = Opener(http_error(404, '{"detail": "Not Found"}'))
+        with self.assertRaises(PeerError):
+            PeerClient("box", opener=opener, sleep=self.fail).get_json("node")
+        self.assertEqual(len(opener.requests), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

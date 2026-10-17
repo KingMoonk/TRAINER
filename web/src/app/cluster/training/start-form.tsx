@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { problem } from "@/lib/cluster";
+import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
 import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type TextSet } from "./logic";
 import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./use-training";
@@ -79,8 +80,8 @@ function Fields({ defaults, sets }: { defaults: Defaults; sets: TextSet[] }) {
           <label key={node.address} className="flex flex-wrap items-center gap-2 text-sm">
             <input type="checkbox" checked={form.machines.includes(node.address)} onChange={(e) => set({ machines: toggled(form.machines, node.address, e.target.checked) })} />
             <span>{node.hostname || node.address}</span>
-            {node.device && <span className="text-xs text-muted-foreground">{node.device_name ? `${node.device_name} (${node.device})` : node.device}</span>}
-            {!node.online && <span className="text-xs text-muted-foreground">{T.notAnswering}</span>}
+            {deviceText(node) && <span className="text-xs text-muted-foreground">{deviceText(node)}</span>}
+            {!node.online && <span className="text-xs text-muted-foreground" title={node.error || undefined}>{T.notAnswering}</span>}
           </label>
         ))}
       </fieldset>
