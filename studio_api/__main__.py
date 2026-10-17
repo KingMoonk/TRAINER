@@ -100,7 +100,7 @@ def build(args):
     if args.fake:
         from studio_ia.services import FakeServices
 
-        services = FakeServices(step_seconds=args.fake_step_seconds)
+        services = FakeServices(step_seconds=args.fake_step_seconds, snapshot_every=2)
     else:
         from studio_core import Workspace
         from studio_ia.services import WorkspaceServices
