@@ -59,6 +59,7 @@ class Run:
     final: dict | None = None  # the coordinator's last snapshot, kept when the coordinator is let go
     stopped: bool = False  # the person asked to stop it before it ran
     term: int = 1  # the coordinator's term when its account was kept (archive)
+    saved: int | None = None  # the version whose weights this run saved when it finished
     restarted: bool = False  # read back from the workspace while its last account still said it was going
 
 
@@ -100,6 +101,13 @@ def local_runs(jobs, create=False):
         for job in owner_jobs.values():
             run_of(job)
     return [(run, studio_diloco.COORDINATORS.get(run.id), owner_jobs.get(run.id)) for run in list(RUNS.values())]
+
+
+def note_saved(run_id, number):
+    """Remember that a finished run's weights were saved as version `number`, so the tab can name it."""
+    with _LOCK:
+        if run_id in RUNS:
+            RUNS[run_id].saved = number
 
 
 def open_run(job):
@@ -360,7 +368,7 @@ def view(run, coordinator, job):
     ended = state in ("finished", "stopped", "failed") and (state if state != "failed" else "stopped")
     settings = (snap or {}).get("settings") or run.settings
     return {"id": run.id, "label": run.label, "version": run.version, "state": state, "note": note, "started_at": run.started_at,
-            "owner": run.owner, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
+            "owner": run.owner, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or ""),
             "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,

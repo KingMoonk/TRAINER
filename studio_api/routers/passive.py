@@ -45,6 +45,25 @@ def stop_passive(session_id: str, services=Depends(get_services)):
     return PassiveStatus(status=status)
 
 
+def command(session_id, command, services):
+    status = services.command_passive(session_id, command)
+    if status is None:
+        raise HTTPException(404, f"No passive session {session_id}")
+    return PassiveStatus(status=status)
+
+
+@router.post("/{session_id}/pause", response_model=PassiveStatus)
+def pause_passive(session_id: str, services=Depends(get_services)):
+    """Ask a session to pause at the trainer's next check. 409 when it has ended or is being stopped."""
+    return command(session_id, "pause", services)
+
+
+@router.post("/{session_id}/resume", response_model=PassiveStatus)
+def resume_passive(session_id: str, services=Depends(get_services)):
+    """Ask a paused session to carry on. 409 when it has ended or is being stopped."""
+    return command(session_id, "resume", services)
+
+
 @router.post("/{session_id}/keep-going", response_model=PassiveStatus)
 def keep_passive_going(session_id: str, services=Depends(get_services)):
     """Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended."""

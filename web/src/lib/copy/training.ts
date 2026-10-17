@@ -43,6 +43,8 @@ export const TRAINING = {
   moreRuns: "{n} older runs are not listed.",
   liveRunLabel: "Live view of {label}",
   coordinates: "{owner} coordinates this run.",
+  savedAs: "Weights saved as Version {number}.",
+  openSaved: "Inspect Version {number} in the Head lab",
   roundOf: "{round} of {rounds} rounds done",
   fromOrigin: "from {origin}, {age} ago",
   originDown: "{origin} is not answering; last heard {age} ago",

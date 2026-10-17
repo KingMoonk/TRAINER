@@ -144,6 +144,7 @@ class Run(BaseModel):
     note: str
     started_at: float
     owner: str  # the computer that coordinates
+    saved_version: int | None  # the version whose weights this run saved when it finished; None while it runs, and for a stopped or failed run
     term: int = 1  # the coordinator's term
     coordinator: str = ""  # the origin whose account of the run this is
     origin: str = ""  # whose fact this is: the node that wrote it into the observation store
