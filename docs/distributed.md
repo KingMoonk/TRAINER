@@ -147,7 +147,10 @@ Lease(job_id, node, epoch, duration_s)
   and the fence compares `(term, epoch)`.
 - **Reassignment.** When a lease expires, the owner waits `duration_s` more (the runner's self-fence has certainly fired by
   then), marks the job *interrupted* at its last checkpoint, and places it again. On a different node the job resumes from
-  the last published checkpoint with a fresh optimizer, and its record says so.
+  the last published checkpoint with a fresh optimizer, and its record says so. Placed again on the node that wrote that
+  checkpoint (#185), it continues from that node's own `last.npz` with the optimizer, sampler and RNG (a published
+  checkpoint is the weights only), on the dataset snapshot saved beside it; if the file is gone or training refuses it, the
+  node falls back to the published weights, and the record says which way it went.
 
 Placement stays `studio_cluster.place()`. A job that needs several nodes (a distributed run) is **gang-placed**: the
 scheduler takes leases on `min_nodes` to `max_nodes` free nodes in one decision, or none, so two half-placed runs never

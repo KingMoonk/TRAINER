@@ -36,6 +36,7 @@ POLL_EVERY = 5.  # seconds between polls of the peers
 POLL_BACKOFF_MAX = 60.  # the longest wait between polls of a peer that does not answer; it doubles from 2 * POLL_EVERY
 TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
+RESUME_EVENTS = ("resumed", "resume_refused")  # which way a job placed again on the node that wrote its checkpoint went (`_own_checkpoint`)
 LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result")  # not for the runner
 TERMINAL = ("done", "failed", "stopped")
 SWEEP_RETRY_S = 60.  # seconds before the owner tries again to delete checkpoints the store would not let go of
@@ -73,6 +74,8 @@ class GuestRun:
         self.enqueued = self.cancelled = self.ended = self.reported = False
         self.stopped_by = None  # "stale" | "fenced" | "cancelled" | "replaced": the owner no longer wants this copy
         self.problem = ""
+        self.shift = 0  # added to the steps this run reports: the owner's offset counts the published checkpoint it handed over, and a
+        #                 run that continues from its own, further-on checkpoint (`Cluster._own_checkpoint`) must read the same progress
 
     def keep(self, event):
         with self.lock:
@@ -263,7 +266,7 @@ class Cluster:
             store = self.store()
             if store is None:
                 raise sched.Refused(self.store_problem)
-            body, notes = self._package(job, store)
+            body, notes = self._package(job, store, address)
             result = self.owner.dispatch(job.id, address, body)
         except sched.Refused as exc:
             return self._refused(job, address, str(exc))
@@ -277,6 +280,8 @@ class Cluster:
         with runner.lock:
             job.status, job.node, job.epoch = "running", address, result.lease.epoch
             job.params = {**job.params, "cluster": notes}
+            if notes.get("checkpoint") and body["fetch"] and "resume_from" not in body["job"]["params"]:  # not on the node that has the full one
+                job.note = f"{job.note} On {address} the optimizer starts again from zero because only the weights are published.".strip()
             self.waiting.pop(job.id, None)
             runner._save()
         runner._emit("job", {"job": job.id, "status": "running"})
@@ -289,8 +294,10 @@ class Cluster:
         self.runner._emit("cluster", {"job": job.id, "state": "refused", "node": address, "detail": reason})
         return False
 
-    def _package(self, job, store):
-        """The body of `POST /cluster/jobs`: the job with its training data inside, and the store key of the version it starts from."""
+    def _package(self, job, store, address=None):
+        """The body of `POST /cluster/jobs`: the job with its training data inside, and the store key of the version it starts from.
+        Sent to the node that wrote the job's last checkpoint, it also names that checkpoint (`resume_from`), so the node can continue
+        from its own full copy, optimizer included, and fall back to the published weights when it cannot."""
         import studio_worker
         params = {k: v for k, v in job.params.items() if k not in LOCAL_ONLY}
         notes = dict(sched.attempt_state(job.params))
@@ -305,6 +312,10 @@ class Cluster:
         params.pop("init_from", None)
         notes.setdefault("steps", int((params.get("config") or {}).get("steps") or 0))
         notes.setdefault("offset", 0)
+        resume = sched.resume_here(notes, address) if address and fetch else None
+        if resume:
+            params["resume_from"] = {**resume, "offset": notes["offset"]}
+        notes["attempt_base"] = resume["base"] if resume else notes["offset"]  # the steps done before the attempt this epoch runs
         spec = {"id": job.id, "kind": job.kind, "label": job.label, "note": job.note, "params": params, "created_at": job.created_at,
                 "eta_s": job.eta_s}
         return {"job": spec, "owner_address": self.address, "fetch": fetch}, notes
@@ -337,7 +348,8 @@ class Cluster:
                 if problem:
                     job.note = f"{job.note} {problem}".strip()
             if checkpoint and checkpoint.get("key") and (notes.get("checkpoint") or {}).get("key") != checkpoint["key"]:
-                notes["checkpoint"] = {"key": checkpoint["key"], "step": int(notes.get("offset", 0)) + int(checkpoint.get("step") or 0)}
+                notes["checkpoint"] = {"key": checkpoint["key"], "step": int(notes.get("offset", 0)) + int(checkpoint.get("step") or 0),
+                                       "node": lease.node, "epoch": epoch, "base": int(notes.get("attempt_base", notes.get("offset", 0)))}  # and where the full one is
                 notes["checkpoints"] = [*(k for k in notes.get("checkpoints") or () if k != checkpoint["key"]), checkpoint["key"]]
                 job.params = {k: v for k, v in job.params.items() if k != "fetch"}  # a new checkpoint: it has pulled the one it started from
                 changed = True
@@ -347,12 +359,40 @@ class Cluster:
         if said and problem:
             self.runner._emit("cluster", {"job": job_id, "state": "checkpoint_refused", "node": lease.node, "detail": problem})
         for event in body.get("events") or ():
+            if isinstance(event, dict) and event.get("type") in RESUME_EVENTS:
+                notes = self._resume_report(job, epoch, event) or notes
+                continue
             shifted = sched.relayed(event, int(notes.get("offset", 0)))
             if shifted is not None:
                 self.runner._emit("train", {"job": job_id, **shifted})
         self.runner._emit("cluster", {"job": job_id, "state": body.get("state") or "running", "node": lease.node, "epoch": epoch,
                                       "recovered": recovered})
         return lease
+
+    def _resume_report(self, job, epoch, event):
+        """The runner says which way it went: from its own checkpoint with the optimizer ("resumed") or from the published weights
+        ("resume_refused", with why). Said once per epoch on the job's note. A refusal also corrects `attempt_base`, which `_package`
+        set for a resume. Returns the job's notes, or None when the job is no longer that runner's."""
+        with self.runner.lock:
+            if self._remote(job.id) is not job or job.epoch != epoch:
+                return None
+            notes = dict(sched.attempt_state(job.params))
+            kind = event["type"]
+            if notes.get(kind) == epoch:
+                return notes
+            notes[kind] = epoch
+            if kind == "resumed":
+                job.note = (f"{job.note} {job.node} continues from its own checkpoint at step "
+                            f"{int(event.get('base') or 0) + int(event.get('step') or 0)}, with the optimizer state it had.").strip()
+            else:
+                notes["attempt_base"] = int(notes.get("offset", 0))
+                if (notes.get("checkpoint") or {}).get("epoch") == epoch:
+                    notes["checkpoint"] = {**notes["checkpoint"], "base": notes["attempt_base"]}
+                job.note = (f"{job.note} {job.node} could not continue from its own checkpoint ({event.get('reason') or 'it is gone'}): "
+                            "it continues from the published weights and the optimizer starts again from zero.").strip()
+            job.params = {**job.params, "cluster": notes}
+            self.runner._save()
+            return notes
 
     def finished(self, job_id, body):
         """`POST /cluster/jobs/{id}/finished`: the runner's job ended. The result is a published version, listed here as available but
@@ -610,6 +650,7 @@ class Cluster:
             params = dict(run.spec.get("params") or {})
             for name, key in (run.fetch or {}).items():
                 params[name] = str(store.pull(key, self.runner.root / "data" / "pulled"))
+            self._own_checkpoint(run, params)
             if run.cancelled:
                 return
             job = studio_queue.Job(kind=run.spec["kind"], label=f"{run.spec.get('label') or run.spec['kind']} (for {run.owner_address})",
@@ -622,6 +663,19 @@ class Cluster:
         except Exception as exc:  # noqa: BLE001 - the pull or the queueing failed: the owner is told in the plain
             run.problem = str(exc) or type(exc).__name__
             self._report(run, "failed", run.problem)
+
+    def _own_checkpoint(self, run, params):
+        """The owner named the checkpoint this node wrote (`resume_from`): continue from its full file when the attempt's folder still
+        has it (`studio_jobs.pretrain` falls back to the pulled weights if training refuses it). Otherwise the owner is told why."""
+        named = params.pop("resume_from", None)
+        if not named:
+            return
+        path = self.runner.root / "runs" / f"queue_{run.id}-e{int(named['epoch'])}" / "last.npz"
+        if path.is_file():
+            params.update(resume=str(path), resume_steps=int(named["steps"]), resume_base=int(named["base"]))
+            run.shift = int(named["base"]) - int(named["offset"])
+        else:
+            run.keep({"type": "resume_refused", "reason": "its folder no longer has it"})
 
     def stop_guest(self, job_id, epoch):
         """`POST /cluster/jobs/{id}/stop`: the owner no longer wants this copy."""
@@ -691,7 +745,7 @@ class Cluster:
         def work():
             step = 0
             try:
-                step = checkpoint_step(path)
+                step = checkpoint_step(path) + run.shift
                 key, created = self._publish(store, studio_publish.checkpoint_version(run.id, step), path)
                 with run.lock:
                     run.checkpoint, run.published_mtime, run.refusal = {"key": key, "step": step}, mtime, ""
@@ -756,21 +810,30 @@ class Cluster:
         if run is None or run.ended:
             return
         if kind == "train":
-            run.keep({k: v for k, v in payload.items() if k != "job"})
+            event = {k: v for k, v in payload.items() if k != "job"}
+            if event.get("type") == "resume_refused":
+                run.shift = 0  # (before any step: training refused the checkpoint and goes on from the published weights)
+            elif event.get("type") in sched.EVENTS_RELAYED:
+                event = sched.relayed(event, run.shift)
+            run.keep(event)
         elif kind == "job" and payload.get("status") in TERMINAL:
             threading.Thread(target=self._conclude, args=(run, payload["status"], payload.get("error") or ""), daemon=True,
                              name=f"finish {run.id}").start()
 
     def _conclude(self, run, status, error):
         """Publish what the job made, then tell the owner. The lease keeps being renewed meanwhile, by `tick`. Once the owner has the
-        result, the job's checkpoints are of no use and are deleted."""
+        result, the job's checkpoints are of no use and are deleted. A job that resumed (or could not) is not reported before the owner
+        has been told which way it went, so a short job still gets that on its note."""
+        while not (run.stopped_by or run.guest.fence.expired()) and any(e.get("type") in RESUME_EVENTS for e in list(run.events)):
+            if self.runner.closed.wait(.2):
+                break
         key, step = None, 0
         job = next((j for j in self.runner.jobs if j.id == run.local_id), None)
         out = Path((job.params.get("output_dir") if job else "") or "")
         path = next((p for p in (out / "best.npz", out / "last.npz") if p.is_file()), None)
         if path is not None:
             try:
-                step = checkpoint_step(path)
+                step = checkpoint_step(path) + run.shift
                 key = self._publish_result(run, {"number": 0, "name": f"job:{run.id}", "change": f"result at step {step}"}, path)
             except Exception as exc:  # noqa: BLE001 - the owner gets the reason instead of a result it could not use
                 where = self.address or "the machine that ran it"
