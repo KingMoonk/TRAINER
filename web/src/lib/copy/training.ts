@@ -46,6 +46,8 @@ export const TRAINING = {
   savedAs: "Weights saved as Version {number}.",
   openSaved: "Inspect Version {number} in the Head lab",
   roundOf: "{round} of {rounds} rounds done",
+  fromOrigin: "from {origin}, {age} ago",
+  originDown: "{origin} is not answering; last heard {age} ago",
   settingsLine: "{steps} steps a round, outer learning rate {lr}, outer momentum {momentum}",
   members: "Machines in this run",
   machine: "Machine",

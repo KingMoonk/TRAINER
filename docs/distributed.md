@@ -116,6 +116,16 @@ no merge function can reach it after the fact. That stays with one coordinator, 
   replica, so any node's UI shows every run and every node, each fact labelled with its origin and age.
 - Every command goes to the node that owns its target (stop a run: its coordinator; cancel a job: its owner) through
   `PeerClient`. A command never writes the replica; the owner writes the outcome and it arrives by sync.
+- What each origin writes (`studio_facts.py` has the table): a `heartbeat` entry rewritten at every poll, so a live origin is
+  never pruned and a restarted one replaces its old entries at once; its `node` record, `queue`, granted `leases` and last
+  200 `events`; for a run it coordinates, the `run` summary (term, coordinator, members, the last 50 rounds), the last 8
+  round `timeline`s and the run's `run_events`, plus a `runs/index` entry naming the runs it still publishes; for a run it
+  is a member of, its own latest `progress` and the ids of the `shards` it has cached. The member's progress reaches the app
+  as a `diloco_member` event from the worker.
+- `GET /distributed/runs` lists this node's runs live (`age_s` 0) and the others' from the replica, each with `origin`,
+  `age_s` and `origin_down`. A run two origins publish (a coordinator that moved to a later term) is listed once: the
+  higher term, else the fresher. A member's own `progress` entry replaces what the coordinator last heard of it when newer.
+  An origin is down when its last poll failed or its heartbeat is older than 20 s.
 - During a partition each side shows what it last heard from the other, with growing ages and the origin marked down. The
   latest state on the far side of a partition cannot be known (CAP); the UI says how old its copy is instead.
 

@@ -1,6 +1,7 @@
 // The Cluster page's rules, apart from the page so a test can check them without a browser.
 import type { components } from "@/lib/api-schema";
 import { CLUSTER as T } from "@/lib/copy/cluster";
+import { ageText } from "@/app/runs/view/live";
 import { seenText, type ClusterQueue, type QueueRow } from "@/lib/cluster";
 
 export type ClusterNode = components["schemas"]["ClusterNode"];
@@ -76,6 +77,12 @@ export function lastSeen(node: ClusterNode, seenAt: number): string {
   if (node.local) return "";
   const when = seenText(seenAt);
   return when ? T.lastAnswered.replace("{when}", when) : node.online ? "" : T.neverAnswered;
+}
+
+/** How old this computer's copy of a machine's facts is (the observation store); "" for this machine and for one the store holds nothing of. */
+export function factsAge(node: ClusterNode): string {
+  if (node.local || node.age_s == null) return "";
+  return (node.origin_down ? T.factsDown : T.factsAge).replace("{age}", ageText(node.age_s));
 }
 
 /** A job that has a page of its own on this computer: a training run that was queued here (its events arrive here whatever machine runs it). */

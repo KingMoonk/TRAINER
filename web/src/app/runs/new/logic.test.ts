@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { ctaLabel, defaultSftVersion, localForced, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node } from "./logic";
 
 const node = (address: string, over: Partial<Node> = {}): Node => ({
-  address, busy: false, device: "cuda", device_name: "", dtypes: [], error: "", hostname: address, local: false, memory_bytes: 0, online: true, tailnet_name: "", version: "", ...over,
+  address, busy: false, device: "cuda", device_name: "", dtypes: [], error: "", hostname: address, local: false, memory_bytes: 0, online: true, tailnet_name: "", origin: "", origin_down: false, version: "", ...over,
 });
 const nodes = [node("local", { local: true, hostname: "mac" }), node("beast"), node("lab")];
 

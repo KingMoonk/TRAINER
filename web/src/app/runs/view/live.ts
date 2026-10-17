@@ -31,6 +31,21 @@ export function otherRuns(runs: Run[], live: Run | undefined): { shown: Run[]; h
   return { shown: rest.slice(0, OTHER_RUNS_SHOWN), hidden: Math.max(0, rest.length - OTHER_RUNS_SHOWN) };
 }
 
+/** A span of seconds as the page says it: "12 s", "3 min", "2 h". */
+export function ageText(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 90) return `${s} s`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  return `${Math.round(s / 3600)} h`;
+}
+
+/** Whose account of the run this is and how old: "" for a run this computer reads live (age 0, its origin answering). */
+export function factAge(run: Pick<Run, "origin" | "age_s" | "origin_down">): string {
+  if (!run.origin || (run.age_s <= 0 && !run.origin_down)) return "";
+  const text = run.origin_down ? T.originDown : T.fromOrigin;
+  return text.replace("{origin}", run.origin).replace("{age}", ageText(run.age_s));
+}
+
 /** The round being trained, counted from one and never past the last. */
 export function roundNumber(run: Run): number {
   return Math.min(run.round + 1, run.rounds);

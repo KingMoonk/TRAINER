@@ -13,7 +13,7 @@ import { RemoveMemberButton, SoloControls, StopRunButton } from "./controls";
 import { T, fill } from "./copy";
 import { EventLog } from "./event-log";
 import { ProgressCard, RunHeader } from "./header";
-import { roundNumber } from "./live";
+import { factAge, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
 import { dilocoShape, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
 import { RoundBanner } from "./round-banner";
@@ -38,6 +38,7 @@ export function DilocoView({ run }: { run: Run }) {
       <RunHeader
         title={run.label || T.untitled}
         shape={dilocoShape(run)}
+        freshness={factAge(run)}
         controls={
           run.can_stop && isActive(run) ? (
             <div role="group" aria-label={T.controls} className="flex items-center gap-2">

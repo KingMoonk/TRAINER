@@ -1,7 +1,9 @@
 {
   "body": {
+    "age_s": 0.0,
     "can_stop": true,
     "contributed": 0,
+    "coordinator": "mac-mini",
     "deadline_s": 3.75,
     "delta_dtype": "float16",
     "events": [
@@ -186,6 +188,8 @@
     ],
     "note": "",
     "now_s": 2.5,
+    "origin": "mac-mini",
+    "origin_down": false,
     "outer_lr": 0.7,
     "outer_momentum": 0.9,
     "owner": "mac-mini",
@@ -195,6 +199,7 @@
     "saved_version": null,
     "started_at": 1700000000.0,
     "state": "running",
+    "term": 1,
     "theta_bytes": 4000000,
     "timeline": [
       {

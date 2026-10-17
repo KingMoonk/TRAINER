@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
-  collectingText, countdownText, deviceBadge, edges, eventAge, eventsNewestFirst, EVENTS_SHOWN, laneSegments, liveLossSeries, liveLossText, liveRun, liveSpeedText,
-  otherRuns, OTHER_RUNS_SHOWN, percent, progressFraction, recentTimeline, reportedText, roundNumber, shardsText, stageIndex, stateColor, stepsText, timelineEnd,
+  ageText, collectingText, countdownText, deviceBadge, edges, eventAge, eventsNewestFirst, EVENTS_SHOWN, laneSegments, liveLossSeries, liveLossText, liveRun, liveSpeedText,
+  factAge, otherRuns, OTHER_RUNS_SHOWN, percent, progressFraction, recentTimeline, reportedText, roundNumber, shardsText, stageIndex, stateColor, stepsText, timelineEnd,
   timelineExtent, tokensSeries, TIMELINE_ROUNDS,
 } from "./live";
 import { event, lane, line, member, run } from "@/app/cluster/training/test-data";
@@ -187,5 +187,22 @@ describe("the event log", () => {
     const r = run({ now_s: 30 });
     expect(eventAge(r, event(1, { t: 12 }))).toBe("18 s ago");
     expect(eventAge(r, event(2, { t: 31 }))).toBe("0 s ago");
+  });
+});
+
+describe("whose account of a run this is", () => {
+  test("a span of seconds reads in the unit that fits", () => {
+    expect([0, 12.4, 89, 90, 600, 5399, 5400, 7200].map(ageText)).toEqual(["0 s", "12 s", "89 s", "2 min", "10 min", "90 min", "2 h", "2 h"]);
+  });
+
+  test("a run read live says nothing; one another computer wrote says whose it is and how old", () => {
+    expect(factAge(run({ origin: "", age_s: 0 }))).toBe("");
+    expect(factAge(run({ origin: "mac", age_s: 0, origin_down: false }))).toBe("");
+    expect(factAge(run({ origin: "mac", age_s: 12 }))).toBe("from mac, 12 s ago");
+  });
+
+  test("a run whose origin is not answering says so, with the age of its last account", () => {
+    expect(factAge(run({ origin: "mac", age_s: 300, origin_down: true }))).toBe("mac is not answering; last heard 5 min ago");
+    expect(factAge(run({ origin: "mac", age_s: 0, origin_down: true }))).toContain("not answering");
   });
 });

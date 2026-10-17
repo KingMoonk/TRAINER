@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TRAINING as T } from "@/lib/copy/training";
-import { otherRuns } from "@/app/runs/view/live";
+import { factAge, otherRuns } from "@/app/runs/view/live";
 import type { Run } from "./logic";
 
 /** The other runs, a short list under the live one. Choosing one makes it the live run. */
@@ -20,6 +20,7 @@ export function RunsList({ runs, live, onSelect }: { runs: Run[]; live: Run | un
             <span className="font-medium">{run.label}</span>
             <Badge variant={run.state === "failed" ? "destructive" : "secondary"} data-testid={`other-state-${run.id}`}>{T.states[run.state]}</Badge>
             <span className="text-xs text-muted-foreground">{T.roundOf.replace("{round}", String(run.round)).replace("{rounds}", String(run.rounds))}</span>
+            {factAge(run) && <span className="text-xs text-muted-foreground" data-testid={`other-age-${run.id}`}>{factAge(run)}</span>}
             <Button className="ml-auto" variant="outline" size="sm" aria-label={T.showRunLabel.replace("{label}", run.label)} onClick={() => onSelect(run.id)}>
               {T.showRun}
             </Button>

@@ -1198,6 +1198,12 @@ class Member:
                 self._refused(exc)
             return False
         self.reported_step, self.reported_phase = step, phase
+        try:  # the app on this node publishes it as this member's own fact (studio_facts, "progress" and "shards")
+            self.emit({"type": "diloco_member", "run": self.run, "node": self.node, "term": self.term, "round": self.report_round,
+                       "phase": phase, "step_in_round": step, "round_steps": self.info["inner_steps"], "loss": body["loss"],
+                       "tokens_per_second": body["tokens_per_second"], "shard_ids": sorted(list(self.shards))})
+        except Exception:  # noqa: BLE001 - a courtesy, like the report itself
+            pass
         return True
 
     def _report_loop(self):
