@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { PAGE_MAIN } from "@/components/page-header";
 import { buttonVariants, Button } from "@/components/ui/button";
@@ -25,13 +25,72 @@ import { ctaLabel, defaultSftVersion, localForced, peersOf, pinnedJob, runHref, 
 
 type Guess = (typeof QUICKTEST.guesses)[number];
 
-function Fields({ defaults, sets, nodes }: { defaults: Defaults; sets: TextSet[]; nodes: Node[] }) {
+const SLOW_MS = 6_000;
+const NO_NODES: Node[] = [];
+const NO_SETS: TextSet[] = [];
+
+/** Whether a read has been going on for a while (from mount), so its section can say it is still waiting. */
+function useSlow(): boolean {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), SLOW_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  return slow;
+}
+
+function Waiting({ text }: { text: string }) {
+  const slow = useSlow();
+  return (
+    <div className="flex flex-col gap-2" aria-busy="true" data-testid="section-loading">
+      <p className="text-sm text-muted-foreground">{slow ? `${text} ${T.slow}` : text}</p>
+      <Skeleton className="h-16 w-full" />
+    </div>
+  );
+}
+
+/** One section's own read: its content once it is in, else a loading line or the reason it failed with a way to try again. */
+function Slot<V>({ query, title, loading, failed, children }: { query: UseQueryResult<V>; title: ReactNode; loading: string; failed: string; children: (data: V) => ReactNode }) {
+  if (query.data !== undefined) return children(query.data);
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-xl font-semibold">{title}</h2>
+      {query.isError && !query.isFetching ? (
+        <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-destructive">
+          <p>{fill(failed, { why: problem(query.error) })}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>{T.retry}</Button>
+        </div>
+      ) : (
+        <Waiting text={loading} />
+      )}
+    </section>
+  );
+}
+
+function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Defaults>; sets: UseQueryResult<TextSet[]>; machines: UseQueryResult<Node[]> }) {
   const router = useRouter();
   const client = useQueryClient();
   const versions = useVersions().data ?? [];
+  const nodes = machines.data ?? NO_NODES;
+  const textSets = sets.data ?? NO_SETS;
   const [stage, setStage] = useState<Stage>("pretrain");
-  const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
-  const [picked, setPicked] = useState<string[]>(() => nodes.filter((n) => n.local).map((n) => n.address));
+  const [form, setForm] = useState<Form>(() => initialForm(undefined, undefined));
+  const [picked, setPicked] = useState<string[]>([]);
+  // Each read fills in its own part of the form when it arrives; the rest of the form is usable before then.
+  const [seeded, setSeeded] = useState({ defaults: false, sets: false, nodes: false });
+  if (defaults.data && !seeded.defaults) {
+    const { rounds, innerSteps, outerLr, outerMomentum } = initialForm(defaults.data, undefined);
+    setSeeded((now) => ({ ...now, defaults: true }));
+    setForm((f) => ({ ...f, rounds, innerSteps, outerLr, outerMomentum }));
+  }
+  if (sets.data && !seeded.sets) {
+    setSeeded((now) => ({ ...now, sets: true }));
+    setForm((f) => ({ ...f, datasets: initialForm(undefined, sets.data).datasets }));
+  }
+  if (machines.data && !seeded.nodes) {
+    setSeeded((now) => ({ ...now, nodes: true }));
+    setPicked(machines.data.filter((n) => n.local).map((n) => n.address));
+  }
   const [mode, setMode] = useState<"catch_up" | "from_scratch">("from_scratch");
   const [dataset, setDataset] = useState<"stories" | "slice" | "problems">("stories");
   const [minutes, setMinutes] = useState<"1" | "3" | "10">("3");
@@ -112,8 +171,11 @@ function Fields({ defaults, sets, nodes }: { defaults: Defaults; sets: TextSet[]
 
   // Why the button is off, in a sentence under it; "" when it is on.
   const blocker = (() => {
+    if (!machines.data) return machines.isError ? T.machinesDown : T.loadingMachines;
     if (workers.length === 0) return T.needWorker;
+    if (stage === "pretrain" && !sets.data) return sets.isError ? T.textDown : T.loadingText;
     if (stage === "pretrain" && ids.length === 0) return T.needText;
+    if (several && !defaults.data) return defaults.isError ? T.settingsDown : T.loadingSettings;
     if (several) return startBody({ ...form, machines: peers }) ? "" : T.needSettings;
     if (stage === "pretrain") return plan.data && !plan.data.can_add ? plan.data.reason : plan.data?.job ? "" : T.loading;
     if (stage === "ablation") return guess ? "" : T.needGuess;
@@ -162,24 +224,28 @@ function Fields({ defaults, sets, nodes }: { defaults: Defaults; sets: TextSet[]
       </section>
 
       {stage === "pretrain" && (
-        <fieldset className="flex flex-col gap-2">
-          <legend className="mb-2 text-xl font-semibold">
-            <Hint tip={T.textTip}>{T.text}</Hint> <span className="text-sm font-normal text-muted-foreground">{selectedText(ids.length)}</span>
-          </legend>
-          {sets.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {T.noText} <Link href="/your-data" className="underline underline-offset-2">{T.yourData}</Link>
-            </p>
-          ) : (
-            sets.map((s) => (
-              <label key={s.id} className="flex min-h-9 items-center gap-2 text-base">
-                <input type="checkbox" checked={form.datasets.includes(s.id)} onChange={(e) => change({ datasets: toggled(form.datasets, s.id, e.target.checked) })} />
-                <span>{s.name}</span>
-                <span className="text-sm text-muted-foreground">{s.count.toLocaleString("en-US")}</span>
-              </label>
-            ))
+        <Slot query={sets} title={T.text} loading={T.loadingText} failed={T.textFailed}>
+          {() => (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="mb-2 text-xl font-semibold">
+                <Hint tip={T.textTip}>{T.text}</Hint> <span className="text-sm font-normal text-muted-foreground">{selectedText(ids.length)}</span>
+              </legend>
+              {textSets.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {T.noText} <Link href="/your-data" className="underline underline-offset-2">{T.yourData}</Link>
+                </p>
+              ) : (
+                textSets.map((s) => (
+                  <label key={s.id} className="flex min-h-9 items-center gap-2 text-base">
+                    <input type="checkbox" checked={form.datasets.includes(s.id)} onChange={(e) => change({ datasets: toggled(form.datasets, s.id, e.target.checked) })} />
+                    <span>{s.name}</span>
+                    <span className="text-sm text-muted-foreground">{s.count.toLocaleString("en-US")}</span>
+                  </label>
+                ))
+              )}
+            </fieldset>
           )}
-        </fieldset>
+        </Slot>
       )}
 
       {stage === "ablation" && (
@@ -200,14 +266,23 @@ function Fields({ defaults, sets, nodes }: { defaults: Defaults; sets: TextSet[]
         </fieldset>
       )}
 
-      <Workers nodes={nodes} workers={workers} forced={localForced(stage, picked, nodes)} multiple={stage === "pretrain"} onToggle={toggle} />
+      <Slot query={machines} title={T.workers} loading={T.loadingMachines} failed={T.machinesFailed}>
+        {() => (
+          <>
+            <Workers nodes={nodes} workers={workers} forced={localForced(stage, picked, nodes)} multiple={stage === "pretrain"} onToggle={toggle} />
+            <div role="status" className="flex items-center">
+              <Hint tip={shape.tip} className="rounded-full border border-border px-3.5 py-2 font-mono text-sm text-highlight">{shape.label}</Hint>
+            </div>
+          </>
+        )}
+      </Slot>
       <Coordinator />
 
-      <div role="status" className="flex items-center">
-        <Hint tip={shape.tip} className="rounded-full border border-border px-3.5 py-2 font-mono text-sm text-highlight">{shape.label}</Hint>
-      </div>
-
-      {several && <OuterLoop values={form} deltaDtype={defaults.delta_dtype} onChange={change} />}
+      {several && (
+        <Slot query={defaults} title={T.outerLoop} loading={T.loadingSettings} failed={T.settingsFailed}>
+          {(d) => <OuterLoop values={form} deltaDtype={d.delta_dtype} onChange={change} />}
+        </Slot>
+      )}
 
       <section className="flex flex-col gap-2" aria-label={T.schedule}>
         <h2 className="text-xl font-semibold"><Hint tip={T.scheduleTip}>{T.schedule}</Hint></h2>
@@ -248,7 +323,6 @@ export default function NewRunPage() {
   const defaults = useDefaults();
   const sets = useTextSets();
   const machines = useMachines();
-  const failed = defaults.isError || sets.isError || machines.isError;
   return (
     <TooltipProvider>
       <main className={PAGE_MAIN}>
@@ -256,16 +330,7 @@ export default function NewRunPage() {
           <Link href="/runs" className="w-fit text-sm text-highlight hover:underline">← {T.back}</Link>
           <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
         </header>
-        {defaults.data && sets.data && machines.data ? (
-          <Fields defaults={defaults.data} sets={sets.data} nodes={machines.data} />
-        ) : failed ? (
-          <p role="alert" className="text-sm text-destructive">{fill(T.couldNotLoad, { why: problem(defaults.error ?? sets.error ?? machines.error) })}</p>
-        ) : (
-          <div className="flex flex-col gap-4" aria-label={T.loading}>
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-40 w-full" />
-          </div>
-        )}
+        <Fields defaults={defaults} sets={sets} machines={machines} />
       </main>
     </TooltipProvider>
   );
