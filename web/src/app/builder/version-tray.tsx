@@ -100,8 +100,8 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
           : <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3" aria-label="Saved versions">
             {rows.map((version) => <li key={version.number}>
               <button type="button" aria-pressed={selected?.number === version.number} onClick={() => setPicked(version.number)}
-                className={cn("flex h-full w-full flex-col gap-3 rounded-xl border p-4 text-left transition-colors hover:bg-white/5",
-                  selected?.number === version.number ? "border-white/40 bg-white/5" : "border-border bg-white/[0.02]")}>
+                className={cn("flex h-full w-full flex-col gap-3 rounded-xl border p-4 text-left transition-colors hover:bg-surface-overlay",
+                  selected?.number === version.number ? "border-surface-border-active bg-surface-overlay" : "border-border bg-surface-faint")}>
                 <span className="flex w-full flex-wrap items-center justify-between gap-2"><span className="font-medium">Version {version.number}</span>
                   <Badge variant="outline">{versionState(version, queue.data, editingVersion)}</Badge></span>
                 <span className="text-sm text-muted-foreground">{version.change || version.name || "Saved design"}</span>
@@ -137,7 +137,7 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
         <CardHeader><CardTitle>Look inside version {selected.number}</CardTitle><CardDescription>{T.inspectDescription}</CardDescription></CardHeader>
         <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {INSPECTORS.map((key) => { const route = routeFor(key); return <Link key={key} href={`${route.href}/?version=${selected.number}`}
-            className="rounded-xl border border-border bg-white/[0.02] px-4 py-3 text-sm transition-colors hover:bg-white/5">{route.title}<span aria-hidden className="float-right text-muted-foreground">↗</span></Link>; })}
+            className="rounded-xl border border-border bg-surface-faint px-4 py-3 text-sm transition-colors hover:bg-surface-overlay">{route.title}<span aria-hidden className="float-right text-muted-foreground">↗</span></Link>; })}
         </CardContent>
       </Card>
     </>}

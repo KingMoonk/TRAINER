@@ -11,8 +11,9 @@ export const HOLD = ["2%", "5%", "10%"] as const;
 export const LENGTHS = { Short: 1, Medium: 2, Long: 4 } as const; // passes over the chosen text
 export type Length = keyof typeof LENGTHS;
 export const PREVIEW_ROWS = 6; // rows of the size preview the page draws
-export const PALETTE = ["#3a3560", "#2a4558", "#4a3a2a", "#2f4a36", "#4a2f45"];
-export const END = "#0a0b0e";
+// Theme tokens (globals.css), as CSS values for an inline style.
+export const PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"];
+export const END = "var(--viz-end)";
 
 const n = (value: number) => value.toLocaleString("en-US");
 

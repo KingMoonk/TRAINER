@@ -137,7 +137,7 @@ export default function Page() {
           <div className="flex flex-col gap-1">
             <p className="max-w-prose text-base text-muted-foreground">{change}</p>
             {run?.parent != null && (
-              <Link href={routeFor("builder").href} className="w-fit text-sm text-violet-400 underline-offset-4 hover:underline">
+              <Link href={routeFor("builder").href} className="w-fit text-sm text-highlight underline-offset-4 hover:underline">
                 {T.seeChange}
               </Link>
             )}
@@ -184,7 +184,7 @@ export default function Page() {
           </Card>
 
           {run && (
-            <div className="rounded-lg border border-sky-500/50 bg-sky-500/10 p-4" data-testid="switch">
+            <div className="rounded-lg border border-info/50 bg-info/10 p-4" data-testid="switch">
               <div className="font-semibold">{fill(T.chatStillUses, { chat: chatName })}</div>
               <p className="mt-1 text-sm text-muted-foreground">{switchText(run.switch, run.version ?? null, parent, run.gate_vs ?? null, run.running)}</p>
               <Link href={routeFor("chat").href} className={cn(buttonVariants({ variant: "link" }), "h-auto px-0")}>

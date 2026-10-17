@@ -168,7 +168,7 @@ export function HeadZoom({ requestedVersion }: { requestedVersion?: number }) {
         {fill(HEAD_ZOOM.head_label, { block: block + 1, head: head + 1, tokens: T })}
       </p>
       {derived.error > TOLERANCE && (
-        <p role="alert" className="max-w-prose rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-500">
+        <p role="alert" className="max-w-prose rounded-md border border-warning/50 bg-warning/10 p-3 text-sm text-warning">
           The numbers derived here differ from the model&apos;s own attention pattern by {derived.error.toPrecision(2)} (allowed {TOLERANCE}). A hook may be wrong, so do not
           trust this picture.
         </p>
@@ -293,13 +293,10 @@ function useHeadStats(data: Loaded | null, block: number): HeadStats | string | 
   return result && result.key === key ? result.value : null;
 }
 
-const AMBER = "oklch(0.8 0.16 80)";
-const BLUE = "oklch(0.65 0.15 250)";
-
 /** Amber for positive, blue for negative, stronger with size. */
 function signed(value: number, scale: number): string {
   const share = Math.round((Math.min(1, Math.abs(value) / scale) * 0.85 + 0.08) * 100);
-  return `color-mix(in oklch, ${value >= 0 ? AMBER : BLUE} ${share}%, var(--muted))`;
+  return `color-mix(in oklch, ${value >= 0 ? "var(--heat-positive)" : "var(--heat-negative)"} ${share}%, var(--muted))`;
 }
 
 type Look = { text: string; background: string; dim?: boolean; bright?: boolean };
@@ -311,12 +308,12 @@ function look(d: Derived, step: number, i: number, j: number): Look {
   const rawScale = Math.max(1e-9, ...d.raw.flat().map(Math.abs));
   if (step === 1) return { text: d.raw[i][j].toFixed(1), background: signed(d.raw[i][j], rawScale) };
   if (step === 2) return { text: d.scaled[i][j].toFixed(2), background: signed(d.scaled[i][j], scale) };
-  if (masked) return { text: step === 3 ? "−∞" : "0", background: "color-mix(in oklch, var(--background) 70%, black)", dim: true };
+  if (masked) return { text: step === 3 ? "−∞" : "0", background: "var(--cell-masked)", dim: true };
   if (step === 3) return { text: d.scaled[i][j].toFixed(2), background: signed(d.scaled[i][j], scale) };
   const w = d.weights[i][j];
   const faded = step === 5 && j !== T - 1;
   const share = Math.round((faded ? w * 0.25 : w * 0.92 + 0.04) * 100);
-  return { text: w.toFixed(2), background: `color-mix(in oklch, white ${share}%, var(--muted))`, dim: faded, bright: w > 0.5 && !faded };
+  return { text: w.toFixed(2), background: `color-mix(in oklch, var(--foreground) ${share}%, var(--muted))`, dim: faded, bright: w > 0.5 && !faded };
 }
 
 /** Rows are keys, columns are queries. Click a cell or use the arrow keys to move the selection. */
@@ -340,7 +337,7 @@ function ScoreGrid({ derived, step, selected, onPick }: { derived: Derived; step
     >
       <span />
       {derived.tokens.map((token, col) => (
-        <span key={col} role="columnheader" className={`text-center text-xs ${step === 5 && col === T - 1 ? "text-amber-500" : "text-muted-foreground"}`}>
+        <span key={col} role="columnheader" className={`text-center text-xs ${step === 5 && col === T - 1 ? "text-warning" : "text-muted-foreground"}`}>
           {showToken(token).slice(0, 7)}
           <br />
           <span className="text-[10px]">q{col + 1}</span>
@@ -371,7 +368,7 @@ function Row({ derived, step, row, token, selected, onPick }: { derived: Derived
             aria-selected={on}
             aria-label={`k${row + 1} q${col + 1}: ${view.text}`}
             onClick={() => onPick([row, col])}
-            className={`h-8 rounded-sm font-mono text-xs ${on ? "outline-2 outline-primary" : ""} ${view.dim ? "text-muted-foreground" : view.bright ? "text-black" : "text-foreground"}`}
+            className={`h-8 rounded-sm font-mono text-xs ${on ? "outline-2 outline-primary" : ""} ${view.dim ? "text-muted-foreground" : view.bright ? "text-background" : "text-foreground"}`}
             style={{ background: view.background }}
           >
             {view.text}

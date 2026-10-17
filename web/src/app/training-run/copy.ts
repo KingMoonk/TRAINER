@@ -63,9 +63,9 @@ export const T = {
 } as const;
 
 export const STATUS = {
-  learning: { label: "Learning", tone: "text-sky-400" },
+  learning: { label: "Learning", tone: "text-info" },
   flat: { label: "Flat", tone: "text-muted-foreground" },
-  memorising: { label: "Memorising", tone: "text-amber-400" },
+  memorising: { label: "Memorising", tone: "text-warning" },
 } as const;
 
 export const SWITCH: Record<string, string> = {

@@ -77,7 +77,7 @@ function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActi
         aria-valuenow={Math.round(fraction * 100)}
         className="h-2 w-full rounded-full bg-muted"
       >
-        <div className="h-2 rounded-full bg-violet-500 transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
+        <div className="h-2 rounded-full bg-highlight-strong transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {queue.paused ? (
@@ -99,7 +99,7 @@ function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActi
           {T.stop}
         </Button>
       </div>
-      {queue.stopping && <p className="text-sm text-violet-400">{T.stopping}</p>}
+      {queue.stopping && <p className="text-sm text-highlight">{T.stopping}</p>}
       <p className="text-xs text-muted-foreground">{T.checkpointDesc}</p>
     </>
   );

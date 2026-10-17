@@ -28,8 +28,8 @@ import {
 import { BUILDER, fill } from "@/lib/copy/builder";
 import { cn } from "@/lib/utils";
 
-const AMBER = "text-amber-600 dark:text-amber-400";
-const VIOLET = "text-violet-600 dark:text-violet-400";
+const AMBER = "text-warning";
+const VIOLET = "text-part-own";
 const WIDTHS = [36, 72, 144];
 
 type PickerProps = {
@@ -180,7 +180,7 @@ export function Segmented({
       {options.map((option, i) => {
         const wasSaved = saved === i && saved !== value;
         return (
-          <ToggleGroupItem key={i} value={String(i)} className={cn(wasSaved && "border-violet-500")}>
+          <ToggleGroupItem key={i} value={String(i)} className={cn(wasSaved && "border-part-own")}>
             {wasSaved ? `${option} · saved` : String(option)}
           </ToggleGroupItem>
         );
@@ -206,7 +206,7 @@ function Block({ view, registry, draft, picker }: BlockProps) {
   const block = scope === "one" ? i : null;
   return (
     <div
-      className={cn("rounded-md border", added && "bg-amber-500/10", own.length > 0 && !added && "bg-violet-500/10")}
+      className={cn("rounded-md border", added && "bg-warning/10", own.length > 0 && !added && "bg-part-own/10")}
       data-testid={`block-${i}`}
     >
       <div className="flex flex-wrap items-center gap-3 px-3 py-2">
@@ -214,8 +214,8 @@ function Block({ view, registry, draft, picker }: BlockProps) {
           {showDetail ? "▾" : "▸"}
         </Button>
         <span className={cn("w-16 text-sm font-medium", removed && "text-muted-foreground line-through")}>Block {i + 1}</span>
-        {heads > 0 && <span className="text-xs text-pink-500">{"●".repeat(heads)}</span>}
-        {width > 0 && <span className="h-2 rounded-sm bg-sky-500" style={{ width }} aria-hidden="true" />}
+        {heads > 0 && <span className="text-xs text-part-attention">{"●".repeat(heads)}</span>}
+        {width > 0 && <span className="h-2 rounded-sm bg-part-mlp" style={{ width }} aria-hidden="true" />}
         <span className="text-xs text-muted-foreground">
           {moduleName(registry, "mixer", parts.mixer)} · {moduleName(registry, "channel", parts.channel)}
         </span>

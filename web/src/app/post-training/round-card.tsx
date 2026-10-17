@@ -95,7 +95,7 @@ function Round1({ counts, options, choices, set, example, loading }: RoundProps 
         {loading ? (
           <Skeleton className="h-8 w-64" />
         ) : blocker ? (
-          <p className="text-sm text-amber-500">
+          <p className="text-sm text-warning">
             {T.loraOff} · {blocker}
           </p>
         ) : (
@@ -160,7 +160,7 @@ function Round2({ live, gate }: RoundProps) {
             </thead>
             <tbody>
               {group.answers.map((a, i) => (
-                <tr key={i} className={a.score >= 1 ? "text-emerald-400" : "text-rose-400"}>
+                <tr key={i} className={a.score >= 1 ? "text-success" : "text-destructive"}>
                   <td className="py-1 pr-4 font-mono">{a.text}</td>
                   <td className="py-1 pr-4">{a.score >= 1 ? "pass" : "fail"}</td>
                   <td className="py-1 pr-4">{a.score.toFixed(1)}</td>
@@ -175,7 +175,7 @@ function Round2({ live, gate }: RoundProps) {
       ) : (
         <p className="text-sm text-muted-foreground">The prompts and rule scores appear here while the round trains.</p>
       )}
-      <p className={cn("text-sm", line ? (taught ? "text-foreground" : "text-amber-500") : "text-muted-foreground")}>{line || T.spreadHint}</p>
+      <p className={cn("text-sm", line ? (taught ? "text-foreground" : "text-warning") : "text-muted-foreground")}>{line || T.spreadHint}</p>
     </div>
   );
 }
@@ -203,7 +203,7 @@ function Round3({ live, options, choices, set }: RoundProps) {
             ))}
           </p>
           <p className="text-xs text-muted-foreground">
-            {T.notSurprised} → <span className="text-rose-400">{T.verySurprised}</span>
+            {T.notSurprised} → <span className="text-destructive">{T.verySurprised}</span>
           </p>
         </div>
       ) : (
@@ -288,7 +288,7 @@ export function RoundCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xs font-medium uppercase tracking-wide text-violet-400">{spec.kicker}</CardTitle>
+        <CardTitle className="text-xs font-medium uppercase tracking-wide text-highlight">{spec.kicker}</CardTitle>
         <CardDescription className="max-w-prose text-base">{spec.lead}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
@@ -297,7 +297,7 @@ export function RoundCard({
           <Button onClick={onQueue} disabled={!!blocker || queuing}>
             {spec.action}
           </Button>
-          {blocker && <span className="text-sm text-amber-500">{blocker}</span>}
+          {blocker && <span className="text-sm text-warning">{blocker}</span>}
           {spec.link && (
             <Link href={spec.link.href} className="text-sm text-primary underline-offset-4 hover:underline">
               {spec.link.label} ›

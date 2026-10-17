@@ -186,13 +186,13 @@ function YourData() {
         <h1 className="text-2xl font-semibold tracking-tight">{T.h1}</h1>
         <p className="max-w-prose text-muted-foreground">{T.lead}</p>
         <div className="flex flex-wrap gap-6 text-sm">
-          <Link href="/storage" className="text-violet-400 hover:underline">
+          <Link href="/storage" className="text-highlight hover:underline">
             {T.storageLink}
           </Link>
-          <Link href="/passive/" className="text-violet-400 hover:underline">{T.passiveLink}</Link>
+          <Link href="/passive/" className="text-highlight hover:underline">{T.passiveLink}</Link>
         </div>
       </div>
-      <Link href={back.href} className="w-fit text-sm text-violet-400 hover:underline">
+      <Link href={back.href} className="w-fit text-sm text-highlight hover:underline">
         ‹ {back.label}
       </Link>
 
@@ -208,7 +208,7 @@ function YourData() {
               onClick={() => show(k)}
               className={cn(
                 "flex flex-col gap-0.5 rounded-lg border-2 p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
-                k === kind ? "border-violet-500 bg-muted/50" : "border-border hover:bg-muted/30",
+                k === kind ? "border-highlight-strong bg-muted/50" : "border-border hover:bg-muted/30",
               )}
             >
               <span className="font-semibold">{KIND[k].tab}</span>

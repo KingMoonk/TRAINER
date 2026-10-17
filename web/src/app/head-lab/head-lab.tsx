@@ -211,7 +211,7 @@ export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
           </ToggleGroup>
         </div>
         {notice && (
-          <p role="alert" className="text-sm text-amber-500">
+          <p role="alert" className="text-sm text-warning">
             {notice}
           </p>
         )}
@@ -230,12 +230,12 @@ export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
                     aria-label={`Block ${block + 1} head ${head + 1}`}
                     onClick={() => setSel(key)}
                     className={`flex flex-col gap-1 rounded-lg border p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-                      key === current ? "border-primary bg-muted" : off.has(key) ? "border-amber-500" : "border-border"
+                      key === current ? "border-primary bg-muted" : off.has(key) ? "border-warning" : "border-border"
                     }`}
                   >
                     <HeatMap cells={patternCells(pattern, off.has(key))} size={9} label={`Where block ${block + 1} head ${head + 1} looks`} />
                     <span className="text-xs">Head {head + 1}</span>
-                    <span className={`text-[11px] ${sub.off ? "text-amber-500" : "text-muted-foreground"}`}>{sub.text}</span>
+                    <span className={`text-[11px] ${sub.off ? "text-warning" : "text-muted-foreground"}`}>{sub.text}</span>
                   </button>
                 );
               })}
@@ -264,7 +264,7 @@ export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
           <h2 className="text-lg font-semibold">
             Block {selBlock + 1} · head {selHead + 1}
           </h2>
-          <p className={`text-sm ${selOff ? "text-amber-500" : "text-muted-foreground"}`}>{selOff ? HEAD_LAB.head_off : HEAD_LAB.head_on}</p>
+          <p className={`text-sm ${selOff ? "text-warning" : "text-muted-foreground"}`}>{selOff ? HEAD_LAB.head_off : HEAD_LAB.head_on}</p>
           <div title={HEAD_LAB.prepared_text}>
             <HeatMap
               cells={patternCells(patterns[selBlock][0][selHead])}
@@ -307,7 +307,7 @@ export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
                     <span className="w-64" title={HEAD_LAB[test.what]}>
                       {HEAD_LAB[test.name]}
                     </span>
-                    <span className={`font-mono ${value >= THRESHOLD ? "text-emerald-500" : "text-muted-foreground"}`}>
+                    <span className={`font-mono ${value >= THRESHOLD ? "text-success" : "text-muted-foreground"}`}>
                       {value.toFixed(2)} {value >= THRESHOLD ? "passes" : "no"}
                     </span>
                   </div>
@@ -338,7 +338,7 @@ export function HeadLab({ requestedVersion }: { requestedVersion?: number }) {
                 {changed?.bits === undefined ? "…" : changed.bits === null ? "—" : `${changed.bits.before.toFixed(2)} → ${changed.bits.after.toFixed(2)} bits/char`}
               </p>
               <p className="max-w-prose text-xs text-muted-foreground">{HEAD_LAB.big_rise}</p>
-              <p className="text-sm text-pink-400">
+              <p className="text-sm text-notice">
                 {HEAD_LAB.you_guessed}: {guess ? guess.toLowerCase() : "no guess"}
               </p>
             </>

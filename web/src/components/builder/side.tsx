@@ -34,7 +34,7 @@ import {
 import { BUILDER, fill, presetAbout } from "@/lib/copy/builder";
 import { cn } from "@/lib/utils";
 
-const AMBER = "text-amber-600 dark:text-amber-400";
+const AMBER = "text-warning";
 
 function Panel({ title, tip, children, testId }: { title: string; tip?: string; children: React.ReactNode; testId?: string }) {
   return (
@@ -188,7 +188,7 @@ export function Costs({ now, next, warm, lines }: CostsProps) {
                 <span className={cn(same ? "text-muted-foreground" : AMBER)}>{said}</span>
               </div>
               <div className="h-1.5 rounded-sm bg-muted-foreground/40" style={{ width: `${wx}%` }} aria-hidden="true" />
-              <div className={cn("h-1.5 rounded-sm", same ? "bg-violet-500" : "bg-amber-500")} style={{ width: `${wy}%` }} aria-hidden="true" />
+              <div className={cn("h-1.5 rounded-sm", same ? "bg-part-cost" : "bg-warning")} style={{ width: `${wy}%` }} aria-hidden="true" />
             </div>
           );
         })
@@ -261,7 +261,7 @@ export function VersionList({ versions, current }: { versions: Version[] | undef
         <ul className="flex flex-col gap-1 text-xs">
           {[...versions].reverse().map((v) => (
             <li key={v.number} data-testid={`version-${v.number}`} className="flex flex-wrap items-baseline gap-2">
-              <span className={cn("font-medium", v.number === current && "text-violet-600 dark:text-violet-400")}>{v.name}</span>
+              <span className={cn("font-medium", v.number === current && "text-highlight")}>{v.name}</span>
               <span className="text-muted-foreground">{v.change}</span>
               <span className="text-muted-foreground">· {v.status}</span>
             </li>

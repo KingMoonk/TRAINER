@@ -16,14 +16,14 @@ type ValueMap = { d_model: number; heads: number; blocks: Record<string, number>
 
 const HEADS = [1, 2, 4, 8];
 const STRIPES = [
-  "fill-amber-500",
-  "fill-blue-500",
-  "fill-violet-500",
-  "fill-pink-400",
-  "fill-indigo-300",
-  "fill-emerald-500",
-  "fill-orange-400",
-  "fill-purple-300",
+  "fill-cat-1",
+  "fill-cat-2",
+  "fill-cat-3",
+  "fill-cat-4",
+  "fill-cat-5",
+  "fill-cat-6",
+  "fill-cat-7",
+  "fill-cat-8",
 ];
 
 /** Numerical rank: singular values above tol of the largest. */
@@ -112,7 +112,7 @@ function ValueMapPage({ version }: { version?: number }) {
       )}
 
       {info && d !== undefined && d % heads !== 0 && (
-        <p role="alert" className="text-amber-500">
+        <p role="alert" className="text-warning">
           {fill(VALUE_MAP.not_equal, { d, heads })}
         </p>
       )}
@@ -264,14 +264,14 @@ function Funnel({ d, hd, heads, fit }: { d: number; hd: number; heads: number; f
         </text>
         <polygon
           points={`${x0 + 24},${top} ${x2},${mid - narrow / 2} ${x2},${mid + narrow / 2} ${x0 + 24},${bottom}`}
-          className="fill-amber-500/20 stroke-amber-500"
+          className="fill-warning/20 stroke-warning"
         />
         <polygon
           points={`${x2},${mid - narrow / 2} ${x4},${top} ${x4},${bottom} ${x2},${mid + narrow / 2}`}
-          className="fill-blue-500/20 stroke-blue-500"
+          className="fill-cat-2/20 stroke-cat-2"
         />
-        <rect x={x2 - 6} y={mid - narrow / 2} width={12} height={narrow} className="fill-violet-500" />
-        <text x={x2} y={bottom + 14} textAnchor="middle" className="fill-violet-500 font-mono text-[12px]">
+        <rect x={x2 - 6} y={mid - narrow / 2} width={12} height={narrow} className="fill-highlight-strong" />
+        <text x={x2} y={bottom + 14} textAnchor="middle" className="fill-highlight-strong font-mono text-[12px]">
           {fill(VALUE_MAP.v_label, { hd })}
         </text>
         {Array.from({ length: Math.min(heads, STRIPES.length) }, (_, i) => (
@@ -290,7 +290,7 @@ function Bars({ singular, hd }: { singular: number[]; hd: number }) {
     <svg viewBox="0 0 420 60" preserveAspectRatio="none" role="img" aria-label={`${n} singular values`} className="h-16 w-full max-w-[420px]">
       {singular.map((s, i) => {
         const h = (56 * s) / top;
-        return <rect key={i} x={(i * 420) / n + 1} y={58 - h} width={Math.max(0.5, 420 / n - 2)} height={h} className={i < hd ? "fill-violet-500" : "fill-border"} />;
+        return <rect key={i} x={(i * 420) / n + 1} y={58 - h} width={Math.max(0.5, 420 / n - 2)} height={h} className={i < hd ? "fill-highlight-strong" : "fill-border"} />;
       })}
     </svg>
   );

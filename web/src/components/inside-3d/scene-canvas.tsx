@@ -16,6 +16,7 @@ import {
   type SceneGroup,
   type SceneLabel,
 } from "@/lib/scene";
+import { useThemeColor } from "@/components/theme";
 
 // The scene is z-up (x right, y into the screen); three.js is y-up. Rotating the whole scene by -90 degrees about x
 // turns scene (x, y, z) into three (x, z, -y), so every position in the payload is used as it arrives.
@@ -24,6 +25,9 @@ const HEADING = (25 * Math.PI) / 180;
 const PITCH = (32 * Math.PI) / 180;
 
 type Palette = ScenePayload["palette"];
+
+// Boxes with their own per-instance colours take them unchanged, so the material's tint is white.
+const WHITE = new Color(1, 1, 1);
 
 export type SceneCanvasProps = {
   scene: ScenePayload;
@@ -35,7 +39,8 @@ export type SceneCanvasProps = {
 };
 
 export default function SceneCanvas({ scene, playing, reduceMotion, showNumbers, onPassDone }: SceneCanvasProps) {
-  const background = scene.palette.background.color;
+  // The viewport colour is a theme token; the server's palette is the fallback until the token has been read.
+  const background = useThemeColor("--scene-background") || scene.palette.background.color;
   const pulse = useRef(new Vector3());
   const elements = useRef(new Map<string, HTMLElement>());
   const labels = useMemo(() => sceneLabels(scene, showNumbers), [scene, showNumbers]);
@@ -114,7 +119,7 @@ function Boxes({ entry, palette }: { entry: BoxEntry; palette: PaletteEntry }) {
   return (
     <instancedMesh ref={mesh} args={[undefined, undefined, entry.count]} key={entry.count} frustumCulled={false}>
       <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial color={entry.color ? "#ffffff" : palette.color} transparent={opacity < 1} opacity={opacity} />
+      <meshStandardMaterial color={entry.color ? WHITE : palette.color} transparent={opacity < 1} opacity={opacity} />
     </instancedMesh>
   );
 }

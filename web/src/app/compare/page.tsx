@@ -271,12 +271,12 @@ export default function Page() {
               !versions.isPending && variants.length === 0 && <p className="text-sm text-muted-foreground">{COMPARE.noVariantVersions}</p>
             )}
             {plan.isError && (
-              <p role="alert" className="text-sm text-amber-500">
+              <p role="alert" className="text-sm text-warning">
                 {message(plan.error)}
               </p>
             )}
             {plan.data?.variants.filter((r) => !r.matched).map((r) => (
-              <p key={r.variant} className="text-sm text-amber-500">{`Variant ${r.variant}: ${r.reason}`}</p>
+              <p key={r.variant} className="text-sm text-warning">{`Variant ${r.variant}: ${r.reason}`}</p>
             ))}
           </div>
 
@@ -312,7 +312,7 @@ export default function Page() {
           {runs.isPending && <Skeleton aria-label="Loading the finished comparisons" className="h-40 w-full" />}
           {runs.isError && (
             <div className="flex flex-col items-start gap-2">
-              <p role="alert" className="text-sm text-amber-500">
+              <p role="alert" className="text-sm text-warning">
                 {COMPARE.readFailed} {message(runs.error)}
               </p>
               <Button variant="outline" onClick={() => void runs.refetch()}>
@@ -389,7 +389,7 @@ function Curves({
         ))}
       </ToggleGroup>
       <p className="text-xs text-muted-foreground">{COMPARE.axisFair}</p>
-      {missing && <p className="text-sm text-amber-500">{COMPARE.axisFallback(missing)}</p>}
+      {missing && <p className="text-sm text-warning">{COMPARE.axisFallback(missing)}</p>}
       {series.length > 0 ? <SeriesChart series={series} xLabel={COMPARE.axes.find((a) => a.id === used.axis)!.label} yLabel={COMPARE.yLabel} /> : <p className="text-sm text-muted-foreground">{COMPARE.curvesStream}</p>}
       {run && stats.size > 0 && (
         <>
@@ -415,7 +415,7 @@ function Curves({
             </tbody>
           </table>
           {guess && <p className="text-sm">{guessLine(guess, "B", stats.get(1))}</p>}
-          {run.results?.cancelled && <p className="text-sm text-amber-500">{COMPARE.cancelled}</p>}
+          {run.results?.cancelled && <p className="text-sm text-warning">{COMPARE.cancelled}</p>}
         </>
       )}
     </div>

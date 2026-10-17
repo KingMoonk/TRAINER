@@ -88,7 +88,7 @@ function TracePage({ version }: { version?: number }) {
           {data ? (
             <p aria-label="Tokens" className="text-lg break-words whitespace-pre-wrap">
               {data.tokens.map((token, i) => (
-                <span key={i} className={i === data.pos ? "font-bold text-amber-500" : undefined}>
+                <span key={i} className={i === data.pos ? "font-bold text-warning" : undefined}>
                   {token}
                 </span>
               ))}

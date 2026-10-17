@@ -33,11 +33,11 @@ export function collectionShown(summary: Summary | undefined): boolean {
 
 export const STATUS_CLASS: Record<string, string> = {
   "In use": "text-foreground/80",
-  "Held back": "text-sky-400",
-  "Near-duplicate": "text-amber-400",
-  Good: "text-violet-400",
+  "Held back": "text-info",
+  "Near-duplicate": "text-warning",
+  Good: "text-highlight",
   Review: "text-muted-foreground",
-  "From Chat": "text-pink-400",
+  "From Chat": "text-notice",
   Ready: "text-foreground/80",
 };
 

@@ -114,7 +114,7 @@ function Row({
         onDrop(e.dataTransfer.getData("text/plain"));
       }}
       onDragEnd={onDragEnd}
-      className={cn("flex flex-wrap items-center gap-3 rounded-lg border-2 bg-muted/20 p-2 transition-colors", active ? "border-violet-500" : "border-border")}
+      className={cn("flex flex-wrap items-center gap-3 rounded-lg border-2 bg-muted/20 p-2 transition-colors", active ? "border-highlight-strong" : "border-border")}
     >
       <button
         type="button"
@@ -137,7 +137,7 @@ function Row({
       >
         {"⠇"}
       </button>
-      <span className={cn("w-5 text-center font-semibold", held ? "text-muted-foreground" : "text-violet-400")}>{n + 1}</span>
+      <span className={cn("w-5 text-center font-semibold", held ? "text-muted-foreground" : "text-highlight")}>{n + 1}</span>
       <div className="min-w-0 flex-1">
         <div className={cn("truncate font-medium", held && "text-muted-foreground")}>
           {name}

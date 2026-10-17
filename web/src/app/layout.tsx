@@ -5,16 +5,21 @@ import { Sidebar } from "@/components/sidebar";
 import { StatusStrip } from "@/components/status-strip";
 import { Toaster } from "@/components/ui/sonner";
 import { ShellEvents } from "@/lib/events";
+import { ACCENT_SCRIPT } from "@/lib/theme";
 
 export const metadata: Metadata = {
   title: "Groundwork Studio",
   description: "Create datasets and train your own language model from random weights.",
 };
 
-// Dark is the default and the only theme for now: the `dark` class on <html> is what globals.css keys on.
+// Dark is the default (so the prerendered page is dark even before any script runs). next-themes puts the mode class on <html> and ACCENT_SCRIPT the accent attribute, both before
+// first paint, so <html> differs from the prerendered markup and needs suppressHydrationWarning.
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark h-full antialiased">
+    <html lang="en" className="dark h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: ACCENT_SCRIPT }} />
+      </head>
       <body className="flex min-h-dvh flex-col md:flex-row">
         <Providers>
           <ShellEvents>

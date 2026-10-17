@@ -73,7 +73,7 @@ export function StatusStrip() {
           aria-hidden
           className={cn(
             "size-2 rounded-full",
-            connection === "online" ? "bg-emerald-500" : connection === "offline" ? "bg-destructive" : "bg-muted-foreground",
+            connection === "online" ? "bg-success" : connection === "offline" ? "bg-destructive" : "bg-muted-foreground",
           )}
         />
         {connection === "online" ? "Connected" : connection === "offline" ? "Offline" : "Connecting"}

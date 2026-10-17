@@ -175,7 +175,7 @@ export function RowsCard() {
             <Skeleton className="h-5 w-2/3" />
           </div>
         )}
-        {!waiting && job?.status === "failed" && <p className="text-sm text-rose-400">{job.error}</p>}
+        {!waiting && job?.status === "failed" && <p className="text-sm text-destructive">{job.error}</p>}
         {!waiting && rows && (
           <div className="flex flex-col gap-2">
             <p className="text-sm text-muted-foreground">
