@@ -15,7 +15,7 @@ ROUTES_TS = ROOT / "web" / "src" / "lib" / "routes.ts"
 APP = ROOT / "web" / "src" / "app"
 WEB_ROUTE = re.compile(r'\{\s*route:\s*"([^"]+)",\s*href:\s*"([^"]+)"')
 PLACEHOLDER = re.compile(r"\bPagePlaceholder\b|page-placeholder")
-# The run pages come from #342 and #343; until they land these routes have no page.tsx yet.
+# The run pages land in #344, #348 and #349; until they do these routes have no page.tsx yet.
 PENDING_ROUTES = {"runs", "new_run", "run_view"}
 
 

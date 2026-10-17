@@ -1,10 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { AREAS, ROUTES, areaHome } from "../src/lib/routes";
+import { PENDING_ROUTES } from "./pending-routes";
 
-// The run pages come from #342 and #343; until they land these routes have no page yet.
-const PENDING = ["runs", "new_run", "run_view"];
-
-for (const route of ROUTES.filter((r) => !PENDING.includes(r.route))) {
+for (const route of ROUTES.filter((r) => !PENDING_ROUTES.includes(r.route))) {
   test(`${route.href}: shows its title and marks its area in the sidebar`, async ({ page }) => {
     await page.goto(`${route.href}/`);
     await expect(page.getByRole("heading", { level: 1, name: route.title })).toBeVisible();

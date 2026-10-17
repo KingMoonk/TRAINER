@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { ROUTES, areaHome } from "../src/lib/routes";
+import { PENDING_ROUTES } from "./pending-routes";
 
 // A 375 px screen (iPhone SE/mini width): the document must not scroll sideways on any page.
 test.use({ viewport: { width: 375, height: 812 } });
@@ -10,7 +11,7 @@ async function sideways(page: Page) {
   return page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 }
 
-for (const route of ROUTES) {
+for (const route of ROUTES.filter((r) => !PENDING_ROUTES.includes(r.route))) {
   test(`${route.href}: the document does not scroll sideways at 375 px`, async ({ page }) => {
     await page.goto(`${route.href}/`);
     await expect(page.getByRole("status", { name: "Status" })).toBeVisible();
