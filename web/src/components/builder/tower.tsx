@@ -8,6 +8,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Pieces } from "@/components/builder/pieces";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
@@ -175,6 +176,7 @@ export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, w
       <Row label={BUILDER.your_text_title}>
         <Segmented options={registry.words} value={draft.V} saved={cur.V} onChange={onWords} testId="words" />
       </Row>
+      <Pieces v={draft.V} />
     </section>
   );
 }

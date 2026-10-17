@@ -1,5 +1,6 @@
-// The Builder's strings, moved here from studio_ia/copy.py BUILDER (the Python copies stay until Phase 5 removes the Tk
-// page). Only the design half (issue #148) is here; the learning loop's strings (#83) come with that half.
+// The Builder's strings: the design half, the learning loop and the cards around the tower. They moved here from
+// studio_ia/copy.py BUILDER; the Python copy keeps only what the server itself writes (the sentences design.py and
+// expectation.py return).
 
 export const BUILDER = {
   h1: "Build your model",
@@ -19,6 +20,39 @@ export const BUILDER = {
   training_memory_fits: "unknown (memory size not reported)",
   training_memory_desc:
     "on this computer at 16 rows per step. The bars compare weights, gradients and optimizer state (16 bytes per parameter at 32-bit); the engine adds activations, which grow with rows per step.",
+  quick_test_first: "Quick test first",
+  try_it: "Try it",
+  compare_runs: "Compare runs",
+  quick_test: "Quick test",
+  when_answering: "When answering: same question, both versions",
+  answering_note:
+    "Answering never stops training. It shares the computer, so training slows while it answers. Each version answers with its best checkpoint.",
+  example_prompt: "The largest planet in our solar system is",
+  its_answer_appears: "its answer appears here, word by word",
+  compare_later: "save your changes and train them to compare",
+  not_trained: "has no trained weights yet",
+  nothing_to_ask_first: "No version has trained yet. Save your design and train it in Pretraining, then ask it a question here.",
+  nothing_to_ask: "Version {n} has no trained weights yet. Train it in Pretraining, then it can answer here.",
+  ask_both: "Ask both versions",
+  ask_one: "Ask {version}",
+  answer_stop: "Stop",
+  answer_failed: "The reply failed.",
+  pieces_unit: "pieces",
+  pieces_reading: "Reading your text…",
+  pieces_needs_text: "Built from your text: add some in Your data to see these pieces.",
+  pieces_gpt2_missing: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
+  pieces_lost_one: "{n} word lost to “unknown”",
+  pieces_lost_many: "{n} words lost to “unknown”",
+  params_where: "Where the size goes",
+  params_where_tip:
+    "Every parameter is one number the model learns. The bar splits them by part: the word table, the blocks and the word scores. The faint bar is the current version, the bright one your draft.",
+  params_table: "word table",
+  params_position: "position",
+  params_blocks: "blocks",
+  params_head: "word scores",
+  params_share: "{name} {share}",
+  params_table_heavy:
+    "Most of this model is its word table: more blocks or thinking room would add less than you might think.",
   what_expect: "What to expect",
   no_changes: "No changes",
   no_changes_text: "Version {version} is the current design. Chat answers with the best checkpoint on held-back text.",

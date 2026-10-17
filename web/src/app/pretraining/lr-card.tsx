@@ -12,13 +12,13 @@ import { runJob, type JobLike } from "../your-data/jobs";
 import { T } from "./copy";
 import { errorText, lrText, specLr, type RangeResult } from "./logic";
 
-type Outcome = { version: number; result: RangeResult | { error: string } };
+type Outcome = { version: number | string; result: RangeResult | { error: string } };
 
 /**
  * The learning-rate range test as a job: a skeleton while it runs (Stop ends it early), then its result as a chart of error
- * against learning rate and the sentence that reads it. A result belongs to the design it ran on: another version hides it.
+ * against learning rate and the sentence that reads it. A result belongs to the design it ran on: another version (or, in the Builder, another draft: any string that names the design) hides it.
  */
-export function LrCard({ version, spec }: { version: number | null; spec: unknown }) {
+export function LrCard({ version, spec }: { version: number | string | null; spec: unknown }) {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const jobId = useRef<string | null>(null);
   const stopped = useRef(false);
