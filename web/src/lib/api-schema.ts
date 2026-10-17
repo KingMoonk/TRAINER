@@ -206,6 +206,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cluster/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Access
+         * @description The allow lists of this node and its owner's Tailscale login. The login is what a machine that answers 401 to this one must
+         *     add to its own allow_users. The funnel token and any other key of studioConfig.cluster are never returned.
+         */
+        get: operations["get_access_cluster_access_get"];
+        /**
+         * Save Access
+         * @description Save the allow lists in the workspace config, keeping every other key of studioConfig.cluster. Entries are stripped and repeats
+         *     dropped. 400 with a sentence for a bad entry. The API reads the lists when it starts: a change counts after it is restarted.
+         */
+        put: operations["save_access_cluster_access_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cluster/jobs": {
         parameters: {
             query?: never;
@@ -336,6 +362,28 @@ export interface paths {
          */
         put: operations["save_nodes_cluster_nodes_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cluster/remote/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Remote
+         * @description Stop, or drop, a job that another machine queued, by asking that machine (DELETE /queue/jobs/{id} there). The machine must be
+         *     one of the listed peers. A job queued here is stopped with DELETE /queue/jobs/{id} on this node. The peer's own refusal (401,
+         *     404, a timeout) comes back as 502 with its sentence.
+         */
+        post: operations["stop_remote_cluster_remote__job_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1941,7 +1989,7 @@ export interface paths {
         post?: never;
         /**
          * Remove
-         * @description Services.remove: drop a waiting job, or stop the running one.
+         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).
          */
         delete: operations["remove_queue_jobs__job_id__delete"];
         options?: never;
@@ -2920,6 +2968,28 @@ export interface components {
             text: string;
             /** Version */
             version?: number | null;
+        };
+        /**
+         * Access
+         * @description Who may call this node's API straight over the tailnet (studioConfig.cluster, docs/cluster.md, "ACL").
+         */
+        Access: {
+            /** Allow Tags */
+            allow_tags: string[];
+            /** Allow Users */
+            allow_users: string[];
+            /**
+             * Login
+             * @default
+             */
+            login: string;
+        };
+        /** AccessBody */
+        AccessBody: {
+            /** Allow Tags */
+            allow_tags: string[];
+            /** Allow Users */
+            allow_users: string[];
         };
         /** ActionOut */
         ActionOut: {
@@ -4962,6 +5032,8 @@ export interface components {
         };
         /** QueueRow */
         QueueRow: {
+            /** Eta S */
+            eta_s?: number | null;
             /** Hostname */
             hostname: string;
             /** Id */
@@ -4985,6 +5057,11 @@ export interface components {
              * @default
              */
             pinned: string;
+            /**
+             * Queued Address
+             * @default
+             */
+            queued_address: string;
             /** Queued Here */
             queued_here: boolean;
             /** Queued On */
@@ -4999,6 +5076,16 @@ export interface components {
              * @enum {string}
              */
             status: "running" | "waiting" | "held";
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
             /**
              * Waiting Reason
              * @default
@@ -5370,6 +5457,11 @@ export interface components {
             widths: string[];
             /** Words */
             words: string[];
+        };
+        /** RemoteStop */
+        RemoteStop: {
+            /** Address */
+            address: string;
         };
         /** Renewal */
         Renewal: {
@@ -6724,6 +6816,59 @@ export interface operations {
             };
         };
     };
+    get_access_cluster_access_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Access"];
+                };
+            };
+        };
+    };
+    save_access_cluster_access_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Access"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     jobs_cluster_jobs_get: {
         parameters: {
             query?: never;
@@ -6939,6 +7084,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NodeList"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_remote_cluster_remote__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteStop"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

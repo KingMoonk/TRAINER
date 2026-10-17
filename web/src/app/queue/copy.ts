@@ -12,6 +12,7 @@ export const T = {
   start: "Start the waiting jobs",
   startDesc: "Jobs saved as waiting by an earlier session run once you start the queue.",
   stop: "Stop",
+  clusterLink: "Open the Cluster page for each machine.",
   stopAfterCooldown: "Stop after a short cool-down",
   stopping: "Asked it to stop. It stops at its next check.",
   checkpointNow: "Make a checkpoint now",

@@ -11,6 +11,7 @@ from unittest import mock
 
 import studio_cluster
 import studio_cluster_queue
+import studio_peer
 import studio_scheduler as sched
 from fastapi.testclient import TestClient
 from studio_api.app import create_app
@@ -67,6 +68,9 @@ class ClusterServices(FakeServices):
         super().__init__()
         self.runner = runner
         runner.subscribe(self.emit)  # as WorkspaceServices does: the queue's events are the app's events
+
+    def remove(self, job_id):
+        self.runner.remove(job_id)
 
     def queue(self):
         """Up next is the Runner's waiting jobs, as WorkspaceServices reports them."""
@@ -141,7 +145,52 @@ class ClusterRoutes(ApiCase):
         self.services.set_setting("nodes", ["gpu-box"])
         with mock.patch.object(studio_cluster_queue, "fetch", lambda address, path, timeout: {"node": node_payload("gpu-box"), "queue/jobs": []}[path]):
             self.assertEqual([n["hostname"] for n in self.call("GET", "/cluster/merged")["nodes"]], ["laptop", "gpu-box"])
+        self.assertEqual(self.call("GET", "/cluster/access"), {"allow_users": [], "allow_tags": ["tag:trainer"], "login": ""})
+        self.call("PUT", "/cluster/access", json={"allow_users": ["me@example.com"], "allow_tags": ["tag:trainer"]})
+        with mock.patch.object(studio_peer.PeerClient, "delete_json", return_value=None):
+            self.call("POST", "/cluster/remote/{job_id}/stop", 204, path={"job_id": "x"}, json={"address": "gpu-box"})
         self.assertAllRoutesHit()
+
+    def test_a_job_that_runs_on_a_peer_can_be_stopped_from_here(self):
+        job = self.owned_remote_job()
+        self.call("DELETE", "/queue/jobs/{job_id}", path={"job_id": job.id})
+        self.assertTrue(wait(lambda: job.status == "stopped"), job.status)
+        self.call("DELETE", "/queue/jobs/{job_id}", 404, path={"job_id": "nope"})
+
+    def test_the_allow_lists_are_saved_beside_the_keys_the_page_never_sees(self):
+        token = "t" * 40
+        self.services.set_setting("cluster", {"funnelToken": token, "allowUsers": ["old@example.com"]})
+        hosts = HostNames(binary=lambda: "tailscale", login=lambda: "me@example.com")
+        hosts.refresh()
+        self.app.state.hosts = hosts
+        self.assertEqual(self.call("GET", "/cluster/access"),
+                         {"allow_users": ["old@example.com"], "allow_tags": ["tag:trainer"], "login": "me@example.com"})
+        saved = self.call("PUT", "/cluster/access", json={"allow_users": [" a@example.com ", "a@example.com", "b@example.com"],
+                                                          "allow_tags": ["tag:trainer", "tag:gpu"]})
+        self.assertEqual((saved["allow_users"], saved["allow_tags"]), (["a@example.com", "b@example.com"], ["tag:trainer", "tag:gpu"]))
+        self.assertNotIn(token, json.dumps(saved))
+        self.assertEqual(self.services.setting("cluster")["funnelToken"], token)  # kept, not echoed
+        self.assertEqual(self.services.setting("cluster")["allowUsers"], ["a@example.com", "b@example.com"])
+
+    def test_a_bad_allow_list_is_refused_with_a_sentence_and_nothing_is_saved(self):
+        detail = self.call("PUT", "/cluster/access", 400, json={"allow_users": [], "allow_tags": ["trainer"]})["detail"]
+        self.assertIn("tag:", detail)
+        self.assertIn("allowUsers", self.call("PUT", "/cluster/access", 400, json={"allow_users": [" "], "allow_tags": []})["detail"])
+        self.assertIsNone(self.services.setting("cluster"))
+        self.services.set_setting("cluster", "nonsense")  # hand-edited since the API started
+        self.assertIn("studioConfig.cluster", self.call("GET", "/cluster/access", 409)["detail"])
+
+    def test_stopping_a_job_on_a_peer_asks_that_peer_and_only_a_listed_one(self):
+        self.services.set_setting("nodes", ["gpu-box"])
+        asked = []
+        with mock.patch.object(studio_peer.PeerClient, "delete_json", lambda client, path: asked.append((client.address, path))):
+            self.call("POST", "/cluster/remote/{job_id}/stop", 204, path={"job_id": "j1"}, json={"address": "gpu-box"})
+            self.call("POST", "/cluster/remote/{job_id}/stop", 404, path={"job_id": "j1"}, json={"address": "stranger"})
+        self.assertEqual(asked, [("gpu-box", "queue/jobs/j1")])
+        refusal = PeerError("gpu-box answered 401 to DELETE /queue/jobs/j1: This node does not know the caller.", status=401)
+        with mock.patch.object(studio_peer.PeerClient, "delete_json", side_effect=refusal):
+            detail = self.call("POST", "/cluster/remote/{job_id}/stop", 502, path={"job_id": "j1"}, json={"address": "gpu-box"})["detail"]
+        self.assertIn("answered 401", detail)
 
     def test_a_pin_decides_where_a_waiting_job_goes_and_the_merged_queue_says_so(self):
         job = self.runner.enqueue(Job("pretrain", "Mine", params={"config": {"steps": 100}, "examples": [{"text": "a"}]}))

@@ -102,6 +102,8 @@ test("the Queue page shows every machine's jobs with the node on each row", asyn
   await expect(other.getByTestId("other-g1")).not.toHaveAttribute("data-stale", "true");
   // This machine's own jobs are not repeated in the other machines' card.
   await expect(other.getByTestId("other-w1")).toHaveCount(0);
+  // The card stays; each machine's state and the controls live on the Cluster page.
+  await expect(other.getByTestId("queue-cluster-link")).toHaveAttribute("href", "/cluster/");
 });
 
 test("a job running on another machine shows the note about its checkpoint in the other machines card, once", async ({ page }) => {
