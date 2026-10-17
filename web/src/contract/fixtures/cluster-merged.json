@@ -1,0 +1,12 @@
+{
+  "body": {
+    "jobs": [],
+    "nodes": []
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/cluster/merged"
+  },
+  "status": 200
+}

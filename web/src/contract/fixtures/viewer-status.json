@@ -1,0 +1,13 @@
+{
+  "body": {
+    "available": true,
+    "connected": false,
+    "running": false
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/viewer/status"
+  },
+  "status": 200
+}

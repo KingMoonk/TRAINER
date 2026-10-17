@@ -1,0 +1,9 @@
+{
+  "body": null,
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/versions/current"
+  },
+  "status": 200
+}

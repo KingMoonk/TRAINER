@@ -1,0 +1,12 @@
+{
+  "body": {
+    "sessions": [],
+    "signin": false
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/passive"
+  },
+  "status": 200
+}

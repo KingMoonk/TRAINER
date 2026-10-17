@@ -7,8 +7,9 @@ TanStack Query. Static export: `pnpm build` writes `out/`, which the API server 
 pnpm install
 pnpm dev            # http://localhost:3000
 pnpm lint && pnpm typecheck && pnpm build
-pnpm exec playwright install chromium   # once
-pnpm test           # Playwright smoke tests against out/, so build first; no API needed
+pnpm test           # Vitest: unit, component (jsdom) and contract tests; no browser, no build needed
+pnpm exec playwright install chromium   # once, CI only
+pnpm test:e2e       # Playwright e2e flows against out/, so build first; no API needed. CI runs it; do not run it from an agent
 ```
 
 `NEXT_PUBLIC_API_URL` points `src/lib/api.ts` at the API server; leave it unset when the API serves `out/` itself.
@@ -72,6 +73,10 @@ Two checks keep them honest. `tests/test_api_schema.py` (part of `python tasks.p
 the app's schema and prints the command above. The CI `web` job runs `pnpm gen:api` and `git diff --exit-code` on the generated
 TypeScript, so a hand-edited `api-schema.ts` fails there. Do not edit either file by hand.
 
+## Tests
+
+Vitest (`src/**/*.test.ts(x)`) holds the unit, component and contract tiers; Playwright (`tests/`) holds the e2e flows that need a real browser. See `.claude/rules/testing.md` for which tier a test belongs in and for re-recording the contract fixtures (`python tasks.py web:fixtures`).
+
 ## Tests against the live API
 
 `tests/live.spec.ts` runs against `python -m studio_api --fake` serving `out/` (the `live` Playwright project), and checks that
@@ -79,5 +84,5 @@ the status strip goes from Connecting to Connected. Any `tests/live.<page>.spec.
 `--fake` API that runs a queued job when `POST /queue/start` is called: `step` rises on `train` events, then a version is added. Uploaded files are parsed into memory; no training weights or workspace records are written. Live specs share one worker, and the server uses `--fake-step-seconds 0.25` so progress can be observed. `live.phase2.spec.ts` imports a text file, selects it for pretraining, starts the queue and checks the trained version, including after a refresh. It needs the Python requirements, so it is skipped unless `API_LIVE=1`:
 
 ```bash
-API_LIVE=1 API_PYTHON=$PWD/../.venv/bin/python pnpm test   # API_PYTHON defaults to `python`
+API_LIVE=1 API_PYTHON=$PWD/../.venv/bin/python pnpm test:e2e   # API_PYTHON defaults to `python`
 ```

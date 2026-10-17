@@ -5,7 +5,9 @@
     python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). Nightly, on macOS and Windows.
     python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
     python tasks.py web:lint                  eslint + tsc on the web UI (web/). Needs pnpm.
-    python tasks.py web:test                  Playwright smoke tests against web/out. Run web:build first, and `pnpm exec playwright install chromium` once.
+    python tasks.py web:test                  Vitest: unit, component and contract tests (web/src). No browser, safe to run locally.
+    python tasks.py web:e2e                   Playwright e2e flows against web/out. CI only: run web:build first, and `pnpm exec playwright install chromium` once.
+    python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
 
 Each level includes the one before it. Use `.venv/bin/python` locally, `.venv/Scripts/python.exe` on Windows.
@@ -88,12 +90,21 @@ def web_test():
     pnpm("test")
 
 
+def web_e2e():
+    pnpm("test:e2e")
+
+
+def web_fixtures():
+    run(PY, "-m", "tests.web_fixtures")
+
+
 def web_build():
     pnpm("build")
 
 
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
-         "web:lint": web_lint, "web:test": web_test, "web:build": web_build}
+         "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
+         "web:build": web_build}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])

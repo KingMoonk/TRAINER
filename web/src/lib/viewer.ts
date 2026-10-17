@@ -11,6 +11,8 @@ export type SceneQuery = {
   headStage: HeadStage;
   tileKind: TileKind;
   snapshot: number;
+  /** Heat-map tiles of the real matrices instead of bar matrices. */
+  thermal?: boolean;
 };
 
 export async function fetchScene(query: SceneQuery, signal: AbortSignal): Promise<ScenePayload> {

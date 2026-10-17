@@ -1,0 +1,34 @@
+{
+  "body": {
+    "next_cursor": null,
+    "rows": [
+      {
+        "a": "Name a prime.",
+        "b": "7 is a prime number.",
+        "dataset": "Your conversations",
+        "id": "c1",
+        "status": "Good"
+      },
+      {
+        "a": "Say hello.",
+        "b": "Hello there.",
+        "dataset": "Your conversations",
+        "id": "c2",
+        "status": "Review"
+      },
+      {
+        "a": "Shorter, please.",
+        "b": "Done.",
+        "dataset": "Your corrections",
+        "id": "c3",
+        "status": "From Chat"
+      }
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/data/conversations/rows"
+  },
+  "status": 200
+}
