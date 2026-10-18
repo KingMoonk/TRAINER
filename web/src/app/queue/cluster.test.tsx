@@ -199,7 +199,7 @@ describe("Queue page with several machines", () => {
     expect(members).toHaveTextContent("Trains on mac-mini, gpu-box together");
     expect(members).toHaveTextContent("Left out: old did not answer within 2 seconds.");
     expect(calls.find((c) => c.path === "/distributed/runs")?.body).toEqual({
-      replaces: "w1", all_machines: true, machines: [], version: 3, dataset_ids: ["Your files"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
+      replaces: "w1", all_machines: true, machines: [], version: 3, dataset_ids: ["Your files"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
     });
     // A run is not pinned: its row has no "Run on" picker and no place line.
     expect(screen.queryByRole("combobox", { name: `Run on: ${run.label}` })).toBeNull();
