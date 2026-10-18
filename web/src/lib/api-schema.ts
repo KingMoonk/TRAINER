@@ -1822,6 +1822,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/passive/{session_id}/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Passive Lessons
+         * @description The lessons the teacher gave this session, oldest first. 404 for an unknown session.
+         */
+        get: operations["passive_lessons_passive__session_id__lessons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/passive/{session_id}/lessons/{lesson_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change Passive Lesson
+         * @description Drop a lesson (the next round leaves it out of the training) or keep it. 404 for an unknown session or lesson.
+         */
+        patch: operations["change_passive_lesson_passive__session_id__lessons__lesson_id__patch"];
+        trace?: never;
+    };
     "/passive/{session_id}/pause": {
         parameters: {
             query?: never;
@@ -4651,6 +4691,14 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** LessonChange */
+        LessonChange: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "dropped";
+        };
         /** Line */
         Line: {
             /** Bad */
@@ -5140,6 +5188,40 @@ export interface components {
             first: number;
             /** Total */
             total: number;
+        };
+        /**
+         * PassiveLesson
+         * @description One thing the teacher showed the model: the prompt, the model's own reply and the better answer it should learn.
+         */
+        PassiveLesson: {
+            /**
+             * Answer
+             * @default
+             */
+            answer: string;
+            /** At */
+            at?: string | null;
+            /** Checkpoint */
+            checkpoint: number;
+            /** Id */
+            id: string;
+            /**
+             * Prompt
+             * @default
+             */
+            prompt: string;
+            /**
+             * Reply
+             * @default
+             */
+            reply: string;
+            /** Round */
+            round: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "dropped" | "left_out";
         };
         /**
          * PassivePlan
@@ -10657,6 +10739,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PassiveStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    passive_lessons_passive__session_id__lessons_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveLesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_passive_lesson_passive__session_id__lessons__lesson_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                lesson_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LessonChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveLesson"];
                 };
             };
             /** @description Validation Error */

@@ -42,6 +42,11 @@ def passive_row(store, s):
     return {"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"], "error": s["error"], **facts}
 
 
+def passive_lesson(row):
+    """A stored lesson as the API shows it: without the raw chat messages the trainer feeds on."""
+    return {key: row.get(key) for key in ("id", "round", "checkpoint", "prompt", "reply", "answer", "status", "at")}
+
+
 @dataclass
 class Job:
     id: str
@@ -428,6 +433,16 @@ class Services:
         """{session, plan, progress, journal}: one passive session as the detail view shows it, or None for an unknown one. session = the
         row passive() lists; plan = studio_passive.plan_summary's lines; progress = studio_passive.progress_summary; journal =
         {events, total, first}: up to `limit` events before event number `before` (the newest when None), oldest first, each with its `index`."""
+        raise NotImplementedError
+
+    def passive_lessons(self, session_id):
+        """The lessons the teacher gave a passive session, oldest first: [{id, round, checkpoint, prompt, reply, answer, status, at}], status
+        pending (trained on), dropped (you left it out) or left_out (a step back left it out). None for an unknown session."""
+        raise NotImplementedError
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        """Drop ("dropped") or keep ("pending") one lesson; the next round's training follows it. Returns the lesson, or None when the
+        session or the lesson is unknown."""
         raise NotImplementedError
 
     def stop_passive(self, session_id):
@@ -988,6 +1003,24 @@ class FakeServices(Services):
 
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
+
+    def passive_lessons(self, session_id):
+        if all(r["id"] != session_id for r in self.passive_sessions):
+            return None
+        return [dict(row) for row in getattr(self, "passive_lesson_rows", {}).get(session_id, [])]
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        rows = self.passive_lessons(session_id)
+        if rows is None:
+            return None
+        if status not in ("pending", "dropped"):
+            raise ValueError("A lesson is either dropped or kept.")
+        stored = getattr(self, "passive_lesson_rows", {}).get(session_id, [])
+        row = next((r for r in stored if r["id"] == lesson_id), None)
+        if row is None:
+            return None
+        row["status"] = status
+        return dict(row)
 
     def passive_detail(self, session_id, limit=50, before=None):
         row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
@@ -1978,6 +2011,25 @@ class WorkspaceServices(Services):
             return {"sessions": [], "signin": signin}
         store = PassiveStore(self.root)
         return {"sessions": [passive_row(store, s) for s in store.list()[:10]], "signin": signin}
+
+    def passive_lessons(self, session_id):
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        if store.get(session_id) is None:
+            return None
+        return [passive_lesson(row) for row in store.lessons(session_id)]
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        if store.get(session_id) is None:
+            return None
+        row = store.set_lesson_status(session_id, lesson_id, status)
+        return row and passive_lesson(row)
 
     def passive_detail(self, session_id, limit=50, before=None):
         from studio_passive import PassiveStore, plan_summary, progress_summary

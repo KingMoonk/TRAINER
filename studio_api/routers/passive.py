@@ -103,6 +103,23 @@ class PassiveDetail(BaseModel):
     journal: PassiveJournal
 
 
+class PassiveLesson(BaseModel):
+    """One thing the teacher showed the model: the prompt, the model's own reply and the better answer it should learn."""
+    id: str
+    round: int
+    checkpoint: int
+    prompt: str = ""
+    reply: str = ""
+    answer: str = ""
+    status: Literal["pending", "dropped", "left_out"]  # pending: trained on; dropped: you left it out; left_out: a step back left it out
+    at: str | None = None
+
+
+class LessonChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["pending", "dropped"]  # "dropped" leaves it out of the next round's training, "pending" keeps it
+
+
 class PassiveStatus(BaseModel):
     status: str
 
@@ -139,6 +156,24 @@ def passive_detail(session_id: str, limit: int = Query(50, ge=1, le=200), before
     found = services.passive_detail(session_id, limit, before)
     if found is None:
         raise HTTPException(404, f"No passive session {session_id}")
+    return found
+
+
+@router.get("/{session_id}/lessons", response_model=list[PassiveLesson])
+def passive_lessons(session_id: str, services=Depends(get_services)):
+    """The lessons the teacher gave this session, oldest first. 404 for an unknown session."""
+    found = services.passive_lessons(session_id)
+    if found is None:
+        raise HTTPException(404, f"No passive session {session_id}")
+    return found
+
+
+@router.patch("/{session_id}/lessons/{lesson_id}", response_model=PassiveLesson)
+def change_passive_lesson(session_id: str, lesson_id: str, body: LessonChange, services=Depends(get_services)):
+    """Drop a lesson (the next round leaves it out of the training) or keep it. 404 for an unknown session or lesson."""
+    found = services.set_passive_lesson(session_id, lesson_id, body.status)
+    if found is None:
+        raise HTTPException(404, f"No lesson {lesson_id} in passive session {session_id}")
     return found
 
 

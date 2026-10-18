@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 """
 COLUMNS = ("status", "command", "plan", "state", "trainer_pid", "watchdog_pid", "heartbeat", "restarts", "error")
 COMMANDS = ("pause", "resume", "stop")
+LESSON_STATUSES = ("pending", "dropped")  # what the page can set; "left_out" is the drop_lessons step's own
 
 
 class AlreadyActive(RuntimeError, ValueError):
@@ -376,6 +377,19 @@ class PassiveStore:
 
     def lessons(self, session_id):
         return _read_jsonl(self.directory(session_id) / "lessons.jsonl")
+
+    def set_lesson_status(self, session_id, lesson_id, status):
+        """Drop a lesson (status "dropped": the next round's training leaves it out) or keep it ("pending": it is trained on again; this also
+        brings back one the drop_lessons step had left out). Returns the changed lesson, or None for an unknown lesson."""
+        if status not in LESSON_STATUSES:
+            raise ValueError("A lesson is either dropped or kept.")
+        rows = self.lessons(session_id)
+        row = next((r for r in rows if r.get("id") == lesson_id), None)
+        if row is None:
+            return None
+        row["status"] = status
+        self.set_lessons(session_id, rows)
+        return row
 
     def set_lessons(self, session_id, rows):
         # ponytail: read-modify-write; the app and the trainer rarely touch it at the same moment. Add a lock file if that changes.
