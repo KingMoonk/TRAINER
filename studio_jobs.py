@@ -29,6 +29,8 @@ def prepare(job, services):
     p.pop("result", None)  # a run cut short by a restart starts afresh; an old result must not be recorded again
     if job.kind in ("pretrain", "compare", "import_pretrained") + ROUNDS:
         p["output_dir"] = str(output_dir(job, run_dir))
+    if job.kind == "pretrain" and not getattr(job, "owner", ""):
+        continue_here(job)
     if job.kind == "pretrain_distributed":
         import studio_cluster
         import studio_diloco
@@ -38,6 +40,53 @@ def prepare(job, services):
         import studio_rl
         studio_rl.resolve(3 if job.kind == "restore_answers" else int(p.get("round", 1)), job, services)
     return {"root": str(services.root), "run_dir": str(run_dir)}
+
+
+FOLDER_FILES = ("config.json", "dataset.jsonl", "last.npz", "best.npz")  # what studio_model.train refuses to overwrite
+RESUME_PARAMS = ("resume", "resume_steps", "resume_base", "resume_local")
+
+
+def continue_here(job):
+    """A pretrain job taken again on this machine finds the folder of its earlier attempt (the app stopped or crashed mid-run), which
+    training refuses to write into. Move that folder aside, and when it holds this job's `last.npz` with its `dataset.jsonl` set
+    `params["resume"]` so `pretrain` continues from it with the optimizer, sampler and RNG (`resume_local` lets it fall back to a
+    fresh start if training still refuses the file). Otherwise start fresh and say why on the job's note. A job that has never run
+    here has no folder and is left alone."""
+    p = job.params
+    for key in RESUME_PARAMS:
+        p.pop(key, None)
+    out = Path(p["output_dir"])
+    if not any((out / name).exists() for name in FOLDER_FILES):
+        return
+    aside = out.with_name(f"{out.name}-before-restart")
+    for n in range(2, 1000):
+        if not aside.exists():
+            break
+        aside = out.with_name(f"{out.name}-before-restart-{n}")
+    shutil.move(str(out), str(aside))
+    steps = int((p.get("config") or {}).get("steps") or 0)
+    step, reason = _checkpoint_step(aside / "last.npz"), ""
+    if step is None:
+        reason = "it had not saved a usable checkpoint"
+    elif not (aside / "dataset.jsonl").is_file():
+        reason = "the training data it used was not saved beside its checkpoint"
+    elif steps and step >= steps:
+        reason = f"its checkpoint (step {step}) is not before the last planned step"
+    if reason:
+        job.note = f"{job.note} The app stopped while this ran; it starts again from step 0 because {reason}.".strip()
+        return
+    p.update(resume=str(aside / "last.npz"), resume_steps=steps or None, resume_base=0, resume_local=True)
+
+
+def _checkpoint_step(path):
+    """The step a checkpoint file was saved at, from its metadata alone (no weights read); None when it is missing or not readable."""
+    import numpy as np
+    try:
+        with np.load(path, allow_pickle=False) as archive:
+            metadata = json.loads(str(archive["metadata"].item()))
+        return int(metadata["step"]) if metadata.get("architecture") == "groundwork_numpy_decoder" else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def _examples(job, context):
@@ -84,14 +133,17 @@ def _resume(job, cfg, out, init, options):
     def relay(event):
         if not started:
             started.append(True)
-            emit({"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": studio_model.load_checkpoint(path)["step"]})
+            said = {"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": studio_model.load_checkpoint(path)["step"]}
+            if job.params.get("resume_local"):  # this queue shows the progress itself, from the checkpoint's step
+                said["total"] = int(job.params.get("resume_steps") or cfg["steps"])
+            emit(said)
         emit(event)
     try:
         examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
         return studio_model.train(dict(cfg, steps=int(job.params.get("resume_steps") or cfg["steps"])), examples, out, resume=path,
                                   **{**options, "emit": relay})
     except (OSError, ValueError, KeyError) as exc:
-        if started or init is None:
+        if started or (init is None and not job.params.get("resume_local")):  # (a local restart can always start fresh instead)
             raise
         emit({"type": "resume_refused", "reason": str(exc) or type(exc).__name__})
         return None
