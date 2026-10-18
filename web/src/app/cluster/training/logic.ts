@@ -12,7 +12,7 @@ export type TextSet = components["schemas"]["TextSet"];
 export type ClusterNode = components["schemas"]["ClusterNode"];
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[] };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -29,6 +29,9 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     version: "",
     datasets: (sets ?? []).filter((set) => set.on).map((set) => set.id),
     machines: [],
+    minMachines: "",
+    maxMachines: "",
+    overlap: false,
   };
 }
 
@@ -36,6 +39,13 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
 function whole(text: string): number | null {
   const n = Number(text);
   return text.trim() !== "" && Number.isInteger(n) && n >= 1 ? n : null;
+}
+
+/** A blank (no limit) is `undefined`; a whole number from one to 64 is itself; anything else is null, which keeps the form incomplete. */
+function limit(text: string): number | undefined | null {
+  if (text.trim() === "") return undefined;
+  const n = whole(text);
+  return n !== null && n <= 64 ? n : null;
 }
 
 /** A number above zero, or null. */
@@ -53,6 +63,10 @@ export function startBody(form: Form): StartRun | null {
   if (rounds === null || innerSteps === null || outerLr === null) return null;
   if (form.outerMomentum.trim() === "" || !Number.isFinite(outerMomentum) || outerMomentum < 0 || outerMomentum >= 1) return null;
   if (form.datasets.length === 0) return null;
+  const least = limit(form.minMachines);
+  const most = limit(form.maxMachines);
+  if (least === null || most === null) return null;
+  if (least !== undefined && most !== undefined && least > most) return null;
   return {
     version: form.version === "" ? null : Number(form.version),
     dataset_ids: form.datasets,
@@ -61,6 +75,9 @@ export function startBody(form: Form): StartRun | null {
     inner_steps: innerSteps,
     outer_lr: outerLr,
     outer_momentum: outerMomentum,
+    ...(least !== undefined ? { min_members: least } : {}),
+    ...(most !== undefined ? { max_members: most } : {}),
+    overlap: form.overlap,
   };
 }
 
