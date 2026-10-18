@@ -65,6 +65,22 @@ class ResumeJob(unittest.TestCase):
             self.assertTrue([e for e in events if e["type"] == "resumed"])
             self.assertEqual(max(losses(events)), TINY["steps"])
 
+    def test_a_dataset_whose_text_holds_a_unicode_line_break_still_resumes(self):
+        # dataset.jsonl is split on "\n" only: str.splitlines() also breaks at U+0085 and U+2028 inside a record's text.
+        examples = [{"user": "say next\x85line", "assistant": "ok done"}, *EXAMPLES]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stop = threading.Event()
+
+            def emit(event):
+                if event["type"] == "metric" and event["step"] >= 3:
+                    stop.set()
+            studio_model.train(TINY, examples, root / "first", emit, stop=stop)
+            events = []
+            run_job(root, "second", events, resume=str(root / "first" / "last.npz"), resume_steps=TINY["steps"])
+            self.assertTrue([e for e in events if e["type"] == "resumed"])
+            self.assertEqual(max(losses(events)), TINY["steps"])
+
     def test_a_checkpoint_training_refuses_falls_back_to_the_published_weights_and_says_so(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

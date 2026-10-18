@@ -278,6 +278,16 @@ class Routes(unittest.TestCase):
         self.assertEqual((job.params["min_members"], job.params["max_members"]), (2, 2))
         self.client.post(f"/distributed/runs/{run_id}/stop")
 
+    def test_an_overlapped_start_puts_the_option_on_the_job_for_the_owner_and_the_invited_members(self):
+        plain = self.start(rounds=2000).json()["id"]
+        overlapped = self.start(rounds=2000, overlap=True).json()["id"]
+        jobs = {j.id: j for j in [self.services.queue().job, *self.services.queue().up_next] if j is not None}
+        self.assertNotIn("member_options", jobs[plain].params)
+        self.assertEqual(jobs[overlapped].params["member_options"], {"overlap": True})  # studio_jobs._member (owner) and invite (members) read it
+        self.assertEqual(self.start(overlap="sometimes").status_code, 422)
+        for run_id in (plain, overlapped):
+            self.client.post(f"/distributed/runs/{run_id}/stop")
+
     def test_the_demo_run_is_live_with_a_cuda_and_an_mps_member_and_one_can_be_stopped(self):
         run = self.services.demo_run()
         runs_now = self.client.get("/distributed/runs").json()

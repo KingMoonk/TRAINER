@@ -540,6 +540,18 @@ class Runner:
                 break
         return max(0., share - held / total)
 
+    def _resume_note(self, job, event):
+        """Say on the job which way a restart went: on from its own checkpoint, or from step 0 because training refused the file."""
+        if event["type"] == "resumed":
+            text = (f"The app stopped while this ran; it continued from its own checkpoint at step "
+                    f"{event.get('base', 0) + event.get('step', 0)}, with the optimizer state it had.")
+        else:
+            text = (f"The app stopped while this ran; it could not continue from its own checkpoint ({event.get('reason') or 'unusable'}), "
+                    "so it started again from step 0.")
+        with self.lock:
+            job.note = f"{job.note} {text}".strip()
+            self._save()
+
     def _run(self, job):
         handler = self.handlers.get(job.kind)
         short = self._disk_problem()
@@ -552,13 +564,19 @@ class Runner:
             self._save()
         started = time.monotonic()
 
+        resumed_at = [0]  # the step this run began at (a resume), so the time per step ignores the steps an earlier run did
+
         def emit(event):
+            if event.get("type") in ("resumed", "resume_refused"):
+                self._resume_note(job, event)
             if event.get("total"):
                 step, total = event.get("step", 0), event["total"]
+                if event.get("type") == "resumed":  # progress starts from the checkpoint's step, not 0
+                    step = resumed_at[0] = event.get("base", 0) + step
                 self.progress.update(step=step, total=total, lr=event.get("lr", self.progress.get("lr")),
                                      phase=event.get("phase", self.progress.get("phase", "")))
-                if step:
-                    self.progress["eta_s"] = (time.monotonic() - started) / step * (total - step)
+                if step > resumed_at[0]:
+                    self.progress["eta_s"] = (time.monotonic() - started) / (step - resumed_at[0]) * (total - step)
             self._emit("train", {"job": job.id, **event})
 
         awake = platform_helpers.keep_awake(os.getpid()) if self.plan.keep_awake else None
