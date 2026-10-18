@@ -12,11 +12,11 @@ import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./
 
 const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
 
-function Setting({ id, label, help, value, onChange, step }: { id: string; label: string; help: string; value: string; onChange: (value: string) => void; step: string }) {
+function Setting({ id, label, help, value, onChange, step, min = "0" }: { id: string; label: string; help: string; value: string; onChange: (value: string) => void; step: string; min?: string }) {
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={id} className="text-sm font-medium">{label}</label>
-      <input id={id} inputMode="decimal" type="number" min="0" step={step} value={value} onChange={(e) => onChange(e.target.value)} className={`${FIELD} w-32`} />
+      <input id={id} inputMode="decimal" type="number" min={min} step={step} value={value} onChange={(e) => onChange(e.target.value)} className={`${FIELD} w-32`} />
       <p className="max-w-prose text-xs text-muted-foreground">{help}</p>
     </div>
   );
@@ -90,6 +90,15 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium">{T.shape}</legend>
+        <p className="text-xs text-muted-foreground">{T.shapeLead}</p>
+        <div className="flex flex-wrap gap-x-6 gap-y-3">
+          <Setting id="training-min-machines" label={T.minMachines} help={T.minMachinesHelp} value={form.minMachines} onChange={(minMachines) => set({ minMachines })} step="1" min="1" />
+          <Setting id="training-max-machines" label={T.maxMachines} help={T.maxMachinesHelp} value={form.maxMachines} onChange={(maxMachines) => set({ maxMachines })} step="1" min="1" />
+        </div>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">{T.settings}</legend>
         <p className="text-xs text-muted-foreground">{T.settingsLead}</p>
         <div className="flex flex-wrap gap-x-6 gap-y-3">
@@ -98,6 +107,11 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
           <Setting id="training-lr" label={T.outerLr} help={T.outerLrHelp} value={form.outerLr} onChange={(outerLr) => set({ outerLr })} step="0.1" />
           <Setting id="training-momentum" label={T.outerMomentum} help={T.outerMomentumHelp} value={form.outerMomentum} onChange={(outerMomentum) => set({ outerMomentum })} step="0.1" />
         </div>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={form.overlap} onChange={(e) => set({ overlap: e.target.checked })} />
+          <span>{T.overlap}</span>
+        </label>
+        <p className="max-w-prose text-xs text-muted-foreground">{T.overlapHelp}</p>
       </fieldset>
 
       <div className="flex flex-wrap items-center gap-3">
