@@ -540,6 +540,14 @@ class Runner:
                 break
         return max(0., share - held / total)
 
+    def follow_up(self, job):
+        """Queue what a job that ended leaves to do (the caller holds the lock and saves): after a pretrain on new text, the
+        restore_answers round that teaches it its old manner again. The cluster calls it for a pretrain that ran on a peer, once its
+        version is here."""
+        if job.status == "done" and job.kind == "pretrain" and job.params.get("user_text"):
+            self.jobs.append(Job("restore_answers", "Restore how it answers", params={"round": 3, "teacher": job.params.get("previous_best")},
+                                 note="added automatically after new text; a short lesson from the previous version restores how it answers"))
+
     def _resume_note(self, job, event):
         """Say on the job which way a restart went: on from its own checkpoint, or from step 0 because training refused the file."""
         if event["type"] == "resumed":
@@ -603,9 +611,7 @@ class Runner:
             job.error = error
             self.running = None
             self.stopping = False
-            if job.status == "done" and job.kind == "pretrain" and job.params.get("user_text"):
-                self.jobs.append(Job("restore_answers", "Restore how it answers", params={"round": 3, "teacher": job.params.get("previous_best")},
-                                     note="added automatically after new text; a short lesson from the previous version restores how it answers"))
+            self.follow_up(job)
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start
             self._save()
