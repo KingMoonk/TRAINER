@@ -237,6 +237,7 @@ describe("Passive training page", () => {
     const calls = mockApi({
       "GET /passive": { body: { sessions: [running, stopped], signin: false } },
       "GET /queue": { body: idle },
+      "GET /passive/p1/lessons": { body: [] },
       "GET /passive/p1": (call) =>
         call.search.includes("before=5")
           ? { body: { ...detail, journal: { events: [{ index: 4, type: "check", round: 3, step: 40, error: 2.4, at: "2026-10-01T22:50:00" }], total: 8, first: 4 } } }
@@ -272,6 +273,7 @@ describe("Passive training page", () => {
     mockApi({
       "GET /passive": { body: { sessions: [running], signin: false } },
       "GET /queue": { body: idle },
+      "GET /passive/p1/lessons": { body: [] },
       "GET /passive/p1": {
         body: {
           session: running,
@@ -287,6 +289,74 @@ describe("Passive training page", () => {
     expect(await screen.findByText(/No checkpoint yet/)).toBeVisible();
     expect(screen.getByText("Nothing has been written yet.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Earlier events" })).toBeNull();
+  });
+
+  test("the detail lists the lessons and drops one, then keeps it again", async () => {
+    const base = { round: 1, checkpoint: 1, reply: "y", at: "2026-10-01T22:00:00" };
+    let lessons = [
+      { ...base, id: "l1", prompt: "say yes", answer: "yes, indeed", status: "pending" },
+      { ...base, id: "l2", round: 2, checkpoint: 2, prompt: "say no", answer: "no, thanks", status: "left_out" },
+    ];
+    const change = (id: string, status: string) => {
+      lessons = lessons.map((l) => (l.id === id ? { ...l, status } : l));
+      return { body: lessons.find((l) => l.id === id) };
+    };
+    const calls = mockApi({
+      "GET /passive": { body: { sessions: [running], signin: false } },
+      "GET /queue": { body: idle },
+      "GET /passive/p1/lessons": () => ({ body: lessons }),
+      "GET /passive/p1": {
+        body: {
+          session: running,
+          plan: { stop: "s", limits: "l", plateau: "p", teacher: "t", worse: "w" },
+          progress: { phase: "idle", round: 2, active_seconds: 0, limit_seconds: 28800, checkpoints: [], best: null, best_error: null, current_error: null, worse_streak: 0, rounds_since_best: 0, restarts: 0 },
+          journal: { events: [], total: 0, first: 0 },
+        },
+      },
+      "PATCH /passive/p1/lessons/l1": (call) => change("l1", (call.body as { status: string }).status),
+    });
+    const user = userEvent.setup();
+    renderPage(<PassivePage />);
+    await user.click(within(await screen.findByTestId("session-p1")).getByRole("button", { name: "Details" }));
+    expect(await screen.findByTestId("lessons-summary")).toHaveTextContent("2 lessons, 1 used in training");
+    const items = within(screen.getByTestId("passive-lessons")).getAllByRole("listitem");
+    expect(items.map((li) => li.getAttribute("data-testid"))).toEqual(["lesson-l2", "lesson-l1"]); // newest first
+    const first = screen.getByTestId("lesson-l1");
+    expect(first).toHaveTextContent("Round 1, checkpoint 1 · Used in training");
+    expect(first).toHaveTextContent("say yes");
+    expect(first).toHaveTextContent("yes, indeed");
+    expect(screen.getByTestId("lesson-l2")).toHaveTextContent("Left out by a step back");
+    expect(within(screen.getByTestId("lesson-l2")).getByRole("button", { name: "Keep" })).toBeVisible();
+
+    await user.click(within(first).getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(screen.getByTestId("lesson-l1")).toHaveTextContent("Dropped by you"));
+    expect(screen.getByTestId("lessons-summary")).toHaveTextContent("2 lessons, 0 used in training");
+    await user.click(within(screen.getByTestId("lesson-l1")).getByRole("button", { name: "Keep" }));
+    await waitFor(() => expect(screen.getByTestId("lesson-l1")).toHaveTextContent("Used in training"));
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => [c.path, c.body])).toEqual([
+      ["/passive/p1/lessons/l1", { status: "dropped" }],
+      ["/passive/p1/lessons/l1", { status: "pending" }],
+    ]);
+  }, 20_000);
+
+  test("a session with no lessons says so", async () => {
+    mockApi({
+      "GET /passive": { body: { sessions: [running], signin: false } },
+      "GET /queue": { body: idle },
+      "GET /passive/p1/lessons": { body: [] },
+      "GET /passive/p1": {
+        body: {
+          session: running,
+          plan: { stop: "s", limits: "l", plateau: "p", teacher: "t", worse: "w" },
+          progress: { phase: "idle", round: 0, active_seconds: 0, limit_seconds: 28800, checkpoints: [], best: null, best_error: null, current_error: null, worse_streak: 0, rounds_since_best: 0, restarts: 0 },
+          journal: { events: [], total: 0, first: 0 },
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<PassivePage />);
+    await user.click(within(await screen.findByTestId("session-p1")).getByRole("button", { name: "Details" }));
+    expect(await screen.findByText("The teacher has not given this session any lessons.")).toBeVisible();
   });
 
   test("the sign-in start can be removed", async () => {
