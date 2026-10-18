@@ -235,6 +235,8 @@ Passive training keeps training on its own: it trains until the test error settl
 
 A small watchdog (`studio_passive_watch.py`) checks the trainer's heartbeat. After 60 seconds of silence, or if the process is gone, it starts the trainer again from the last saved step; after 5 restarts in 10 minutes it gives up and records why. It also registers itself to start at sign-in (a LaunchAgent on macOS, a Task Scheduler task on Windows) and removes that entry when the session ends. The plan can keep the computer awake (`caffeinate` on macOS, a keep-awake request on Windows) and pause on battery.
 
+Each round that carries on from the last checkpoint resumes it: the weights, Adam's moments and the step count (so the learning-rate schedule goes on) come across, and the round trains on its own data with its own seed, learning rate and batch size. The first round, and a round after a step back to an earlier best, start with a fresh optimizer from the weights alone; so does a round whose checkpoint has no optimizer state (a polished one). The journal's `round` event says `resumed` or `fresh`, and an `optimizer` event gives the reason when a resume was refused. On CUDA the optimizer state moves to host memory when it cannot fit the GPU, as in the queue.
+
 The record lives in `data/passive.sqlite` (plan, state, process ids, heartbeat) and `runs/<session id>/` (journal, checkpoints, `trainer.log`). To stop a session, press Stop on Resources > Passive training; the watchdog then exits by itself.
 
 ## Releases
