@@ -3033,6 +3033,24 @@
         "title": "LeaveRequest",
         "type": "object"
       },
+      "LessonChange": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "pending",
+              "dropped"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LessonChange",
+        "type": "object"
+      },
       "Line": {
         "properties": {
           "bad": {
@@ -4328,6 +4346,66 @@
           "first"
         ],
         "title": "PassiveJournal",
+        "type": "object"
+      },
+      "PassiveLesson": {
+        "description": "One thing the teacher showed the model: the prompt, the model's own reply and the better answer it should learn.",
+        "properties": {
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "checkpoint": {
+            "title": "Checkpoint",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "prompt": {
+            "default": "",
+            "title": "Prompt",
+            "type": "string"
+          },
+          "reply": {
+            "default": "",
+            "title": "Reply",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "dropped",
+              "left_out"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "round",
+          "checkpoint",
+          "status"
+        ],
+        "title": "PassiveLesson",
         "type": "object"
       },
       "PassivePlan": {
@@ -14658,6 +14736,115 @@
           }
         },
         "summary": "Keep Passive Going",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/lessons": {
+      "get": {
+        "description": "The lessons the teacher gave this session, oldest first. 404 for an unknown session.",
+        "operationId": "passive_lessons_passive__session_id__lessons_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PassiveLesson"
+                  },
+                  "title": "Response Passive Lessons Passive  Session Id  Lessons Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Passive Lessons",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/lessons/{lesson_id}": {
+      "patch": {
+        "description": "Drop a lesson (the next round leaves it out of the training) or keep it. 404 for an unknown session or lesson.",
+        "operationId": "change_passive_lesson_passive__session_id__lessons__lesson_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lesson_id",
+            "required": true,
+            "schema": {
+              "title": "Lesson Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LessonChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveLesson"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Passive Lesson",
         "tags": [
           "passive"
         ]

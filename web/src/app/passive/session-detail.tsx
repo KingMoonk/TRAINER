@@ -9,6 +9,7 @@ import { SeriesChart } from "@/components/series-chart";
 import { api, unwrap } from "@/lib/api";
 import { problem } from "@/lib/cluster";
 import { PASSIVE } from "./copy";
+import { Lessons } from "./lessons-list";
 import { errorSeries, eventLine, facts, isTrouble, mergeEvents, STOP_REASONS, type JournalEvent } from "./detail";
 import { ACTIVE, when } from "./session";
 
@@ -98,6 +99,8 @@ export function SessionDetail({ id, onClose }: { id: string; onClose: () => void
                 </p>
               ))}
             </section>
+
+            <Lessons id={id} />
 
             <section className="flex flex-col gap-2" aria-label={PASSIVE.journalTitle}>
               <h3 className="text-sm font-medium">{PASSIVE.journalTitle}</h3>
