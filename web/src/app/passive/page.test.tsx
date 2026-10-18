@@ -115,6 +115,34 @@ describe("Passive training page", () => {
     expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/passive/p1/pause", "/passive/p3/resume"]);
   });
 
+  test("Save best as a version shows for a session with checkpoints and no saved version, and saves it", async () => {
+    let sessions = [
+      { ...stopped, id: "p4", checkpoints: 3, version: null as number | null },
+      { ...stopped, id: "p5", checkpoints: 2, version: 7 },
+      { ...stopped, id: "p6", checkpoints: 0, version: null },
+    ];
+    const calls = mockApi({
+      "GET /passive": () => ({ body: { sessions, signin: false } }),
+      "GET /queue": { body: idle },
+      "POST /passive/p4/save": () => {
+        sessions = [{ ...sessions[0], version: 8 }, sessions[1], sessions[2]];
+        return { body: { version: 8, created: true } };
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<PassivePage />);
+    const fresh = await screen.findByTestId("session-p4");
+    expect(within(screen.getByTestId("session-p5")).queryByRole("button", { name: "Save best as a version" })).toBeNull();
+    expect(screen.getByTestId("session-p5")).toHaveTextContent("Best checkpoint saved as version 7");
+    expect(within(screen.getByTestId("session-p6")).queryByRole("button", { name: "Save best as a version" })).toBeNull();
+
+    await user.click(within(fresh).getByRole("button", { name: "Save best as a version" }));
+    await waitFor(() => expect(screen.getByTestId("session-p4")).toHaveTextContent("Best checkpoint saved as version 8"));
+    expect(screen.getByTestId("passive-note")).toHaveTextContent("Saved the best checkpoint as version 8.");
+    expect(within(screen.getByTestId("session-p4")).queryByRole("button", { name: "Save best as a version" })).toBeNull();
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/passive/p4/save"]);
+  });
+
   test("Resume shows only on failed and stopped rows and puts the session back in the queue", async () => {
     const failed = { ...stopped, id: "p9", status: "failed", error: "gave up" };
     let sessions = [{ ...stopped, id: "p8", status: "finished" }, failed, { ...running, id: "p7", status: "paused" }];

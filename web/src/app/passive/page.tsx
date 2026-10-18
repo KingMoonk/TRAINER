@@ -72,6 +72,12 @@ export default function Page() {
     onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
     onSettled: () => client.invalidateQueries({ queryKey: ["passive"] }),
   });
+  const save = useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/passive/{session_id}/save", { params: { path: { session_id: id } } })),
+    onSuccess: ({ version, created }) => setNote(created ? PASSIVE.saved(version) : PASSIVE.savedBefore(version)),
+    onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
+    onSettled: () => Promise.all([client.invalidateQueries({ queryKey: ["passive"] }), client.invalidateQueries({ queryKey: ["versions"] })]),
+  });
   const signOut = useMutation({
     mutationFn: () => unwrap(api.DELETE("/passive/signin")),
     onSuccess: () => setNote(PASSIVE.signinRemoved),
@@ -141,6 +147,11 @@ export default function Page() {
                         onClick={() => command.mutate({ id: row.id, action: view.canPause ? "pause" : "resume" })}
                       >
                         {view.canPause ? PASSIVE.pause : PASSIVE.resume}
+                      </Button>
+                    )}
+                    {view.canSave && (
+                      <Button variant="outline" size="sm" title={PASSIVE.saveHint} disabled={save.isPending} onClick={() => save.mutate(row.id)}>
+                        {PASSIVE.save}
                       </Button>
                     )}
                     {view.canKeepGoing && (

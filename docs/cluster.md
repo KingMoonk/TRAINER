@@ -98,8 +98,10 @@ Every job kind carries requirements, and the cluster picks the best free node th
 | job | prefers | notes |
 | --- | --- | --- |
 | pretraining, RLHF rounds | a CUDA node | a free node of another kind still runs it if no CUDA node is free |
-| evals, scoring, benchmarks, data generation, LoRA, passive training | any free node | this machine first, on a tie |
+| evals, scoring, benchmarks, data generation, LoRA | any free node | this machine first, on a tie |
 | inspect jobs (memory-bound) | the node with the most memory | |
+
+Passive training is not placed: a session and its runs folder live on the machine that started it and it never moves to another node. Its best checkpoint can be saved as a version, which is then pulled or published like any other.
 
 A job may also ask for a minimum of memory or a dtype (`float32`, `bfloat16`, `float16`); those are not preferences: a node
 below the memory, or that does not train in the dtype, never gets the job. You can pin a job to one node by name instead: it

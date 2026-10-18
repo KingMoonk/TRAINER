@@ -34,12 +34,15 @@ class Version:
     score_device: str | None = None  # what scored it on the held-back text
 
 
-def passive_row(store, s):
-    """One passive session as passive() lists it: its status, plan summary and the trainer's and watchdog's facts."""
+def passive_row(store, s, saved=None):
+    """One passive session as passive() lists it: its status, plan summary, the trainer's and watchdog's facts, how many checkpoints
+    it saved and the version its best one became. `saved`: {checkpoint path: version number} (_passive_saved)."""
     import studio_passive_watch as watch
     from studio_passive import ACTIVE, plan_summary
     facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
-    return {"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"], "error": s["error"], **facts}
+    best = _passive_best(s)
+    return {"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"], "error": s["error"], **facts,
+            "checkpoints": len((s["state"] or {}).get("checkpoints", [])), "version": (saved or {}).get(str(best["path"])) if best else None}
 
 
 def passive_lesson(row):
@@ -461,6 +464,12 @@ class Services:
         """Start the watchdog again for an active passive session whose watchdog is gone (it then restarts the trainer). Without
         `session_id`, the active session, if any. Returns the session's status, or None when there is no such session; a session that
         is stopped, failed or finished raises RuntimeError."""
+        raise NotImplementedError
+
+    def save_passive(self, session_id):
+        """Save a passive session's best checkpoint as a trained version (scored like a local pretrain, with the session, its rounds and
+        its best error in the description). Saving the same best checkpoint again returns the version it made. Returns
+        {"version": number, "created": bool}, or None for an unknown session; a session with no checkpoint yet raises RuntimeError."""
         raise NotImplementedError
 
     def remove_passive_signin(self):
@@ -1086,6 +1095,21 @@ class FakeServices(Services):
             self.passive_kept = [*getattr(self, "passive_kept", []), row["id"]]
         return row["status"]
 
+    def save_passive(self, session_id):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        if not row.get("checkpoints"):
+            raise RuntimeError(f"Passive session {session_id} has no checkpoint yet, so there is nothing to save.")
+        if row.get("version"):
+            return {"version": row["version"], "created": False}
+        v = Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", f"Passive training {session_id}", spec={},
+                    status="trained", best_checkpoint=f"/work/runs/{session_id}/best.npz")
+        self._versions.append(v)
+        row["version"] = v.number
+        self.emit("versions", None)
+        return {"version": v.number, "created": True}
+
     def remove_passive_signin(self):
         self.passive_signin = False
 
@@ -1459,6 +1483,20 @@ class _Cold(BaseException):
 
 class _Slow(_Cold):
     """A _Cold that is long however small the store is (scoring a checkpoint, parsing the held-back text): ready() says no."""
+
+
+_PASSIVE_SAVE = threading.Lock()
+
+
+def _passive_best(session):
+    """The checkpoint entry ({n, round, path, error, ...}) a passive session counts as its best, or None before its first checkpoint."""
+    state = session["state"] or {}
+    return next((c for c in state.get("checkpoints", []) if c["n"] == state.get("best")), None)
+
+
+def _passive_saved(rows):
+    """{checkpoint path: version number} for the versions made from a passive session's checkpoint."""
+    return {r["passive"]["checkpoint"]: r["number"] for r in rows if isinstance(r.get("passive"), dict) and r["passive"].get("checkpoint")}
 
 
 class _Pending(Exception):
@@ -2005,12 +2043,17 @@ class WorkspaceServices(Services):
 
     def passive(self):
         import studio_passive_watch as watch
-        from studio_passive import PassiveStore
+        from studio_passive import ACTIVE, PassiveStore
         signin = watch.installed(self.root)
         if not (self.root / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
             return {"sessions": [], "signin": signin}
         store = PassiveStore(self.root)
-        return {"sessions": [passive_row(store, s) for s in store.list()[:10]], "signin": signin}
+        saved = _passive_saved(self._rows()) if hasattr(self, "_rows") else {}
+        rows = [passive_row(store, s, saved) for s in store.list()[:10]]
+        autosave = getattr(self, "autosave_passive", None)  # not on the bare namespaces some tests pass as `self`
+        if autosave:
+            autosave([s for s in store.list()[:10] if s["status"] not in ACTIVE])
+        return {"sessions": rows, "signin": signin}
 
     def passive_lessons(self, session_id):
         from studio_passive import PassiveStore
@@ -2040,7 +2083,7 @@ class WorkspaceServices(Services):
         if s is None:
             return None
         events, total, first = store.journal_page(session_id, limit, before)
-        return {"session": passive_row(store, s), "plan": plan_summary(s["plan"]), "progress": progress_summary(s["state"], s["plan"]),
+        return {"session": passive_row(store, s, _passive_saved(self._rows()) if hasattr(self, "_rows") else {}), "plan": plan_summary(s["plan"]), "progress": progress_summary(s["state"], s["plan"]),
                 "journal": {"events": events, "total": total, "first": first}}
 
     def start_passive(self, plan, version=None, **hooks):
@@ -2129,6 +2172,61 @@ class WorkspaceServices(Services):
             self.keep_passive_going(**hooks)
         except Exception as exc:
             print(f"passive training: could not start the watchdog again: {exc}", flush=True)
+
+    def save_passive(self, session_id):
+        import studio_eval
+        import studio_model
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        session = PassiveStore(self.root).get(session_id)
+        if session is None:
+            return None
+        best = _passive_best(session)
+        if best is None:
+            raise RuntimeError(f"Passive session {session_id} has no checkpoint yet, so there is nothing to save.")
+        path = Path(best["path"])
+        if not path.is_file():
+            raise RuntimeError(f"The best checkpoint of passive session {session_id} is no longer on disk ({path}).")
+        with _PASSIVE_SAVE:  # two saves of one checkpoint (the button and the automatic one) make one version
+            have = _passive_saved(self._rows()).get(str(path))
+            if have:
+                return {"version": have, "created": False}
+            scores = self._held_scores(str(path))  # before the row exists: a scoring that fails leaves no unscored version behind
+            rounds = len(session["state"]["checkpoints"])
+            config = studio_model.load_checkpoint(path, weights_only=True)["config"]
+            spec = studio_model.effective_spec(studio_model.validate_config(config))
+            change = f"Passive training {session_id}: the best of {rounds} {'round' if rounds == 1 else 'rounds'} (round {best['round']}), test error {best['error']:.4g}"
+            row = self.store.add_trained(spec, change, path, path.parent, {"session": session_id, "rounds": rounds, "round": best["round"],
+                                                                         "error": best["error"], "checkpoint": str(path)})
+            number = row["number"]
+            if scores is not None:
+                card = {"bpc": studio_eval.corpus_bpc(scores), "bpc_method": studio_eval.SCORE_METHOD}
+                self.store.set_scorecard(number, card)
+            self._note_devices(number, path, scores is not None)
+        self.emit("versions", None)
+        return {"version": number, "created": True}
+
+    def autosave_passive(self, ended):
+        """Sessions that ended with a checkpoint no version holds yet are saved on a worker thread, once each per run of the app (the
+        trainer is another process and cannot score). A failure is logged and left to the button."""
+        tried = self.__dict__.setdefault("_passive_tried", set())
+        saved = _passive_saved(self._rows())
+        todo = []
+        for session in ended:
+            best = _passive_best(session)
+            if best and str(best["path"]) not in saved and (session["id"], str(best["path"])) not in tried:
+                tried.add((session["id"], str(best["path"])))
+                todo.append(session["id"])
+        if todo:
+            start_thread(self._autosave_passive, todo)
+
+    def _autosave_passive(self, ids):
+        for session_id in ids:
+            try:
+                self.save_passive(session_id)
+            except Exception as exc:
+                _log.warning("passive session %s: could not save its best checkpoint as a version: %s", session_id, exc)
 
     def remove_passive_signin(self):
         import studio_passive_watch as watch

@@ -1903,6 +1903,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/passive/{session_id}/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Passive
+         * @description Save the session's best checkpoint as a trained version. Saving the same checkpoint again answers with the version it made.
+         *     409 when the session has no checkpoint yet.
+         */
+        post: operations["save_passive_passive__session_id__save_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/passive/{session_id}/stop": {
         parameters: {
             query?: never;
@@ -5290,8 +5311,20 @@ export interface components {
              */
             worse_streak: number;
         };
+        /** PassiveSaved */
+        PassiveSaved: {
+            /** Created */
+            created: boolean;
+            /** Version */
+            version: number;
+        };
         /** PassiveSession */
         PassiveSession: {
+            /**
+             * Checkpoints
+             * @default 0
+             */
+            checkpoints: number;
             /** Created */
             created?: string | null;
             /** Error */
@@ -5314,6 +5347,8 @@ export interface components {
              * @default
              */
             trainer: string;
+            /** Version */
+            version?: number | null;
             /**
              * Watchdog
              * @default
@@ -10873,6 +10908,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PassiveStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_passive_passive__session_id__save_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveSaved"];
                 };
             };
             /** @description Validation Error */

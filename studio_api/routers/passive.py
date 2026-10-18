@@ -21,6 +21,8 @@ class PassiveSession(BaseModel):
     restarts: int = 0
     heard: float | None = None  # seconds since the trainer's last heartbeat
     error: Any = None
+    checkpoints: int = 0  # checkpoints the session has saved
+    version: int | None = None  # the version made from its best checkpoint, once saved
 
 
 class Passive(BaseModel):
@@ -222,6 +224,21 @@ def keep_passive_going(session_id: str, services=Depends(get_services)):
     if status is None:
         raise HTTPException(404, f"No passive session {session_id}")
     return PassiveStatus(status=status)
+
+
+class PassiveSaved(BaseModel):
+    version: int
+    created: bool  # False when that checkpoint was already saved as this version
+
+
+@router.post("/{session_id}/save", response_model=PassiveSaved)
+def save_passive(session_id: str, services=Depends(get_services)):
+    """Save the session's best checkpoint as a trained version. Saving the same checkpoint again answers with the version it made.
+    409 when the session has no checkpoint yet."""
+    saved = services.save_passive(session_id)
+    if saved is None:
+        raise HTTPException(404, f"No passive session {session_id}")
+    return PassiveSaved(**saved)
 
 
 @router.delete("/signin", status_code=204)

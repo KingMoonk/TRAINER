@@ -9,7 +9,7 @@ from studio_ia.services import FakeServices
 from tests.api_tap import EventTap
 
 SESSION = {"id": "p1", "status": "running", "created": "2026-10-01T22:00:00", "stop": "8 hours", "trainer": "Running",
-           "watchdog": "Running", "restarts": 2, "heard": 4.5, "error": ""}
+           "watchdog": "Running", "restarts": 2, "heard": 4.5, "error": "", "checkpoints": 0, "version": None}
 
 
 class PassiveApiTest(unittest.TestCase):
@@ -64,6 +64,20 @@ class PassiveApiTest(unittest.TestCase):
         self.assertEqual(self.client.post("/passive/p1/resume").status_code, 409)
         for route in ("pause", "resume"):
             self.assertEqual(self.client.post(f"/passive/nope/{route}").status_code, 404)
+
+    def test_save_makes_the_best_checkpoint_a_version_and_saving_again_gives_the_same_one(self):
+        self.services.passive_sessions = [{**SESSION, "status": "finished", "checkpoints": 3}]
+        first = self.client.post("/passive/p1/save")
+        self.assertEqual((first.status_code, first.json()), (200, {"version": 1, "created": True}))
+        again = self.client.post("/passive/p1/save")
+        self.assertEqual(again.json(), {"version": 1, "created": False})
+        self.assertEqual([(v.number, v.status) for v in self.services.versions()], [(1, "trained")])
+        self.assertEqual(self.client.get("/passive").json()["sessions"][0]["version"], 1)
+        self.tap.wait("versions")  # the versions list changed
+
+    def test_save_is_refused_without_a_checkpoint_and_404_for_an_unknown_session(self):
+        self.assertEqual(self.client.post("/passive/p1/save").status_code, 409)  # SESSION has saved no checkpoint
+        self.assertEqual(self.client.post("/passive/nope/save").status_code, 404)
 
     def test_start_creates_a_session_from_the_form_and_lists_it(self):
         self.client.post("/passive/p1/stop")
