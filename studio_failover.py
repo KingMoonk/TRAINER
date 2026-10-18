@@ -14,10 +14,11 @@ studio_remote.Cluster (its observation store, its coordinators, its files).
   poll; a member that calls it with the higher term makes it step down sooner.
 * **The seam for the bucket (#362).** `Host.tie_break(claim)` is asked before a claim is written: a host that has the bucket writes
   `runs/<run>/term/<term>` with a conditional PUT there and answers False when another claimant won. The default answers True, so
-  the rule above decides alone, which is also what happens when the bucket cannot be reached.
+  the rule above decides alone, which is also what happens when the bucket cannot be reached (#362: `ClusterHost.tie_break`).
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,7 +128,7 @@ class Host:
         return False
 
     def tie_break(self, claim):
-        """The seam for the bucket's conditional PUT (#362): False when another claimant of this term already won there."""
+        """The bucket's conditional PUT (ClusterHost): False when another claimant of this term already won there."""
         return True
 
     def claim(self, claim):
@@ -253,6 +254,30 @@ class ClusterHost(Host):
 
     def is_down(self, node):
         return self.cluster.is_down(node)
+
+    # -- the bucket's tie-break
+    def tie_break(self, claim):
+        """Write `runs/<run>/term/<term>` in the version store, create-if-absent. The first writer wins; the others read the winner and
+        follow (False). A store that is not set up or cannot be reached, or a winner that cannot be read, leaves the rule to decide (True):
+        nothing is decided only here. A winner that is down is no reason to wait for it, so the rule decides then too."""
+        try:
+            store = self.cluster.store()
+            if store is None or not hasattr(store, "create_if_absent"):
+                return True
+            key = f"runs/{claim.run}/term/{claim.term}"
+            if store.create_if_absent(key, json.dumps({"node": claim.node, "round": claim.round, "rank": claim.rank}).encode()):
+                return True
+            try:
+                winner = json.loads(store.read(key) or b"null")["node"]
+            except (ValueError, KeyError, TypeError):
+                return True
+        except Exception:  # noqa: BLE001 - the bucket is a tie-breaker only; a failure of it never stops a run
+            _log.warning("The store could not break the tie for run %s term %s; the rule decides", claim.run, claim.term, exc_info=True)
+            return True
+        if winner == self.name or self.is_down(winner):
+            return True
+        _log.info("Run %s term %s was claimed first by %s; following it", claim.run, claim.term, winner)
+        return False
 
     # -- this node's coordinators
     def _coordinator(self, run):
