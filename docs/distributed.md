@@ -375,7 +375,10 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
   live claim.
 - A claim takes the coordinator from the replica folder (`Coordinator.from_replica`) under `data/failover/<run>_term<N>`,
   registers it on this node and publishes it. The owner's queue record gets the sentence "Coordinated on X (term N).".
-- A claimant first asks `Host.tie_break(claim)`. It always agrees today; the bucket's conditional PUT (#362) goes there.
+- A claimant first asks `Host.tie_break(claim)`. `ClusterHost` writes `runs/<run>/term/<t+1>` in the version store with
+  `create_if_absent` (R2: PutObject with `If-None-Match: *`; a shared folder: an exclusive create). The first writer wins;
+  the others read the winner and follow. No store, an unreachable one, an unreadable winner or a winner that is down: the
+  rule decides alone (#362).
 - A coordinator steps down when a call carries a higher term or the store holds a claim that outranks its own: it drops
   its `theta`, archives its folder and publishes `{"released": true}`. A returning coordinator does this on its first poll.
 - Members run in worker processes. The app writes `data/diloco_where/<run>.json` (node and URL of the coordinator) when

@@ -375,6 +375,21 @@ class _Store:
         the look-up of `key` happens inside whatever lock the check holds, so two uploads of one key cannot both count."""
         yield key is None or not self.exists(key)
 
+    @slow("write a marker if absent")
+    def create_if_absent(self, key, data):
+        """Write `data` (bytes) under `key` only when nothing is there: True when this call wrote it, False when another writer got there
+        first. It is atomic: of several callers racing for one key exactly one gets True. Used for the failover tie-break (#362); `key`
+        is a path of the same segments as a published key (`runs/<run>/term/<n>`) and never shows in `list`."""
+        return self._create(_check_key(key), bytes(data))
+
+    @slow("read a marker")
+    def read(self, key):
+        """The bytes under `key`, or None when nothing is there."""
+        try:
+            return self._get_bytes(_check_key(key))
+        except KeyError:
+            return None
+
     @slow("delete a version")
     def delete(self, key):
         """Remove a published version, its listing first so nobody is offered weights that are going. A missing object is not an error."""
@@ -454,6 +469,29 @@ class FolderStore(_Store):
         temporary = target.with_name(target.name + ".tmp")
         temporary.write_bytes(data)
         replace_file(temporary, target)
+
+    def _create(self, name, data):
+        """Exclusive create: the file appears whole (linked from a temporary one) or not at all, so a reader never sees half a marker."""
+        target = self._path(name)
+        if not self.root.is_dir():
+            raise FileNotFoundError(f"The shared folder {self.root} is not there. Check that the drive or share is connected.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_bytes(data)
+        try:
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                return False
+            except OSError:  # a share without hard links: an exclusive create is still one winner, only the contents land after
+                try:
+                    with open(target, "xb") as stream:
+                        stream.write(data)
+                except FileExistsError:
+                    return False
+            return True
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _get_file(self, name, path):
         try:
@@ -545,6 +583,20 @@ class S3Store(_Store):
 
     def _put_bytes(self, name, data):
         self.client.put_object(Bucket=self.bucket, Key=self.prefix + name, Body=data, ContentType="application/json")
+
+    def _create(self, name, data):
+        """PutObject with `If-None-Match: *`: R2 lets at most one concurrent writer succeed and answers the others 412 PreconditionFailed
+        (https://developers.cloudflare.com/r2/api/s3/api/). 409 (a conflicting write in flight) also means another writer got there."""
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=self.prefix + name, Body=data, ContentType="application/json", IfNoneMatch="*")
+        except Exception as error:
+            response = getattr(error, "response", {})
+            code = str(response.get("Error", {}).get("Code", ""))
+            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in ("PreconditionFailed", "ConditionalRequestConflict") or status in (409, 412):
+                return False
+            raise
+        return True
 
     def _get_file(self, name, path):
         try:
