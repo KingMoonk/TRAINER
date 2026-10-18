@@ -1,0 +1,12 @@
+{
+  "body": {
+    "id": "passive_1",
+    "status": "queued"
+  },
+  "request": {
+    "body": {},
+    "method": "POST",
+    "path": "/passive"
+  },
+  "status": 201
+}

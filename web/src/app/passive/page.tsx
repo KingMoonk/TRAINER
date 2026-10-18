@@ -7,17 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, subscribe, unwrap } from "@/lib/api";
+import { problem } from "@/lib/cluster";
 import { routeFor } from "@/lib/routes";
 import { PASSIVE } from "./copy";
-import { competes, sessionView, type SessionRow } from "./session";
+import { ACTIVE, competes, sessionView, type SessionRow } from "./session";
+import { StartSession } from "./start-form";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 const route = routeFor("passive");
 const REFRESH_MS = 5_000;
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+const message = problem;
 
 export default function Page() {
   const client = useQueryClient();
@@ -46,6 +46,7 @@ export default function Page() {
 
   const [confirming, setConfirming] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const stop = useMutation({
     mutationFn: (id: string) => unwrap(api.POST("/passive/{session_id}/stop", { params: { path: { session_id: id } } })),
@@ -59,7 +60,7 @@ export default function Page() {
   const command = useMutation({
     mutationFn: ({ id, action }: { id: string; action: "pause" | "resume" }) =>
       unwrap(api.POST(action === "pause" ? "/passive/{session_id}/pause" : "/passive/{session_id}/resume", { params: { path: { session_id: id } } })),
-    onSuccess: (_, { action }) => setNote(action === "pause" ? PASSIVE.pausing : PASSIVE.resuming),
+    onSuccess: ({ status }, { action }) => setNote(action === "pause" ? PASSIVE.pausing : status === "queued" ? PASSIVE.requeued : PASSIVE.resuming),
     onError: (error) => toast.error(`${PASSIVE.actionFailed}: ${message(error)}`),
     onSettled: () => client.invalidateQueries({ queryKey: ["passive"] }),
   });
@@ -77,6 +78,7 @@ export default function Page() {
   });
 
   const sessions: SessionRow[] = passive.data?.sessions ?? [];
+  const busy = sessions.some((s) => ACTIVE.includes(s.status));
   const warning = competes(sessions, queue.data);
 
   return (
@@ -104,6 +106,12 @@ export default function Page() {
             <CardHeader>
               <CardTitle className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{PASSIVE.kicker}</CardTitle>
               <CardDescription>{PASSIVE.desc}</CardDescription>
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                <Button size="sm" disabled={busy || creating} title={busy ? PASSIVE.newBusy : undefined} onClick={() => setCreating(true)}>
+                  {PASSIVE.newSession}
+                </Button>
+                {busy && <span className="text-xs text-muted-foreground">{PASSIVE.newBusy}</span>}
+              </div>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
               {sessions.length === 0 && <p className="text-sm text-muted-foreground">{PASSIVE.none}</p>}
@@ -119,10 +127,11 @@ export default function Page() {
                         </span>
                       ))}
                     </div>
-                    {(view.canPause || view.canResume) && (
+                    {(view.canPause || view.canResume || view.canRestart) && (
                       <Button
                         variant="outline"
                         size="sm"
+                        title={view.canRestart ? PASSIVE.resumeEnded : undefined}
                         disabled={command.isPending}
                         onClick={() => command.mutate({ id: row.id, action: view.canPause ? "pause" : "resume" })}
                       >
@@ -157,6 +166,16 @@ export default function Page() {
               })}
             </CardContent>
           </Card>
+
+          {creating && (
+            <StartSession
+              onStarted={() => {
+                setCreating(false);
+                setNote(PASSIVE.createdNote);
+                void client.invalidateQueries({ queryKey: ["passive"] });
+              }}
+            />
+          )}
 
           <Card>
             <CardHeader>
