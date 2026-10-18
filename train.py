@@ -45,7 +45,7 @@ def main():
     if args.data:
         examples = [example for row in parse_file(args.data) if (example := normalize(row))]
     elif args.resume:
-        examples = [json.loads(line) for line in (args.resume.parent / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        examples = [json.loads(line) for line in (args.resume.parent / "dataset.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
     else:
         parser.error("--data is required for a new model")
     stop = threading.Event()

@@ -87,7 +87,7 @@ def _resume(job, cfg, out, init, options):
             emit({"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": studio_model.load_checkpoint(path)["step"]})
         emit(event)
     try:
-        examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
         return studio_model.train(dict(cfg, steps=int(job.params.get("resume_steps") or cfg["steps"])), examples, out, resume=path,
                                   **{**options, "emit": relay})
     except (OSError, ValueError, KeyError) as exc:
@@ -139,7 +139,7 @@ def checkpoint_now(job, context, emit, stop, pause):
         # near zero over the next COOLDOWN_STEPS steps.
         cfg = json.loads((run / "config.json").read_text(encoding="utf-8"))
         cfg["steps"] = step + job.params.get("cooldown_steps", COOLDOWN_STEPS)
-        examples = [json.loads(line) for line in (run / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line]
+        examples = [json.loads(line) for line in (run / "dataset.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
         return studio_model.train(cfg, examples, run / f"cooldown_{step}", emit=emit, stop=stop, pause=pause, resume=copy)
 
 
