@@ -656,12 +656,16 @@ def _initialize_from(model, tokenizer, path):
 @slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
-          schedule_window=None, offload_optimizer=False, distributed=None):
+          schedule_window=None, offload_optimizer=False, distributed=None, rebase=False):
     """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
     step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
     Left None (the default) the schedule spans this run alone.
     offload_optimizer keeps the optimizer state in host memory and streams it through the device for each update: slower,
     the same result, and a model whose state does not fit the GPU can train (studio_memory.offload_wanted says when).
+
+    rebase=True (with resume) continues a checkpoint on different data: the weights, tokenizer, optimizer state and step carry over,
+    and cfg["steps"] is the number of steps to add. The dataset, split, seed, learning rate and batch size may differ from the
+    checkpoint's; the sampler, the best score and its best.npz start fresh. Passive training's rounds use it (studio_passive.py).
 
     distributed is the hook studio_diloco's members train through (DiLoCo, docs/distributed.md); every other caller leaves it None.
     It is any object with: `tokenizer`; `train` and `val`, window sequences read at every batch, so it may swap what they
@@ -679,6 +683,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         raise ValueError("Wall-clock budget must be positive.")
     if resume and init_from:
         raise ValueError("Resume and initialize-from cannot be combined.")
+    if rebase and not resume:
+        raise ValueError("Rebase continues a checkpoint, so it needs resume.")
     if cfg["lora"] and not (resume or init_from):
         raise ValueError("LoRA fine-tunes a model that already exists, so start it from a version you have already trained or imported.")
     if schedule_window and schedule_window[0] + cfg["steps"] > schedule_window[1]:
@@ -712,14 +718,14 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         if checkpoint and checkpoint["config"].get("lora"):  # a LoRA run resumes from the frozen base plus its adapters, not the merged weights
             checkpoint["model"] = load_checkpoint(resume, weights_only=True, merged=False)["model"]
         # Older checkpoints must resume with their original row-based partition.
-        grouped = not checkpoint or checkpoint.get("split_strategy") == "lineage-v1"
+        grouped = not checkpoint or rebase or checkpoint.get("split_strategy") == "lineage-v1"
         training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
         split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" +
                                      "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
         if checkpoint:
-            if checkpoint["data_hash"] != digest:
+            if not rebase and checkpoint["data_hash"] != digest:
                 raise ValueError("Resume requires the original dataset snapshot.")
-            if checkpoint.get("split_hash") and checkpoint["split_hash"] != split_hash:
+            if not rebase and checkpoint.get("split_hash") and checkpoint["split_hash"] != split_hash:
                 raise ValueError("Resume requires the original source lineage and validation split.")
             # Old checkpoints have no "architecture": validate_config derives the equivalent uniform spec.
             previous = validate_config(checkpoint["config"])
@@ -727,11 +733,13 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 # Checkpoints from before windowing existed were trained with independent sequential chunks.
                 previous["windowing"] = cfg["windowing"] = "sequential"
             keys = tuple(k for k in ARCHITECTURE_KEYS if k != "architecture") + (
-                "seed", "validation", "objective", "windowing", "batch_size", "accumulation",
-                "learning_rate", "weight_decay", "warmup", "lora",
-            )
+                "objective", "windowing", "weight_decay", "warmup", "lora",
+            ) + (() if rebase else ("seed", "validation", "batch_size", "accumulation", "learning_rate"))
             current_spec, previous_spec = effective_spec(cfg), effective_spec(previous)
             recipe = ("objective", "optimizer", "schedule")
+            if rebase:  # the optimizer entry carries the learning rate, which a rebased round may change
+                for spec in (current_spec, previous_spec):
+                    spec["train"]["optimizer"] = {**spec["train"]["optimizer"], "config": {k: v for k, v in spec["train"]["optimizer"]["config"].items() if k != "lr"}}
             if (any(cfg[k] != previous[k] for k in keys)
                     or structure_key(current_spec) != structure_key(previous_spec)
                     or any(current_spec["train"][key] != previous_spec["train"][key] for key in recipe)):
@@ -765,14 +773,17 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     raise ValueError(f"Checkpoint optimizer state {state} for {key} is missing or invalid.")
                 target.copy_(torch.as_tensor(np.asarray(value), dtype=target.dtype, device=target.device))
         previous_best = Path(resume).parent / "best.npz"
-        if previous_best.is_file():
+        if previous_best.is_file() and not rebase:
             shutil.copy2(previous_best, directory / "best.npz")  # the best so far carries over until this run beats it
         step = checkpoint["step"]
-        best = checkpoint["best"] if checkpoint["best"] is not None else float("inf")
+        best = checkpoint["best"] if checkpoint["best"] is not None and not rebase else float("inf")
         optimizer.steps = checkpoint["optimizer_steps"]
         history = checkpoint.get("history", [])
-        sampler.setstate(_tuples(checkpoint["sampler_state"]))
-        model.rng.bit_generator.state = checkpoint["model_rng"]
+        if rebase:
+            cfg["steps"] += step  # the steps to add, on top of the ones already taken
+        else:
+            sampler.setstate(_tuples(checkpoint["sampler_state"]))
+            model.rng.bit_generator.state = checkpoint["model_rng"]
         if cfg["steps"] <= step:
             raise ValueError("Total steps must exceed the checkpoint step.")
     record = {"name": cfg["name"], "createdAt": now(), "status": "training", "step": step, "steps": cfg["steps"],

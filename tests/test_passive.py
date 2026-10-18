@@ -37,8 +37,8 @@ class Rig:
         self.on_train = None
         self.fail_with = RuntimeError("boom")
 
-    def train(self, config, examples, output_dir, emit, stop, pause, init_from=None):
-        self.calls.append({"config": config, "examples": list(examples), "init_from": init_from, "dir": Path(output_dir)})
+    def train(self, config, examples, output_dir, emit, stop, pause, init_from=None, resume=None):
+        self.calls.append({"config": config, "examples": list(examples), "init_from": init_from, "resume": resume, "dir": Path(output_dir)})
         if self.fail_on == len(self.calls):
             self.fail_on = None
             raise self.fail_with
@@ -264,7 +264,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((six["parent"], six["pivot"]), (3, "halve_lr"))
         self.assertEqual(rig.calls[5]["init_from"], state["checkpoints"][2]["path"])  # round 6 restarts from checkpoint 3
         self.assertAlmostEqual(rig.calls[5]["config"]["learning_rate"], rig.calls[0]["config"]["learning_rate"] / 2)
-        self.assertEqual(rig.calls[3]["init_from"], state["checkpoints"][2]["path"])  # 4 followed on from 3 before the step back
+        self.assertEqual(rig.calls[3]["resume"], state["checkpoints"][2]["path"])  # 4 followed on from 3 before the step back
         self.assertEqual(rig.calls[0]["config"]["steps"], 50)
         self.assertEqual(len({c["config"]["seed"] for c in rig.calls}), len(rig.calls))  # each round draws its batches in its own order
         self.assertIn("start", rig.types())
@@ -335,7 +335,7 @@ class LoopTests(unittest.TestCase):
     def test_a_stop_survives_a_trainer_that_dies_before_acting_on_it(self):
         rig = Rig(self, [3.0, 2.0], plateau={"checks": 9})
 
-        def dies(config, examples, output_dir, emit, stop, pause, init_from=None):
+        def dies(config, examples, output_dir, emit, stop, pause, init_from=None, resume=None):
             rig.store.command(rig.id, "stop")
             emit({"type": "metric", "step": 1, "loss": 1.0, "val_loss": 3.0})  # the trainer takes the command here
             raise KeyboardInterrupt  # and is killed before it writes the stopped status
@@ -348,7 +348,7 @@ class LoopTests(unittest.TestCase):
     def test_a_stop_while_the_data_is_still_being_prepared_ends_cleanly(self):
         rig = Rig(self, [3.0], plateau={"checks": 9})
 
-        def cancelled(config, examples, output_dir, emit, stop, pause, init_from=None):
+        def cancelled(config, examples, output_dir, emit, stop, pause, init_from=None, resume=None):
             rig.store.command(rig.id, "stop")
             self.assertTrue(stop.wait(5))  # the heartbeat thread takes the command
             raise InterruptedError("Training preparation cancelled.")
@@ -621,7 +621,7 @@ class LoopTests(unittest.TestCase):
         rig = Rig(self, [], plateau={"checks": 9})
         interrupt = threading.Event()
 
-        def paused(config, examples, output_dir, emit, stop, pause, init_from=None):
+        def paused(config, examples, output_dir, emit, stop, pause, init_from=None, resume=None):
             Path(output_dir).mkdir(parents=True)
             (Path(output_dir) / "last.npz").write_bytes(b"x")
             pause.set()  # train() sits in its own pause loop, which only a stop ends

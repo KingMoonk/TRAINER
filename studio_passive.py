@@ -500,9 +500,27 @@ def default_evaluate(path, examples):
     return evaluate_checkpoint(path, examples, limit=len(examples))["loss"]
 
 
-def default_train(config, examples, output_dir, emit, stop, pause, init_from=None):
-    from studio_model import train
-    return train(config, examples, output_dir, emit, stop, pause, init_from=init_from)
+def default_train(config, examples, output_dir, emit, stop, pause, init_from=None, resume=None):
+    """Train one round. `resume` is the last round's checkpoint: the round continues it with the optimizer state and the step count
+    (config["steps"] is how many steps to add), on the round's own data. A checkpoint training refuses before its first step (a polished
+    one has no optimizer state, say) emits "resume_refused" and the round starts from its weights alone, as `init_from` does."""
+    import studio_memory
+    import studio_model
+    options = dict(offload_optimizer=studio_memory.offload_wanted(studio_model.validate_config(config), 1.0))  # CUDA, and only when the state cannot fit
+    if not resume:
+        return studio_model.train(config, examples, output_dir, emit, stop, pause, init_from=init_from, **options)
+    started = []
+
+    def relay(event):
+        started.append(True)
+        emit(event)
+    try:
+        return studio_model.train(config, examples, output_dir, relay, stop, pause, resume=resume, rebase=True, **options)
+    except (OSError, ValueError, KeyError) as exc:
+        if started:
+            raise
+        emit({"type": "resume_refused", "reason": str(exc) or type(exc).__name__})
+        return studio_model.train(config, examples, output_dir, emit, stop, pause, init_from=resume, **options)
 
 
 def _teacher(settings):
@@ -704,8 +722,17 @@ class _Trainer:
                        for row in self.store.lessons(self.id) if row.get("status") not in ("dropped", "left_out")]
 
     # -- one round
+    def continues(self):
+        """True when the next round carries the optimizer over: it starts from the checkpoint the last round saved. A first round, and a
+        round after a step back to an earlier best, start with a fresh optimizer."""
+        state = self.state
+        last = state["checkpoints"][-1] if state["checkpoints"] else None
+        return bool(last and state["current"] == last["n"] and state["pending_pivot"] is None)
+
     def on_event(self, event):
         self.guard()
+        if event.get("type") == "resume_refused":
+            self.journal("optimizer", round=self.state["round"], mode="fresh", reason=str(event.get("reason", ""))[:300])
         if event.get("type") == "metric" and event.get("val_loss") is not None:
             error = float(event["val_loss"])
             self.state["live"].append([round(self.state["active_seconds"], 1), error])
@@ -719,8 +746,9 @@ class _Trainer:
         init = state["current"]
         init_from = self.plan["base_checkpoint"] if init is None else _checkpoint(state, init)["path"]
         examples = self.training_examples()
-        # Each round (and each restart) draws its batches in a different order. The optimizer state and the warmup/cosine schedule
-        # still start fresh every round: init_from copies weights only. Carrying them over needs an engine change (studio_model.train).
+        # Each round (and each restart) draws its batches in a different order. A round that carries on from the last checkpoint resumes
+        # it (weights, Adam's moments and the step count, so the schedule goes on); the first round and a step back start from weights only.
+        resume = _checkpoint(state, init)["path"] if init is not None and self.continues() else None
         seed = (int(self.plan["config"].get("seed", 42)) + n + state.get("restart_count", 0)) % 2147483648
         try:
             while True:
@@ -732,7 +760,10 @@ class _Trainer:
                 state["training_batch"] = state["batch_size"]  # still here after a restart only if this process was killed outright: see setup()
                 self.save()
                 try:
-                    self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, init_from=init_from)
+                    if resume:
+                        self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, resume=resume)
+                    else:
+                        self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, init_from=init_from)
                 except InterruptedError:
                     if not (self.user or self.interrupt.is_set()):
                         raise
@@ -840,7 +871,8 @@ class _Trainer:
             except Exception as exc:  # killed while writing it, say
                 self.journal("error", message=f"The checkpoint the last run left for round {n} could not be read ({str(exc)[:200]}), so the round trains again.", round=n)
                 path = None
-        self.journal("round", round=n, parent=state["current"], learning_rate=state["learning_rate"], batch_size=state["batch_size"], **({"recovered": True} if path else {}))
+        self.journal("round", round=n, parent=state["current"], learning_rate=state["learning_rate"], batch_size=state["batch_size"],
+                     optimizer="resumed" if self.continues() else "fresh", **({"recovered": True} if path else {}))
         self.save()
         if path is None:
             try:
