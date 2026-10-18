@@ -157,7 +157,7 @@ def _member(job, context, emit, stop, name):
     p = job.params
     folder = Path(p["output_dir"]) / "member" if p.get("output_dir") else Path(context.run_dir) / f"{name}_{job.id}"
     studio_diloco.run_member(PeerClient(p["coordinator_url"]), p["run"], p.get("node") or socket.gethostname(), int(p.get("epoch", 0)),
-                             context.root, folder, emit, stop, **p.get("member_options", {}))
+                             context.root, folder, emit, stop, **{"locate": studio_diloco.file_locator(context.root), **p.get("member_options", {})})
 
 
 def pretrain_distributed(job, context, emit, stop, pause):

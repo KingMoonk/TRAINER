@@ -367,6 +367,23 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
   read the winner and follow it, which removes split brain whenever both sides can reach the bucket. When it cannot be
   reached, the rule above decides alone. No decision is ever only in the bucket.
 
+**As built (#361, `studio_failover.py`).** `Failover.step()` runs on every poll, after the store is synced.
+
+- Each node publishes two entries per run: `held` (the `(term, round, rank)` its replica holds, and whether the replica is
+  whole) and `claim` (the `(term, round, rank)` it coordinates, or `{"released": true}` after it steps down). The
+  `runs/index` entry also lists the run ids a node serves now (`live`), so a finished earlier run entry never outranks a
+  live claim.
+- A claim takes the coordinator from the replica folder (`Coordinator.from_replica`) under `data/failover/<run>_term<N>`,
+  registers it on this node and publishes it. The owner's queue record gets the sentence "Coordinated on X (term N).".
+- A claimant first asks `Host.tie_break(claim)`. It always agrees today; the bucket's conditional PUT (#362) goes there.
+- A coordinator steps down when a call carries a higher term or the store holds a claim that outranks its own: it drops
+  its `theta`, archives its folder and publishes `{"released": true}`. A returning coordinator does this on its first poll.
+- Members run in worker processes. The app writes `data/diloco_where/<run>.json` (node and URL of the coordinator) when
+  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL assumes the
+  peers' default port.
+- Not done: a failed takeover is not retried on another node except by the same rule on the next poll; a run that
+  finishes under a successor is not saved as a Version by the owner.
+
 ## Failures
 
 | what fails | what happens |

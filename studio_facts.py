@@ -17,11 +17,13 @@ node        node      every origin        the NodeInfo payload, plus {"peers": n
 queue       jobs      every origin        the running and waiting jobs queued here, as GET /queue/jobs lists them
 leases      granted   every origin        the leases this node granted, with seconds since the runner was heard
 events      node      every origin        the last EVENTS_KEPT cluster events
-runs        index     a coordinator       {"ids": the runs it publishes}
+runs        index     a coordinator       {"ids": the runs it publishes, "live": those it coordinates now}
 run         run id    a coordinator       the run summary (the Training tab's row)
 timeline    run id    a coordinator       the last TIMELINES_KEPT round timelines
 run_events  run id    a coordinator       the run's last EVENTS_KEPT events
 progress    run id    a member            its own latest progress report
+held        run id    a replica           {"term", "round", "rank", "ready", "held"}: the round it keeps (studio_failover)
+claim       run id    a coordinator       {"term", "round", "rank"}, or {"released": true}: who coordinates the run since a failover
 shards      run id    a member            the ids of the shards it has cached
 """
 from __future__ import annotations
@@ -65,6 +67,7 @@ def publish(cluster):
                                                for e in list(cluster.events)[-EVENTS_KEPT:]]),
         lambda: _publish_runs(cluster),
         lambda: _publish_member(cluster),
+        lambda: _publish_failover(cluster),
     )
     for step in steps:
         try:
@@ -75,22 +78,33 @@ def publish(cluster):
 
 def _publish_runs(cluster):
     import studio_distributed as runs
-    replica, ids = cluster.state, []
+    replica, ids, live = cluster.state, [], []
     for run, coordinator, job in cluster.local_runs():
         if coordinator is None and run.final is None and job is None:
             continue  # the app no longer holds this run (a later term may coordinate it elsewhere): not this node's fact
         row = runs.view(run, coordinator, job)
         ids.append(run.id)
+        if coordinator is not None:
+            live.append(run.id)
         replica.put("run", run.id, run_summary(row))
         replica.put("timeline", run.id, row["timeline"][-TIMELINES_KEPT:])
         replica.put("run_events", run.id, row["events"][-EVENTS_KEPT:])
-    replica.put("runs", "index", {"ids": ids})
+    replica.put("runs", "index", {"ids": ids, "live": live})  # live: the ones this node coordinates now (the rest is a kept account)
 
 
 def _publish_member(cluster):
     for run_id, found in list(cluster.members.items()):
         cluster.state.put("progress", run_id, {k: v for k, v in found.items() if k != "shard_ids"})
         cluster.state.put("shards", run_id, {"ids": list(found.get("shard_ids") or [])})
+
+
+def _publish_failover(cluster):
+    """The replica this node's member keeps (kind `held`), and the claim of the coordinator this node runs (kind `claim`), each rewritten at
+    every poll, so their ages say how long ago this node last looked (studio_failover reads both)."""
+    for run_id, found in list(cluster.replicas.items()):
+        cluster.state.put("held", run_id, dict(found))
+    for run_id, found in list(cluster.claims.items()):
+        cluster.state.put("claim", run_id, dict(found))
 
 
 def member_fact(event, now):

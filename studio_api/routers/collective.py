@@ -86,16 +86,19 @@ class Accepted(Versioned):
     accepted: bool = True
 
 
-def coordinator(run: str) -> "studio_diloco.Coordinator":
-    found = studio_diloco.COORDINATORS.get(run)
+def coordinator(run: str, request: Request) -> "studio_diloco.Coordinator":
+    """The run's coordinator in this app's registry: the app's own `state.coordinators` when it has one (an in-process cluster of several
+    nodes in the tests gives each its own), else the process's (studio_diloco.COORDINATORS)."""
+    registry = getattr(request.app.state, "coordinators", None)
+    found = (studio_diloco.COORDINATORS if registry is None else registry).get(run)
     if found is None:
         raise HTTPException(404, f"No distributed run {run!r} on this node.")
     return found
 
 
-def admit(run: str, term: int, response: Response, learning: bool = False) -> "studio_diloco.Coordinator":
+def admit(run: str, term: int, response: Response, request: Request, learning: bool = False) -> "studio_diloco.Coordinator":
     """The run's coordinator, once the call's term is admitted; its term goes on the answer. A refused term is 409 with the term too."""
-    found = coordinator(run)
+    found = coordinator(run, request)
     try:
         found.check_term(term, learning)
     except studio_diloco.StaleTerm as exc:
@@ -104,8 +107,8 @@ def admit(run: str, term: int, response: Response, learning: bool = False) -> "s
     return found
 
 
-def member_call(response: Response, run: str = Run, term: int = Term) -> "studio_diloco.Coordinator":
-    return admit(run, term, response)
+def member_call(request: Request, response: Response, run: str = Run, term: int = Term) -> "studio_diloco.Coordinator":
+    return admit(run, term, response, request)
 
 
 def binary(found: "studio_diloco.Coordinator", content: bytes) -> Response:
@@ -113,10 +116,10 @@ def binary(found: "studio_diloco.Coordinator", content: bytes) -> Response:
 
 
 @router.post("/join", response_model=JoinInfo)
-def join(response: Response, run: str = Run, term: int = Term, body: JoinRequest = ...):
+def join(request: Request, response: Response, run: str = Run, term: int = Term, body: JoinRequest = ...):
     """Join (or re-join with a newer epoch). Takes effect at the next round boundary, at once when no round is open.
     A member that does not know the term yet sends 0 and learns it from the answer."""
-    return admit(run, term, response, learning=True).join(body.node, body.epoch, term or None)
+    return admit(run, term, response, request, learning=True).join(body.node, body.epoch, term or None)
 
 
 @router.get("/params", response_class=Response, responses=BINARY)

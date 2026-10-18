@@ -30,6 +30,7 @@ from pathlib import Path
 import studio_cluster
 import studio_publish
 import studio_facts
+import studio_failover
 import studio_scheduler as sched
 import studio_state
 from studio_peer import PeerClient
@@ -96,7 +97,7 @@ class Cluster:
     the workspace config. `client_for(address, **options)` makes the PeerClient; tests pass fakes for it, for `store`, `own` and `clock`."""
 
     def __init__(self, runner, client_for=client_for, store=None, own=None, clock=time.monotonic, address=None, environ=None,
-                 lease_s=sched.LEASE_S, threads=True, hostname=None, local_runs=None):
+                 lease_s=sched.LEASE_S, threads=True, hostname=None, local_runs=None, coordinators=None):
         self.runner, self.client_for, self.clock, self.lease_s, self.threads = runner, client_for, clock, lease_s, threads
         self.environ = os.environ if environ is None else environ
         self.hostname = hostname or socket.gethostname()  # this node's origin in the observation store
@@ -124,6 +125,11 @@ class Cluster:
         self.state = studio_state.Replica(self.hostname, studio_state.next_incarnation(runner.root / "data" / studio_state.INCARNATION_FILE),
                                           clock)  # the observation store; `publish_state` writes this node's facts into it
         self.beat, self.events, self.members = 0, [], {}  # heartbeat count; recent cluster events; run id -> this node's member report
+        self.replicas, self.claims = {}, {}  # run id -> the replica this node's member keeps; run id -> the claim of the coordinator run here
+        # the coordinators this node serves: the process's (studio_diloco.COORDINATORS) unless a test runs several nodes in one process
+        import studio_diloco
+        self.coordinators = studio_diloco.COORDINATORS if coordinators is None else coordinators
+        self.failover = studio_failover.Failover(studio_failover.ClusterHost(self))
         self._names = {}  # peer address -> the hostname it last answered with
         self.polled = threading.Event()
         self._threads = []
@@ -234,7 +240,7 @@ class Cluster:
         import studio_distributed
         with self.runner.lock:
             jobs = list(self.runner.jobs)
-        return studio_distributed.local_runs(jobs, create=True)
+        return studio_distributed.local_runs(jobs, create=True, coordinators=self.coordinators)
 
     def address_of(self, origin):
         """The listed address of the peer that is `origin`, or None when this node's list has none by that name."""
@@ -289,6 +295,10 @@ class Cluster:
                 count = self._silent.get(address, (0,))[0] + 1
                 self._silent[address] = (count, self.clock() + min(POLL_BACKOFF_MAX, 2 * POLL_EVERY * 2 ** (count - 1)))
         self.polled.set()
+        try:  # who coordinates which run, from the store as it is after this poll's syncs (studio_failover)
+            self.failover.step()
+        except Exception:  # noqa: BLE001 - a failover step is retried at the next poll
+            _log.debug("failover step failed", exc_info=True)
 
     def nodes(self):
         """This node first, then each listed peer as last polled."""
@@ -1077,6 +1087,8 @@ class Cluster:
                 del self.events[:-studio_facts.EVENTS_KEPT]
             elif kind == "train" and payload.get("type") == "diloco_member" and payload.get("run"):
                 self.members[payload["run"]] = studio_facts.member_fact(payload, self.clock())
+            elif kind == "train" and payload.get("type") == "diloco_replica" and payload.get("run"):
+                self.replicas[payload["run"]] = {k: payload.get(k) for k in ("term", "round", "rank", "ready", "held")}
         run = next((r for r in self.guests.values() if payload.get("job") == r.local_id), None) if isinstance(payload, dict) else None
         if run is None or run.ended:
             return

@@ -135,7 +135,7 @@ class Replication(unittest.TestCase):
                 continue
             with self.subTest(node=node, round=number):
                 self.assertEqual(found["round"], number)
-                self.assertEqual(found["files"], ["diloco.json", "momentum.npz", "theta.npz"])  # the latest round only
+                self.assertEqual(found["files"], ["diloco.json", "info.json", "momentum.npz", "theta.npz"])  # the latest round only
                 for name, value in found["own_theta"].items():
                     np.testing.assert_array_equal(found["theta"][name], value)
                 for name, value in found["own_momentum"].items():
