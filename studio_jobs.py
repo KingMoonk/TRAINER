@@ -36,7 +36,7 @@ def prepare(job, services):
         studio_diloco.prepare(job, services, p["output_dir"], p.get("api_port", studio_cluster.DEFAULT_PORT))
     if job.kind in ROUNDS:
         import studio_rl
-        studio_rl.resolve(3 if job.kind == "restore_answers" else int(p.get("round", 1)), job, services)
+        studio_rl.resolve(studio_rl.number_of(job), job, services)
     return {"root": str(services.root), "run_dir": str(run_dir)}
 
 

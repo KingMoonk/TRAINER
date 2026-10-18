@@ -425,10 +425,31 @@ def skipped_round(probe, checkpoint):
             "before": None, "after": None, "band": None, "checkpoint": str(checkpoint), "groups": 0, "taught": 0, "probe": probe}
 
 
+def number_of(job):
+    """The round a post_round or restore_answers job runs (restore_answers is round 3)."""
+    return 3 if job.kind == "restore_answers" else int(job.params.get("round", 1))
+
+
+def rows_needed(number, params):
+    """The post_rows kinds round `number` reads when `params` does not already carry them (`_rows`): what the owner ships with a round
+    that runs on another machine, whose stores hold none of it."""
+    kinds = {1: ("heldout_docs", "heldout_problems", "conversations"), 2: ("problems", "heldout_docs", "heldout_problems"),
+             3: ("heldout_docs", "heldout_problems"), 4: ("heldout_docs", "heldout_problems", "pairs")}[number]
+    if number == 3:
+        kinds += ("corrections",) if params.get("teacher_choice") == "correction" else () if "prompts" in params else ("conversations",)
+    return [kind for kind in kinds if kind not in params]
+
+
 def resolve(number, job, services):
     """App side, before the round's worker starts: the checkpoint it starts from (the current version's) and, for round 3, the
-    teacher (the best version's). Both read the version records, which live in the app."""
+    teacher (the best version's). Both read the version records, which live in the app. A round another node owns (`job.owner`) is
+    not resolved here: its checkpoint and teacher are the owner's versions, which came with it (the owner resolved them before it
+    dispatched), and this node's own versions are none of its business."""
     p = job.params
+    if job.owner:
+        if not p.get("checkpoint"):
+            raise ValueError("The round came without the checkpoint it starts from.")
+        return
     if not p.get("checkpoint"):
         current = services.current_version()
         p["checkpoint"] = str(current.best_checkpoint) if getattr(current, "best_checkpoint", None) else None
