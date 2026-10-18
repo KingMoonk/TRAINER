@@ -112,6 +112,29 @@ class StaleTerm(Stale):
         self.term = term
 
 
+class Rebound(Exception):
+    """Raised inside a member whose coordinator is gone, when the run is coordinated elsewhere now (studio_failover). `found` is the
+    (node, term, client) of the coordinator in charge; Member.work catches it and rejoins there."""
+
+    def __init__(self, found):
+        super().__init__(f"The run is coordinated on {found[0]} at term {found[1]} now.")
+        self.found = found
+
+
+class Halt:
+    """The stop studio_model.train sees: the job's stop, or the end of this attempt (the run finished, or the member was fenced out of
+    its coordinator and may rebind to the one now in charge)."""
+
+    def __init__(self, stop, ended):
+        self.stop, self.ended = stop, ended
+
+    def is_set(self):
+        return self.stop.is_set() or self.ended.is_set()
+
+    def set(self):
+        self.ended.set()
+
+
 @dataclass(frozen=True)
 class Settings:
     """A run's DiLoCo parameters (the job's params). outer_lr 1 with momentum 0 makes one member exactly plain training."""
@@ -377,6 +400,7 @@ class Coordinator:
         self.split, self.split_hash, self.state_file, self.record = {"strategy": "lineage-v1"}, "", None, {}
         self.shard_count = max(1, min(settings.shards, len(train)))
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
+        self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
         self.reports, self.events, self.timelines = {}, deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT)  # the live view's state
@@ -438,6 +462,61 @@ class Coordinator:
             coordinator._start_files(model)
         return coordinator
 
+    @classmethod
+    def from_replica(cls, run, directory, replica_dir, shard_dir, term, clock=time.monotonic, on_step_down=None):
+        """The coordinator of `term` made from the replica this node keeps (Member._replicate: theta, the outer momentum and diloco.json
+        of the latest round, info.json, validation.npz) and the shards its member cached under `shard_dir`: it continues from that
+        round, with the history, settings and step time of the record. The round that was open when the old coordinator went is lost,
+        and so are the deltas members had sent to it. Its own folder `directory` gets the run's files again, starting from this
+        round. ValueError, saying what is missing, when the replica is not whole (no theta yet, validation or a shard not fetched)."""
+        import studio_model as sm
+        import studio_shards
+        from studio_core import atomic_json
+        from studio_modules.tokenizer.byte import Tokenizer
+        replica, directory = Path(replica_dir), Path(directory)
+        try:
+            info = json.loads((replica / "info.json").read_text(encoding="utf-8"))
+            record = json.loads((replica / STATE_FILE).read_text(encoding="utf-8"))
+            theta = decode_arrays((replica / "theta.npz").read_bytes())
+            momentum = decode_arrays((replica / "momentum.npz").read_bytes())
+            validation = (replica / "validation.npz").read_bytes()
+            settings = Settings(**record["settings"])
+            vocabulary, count = int(info["vocab_size"]), int(info["shard_count"])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"This node holds no whole replica of run {run} ({type(exc).__name__}: {exc}).") from None
+        if record.get("run") != run:
+            raise ValueError(f"The replica on this node is of run {record.get('run')}, not {run}.")
+        parts = []
+        for shard in range(count):
+            found = studio_shards.load(shard_dir, f"shard{shard}", vocabulary)
+            if found is None:
+                raise ValueError(f"Shard {shard} of run {run} is not in this node's cache.")
+            parts.append(sm.MappedWindows(*found["train"]))
+        directory.mkdir(parents=True, exist_ok=True)
+        val = install_shard(directory / "windows", "val", validation, vocabulary)
+        cfg = info["config"]
+        model = sm.ScratchTransformer(cfg, vocabulary)
+        state = {"term": term, "momentum": momentum, "round": int(record["round"]), "generation": int(record["generation"]),
+                 "history": record["history"], "step_time": record.get("step_time"), "state_file": None}
+        coordinator = cls(run, directory, cfg, Tokenizer.restore(info["tokenizer"]), Windows(parts), val, settings, theta,
+                          _evaluator(model, val, cfg["batch_size"]), record["digest"], clock, state, on_step_down)
+        coordinator.shard_count, coordinator.parts = count, parts
+        coordinator.split, coordinator.split_hash = {"strategy": record.get("split_strategy", "lineage-v1")}, record.get("split_hash", "")
+        coordinator.model_spec = model.spec
+        coordinator.deal = record.get("shard_deal") or {}
+        coordinator._start_files(model)
+        last = coordinator.history[-1] if coordinator.history else {}
+        with (directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
+            for row in coordinator.history:
+                stream.write(json.dumps({k: row.get(k) for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")}
+                                        | {"round": row["round"], "timeline": None}) + "\n")
+        step = coordinator._persist(record.get("members") or [], coordinator.deal)
+        coordinator.record.update({"step": step, "val_loss": last.get("val_loss"), "status": "completed" if coordinator.finished else "training"})
+        atomic_json(directory / "run.json", coordinator.record)
+        coordinator._event("took_over", "", coordinator.next_round,
+                           f"Term {term} began here, continuing from round {coordinator.next_round} of term {record.get('term', 1)}.")
+        return coordinator
+
     @staticmethod
     def _read_state(directory, cfg, settings, digest):
         path = directory / "diloco.json"
@@ -484,18 +563,25 @@ class Coordinator:
             if term < self.term and not (learning and term == 0):
                 raise StaleTerm(f"{TERM_STALE} {term}: the run is at term {self.term}.", self.term)
 
-    def step_down(self, term):
+    def step_down(self, term, force=False):
         """Told of a higher term (by a call that carries it, or by whoever watches the run's claims): stop closing rounds. The run's
         state stays as it is on disk for the new coordinator's replicas; this node joins the new coordinator as a member (#361).
-        Idempotent; a term that is not higher than the coordinator's own changes nothing."""
+        Idempotent; a term that is not higher than the coordinator's own changes nothing, unless `force`: a claim of the same term
+        that outranks this coordinator's (studio_failover.beats) settles the tie, and the coordinator that lost defers to it."""
         with self.cond:
-            if term <= max(self.term, self.superseded):
+            if term <= self.superseded or term < self.term or (term == self.term and not force):
                 return
             self.superseded = term
             self._event("stepped_down", "", self.next_round, f"Term {term} exists (this node held term {self.term}): no longer coordinating the run.")
             self.cond.notify_all()
         if self.on_step_down:
             self.on_step_down(term)
+
+    def defer(self, term):
+        """Lose to a claim of `term` (this coordinator's own or higher) that outranks this node's: step down, and discard the rounds
+        this coordinator closed after the claim's round, so the run has one theta. The files in its folder stay; nothing here uses them."""
+        self.step_down(term, force=True)
+        self.release()
 
     def _lease(self, term, epoch):
         """The fence a member's lease is compared by: the coordinator's term first, then the scheduler's lease epoch."""
@@ -791,6 +877,8 @@ class Coordinator:
     def shard_bytes(self, shard):
         if not 0 <= shard < self.shard_count:
             raise KeyError(shard)
+        if self.parts is not None:
+            return shard_blob(self.parts[shard], 0, len(self.parts[shard]))
         return shard_blob(self.train, int(self.bounds[shard]), int(self.bounds[shard + 1]))
 
     def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0, term=None):
@@ -954,6 +1042,23 @@ class Coordinator:
     def _save(self, row, closed):
         """The round's files, in the order that keeps a crash recoverable: the state, last.npz, then diloco.json that names it."""
         from studio_core import atomic_json, now
+        step = self._persist(closed.members, closed.deal)
+        with (self.directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({k: row[k] for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")}
+                                    | {"round": row["round"], "timeline": self._timeline(closed)}) + "\n")
+        self._event("checkpoint", "", row["round"], f"Round {row['round']} checkpoint written.")
+        self.record.update({"step": step, "val_loss": row["val_loss"], "status": "completed" if self.finished else "training"})
+        if row["loss"] is not None:
+            self.record["loss"] = row["loss"]
+        if self.finished:
+            self.record["finishedAt"] = now()
+        atomic_json(self.directory / "run.json", self.record)
+        self._remember()
+
+    def _persist(self, members, deal):
+        """Write the state for `next_round` rounds closed: the state archive, last.npz, then diloco.json that names it (a crash between
+        them leaves the round before). Returns the step. `members` and `deal` are the last closed round's."""
+        from studio_core import atomic_json
         old = self.state_file
         self.state_file = f"diloco_state_{self.next_round}.npz"
         arrays = {STATE_PREFIXES[0] + k: v for k, v in self.theta.items()}
@@ -971,21 +1076,11 @@ class Coordinator:
         atomic_json(self.directory / "diloco.json", {
             "format": FORMAT, "run": self.run, "term": self.term, "round": self.next_round, "generation": self.generation, "state_file": self.state_file,
             "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
-            "members": closed.members, "shard_deal": closed.deal, "step_time": self.step_time, "history": self.history,
-            "finished": self.finished})
+            "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
+            "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash})
         if old and old != self.state_file:
             (self.directory / old).unlink(missing_ok=True)
-        with (self.directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps({k: row[k] for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")}
-                                    | {"round": row["round"], "timeline": self._timeline(closed)}) + "\n")
-        self._event("checkpoint", "", row["round"], f"Round {row['round']} checkpoint written.")
-        self.record.update({"step": step, "val_loss": row["val_loss"], "status": "completed" if self.finished else "training"})
-        if row["loss"] is not None:
-            self.record["loss"] = row["loss"]
-        if self.finished:
-            self.record["finishedAt"] = now()
-        atomic_json(self.directory / "run.json", self.record)
-        self._remember()
+        return step
 
     @staticmethod
     def _write_npz(path, arrays):
@@ -1065,7 +1160,7 @@ class Member:
     inject their own) while the next round's steps run, and is joined at the end of that round, where its theta is applied."""
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
-                 progress=True, overlap=False, spawn=Background, replica_dir=None):
+                 progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None):
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
@@ -1083,6 +1178,9 @@ class Member:
         self.live = {"loss": None, "tokens_per_second": None}
         self.wake, self.halt, self.reporter = threading.Event(), threading.Event(), None
         self.overlap, self.spawn, self.pending, self.entered, self.anchor = overlap, spawn, None, None, None
+        # locate(run) -> (node, term, client) of the coordinator now in charge, or None (studio_failover); where: the (node, term) this member
+        # last rebound to; ended: this attempt of train() is over but the job is not (the member may rebind); holding: (round, rank) it keeps
+        self.locate, self.where, self.ended, self.holding, self.moved = locate, None, threading.Event(), None, False
 
     # -- the train() hook
     @property
@@ -1109,7 +1207,7 @@ class Member:
             self.started = True
         if self.finished or self.fenced:
             self._phase("waiting")
-            self.stop.set()
+            self._end_attempt()
             return
         model.load_weights(self.theta)
         self._begin(step, trained_tokens)
@@ -1136,7 +1234,7 @@ class Member:
         entered = self._join() if self.pending is not None else self.entered
         if entered is None or self.finished or self.fenced:
             self._phase("waiting")
-            self.stop.set()
+            self._end_attempt()
             return
         self._apply(entered)
         if entered.round != self.round:  # this round closed without the member: its work counts for nothing, so start over from the new weights
@@ -1156,12 +1254,20 @@ class Member:
             self._phase("waiting")
             self.entered = self._join()
             if self.entered is None or self.finished or self.fenced:
-                self.stop.set()
+                self._end_attempt()
                 return
         renewed = {name: entered.theta[name] - delta[name] for name in delta}
         model.load_weights(renewed)
         self.round, self.anchor = number + 1, renewed
         self._begin(step, trained_tokens)
+
+    def _end_attempt(self):
+        """Have train() end: the run finished or the member was fenced out. When it may rebind (it has `locate`) and was fenced, only
+        this attempt ends, and the job's own stop stays unset."""
+        if self.locate is not None and (self.superseded or self.moved) and not self.finished:
+            self.ended.set()
+        else:
+            self.stop.set()
 
     def _join(self):
         """The result of the exchange in flight (an Entered, or None when the run finished, the member was fenced out or stop was set)."""
@@ -1185,7 +1291,7 @@ class Member:
     def report(self):
         """Send one progress report (no weights). A report that fails, for any reason, is dropped: it never raises, and never stops
         the training."""
-        if not self.progress or self.report_round is None or self.superseded:
+        if not self.progress or self.report_round is None or self.superseded or not self.term:  # no term: not joined to this coordinator yet
             return False
         step, phase = self.round_step, self.phase
         body = {"node": self.node, "generation": getattr(self, "generation", self.info["generation"]), "epoch": self.epoch,
@@ -1234,7 +1340,10 @@ class Member:
 
     def _refused(self, exc):
         """A 409 for a term that is not the coordinator's: when it names a higher one, follow it."""
-        found = re.search(r"at term (\d+)", exc.detail) if exc.status == 409 and exc.detail.startswith(TERM_STALE) else None
+        if exc.status != 409 or not exc.detail.startswith(TERM_STALE):
+            return
+        self.moved = True  # the coordinator it talks to is not the run's coordinator any more
+        found = re.search(r"at term (\d+)", exc.detail)
         if found:
             self.follow(int(found.group(1)))
 
@@ -1257,7 +1366,55 @@ class Member:
                 self._refused(exc)
                 if exc.status is not None or self.clock() >= end or self.stop.is_set():
                     raise
+                found = self._relocated()
+                if found is not None:
+                    raise Rebound(found) from None
                 self.sleep(2.)
+
+    def _relocated(self):
+        """(node, term, client) of the coordinator now in charge of the run, when it is not the one this member last joined; else None."""
+        if self.locate is None:
+            return None
+        try:
+            found = self.locate(self.run)
+        except Exception:  # noqa: BLE001 - where the run is now is a question for the store; a failing answer is no answer
+            return None
+        if not found or (found[0], found[1]) == self.where or found[1] < self.term:
+            return None
+        return found
+
+    def _relocated_within(self):
+        """Like _relocated, but waits up to `patience` for the claim of the coordinator in charge to reach this node's store: a member told
+        of a higher term has seen it before the claim that carries it."""
+        end = self.clock() + self.patience
+        while True:
+            found = self._relocated()
+            if found is not None or self.clock() >= end or self.stop.is_set():
+                return found
+            self.sleep(2.)
+
+    def _bound(self, found):
+        """_rebind to `found`, and to whichever coordinator is in charge by the time that one is unreachable too, until one holds."""
+        while found is not None:
+            try:
+                self._rebind(found)
+                found = None
+            except Rebound as bound:
+                found = bound.found
+
+    def _rebind(self, found):
+        """Leave the coordinator this member was attached to and join the one in charge (a failover or a settled claim, #361): the
+        round in flight is dropped, the term is learnt again, and the shards already held are kept (the run's shard cut does not change)."""
+        node, term, client = found
+        self.emit({"type": "info", "text": f"The run is coordinated on {node} at term {term} now; rejoining there."})
+        self.pending = None
+        self.client, self.where = client, (node, term)
+        self.term, self.superseded = 0, 0
+        self.fenced = self.finished = self.started = self.moved = False
+        self.entered = self.anchor = None
+        self.ended.clear()
+        self.join()
+        self._enter(self.info["round"])
 
     def join(self):
         self.info = self._call(lambda: self.client.post_json(f"{self.base}/join", {"node": self.node, "epoch": self.epoch}, self._q()))
@@ -1312,7 +1469,7 @@ class Member:
                     body = self._call(lambda: self.client.get_bytes(f"{self.base}/params", self._q({"round": want, "node": self.node})))
                     theta = decode_arrays(body)
                     if view.get("replica") and self.replica_dir is not None:
-                        self._replicate(want, body)
+                        self._replicate(want, body, view["rank"])
                     elif self.replica_dir is not None:
                         self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
                     shards = [int(s) for s in view["shards"]]
@@ -1339,7 +1496,7 @@ class Member:
                 self.shards[shard] = install_shard(self.shard_dir, shard, blob, self.info["vocab_size"])
 
     # -- a replica
-    def _replicate(self, number, theta):
+    def _replicate(self, number, theta, rank=0):
         """Keep theta (the bytes just downloaded) of round `number` with the outer momentum and diloco.json that go with it, replacing
         the round before; then, once, start fetching the validation windows and the shards this member lacks in the background. A round
         that moved on while the state downloaded (409) or one before any closed (404) leaves the folder as it was."""
@@ -1352,9 +1509,12 @@ class Member:
                     raise
                 return
             epoch = self.replica_epoch
-            for name, data in (("theta.npz", theta), ("momentum.npz", encode_arrays(momentum)), (STATE_FILE, record)):
+            for name, data in (("theta.npz", theta), ("momentum.npz", encode_arrays(momentum)), (STATE_FILE, record),
+                               ("info.json", json.dumps(self.info).encode("utf-8"))):  # info.json: what a coordinator made from this needs
                 self._write_replica(epoch, name, data)
+            self.holding = (number, rank)
             self.emit({"type": "info", "text": f"Holding round {number} as a replica."})
+            self._announce()
         if not self.prefetched and (self.prefetch is None or not self.prefetch.is_alive()):
             self.prefetch = threading.Thread(target=self._prefetch, args=(self.replica_epoch,), name=f"diloco-replica-{self.node}", daemon=True)
             self.prefetch.start()
@@ -1377,6 +1537,19 @@ class Member:
             self.replica_epoch += 1
             self.prefetched = False
             shutil.rmtree(self.replica_dir, ignore_errors=True)
+        if self.holding is not None:
+            self.holding = None
+            self._announce()
+
+    def _announce(self):
+        """Say what this member keeps as a replica (the app on this node publishes it as the node's `held` fact, studio_failover): the
+        round, its rank, and `ready` once the validation windows and every shard are here too, so it could coordinate the run."""
+        number, rank = self.holding or (None, None)
+        try:
+            self.emit({"type": "diloco_replica", "run": self.run, "node": self.node, "term": self.term, "held": number is not None,
+                       "round": number, "rank": rank, "ready": bool(self.prefetched and number is not None)})
+        except Exception:  # noqa: BLE001 - a courtesy, like a progress report
+            pass
 
     def _prefetch(self, epoch):
         """The once-per-run part of a replica, off the training thread: the validation windows (kept, never trained on) and every shard
@@ -1395,6 +1568,7 @@ class Member:
                     return
                 self.prefetched = True
             self.emit({"type": "info", "text": "Replica holds the validation windows and every shard."})
+            self._announce()
         except (PeerError, OSError):
             return
 
@@ -1445,12 +1619,18 @@ class Member:
         emit = emit or self.emit
         self.emit = emit
         try:
-            self.join()
+            try:
+                self.join()
+            except Rebound as bound:  # the coordinator it was told to join is gone and another is in charge
+                self._bound(bound.found)
             if self.progress:
                 self.reporter = threading.Thread(target=self._report_loop, name=f"diloco-progress-{self.node}", daemon=True)
                 self.reporter.start()
             self.shard_dir.mkdir(parents=True, exist_ok=True)
-            self._enter(self.info["round"])
+            try:
+                self._enter(self.info["round"])
+            except Rebound as bound:
+                self._bound(bound.found)
             if self.finished or self.fenced or self.stop.is_set():
                 return None
 
@@ -1460,8 +1640,22 @@ class Member:
                     self.live = {"loss": self.loss, "tokens_per_second": event.get("tokens_per_second")}
                 emit(event)
             cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": self.info["total_steps"]}
-            self.first_step = 0
-            studio_model.train(cfg, [], directory, emit=watch, stop=self.stop, distributed=self, telemetry_every=0)
+            attempt = 0
+            while True:  # one attempt of train() per coordinator this member is attached to; a failover or a settled claim ends one
+                self.first_step, found = 0, None
+                try:
+                    studio_model.train(cfg, [], directory if not attempt else Path(f"{directory}_{attempt}"), emit=watch,
+                                       stop=Halt(self.stop, self.ended), distributed=self, telemetry_every=0)
+                    if (self.superseded or self.moved) and not self.finished and not self.stop.is_set():
+                        found = self._relocated_within()
+                except Rebound as bound:
+                    found = bound.found
+                if found is None:
+                    break
+                self._bound(found)
+                if self.finished or self.fenced or self.stop.is_set():
+                    break
+                attempt += 1
             if not (self.finished or self.fenced):
                 if self.stop.is_set():
                     return self.round
@@ -1482,6 +1676,29 @@ class Member:
             self.shards.clear()
             gc.collect()  # a memory map keeps its file open (on Windows, undeletable) until it is collected
             shutil.rmtree(self.shard_dir, ignore_errors=True)
+
+
+def where_file(root, run):
+    """Where the app on this node writes which node coordinates `run` now ({"node", "term", "url"}; Cluster, from the store's claims)."""
+    return Path(root) / "data" / "diloco_where" / f"{run}.json"
+
+
+def file_locator(root):
+    """`locate` for a member in a worker process, which has no store: it reads where_file, written by the app on its node. Returns
+    (node, term, client) or None when the app has written nothing for the run."""
+    from studio_peer import PeerClient
+    clients = {}
+
+    def locate(run):
+        try:
+            found = json.loads(where_file(root, run).read_text(encoding="utf-8"))
+            node, term, url = str(found["node"]), int(found["term"]), str(found["url"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if url not in clients:
+            clients[url] = PeerClient(url)
+        return node, term, clients[url]
+    return locate
 
 
 def run_member(client, run, node, epoch, root, directory, emit, stop, **options):

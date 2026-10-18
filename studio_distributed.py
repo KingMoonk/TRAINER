@@ -92,15 +92,31 @@ def run_of(job):
     return run
 
 
-def local_runs(jobs, create=False):
+def local_runs(jobs, create=False, coordinators=None):
     """[(run, coordinator, job)] for every run this process knows: its remembered ones, and with `create` an owner job in `jobs` that
-    has no record yet. `coordinator` is the live one or None; `job` the owner job or None."""
+    has no record yet. `coordinator` is the live one or None; `job` the owner job or None. `coordinators` is the registry to look in (the
+    process's, studio_diloco.COORDINATORS, unless a test runs several nodes in one process)."""
     import studio_diloco
     owner_jobs = {job.id: job for job in jobs if job.kind == "pretrain_distributed"}
     if create:
         for job in owner_jobs.values():
             run_of(job)
-    return [(run, studio_diloco.COORDINATORS.get(run.id), owner_jobs.get(run.id)) for run in list(RUNS.values())]
+    found = studio_diloco.COORDINATORS if coordinators is None else coordinators
+    return [(run, found.get(run.id), owner_jobs.get(run.id)) for run in list(RUNS.values())]
+
+
+def adopt(row):
+    """The Run record of a run this node took over from another coordinator (studio_failover): made from the run summary that coordinator
+    published, so the tab and the store list it here. A record already held is kept."""
+    with _LOCK:
+        run = RUNS.get(row["id"])
+        if run is None:
+            run = RUNS[row["id"]] = Run(row["id"], row.get("label") or "", row.get("version"), row.get("started_at") or time.time(),
+                                        dict(row.get("settings") or {}), row.get("owner") or "")
+            for key in list(RUNS)[:-KEPT]:
+                del RUNS[key]
+    persist()
+    return run
 
 
 def note_saved(run_id, number):
