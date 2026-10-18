@@ -55,6 +55,7 @@ class StartRun(BaseModel):
     outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
     min_members: int | None = Field(None, ge=1, le=64)  # the run waits in the queue until this many machines (this one included) are free at once
     max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
+    overlap: bool = False  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs
 
 
 class Sample(BaseModel):
@@ -364,7 +365,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
         "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)

@@ -8721,6 +8721,11 @@
             "title": "Outer Momentum",
             "type": "number"
           },
+          "overlap": {
+            "default": false,
+            "title": "Overlap",
+            "type": "boolean"
+          },
           "replaces": {
             "anyOf": [
               {

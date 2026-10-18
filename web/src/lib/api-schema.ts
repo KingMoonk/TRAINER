@@ -7018,6 +7018,11 @@ export interface components {
              * @default 0.9
              */
             outer_momentum: number;
+            /**
+             * Overlap
+             * @default false
+             */
+            overlap: boolean;
             /** Replaces */
             replaces?: string | null;
             /**
