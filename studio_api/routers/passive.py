@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from studio_api.app import get_services
@@ -26,6 +26,81 @@ class PassiveSession(BaseModel):
 class Passive(BaseModel):
     sessions: list[PassiveSession]
     signin: bool  # the watchdog is set to start when you sign in
+
+
+class PassivePlan(BaseModel):
+    """studio_passive.plan_summary: one plain sentence per group of settings."""
+    stop: str
+    limits: str
+    plateau: str
+    teacher: str
+    worse: str
+
+
+class PassiveCheckpoint(BaseModel):
+    n: int
+    round: int
+    error: float  # the held-out test error
+    elapsed: float | None = None  # active seconds when it was saved
+    at: str | None = None
+    parent: int | None = None
+    kept: bool = True
+    discarded: bool = False  # a rollback threw it away
+    pivot: str | None = None  # the change tried before this round
+    polished: bool = False  # the teacher's polish replaced it
+    win_rate: float | None = None
+    lessons: int = 0
+    best: bool = False
+
+
+class PassiveTeacher(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    model: str = ""
+    reachable: bool | None = None
+    done: int = 0
+    total: int = 0
+
+
+class PassiveProgress(BaseModel):
+    phase: str  # idle | train | save | teach, "" before the trainer set up
+    round: int = 0
+    best: int | None = None  # the best checkpoint's number
+    best_error: float | None = None
+    current: int | None = None
+    current_error: float | None = None
+    learning_rate: float | None = None
+    batch_size: int | None = None
+    win_rate: float | None = None
+    stop_reason: str | None = None
+    active_seconds: float = 0
+    limit_seconds: float
+    worse_streak: int = 0
+    rounds_since_best: int = 0
+    restarts: int = 0
+    teacher: PassiveTeacher | None = None
+    checkpoints: list[PassiveCheckpoint]
+
+
+class PassiveEvent(BaseModel):
+    """One line of the trainer's journal. `type` is start, round, check, checkpoint, rollback, teacher, lesson, restart, power, pause,
+    resume, stop, memory or error; the other fields depend on it (message, reason, error, from, to, ...)."""
+    model_config = ConfigDict(extra="allow")
+    index: int
+    type: str
+    at: str | None = None
+
+
+class PassiveJournal(BaseModel):
+    events: list[PassiveEvent]  # oldest first
+    total: int
+    first: int  # index of events[0]; ask for `before=first` to get the events before them
+
+
+class PassiveDetail(BaseModel):
+    session: PassiveSession
+    plan: PassivePlan
+    progress: PassiveProgress
+    journal: PassiveJournal
 
 
 class PassiveStatus(BaseModel):
@@ -55,6 +130,16 @@ class PassiveStarted(BaseModel):
 @router.get("", response_model=Passive)
 def passive(services=Depends(get_services)):
     return services.passive()
+
+
+@router.get("/{session_id}", response_model=PassiveDetail)
+def passive_detail(session_id: str, limit: int = Query(50, ge=1, le=200), before: int | None = Query(None, ge=0), services=Depends(get_services)):
+    """One session: its row, plan, progress (phase, round, best error, the error of each checkpoint) and a page of the trainer's journal,
+    the newest `limit` events or those before event number `before`. 404 for an unknown session."""
+    found = services.passive_detail(session_id, limit, before)
+    if found is None:
+        raise HTTPException(404, f"No passive session {session_id}")
+    return found
 
 
 @router.post("", response_model=PassiveStarted, status_code=201)
