@@ -8,7 +8,7 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -18,7 +18,7 @@ describe("the form", () => {
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {
     expect(startBody(form({ machines: ["gpu-box"] }))).toEqual({
-      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
+      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
     });
     expect(startBody(form({ version: "3" }))?.version).toBe(3);
   });
@@ -30,7 +30,18 @@ describe("the form", () => {
     ["a blank learning rate", { outerLr: "" }],
     ["a momentum of one", { outerMomentum: "1" }],
     ["a settings word", { rounds: "ten" }],
+    ["a fewest machines of zero", { minMachines: "0" }],
+    ["a most machines above 64", { maxMachines: "65" }],
+    ["a fewest above the most", { minMachines: "3", maxMachines: "2" }],
   ] as [string, Partial<Form>][])("is not complete with %s", (_, over) => expect(startBody(form(over))).toBeNull());
+
+  test("the machine counts are left out while blank and sent as numbers when typed", () => {
+    expect(startBody(form())).not.toHaveProperty("min_members");
+    expect(startBody(form({ minMachines: "2", maxMachines: "4" }))).toMatchObject({ min_members: 2, max_members: 4 });
+    expect(startBody(form({ maxMachines: "2" }))).not.toHaveProperty("min_members");
+  });
+
+  test("overlap is sent as ticked", () => expect(startBody(form({ overlap: true }))?.overlap).toBe(true));
 
   test("momentum may be zero", () => expect(startBody(form({ outerMomentum: "0" }))?.outer_momentum).toBe(0));
 
