@@ -4146,9 +4146,32 @@
         "title": "Passive",
         "type": "object"
       },
+      "PassiveSaved": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "created"
+        ],
+        "title": "PassiveSaved",
+        "type": "object"
+      },
       "PassiveSession": {
         "additionalProperties": true,
         "properties": {
+          "checkpoints": {
+            "default": 0,
+            "title": "Checkpoints",
+            "type": "integer"
+          },
           "created": {
             "anyOf": [
               {
@@ -4194,6 +4217,17 @@
             "default": "",
             "title": "Trainer",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           },
           "watchdog": {
             "default": "",
@@ -14130,6 +14164,49 @@
           }
         },
         "summary": "Resume Passive",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/save": {
+      "post": {
+        "description": "Save the session's best checkpoint as a trained version. Saving the same checkpoint again answers with the version it made.\n409 when the session has no checkpoint yet.",
+        "operationId": "save_passive_passive__session_id__save_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveSaved"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Passive",
         "tags": [
           "passive"
         ]

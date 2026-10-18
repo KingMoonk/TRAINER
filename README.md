@@ -235,6 +235,8 @@ Passive training keeps training on its own: it trains until the test error settl
 
 A small watchdog (`studio_passive_watch.py`) checks the trainer's heartbeat. After 60 seconds of silence, or if the process is gone, it starts the trainer again from the last saved step; after 5 restarts in 10 minutes it gives up and records why. It also registers itself to start at sign-in (a LaunchAgent on macOS, a Task Scheduler task on Windows) and removes that entry when the session ends. The plan can keep the computer awake (`caffeinate` on macOS, a keep-awake request on Windows) and pause on battery.
 
+A session's best checkpoint can become a version: the **Save best as a version** button on Resources > Passive training (`POST /passive/{id}/save`) makes a trained version from it, scored on the held-back text like a pretrain, and its description names the session, its rounds and its best error. Saving the same best again returns the same version. A session that has ended with at least one checkpoint is saved this way by itself the next time the app looks at the list. Passive training itself runs only on the machine that started it; a saved version can be pulled or published like any other.
+
 The record lives in `data/passive.sqlite` (plan, state, process ids, heartbeat) and `runs/<session id>/` (journal, checkpoints, `trainer.log`). To stop a session, press Stop on Resources > Passive training; the watchdog then exits by itself.
 
 ## Releases

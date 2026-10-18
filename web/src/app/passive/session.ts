@@ -13,6 +13,9 @@ export type SessionRow = {
   restarts?: number;
   heard?: number | null;
   error?: unknown;
+  /** Checkpoints the session has saved, and the version made from its best one (null until saved). */
+  checkpoints?: number;
+  version?: number | null;
 };
 
 /** studio_ux.format_duration, without its "about " prefix. */
@@ -38,7 +41,7 @@ const text = (value: unknown) => (value === null || value === undefined ? "" : S
 
 /** The headline, the lines under it (the stop plan, the facts, any error), whether Stop applies for one session row,
  * whether Pause (running) or Resume (paused) does, and whether Keep it going does: the session is still active but its trainer
- * and its watchdog are both gone. */
+ * and its watchdog are both gone. canSave: it has a checkpoint and none of its versions holds the best one yet. */
 export function sessionView(row: SessionRow): {
   headline: string;
   lines: string[];
@@ -46,6 +49,7 @@ export function sessionView(row: SessionRow): {
   canPause: boolean;
   canResume: boolean;
   canKeepGoing: boolean;
+  canSave: boolean;
 } {
   const status = PASSIVE.status[row.status] ?? row.status;
   const active = ACTIVE.includes(row.status);
@@ -53,11 +57,12 @@ export function sessionView(row: SessionRow): {
   if (row.heard !== null && row.heard !== undefined && active) facts += PASSIVE.heard(formatAgo(row.heard));
   return {
     headline: PASSIVE.started(status, when(row.created)),
-    lines: [text(row.stop), facts, text(row.error)].filter(Boolean),
+    lines: [text(row.stop), facts, row.version ? PASSIVE.savedAs(row.version) : "", text(row.error)].filter(Boolean),
     canStop: active,
     canPause: row.status === "running",
     canResume: row.status === "paused",
     canKeepGoing: active && row.trainer === "Stopped" && row.watchdog === "Stopped",
+    canSave: (row.checkpoints ?? 0) > 0 && !row.version,
   };
 }
 

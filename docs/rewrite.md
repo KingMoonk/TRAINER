@@ -135,8 +135,8 @@ Done: no `tkinter` import anywhere; CI is faster than today.
 - [ ] Node registry: every API is a coordinator and a worker; nodes are listed by hand (tailnet names) in the workspace
       config, and each polls the others' `/node` for capabilities and load. A node alone is a cluster of one.
 - [ ] Jobs carry requirements (device preference, minimum memory, dtype); placement picks the best free node, or the one
-      the user pinned. Defaults: pretraining and RLHF prefer CUDA; eval, scoring, benchmarks, data generation, LoRA and
-      passive training take any free node; memory-bound inspect jobs prefer the node with the most memory.
+      the user pinned. Defaults: pretraining and RLHF prefer CUDA; eval, scoring, benchmarks, data generation and LoRA
+      take any free node (passive training does not: it runs only on the machine that started it); memory-bound inspect jobs prefer the node with the most memory.
 - [ ] Transient nodes: a job whose node disappears is marked interrupted at its last checkpoint and resumes when the node
       returns or on another node (`checkpoint_now`/`resume` already exist; the optimizer restarts on a different node).
 - [ ] Version store interface: local folder (always) plus an S3-compatible bucket (Cloudflare R2 or Backblaze B2 free
