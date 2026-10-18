@@ -1781,6 +1781,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/passive/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Passive Detail
+         * @description One session: its row, plan, progress (phase, round, best error, the error of each checkpoint) and a page of the trainer's journal,
+         *     the newest `limit` events or those before event number `before`. 404 for an unknown session.
+         */
+        get: operations["passive_detail_passive__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/passive/{session_id}/keep-going": {
         parameters: {
             query?: never;
@@ -5045,6 +5066,148 @@ export interface components {
             /** Signin */
             signin: boolean;
         };
+        /** PassiveCheckpoint */
+        PassiveCheckpoint: {
+            /** At */
+            at?: string | null;
+            /**
+             * Best
+             * @default false
+             */
+            best: boolean;
+            /**
+             * Discarded
+             * @default false
+             */
+            discarded: boolean;
+            /** Elapsed */
+            elapsed?: number | null;
+            /** Error */
+            error: number;
+            /**
+             * Kept
+             * @default true
+             */
+            kept: boolean;
+            /**
+             * Lessons
+             * @default 0
+             */
+            lessons: number;
+            /** N */
+            n: number;
+            /** Parent */
+            parent?: number | null;
+            /** Pivot */
+            pivot?: string | null;
+            /**
+             * Polished
+             * @default false
+             */
+            polished: boolean;
+            /** Round */
+            round: number;
+            /** Win Rate */
+            win_rate?: number | null;
+        };
+        /** PassiveDetail */
+        PassiveDetail: {
+            journal: components["schemas"]["PassiveJournal"];
+            plan: components["schemas"]["PassivePlan"];
+            progress: components["schemas"]["PassiveProgress"];
+            session: components["schemas"]["PassiveSession"];
+        };
+        /**
+         * PassiveEvent
+         * @description One line of the trainer's journal. `type` is start, round, check, checkpoint, rollback, teacher, lesson, restart, power, pause,
+         *     resume, stop, memory or error; the other fields depend on it (message, reason, error, from, to, ...).
+         */
+        PassiveEvent: {
+            /** At */
+            at?: string | null;
+            /** Index */
+            index: number;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** PassiveJournal */
+        PassiveJournal: {
+            /** Events */
+            events: components["schemas"]["PassiveEvent"][];
+            /** First */
+            first: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * PassivePlan
+         * @description studio_passive.plan_summary: one plain sentence per group of settings.
+         */
+        PassivePlan: {
+            /** Limits */
+            limits: string;
+            /** Plateau */
+            plateau: string;
+            /** Stop */
+            stop: string;
+            /** Teacher */
+            teacher: string;
+            /** Worse */
+            worse: string;
+        };
+        /** PassiveProgress */
+        PassiveProgress: {
+            /**
+             * Active Seconds
+             * @default 0
+             */
+            active_seconds: number;
+            /** Batch Size */
+            batch_size?: number | null;
+            /** Best */
+            best?: number | null;
+            /** Best Error */
+            best_error?: number | null;
+            /** Checkpoints */
+            checkpoints: components["schemas"]["PassiveCheckpoint"][];
+            /** Current */
+            current?: number | null;
+            /** Current Error */
+            current_error?: number | null;
+            /** Learning Rate */
+            learning_rate?: number | null;
+            /** Limit Seconds */
+            limit_seconds: number;
+            /** Phase */
+            phase: string;
+            /**
+             * Restarts
+             * @default 0
+             */
+            restarts: number;
+            /**
+             * Round
+             * @default 0
+             */
+            round: number;
+            /**
+             * Rounds Since Best
+             * @default 0
+             */
+            rounds_since_best: number;
+            /** Stop Reason */
+            stop_reason?: string | null;
+            teacher?: components["schemas"]["PassiveTeacher"] | null;
+            /** Win Rate */
+            win_rate?: number | null;
+            /**
+             * Worse Streak
+             * @default 0
+             */
+            worse_streak: number;
+        };
         /** PassiveSession */
         PassiveSession: {
             /** Created */
@@ -5088,6 +5251,28 @@ export interface components {
         PassiveStatus: {
             /** Status */
             status: string;
+        };
+        /** PassiveTeacher */
+        PassiveTeacher: {
+            /**
+             * Done
+             * @default 0
+             */
+            done: number;
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /** Reachable */
+            reachable?: boolean | null;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        } & {
+            [key: string]: unknown;
         };
         /** PathsRequest */
         PathsRequest: {
@@ -10422,6 +10607,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    passive_detail_passive__session_id__get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before?: number | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

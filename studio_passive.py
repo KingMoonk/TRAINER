@@ -148,6 +148,22 @@ def plan_summary(plan):
             "worse": f"After {_plural(worse['limit'], 'checkpoint')} in a row worse than the best: go back to the best, then " + (", then ".join(steps) if steps else "stop") + ". When the list runs out it stops." + hidden}
 
 
+def progress_summary(state, plan):
+    """The trainer's state as the detail view shows it: phase, round, best and current error, the checkpoints with their errors, the
+    learning rate and batch size, the time used against the limit. Missing keys (a session that has not set up yet) are None or empty."""
+    checkpoints = [{"n": c["n"], "round": c.get("round", c["n"]), "error": c["error"], "elapsed": c.get("elapsed"), "at": c.get("at"), "parent": c.get("parent"),
+                    "kept": c.get("kept", True), "discarded": c.get("discarded", False), "pivot": c.get("pivot"),
+                    "polished": bool((c.get("teacher") or {}).get("polished")), "win_rate": (c.get("teacher") or {}).get("win_rate"),
+                    "lessons": (c.get("teacher") or {}).get("lessons", 0), "best": c["n"] == state.get("best")} for c in state.get("checkpoints", [])]
+    best, current = _checkpoint(state, state.get("best")) if state.get("checkpoints") else None, _checkpoint(state, state.get("current")) if state.get("checkpoints") else None
+    return {"phase": state.get("phase") or "", "round": state.get("round", 0), "best": state.get("best"), "best_error": best and best["error"],
+            "current": state.get("current"), "current_error": current and current["error"], "learning_rate": state.get("learning_rate"),
+            "batch_size": state.get("batch_size"), "win_rate": state.get("win_rate"), "stop_reason": state.get("stop_reason"),
+            "active_seconds": state.get("active_seconds", 0.0), "limit_seconds": duration_seconds(plan), "worse_streak": state.get("worse_streak", 0),
+            "rounds_since_best": state.get("rounds_since_best", 0), "restarts": state.get("restart_count", 0), "teacher": state.get("teacher") or None,
+            "checkpoints": checkpoints}
+
+
 # --------------------------------------------------------------------------- pure decisions
 
 def plateaued(losses, plan):
@@ -345,6 +361,14 @@ class PassiveStore:
 
     def journal(self, session_id):
         return _read_jsonl(self.directory(session_id) / "journal.jsonl")
+
+    def journal_page(self, session_id, limit=50, before=None):
+        """(events, total, first): up to `limit` journal events that come before event number `before` (the newest ones when None), oldest
+        first, each with its `index`; `first` is the index of the first one returned, which is the next page's `before`."""
+        rows = self.journal(session_id)
+        end = len(rows) if before is None else max(0, min(before, len(rows)))
+        start = max(0, end - max(1, limit))
+        return [{**rows[i], "index": i} for i in range(start, end)], len(rows), start
 
     def append(self, session_id, event):
         with (self.directory(session_id) / "journal.jsonl").open("a", encoding="utf-8") as stream:

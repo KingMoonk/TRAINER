@@ -83,7 +83,18 @@ describe("pages on recorded responses", () => {
     expect(fixtures["passive-resume"].body).toEqual({ status: "queued" });
     replay(["passive-started", "queue-empty"]);
     renderPage(<PassivePage />);
-    expect(await screen.findByTestId(`session-${started.sessions[0].id}`)).toHaveTextContent("Starting · started");
+    const row = await screen.findByTestId(`session-${started.sessions[0].id}`);
+    expect(row).toHaveTextContent("Starting · started");
+  });
+
+  test("Passive training opens the detail the API recorded for a session", async () => {
+    const started = fixtures["passive-started"].body as { sessions: { id: string }[] };
+    const id = started.sessions[0].id;
+    replay(["passive-started", "queue-empty", "passive-detail"]);
+    renderPage(<PassivePage />);
+    await userEvent.setup().click(within(await screen.findByTestId(`session-${id}`)).getByRole("button", { name: "Details" }));
+    expect(await screen.findByTestId("passive-facts")).toBeVisible();
+    expect(screen.getByText("Nothing has been written yet.")).toBeVisible();
   });
 
   test("the traffic console lists the alert rules the API shipped, each with a switch", async () => {

@@ -1,0 +1,52 @@
+{
+  "body": {
+    "journal": {
+      "events": [],
+      "first": 0,
+      "total": 0
+    },
+    "plan": {
+      "limits": "Up to 50% of memory (best effort), keeps 10 checkpoints, keeps the computer awake, pauses on battery.",
+      "plateau": "Saves a checkpoint when test error improves by less than 1% across 5 checks, or after 2,000 steps.",
+      "stop": "Stops after 8 hours, or after 3 rounds without a better checkpoint.",
+      "teacher": "Polishes each checkpoint and carries the teacher's better answers forward (skipped without a teacher).",
+      "worse": "After 2 checkpoints in a row worse than the best: go back to the best, then halve the learning rate, then switch to the next dataset, then leave out the newest lessons. When the list runs out it stops."
+    },
+    "progress": {
+      "active_seconds": 0.0,
+      "batch_size": null,
+      "best": null,
+      "best_error": null,
+      "checkpoints": [],
+      "current": null,
+      "current_error": null,
+      "learning_rate": null,
+      "limit_seconds": 28800.0,
+      "phase": "",
+      "restarts": 0,
+      "round": 0,
+      "rounds_since_best": 0,
+      "stop_reason": null,
+      "teacher": null,
+      "win_rate": null,
+      "worse_streak": 0
+    },
+    "session": {
+      "created": "2026-10-01T22:00:00",
+      "error": "",
+      "heard": null,
+      "id": "passive_1",
+      "restarts": 0,
+      "status": "queued",
+      "stop": "Stops after 8 hours, or after 3 rounds without a better checkpoint.",
+      "trainer": "Running",
+      "watchdog": "Running"
+    }
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/passive/passive_1"
+  },
+  "status": 200
+}
