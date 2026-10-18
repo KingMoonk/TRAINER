@@ -211,6 +211,10 @@ COLUMNS = ("status", "command", "plan", "state", "trainer_pid", "watchdog_pid", 
 COMMANDS = ("pause", "resume", "stop")
 
 
+class AlreadyActive(RuntimeError, ValueError):
+    """Another session is queued, running or paused. A RuntimeError first, so the API answers 409; still a ValueError for older callers."""
+
+
 # Switching to WAL takes an exclusive lock that the busy timeout does not wait for, so two threads opening the
 # store at once could fail with "database is locked". Opening is serialised, and WAL is only set when it is not yet on.
 _OPEN_LOCK = threading.Lock()
@@ -247,7 +251,7 @@ class PassiveStore:
             db.execute("BEGIN IMMEDIATE")
             try:
                 if db.execute(f"SELECT 1 FROM sessions WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchone():
-                    raise ValueError("A passive training session is already running. Stop it before starting another.")
+                    raise AlreadyActive("A passive training session is already running. Stop it before starting another.")
                 db.execute("INSERT INTO sessions(id, status, plan, state, created_at, updated_at) VALUES (?, 'queued', ?, '{}', ?, ?)",
                            (session_id, json.dumps(plan), stamp, stamp))
                 db.execute("COMMIT")
@@ -256,6 +260,36 @@ class PassiveStore:
                 raise
         self.directory(session_id)
         return session_id
+
+    def requeue(self, session_id):
+        """Put a failed or stopped session back in the queue so a watchdog starts its trainer again, which carries on from the last
+        checkpoint it saved (the state keeps `started`). Forgets the old process ids, the restart count and the watchdog's memory of
+        fruitless restarts, or a session that gave up would give up again at once. Returns the status it had; None for an unknown
+        session; raises RuntimeError for one that is not failed or stopped, and AlreadyActive while another session is active."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.decode(db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone())
+                if row is None:
+                    db.execute("ROLLBACK")
+                    return None
+                if row["status"] not in ("failed", "stopped"):
+                    raise RuntimeError(f"Passive session {session_id} is {row['status']}, so it cannot be resumed.")
+                if db.execute(f"SELECT 1 FROM sessions WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchone():
+                    raise AlreadyActive("A passive training session is already running. Stop it before resuming another.")
+                state = {**row["state"], "stop_reason": None, "paused": False, "phase": "idle"} if row["state"] else {}
+                db.execute("UPDATE sessions SET status = 'queued', command = '', error = '', trainer_pid = NULL, watchdog_pid = NULL, heartbeat = NULL,"
+                           " restarts = '[]', state = ?, updated_at = ? WHERE id = ?", (json.dumps(state), now(), session_id))
+                db.execute("COMMIT")
+            except BaseException:
+                try:
+                    db.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass  # already rolled back above
+                raise
+        (self.directory(session_id) / "watchdog.json").unlink(missing_ok=True)
+        self.append(session_id, {"type": "resume", "reason": "requeued", "from": row["status"]})
+        return row["status"]
 
     def _one(self, sql, args=()):
         with self.connect() as db:

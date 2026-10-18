@@ -4208,6 +4208,24 @@
         "title": "PassiveSession",
         "type": "object"
       },
+      "PassiveStarted": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "PassiveStarted",
+        "type": "object"
+      },
       "PassiveStatus": {
         "properties": {
           "status": {
@@ -8035,6 +8053,90 @@
           "prediction"
         ],
         "title": "SplitStep",
+        "type": "object"
+      },
+      "StartPassive": {
+        "additionalProperties": false,
+        "description": "The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.",
+        "properties": {
+          "duration": {
+            "default": 8,
+            "title": "Duration",
+            "type": "number"
+          },
+          "keep_awake": {
+            "default": true,
+            "title": "Keep Awake",
+            "type": "boolean"
+          },
+          "memory_fraction": {
+            "default": 0.5,
+            "title": "Memory Fraction",
+            "type": "number"
+          },
+          "patience_rounds": {
+            "default": 3,
+            "title": "Patience Rounds",
+            "type": "integer"
+          },
+          "pause_on_battery": {
+            "default": true,
+            "title": "Pause On Battery",
+            "type": "boolean"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          },
+          "target_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Error"
+          },
+          "teacher": {
+            "default": true,
+            "title": "Teacher",
+            "type": "boolean"
+          },
+          "unit": {
+            "default": "hours",
+            "enum": [
+              "minutes",
+              "hours",
+              "days"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "StartPassive",
         "type": "object"
       },
       "StartRequest": {
@@ -13990,6 +14092,46 @@
         "tags": [
           "passive"
         ]
+      },
+      "post": {
+        "description": "Create a session from the form and start its watchdog. 400 with a sentence for a bad plan or version, 409 while another session is active.",
+        "operationId": "start_passive_passive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPassive"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Passive",
+        "tags": [
+          "passive"
+        ]
       }
     },
     "/passive/signin": {
@@ -14094,7 +14236,7 @@
     },
     "/passive/{session_id}/resume": {
       "post": {
-        "description": "Ask a paused session to carry on. 409 when it has ended or is being stopped.",
+        "description": "Ask a paused session to carry on; a stopped or failed one goes back in the queue (status \"queued\"), its watchdog starts and the\ntrainer continues from its last checkpoint. 409 when it has finished, is being stopped, or another session is active.",
         "operationId": "resume_passive_passive__session_id__resume_post",
         "parameters": [
           {

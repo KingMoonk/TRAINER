@@ -1753,7 +1753,11 @@ export interface paths {
         /** Passive */
         get: operations["passive_passive_get"];
         put?: never;
-        post?: never;
+        /**
+         * Start Passive
+         * @description Create a session from the form and start its watchdog. 400 with a sentence for a bad plan or version, 409 while another session is active.
+         */
+        post: operations["start_passive_passive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1828,7 +1832,8 @@ export interface paths {
         put?: never;
         /**
          * Resume Passive
-         * @description Ask a paused session to carry on. 409 when it has ended or is being stopped.
+         * @description Ask a paused session to carry on; a stopped or failed one goes back in the queue (status "queued"), its watchdog starts and the
+         *     trainer continues from its last checkpoint. 409 when it has finished, is being stopped, or another session is active.
          */
         post: operations["resume_passive_passive__session_id__resume_post"];
         delete?: never;
@@ -5072,6 +5077,13 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** PassiveStarted */
+        PassiveStarted: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+        };
         /** PassiveStatus */
         PassiveStatus: {
             /** Status */
@@ -6650,6 +6662,54 @@ export interface components {
             spec: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * StartPassive
+         * @description The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.
+         */
+        StartPassive: {
+            /**
+             * Duration
+             * @default 8
+             */
+            duration: number;
+            /**
+             * Keep Awake
+             * @default true
+             */
+            keep_awake: boolean;
+            /**
+             * Memory Fraction
+             * @default 0.5
+             */
+            memory_fraction: number;
+            /**
+             * Patience Rounds
+             * @default 3
+             */
+            patience_rounds: number;
+            /**
+             * Pause On Battery
+             * @default true
+             */
+            pause_on_battery: boolean;
+            /** Sources */
+            sources?: string[] | null;
+            /** Target Error */
+            target_error?: number | null;
+            /**
+             * Teacher
+             * @default true
+             */
+            teacher: boolean;
+            /**
+             * Unit
+             * @default hours
+             * @enum {string}
+             */
+            unit: "minutes" | "hours" | "days";
+            /** Version */
+            version?: number | null;
         };
         /** StartRequest */
         StartRequest: {
@@ -10310,6 +10370,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Passive"];
+                };
+            };
+        };
+    };
+    start_passive_passive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartPassive"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
