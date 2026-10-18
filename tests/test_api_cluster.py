@@ -243,8 +243,8 @@ class ClusterRoutes(ApiCase):
 
     def test_a_job_that_cannot_leave_its_owner_is_refused_with_a_sentence(self):
         detail = self.call("POST", "/cluster/jobs", 409, json={
-            "job": {"id": "x", "kind": "compare"}, "lease": self.lease("x"), "owner_address": "owner-x"})["detail"]
-        self.assertEqual(detail, "A compare job only runs on the machine that queued it.")
+            "job": {"id": "x", "kind": "quicktest"}, "lease": self.lease("x"), "owner_address": "owner-x"})["detail"]
+        self.assertEqual(detail, "A quicktest job only runs on the machine that queued it.")
 
     def test_without_a_version_store_a_job_is_refused_with_what_to_set_up(self):
         self.runner.cluster._store_factory = lambda: None

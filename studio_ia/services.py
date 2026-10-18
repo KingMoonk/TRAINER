@@ -34,6 +34,22 @@ class Version:
     score_device: str | None = None  # what scored it on the held-back text
 
 
+def passive_row(store, s, saved=None):
+    """One passive session as passive() lists it: its status, plan summary, the trainer's and watchdog's facts, how many checkpoints
+    it saved and the version its best one became. `saved`: {checkpoint path: version number} (_passive_saved)."""
+    import studio_passive_watch as watch
+    from studio_passive import ACTIVE, plan_summary
+    facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
+    best = _passive_best(s)
+    return {"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"], "error": s["error"], **facts,
+            "checkpoints": len((s["state"] or {}).get("checkpoints", [])), "version": (saved or {}).get(str(best["path"])) if best else None}
+
+
+def passive_lesson(row):
+    """A stored lesson as the API shows it: without the raw chat messages the trainer feeds on."""
+    return {key: row.get(key) for key in ("id", "round", "checkpoint", "prompt", "reply", "answer", "status", "at")}
+
+
 @dataclass
 class Job:
     id: str
@@ -409,6 +425,29 @@ class Services:
         trainer, watchdog, restarts, heard, error}; signin is True while its watchdog is set to start when you sign in."""
         raise NotImplementedError
 
+    def start_passive(self, plan, version=None):
+        """Create a passive session and start its watchdog. `plan`: overrides of studio_passive.DEFAULT_PLAN (stop, limits, teacher,
+        data); an empty data.sources means every set of text. `version`: the number to train (the current one when None), whose
+        design and best checkpoint become the plan's config and base_checkpoint. Returns the new session's id. ValueError (in
+        plain words) for a bad plan or version; RuntimeError while another session is queued, running or paused."""
+        raise NotImplementedError
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        """{session, plan, progress, journal}: one passive session as the detail view shows it, or None for an unknown one. session = the
+        row passive() lists; plan = studio_passive.plan_summary's lines; progress = studio_passive.progress_summary; journal =
+        {events, total, first}: up to `limit` events before event number `before` (the newest when None), oldest first, each with its `index`."""
+        raise NotImplementedError
+
+    def passive_lessons(self, session_id):
+        """The lessons the teacher gave a passive session, oldest first: [{id, round, checkpoint, prompt, reply, answer, status, at}], status
+        pending (trained on), dropped (you left it out) or left_out (a step back left it out). None for an unknown session."""
+        raise NotImplementedError
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        """Drop ("dropped") or keep ("pending") one lesson; the next round's training follows it. Returns the lesson, or None when the
+        session or the lesson is unknown."""
+        raise NotImplementedError
+
     def stop_passive(self, session_id):
         """Ask a passive session to stop. Returns its status afterwards."""
         raise NotImplementedError
@@ -416,7 +455,9 @@ class Services:
     def command_passive(self, session_id, command):
         """Ask a passive session to "pause" or "resume"; the trainer takes it at its next check and journals it. Returns the
         session's status now (still the old one until the trainer has taken the command), or None for an unknown session. A
-        session that is stopped, failed or finished, or that is being stopped, raises RuntimeError."""
+        session that is finished, or that is being stopped, raises RuntimeError, and so does "pause" for a stopped or failed one.
+        "resume" for a stopped or failed session puts it back in the queue and starts its watchdog (status "queued"): the trainer
+        carries on from its last checkpoint; RuntimeError while another session is active."""
         raise NotImplementedError
 
     def keep_passive_going(self, session_id=None):
@@ -972,6 +1013,50 @@ class FakeServices(Services):
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
 
+    def passive_lessons(self, session_id):
+        if all(r["id"] != session_id for r in self.passive_sessions):
+            return None
+        return [dict(row) for row in getattr(self, "passive_lesson_rows", {}).get(session_id, [])]
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        rows = self.passive_lessons(session_id)
+        if rows is None:
+            return None
+        if status not in ("pending", "dropped"):
+            raise ValueError("A lesson is either dropped or kept.")
+        stored = getattr(self, "passive_lesson_rows", {}).get(session_id, [])
+        row = next((r for r in stored if r["id"] == lesson_id), None)
+        if row is None:
+            return None
+        row["status"] = status
+        return dict(row)
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        import studio_passive
+        data = getattr(self, "passive_details", {}).get(session_id, {})  # tests set {"state": ..., "journal": [...]}
+        plan = studio_passive.merge_plan({})
+        events = data.get("journal", [])
+        end = len(events) if before is None else max(0, min(before, len(events)))
+        start = max(0, end - max(1, limit))
+        return {"session": dict(row), "plan": studio_passive.plan_summary(plan), "progress": studio_passive.progress_summary(data.get("state", {}), plan),
+                "journal": {"events": [{**events[i], "index": i} for i in range(start, end)], "total": len(events), "first": start}}
+
+    def start_passive(self, plan, version=None):
+        import studio_passive
+        if any(r["status"] in studio_passive.ACTIVE for r in self.passive_sessions):
+            raise RuntimeError("A passive training session is already running. Stop it before starting another.")
+        if version is not None and all(v.number != version for v in self._versions):
+            raise ValueError(f"There is no version {version}.")
+        merged = studio_passive.merge_plan(plan)
+        row = {"id": f"passive_{len(self.passive_sessions) + 1}", "status": "queued", "created": "2026-10-01T22:00:00",
+               "stop": studio_passive.plan_summary(merged)["stop"], "trainer": "Running", "watchdog": "Running", "restarts": 0, "heard": None, "error": ""}
+        self.passive_sessions = [row, *self.passive_sessions]
+        self.passive_started = [*getattr(self, "passive_started", []), (merged, version)]
+        return row["id"]
+
     def stop_passive(self, session_id):
         for row in self.passive_sessions:
             if row["id"] == session_id:
@@ -983,6 +1068,12 @@ class FakeServices(Services):
         row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
         if row is None:
             return None
+        if command == "resume" and row["status"] in ("stopped", "failed"):
+            if any(r["status"] in ("queued", "running", "paused") for r in self.passive_sessions):
+                raise RuntimeError("A passive training session is already running. Stop it before resuming another.")
+            row.update(status="queued", trainer="Running", watchdog="Running", error="", restarts=0)  # the real watchdog starts the trainer on its first check
+            self.passive_commands = [*getattr(self, "passive_commands", []), (session_id, "requeue")]
+            return "queued"
         if row["status"] not in ("queued", "running", "paused"):
             raise RuntimeError(f"Passive session {session_id} is {row['status']}, so it cannot {command}.")
         row["status"] = "paused" if command == "pause" else "running"  # the real trainer takes the command at its next check
@@ -1952,29 +2043,89 @@ class WorkspaceServices(Services):
 
     def passive(self):
         import studio_passive_watch as watch
-        from studio_passive import ACTIVE, PassiveStore, plan_summary
+        from studio_passive import ACTIVE, PassiveStore
         signin = watch.installed(self.root)
         if not (self.root / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
             return {"sessions": [], "signin": signin}
-        store, rows = PassiveStore(self.root), []
+        store = PassiveStore(self.root)
         saved = _passive_saved(self._rows()) if hasattr(self, "_rows") else {}
-        for s in store.list()[:10]:
-            facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
-            best = _passive_best(s)
-            rows.append({"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"],
-                         "error": s["error"], **facts, "checkpoints": len((s["state"] or {}).get("checkpoints", [])),
-                         "version": saved.get(str(best["path"])) if best else None})
+        rows = [passive_row(store, s, saved) for s in store.list()[:10]]
         autosave = getattr(self, "autosave_passive", None)  # not on the bare namespaces some tests pass as `self`
         if autosave:
             autosave([s for s in store.list()[:10] if s["status"] not in ACTIVE])
         return {"sessions": rows, "signin": signin}
+
+    def passive_lessons(self, session_id):
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        if store.get(session_id) is None:
+            return None
+        return [passive_lesson(row) for row in store.lessons(session_id)]
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        if store.get(session_id) is None:
+            return None
+        row = store.set_lesson_status(session_id, lesson_id, status)
+        return row and passive_lesson(row)
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        from studio_passive import PassiveStore, plan_summary, progress_summary
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        s = store.get(session_id)
+        if s is None:
+            return None
+        events, total, first = store.journal_page(session_id, limit, before)
+        return {"session": passive_row(store, s, _passive_saved(self._rows()) if hasattr(self, "_rows") else {}), "plan": plan_summary(s["plan"]), "progress": progress_summary(s["state"], s["plan"]),
+                "journal": {"events": events, "total": total, "first": first}}
+
+    def start_passive(self, plan, version=None, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""
+        import copy
+        import studio_passive_watch as watch
+        from studio_ia import pretraining_plan
+        from studio_passive import AlreadyActive, PassiveStore
+        from studio_spec import config_from_spec
+        store = PassiveStore(self.root)
+        if store.active() is not None:
+            raise AlreadyActive("A passive training session is already running. Stop it before starting another.")
+        versions = self.versions()
+        chosen = next((v for v in versions if v.number == version), None) if version is not None else (versions[-1] if versions else None)
+        if chosen is None:
+            raise ValueError(f"There is no version {version}." if version is not None else "Design a version first: passive training trains the design you pick.")
+        plan = copy.deepcopy(plan or {})
+        data = plan.setdefault("data", {})
+        if not data.get("sources"):
+            data["sources"] = [s["id"] for s in pretraining_plan.sets_of(self.data("text")) if not pretraining_plan.held_out(s["id"])]
+            if not data["sources"]:
+                raise ValueError("There is no text to train on yet. Add some under Your data.")
+        checkpoint = self._abs(chosen.best_checkpoint)
+        plan["config"] = config_from_spec(chosen.spec)
+        plan["base_checkpoint"] = checkpoint if checkpoint and Path(checkpoint).is_file() else None
+        session_id = store.create(plan)
+        try:
+            watch.start(self.root, session_id, **hooks)
+        except Exception as exc:  # the record exists but nothing will run it: say so rather than leave it queued
+            message = f"Could not start the watchdog: {exc}"
+            store.update(session_id, status="failed", error=message)
+            raise RuntimeError(message) from exc
+        return session_id
 
     def stop_passive(self, session_id):
         import studio_passive_watch as watch
         from studio_passive import PassiveStore
         return watch.stop(PassiveStore(self.root), session_id)
 
-    def command_passive(self, session_id, command):
+    def command_passive(self, session_id, command, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours, for a resumed session's watchdog."""
+        import studio_passive_watch as watch
         from studio_passive import ACTIVE, PassiveStore
         if command not in ("pause", "resume"):
             raise ValueError("Command must be pause or resume.")
@@ -1984,6 +2135,15 @@ class WorkspaceServices(Services):
         session = store.get(session_id)
         if session is None:
             return None
+        if command == "resume" and session["status"] in ("stopped", "failed"):
+            store.requeue(session_id)
+            try:
+                watch.start(self.root, session_id, **hooks)
+            except Exception as exc:
+                message = f"Could not start the watchdog: {exc}"
+                store.update(session_id, status="failed", error=message)
+                raise RuntimeError(message) from exc
+            return store.get(session_id)["status"]
         if session["status"] not in ACTIVE:
             raise RuntimeError(f"Passive session {session_id} is {session['status']}, so it cannot {command}.")
         if not store.command(session_id, command):

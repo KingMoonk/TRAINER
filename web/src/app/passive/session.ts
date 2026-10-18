@@ -40,7 +40,8 @@ export function when(stamp: string | null | undefined): string {
 const text = (value: unknown) => (value === null || value === undefined ? "" : String(value));
 
 /** The headline, the lines under it (the stop plan, the facts, any error), whether Stop applies for one session row,
- * whether Pause (running) or Resume (paused) does, and whether Keep it going does: the session is still active but its trainer
+ * whether Pause (running) or Resume (paused) does, whether Resume applies to an ended one (failed or stopped: it goes back in
+ * the queue and carries on from its last checkpoint), and whether Keep it going does: the session is still active but its trainer
  * and its watchdog are both gone. canSave: it has a checkpoint and none of its versions holds the best one yet. */
 export function sessionView(row: SessionRow): {
   headline: string;
@@ -48,6 +49,7 @@ export function sessionView(row: SessionRow): {
   canStop: boolean;
   canPause: boolean;
   canResume: boolean;
+  canRestart: boolean;
   canKeepGoing: boolean;
   canSave: boolean;
 } {
@@ -61,6 +63,7 @@ export function sessionView(row: SessionRow): {
     canStop: active,
     canPause: row.status === "running",
     canResume: row.status === "paused",
+    canRestart: row.status === "failed" || row.status === "stopped",
     canKeepGoing: active && row.trainer === "Stopped" && row.watchdog === "Stopped",
     canSave: (row.checkpoints ?? 0) > 0 && !row.version,
   };

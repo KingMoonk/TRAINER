@@ -1,0 +1,11 @@
+{
+  "body": {
+    "status": "stopped"
+  },
+  "request": {
+    "body": null,
+    "method": "POST",
+    "path": "/passive/passive_1/stop"
+  },
+  "status": 200
+}

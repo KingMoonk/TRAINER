@@ -591,7 +591,7 @@ class ProcessTests(unittest.TestCase):
             store = PassiveStore(tmp)
             sid = store.create(merge({"stop": {"duration": 0.0001, "unit": "minutes", "patience_rounds": 0}, "teacher": {"polish": False, "lessons": False}, "plateau": {"checks": 2, "max_steps": 5}}))
             code = ("import sys, studio_passive as p\n"
-                    "def train(config, examples, out, emit, stop, pause, init_from=None):\n"
+                    "def train(config, examples, out, emit, stop, pause, init_from=None, resume=None):\n"
                     "    out.mkdir(parents=True); (out / 'best.npz').write_text('x')\n"
                     "p.run_session(sys.argv[1], sys.argv[2], train=train, evaluate=lambda path, ex: 1.0, build=lambda r, d: [{'n': i} for i in range(5)])\n"
                     "print('child done')\n")

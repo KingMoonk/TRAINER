@@ -59,8 +59,10 @@ class PassiveApiTest(unittest.TestCase):
 
     def test_pause_is_refused_for_an_ended_session_and_unknown_is_404(self):
         self.client.post("/passive/p1/stop")
+        self.assertEqual(self.client.post("/passive/p1/pause").status_code, 409)
+        self.services.passive_sessions[0]["status"] = "finished"
+        self.assertEqual(self.client.post("/passive/p1/resume").status_code, 409)
         for route in ("pause", "resume"):
-            self.assertEqual(self.client.post(f"/passive/p1/{route}").status_code, 409)
             self.assertEqual(self.client.post(f"/passive/nope/{route}").status_code, 404)
 
     def test_save_makes_the_best_checkpoint_a_version_and_saving_again_gives_the_same_one(self):
@@ -77,6 +79,47 @@ class PassiveApiTest(unittest.TestCase):
         self.assertEqual(self.client.post("/passive/p1/save").status_code, 409)  # SESSION has saved no checkpoint
         self.assertEqual(self.client.post("/passive/nope/save").status_code, 404)
 
+    def test_start_creates_a_session_from_the_form_and_lists_it(self):
+        self.client.post("/passive/p1/stop")
+        started = self.client.post("/passive", json={"duration": 2, "unit": "days", "patience_rounds": 0, "target_error": 1.5, "teacher": False,
+                                                     "memory_fraction": 0.25, "keep_awake": False, "pause_on_battery": False, "sources": ["a"]})
+        self.assertEqual((started.status_code, started.json()["status"]), (201, "queued"))
+        merged, version = self.services.passive_started[0]
+        self.assertEqual((merged["stop"]["duration"], merged["stop"]["unit"], merged["stop"]["patience_rounds"], merged["stop"]["target_error"]), (2, "days", 0, 1.5))
+        self.assertEqual((merged["teacher"], merged["limits"]["memory_fraction"], merged["limits"]["keep_awake"], merged["data"]["sources"], version),
+                         ({"polish": False, "lessons": False}, 0.25, False, ["a"], None))
+        newest = self.client.get("/passive").json()["sessions"][0]
+        self.assertEqual((newest["id"], newest["status"]), (started.json()["id"], "queued"))
+
+    def test_start_with_the_defaults(self):
+        self.client.post("/passive/p1/stop")
+        self.assertEqual(self.client.post("/passive", json={}).status_code, 201)
+        self.assertEqual(self.services.passive_started[0][0]["stop"]["duration"], 8)
+
+    def test_a_bad_plan_is_a_400_with_a_sentence_and_a_second_active_session_a_409(self):
+        self.client.post("/passive/p1/stop")
+        bad = self.client.post("/passive", json={"duration": 0})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("time limit", bad.json()["detail"])
+        self.assertEqual(self.client.post("/passive", json={"version": 99}).status_code, 400)
+        self.assertEqual(self.client.post("/passive", json={}).status_code, 201)
+        busy = self.client.post("/passive", json={})
+        self.assertEqual(busy.status_code, 409)
+        self.assertIn("already running", busy.json()["detail"])
+
+    def test_resume_puts_a_stopped_or_failed_session_back_in_the_queue(self):
+        self.client.post("/passive/p1/stop")
+        resumed = self.client.post("/passive/p1/resume")
+        self.assertEqual((resumed.status_code, resumed.json()), (200, {"status": "queued"}))
+        self.assertEqual(self.client.get("/passive").json()["sessions"][0]["status"], "queued")
+        self.assertEqual(self.client.post("/passive/p1/resume").status_code, 200)  # queued: resume is the ordinary command
+        self.services.passive_sessions[0]["status"] = "failed"
+        self.assertEqual(self.client.post("/passive/p1/resume").json(), {"status": "queued"})
+
+    def test_resume_is_refused_while_another_session_is_active(self):
+        self.services.passive_sessions = [{**SESSION, "id": "p0", "status": "failed"}, dict(SESSION)]
+        self.assertEqual(self.client.post("/passive/p0/resume").status_code, 409)
+
     def test_removing_the_signin_watchdog(self):
         self.assertEqual(self.client.delete("/passive/signin").status_code, 204)
         self.assertFalse(self.client.get("/passive").json()["signin"])
@@ -87,6 +130,9 @@ class PassiveApiTest(unittest.TestCase):
         self.client.post("/passive/p1/pause")
         self.client.post("/passive/p1/resume")
         self.client.post("/passive/p1/stop")
+        self.client.post("/passive/p1/resume")
+        self.client.post("/passive/p1/stop")
+        self.client.post("/passive", json={})
         self.client.delete("/passive/signin")
         self.assertEqual([event for event in self.tap.events if event[0] != "status"], [])  # initial shell snapshot is independent
 

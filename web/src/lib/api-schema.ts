@@ -1753,7 +1753,11 @@ export interface paths {
         /** Passive */
         get: operations["passive_passive_get"];
         put?: never;
-        post?: never;
+        /**
+         * Start Passive
+         * @description Create a session from the form and start its watchdog. 400 with a sentence for a bad plan or version, 409 while another session is active.
+         */
+        post: operations["start_passive_passive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1777,6 +1781,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/passive/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Passive Detail
+         * @description One session: its row, plan, progress (phase, round, best error, the error of each checkpoint) and a page of the trainer's journal,
+         *     the newest `limit` events or those before event number `before`. 404 for an unknown session.
+         */
+        get: operations["passive_detail_passive__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/passive/{session_id}/keep-going": {
         parameters: {
             query?: never;
@@ -1795,6 +1820,46 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/passive/{session_id}/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Passive Lessons
+         * @description The lessons the teacher gave this session, oldest first. 404 for an unknown session.
+         */
+        get: operations["passive_lessons_passive__session_id__lessons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/passive/{session_id}/lessons/{lesson_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change Passive Lesson
+         * @description Drop a lesson (the next round leaves it out of the training) or keep it. 404 for an unknown session or lesson.
+         */
+        patch: operations["change_passive_lesson_passive__session_id__lessons__lesson_id__patch"];
         trace?: never;
     };
     "/passive/{session_id}/pause": {
@@ -1828,7 +1893,8 @@ export interface paths {
         put?: never;
         /**
          * Resume Passive
-         * @description Ask a paused session to carry on. 409 when it has ended or is being stopped.
+         * @description Ask a paused session to carry on; a stopped or failed one goes back in the queue (status "queued"), its watchdog starts and the
+         *     trainer continues from its last checkpoint. 409 when it has finished, is being stopped, or another session is active.
          */
         post: operations["resume_passive_passive__session_id__resume_post"];
         delete?: never;
@@ -4646,6 +4712,14 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** LessonChange */
+        LessonChange: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "dropped";
+        };
         /** Line */
         Line: {
             /** Bad */
@@ -5061,6 +5135,182 @@ export interface components {
             /** Signin */
             signin: boolean;
         };
+        /** PassiveCheckpoint */
+        PassiveCheckpoint: {
+            /** At */
+            at?: string | null;
+            /**
+             * Best
+             * @default false
+             */
+            best: boolean;
+            /**
+             * Discarded
+             * @default false
+             */
+            discarded: boolean;
+            /** Elapsed */
+            elapsed?: number | null;
+            /** Error */
+            error: number;
+            /**
+             * Kept
+             * @default true
+             */
+            kept: boolean;
+            /**
+             * Lessons
+             * @default 0
+             */
+            lessons: number;
+            /** N */
+            n: number;
+            /** Parent */
+            parent?: number | null;
+            /** Pivot */
+            pivot?: string | null;
+            /**
+             * Polished
+             * @default false
+             */
+            polished: boolean;
+            /** Round */
+            round: number;
+            /** Win Rate */
+            win_rate?: number | null;
+        };
+        /** PassiveDetail */
+        PassiveDetail: {
+            journal: components["schemas"]["PassiveJournal"];
+            plan: components["schemas"]["PassivePlan"];
+            progress: components["schemas"]["PassiveProgress"];
+            session: components["schemas"]["PassiveSession"];
+        };
+        /**
+         * PassiveEvent
+         * @description One line of the trainer's journal. `type` is start, round, check, checkpoint, rollback, teacher, lesson, restart, power, pause,
+         *     resume, stop, memory or error; the other fields depend on it (message, reason, error, from, to, ...).
+         */
+        PassiveEvent: {
+            /** At */
+            at?: string | null;
+            /** Index */
+            index: number;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** PassiveJournal */
+        PassiveJournal: {
+            /** Events */
+            events: components["schemas"]["PassiveEvent"][];
+            /** First */
+            first: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * PassiveLesson
+         * @description One thing the teacher showed the model: the prompt, the model's own reply and the better answer it should learn.
+         */
+        PassiveLesson: {
+            /**
+             * Answer
+             * @default
+             */
+            answer: string;
+            /** At */
+            at?: string | null;
+            /** Checkpoint */
+            checkpoint: number;
+            /** Id */
+            id: string;
+            /**
+             * Prompt
+             * @default
+             */
+            prompt: string;
+            /**
+             * Reply
+             * @default
+             */
+            reply: string;
+            /** Round */
+            round: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "dropped" | "left_out";
+        };
+        /**
+         * PassivePlan
+         * @description studio_passive.plan_summary: one plain sentence per group of settings.
+         */
+        PassivePlan: {
+            /** Limits */
+            limits: string;
+            /** Plateau */
+            plateau: string;
+            /** Stop */
+            stop: string;
+            /** Teacher */
+            teacher: string;
+            /** Worse */
+            worse: string;
+        };
+        /** PassiveProgress */
+        PassiveProgress: {
+            /**
+             * Active Seconds
+             * @default 0
+             */
+            active_seconds: number;
+            /** Batch Size */
+            batch_size?: number | null;
+            /** Best */
+            best?: number | null;
+            /** Best Error */
+            best_error?: number | null;
+            /** Checkpoints */
+            checkpoints: components["schemas"]["PassiveCheckpoint"][];
+            /** Current */
+            current?: number | null;
+            /** Current Error */
+            current_error?: number | null;
+            /** Learning Rate */
+            learning_rate?: number | null;
+            /** Limit Seconds */
+            limit_seconds: number;
+            /** Phase */
+            phase: string;
+            /**
+             * Restarts
+             * @default 0
+             */
+            restarts: number;
+            /**
+             * Round
+             * @default 0
+             */
+            round: number;
+            /**
+             * Rounds Since Best
+             * @default 0
+             */
+            rounds_since_best: number;
+            /** Stop Reason */
+            stop_reason?: string | null;
+            teacher?: components["schemas"]["PassiveTeacher"] | null;
+            /** Win Rate */
+            win_rate?: number | null;
+            /**
+             * Worse Streak
+             * @default 0
+             */
+            worse_streak: number;
+        };
         /** PassiveSaved */
         PassiveSaved: {
             /** Created */
@@ -5107,10 +5357,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** PassiveStarted */
+        PassiveStarted: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+        };
         /** PassiveStatus */
         PassiveStatus: {
             /** Status */
             status: string;
+        };
+        /** PassiveTeacher */
+        PassiveTeacher: {
+            /**
+             * Done
+             * @default 0
+             */
+            done: number;
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /** Reachable */
+            reachable?: boolean | null;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        } & {
+            [key: string]: unknown;
         };
         /** PathsRequest */
         PathsRequest: {
@@ -6685,6 +6964,54 @@ export interface components {
             spec: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * StartPassive
+         * @description The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.
+         */
+        StartPassive: {
+            /**
+             * Duration
+             * @default 8
+             */
+            duration: number;
+            /**
+             * Keep Awake
+             * @default true
+             */
+            keep_awake: boolean;
+            /**
+             * Memory Fraction
+             * @default 0.5
+             */
+            memory_fraction: number;
+            /**
+             * Patience Rounds
+             * @default 3
+             */
+            patience_rounds: number;
+            /**
+             * Pause On Battery
+             * @default true
+             */
+            pause_on_battery: boolean;
+            /** Sources */
+            sources?: string[] | null;
+            /** Target Error */
+            target_error?: number | null;
+            /**
+             * Teacher
+             * @default true
+             */
+            teacher: boolean;
+            /**
+             * Unit
+             * @default hours
+             * @enum {string}
+             */
+            unit: "minutes" | "hours" | "days";
+            /** Version */
+            version?: number | null;
         };
         /** StartRequest */
         StartRequest: {
@@ -10349,6 +10676,39 @@ export interface operations {
             };
         };
     };
+    start_passive_passive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartPassive"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     remove_passive_signin_passive_signin_delete: {
         parameters: {
             query?: never;
@@ -10364,6 +10724,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    passive_detail_passive__session_id__get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before?: number | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
@@ -10385,6 +10779,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PassiveStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    passive_lessons_passive__session_id__lessons_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveLesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_passive_lesson_passive__session_id__lessons__lesson_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                lesson_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LessonChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PassiveLesson"];
                 };
             };
             /** @description Validation Error */

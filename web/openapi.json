@@ -3033,6 +3033,24 @@
         "title": "LeaveRequest",
         "type": "object"
       },
+      "LessonChange": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "pending",
+              "dropped"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LessonChange",
+        "type": "object"
+      },
       "Line": {
         "properties": {
           "bad": {
@@ -4146,6 +4164,433 @@
         "title": "Passive",
         "type": "object"
       },
+      "PassiveCheckpoint": {
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "best": {
+            "default": false,
+            "title": "Best",
+            "type": "boolean"
+          },
+          "discarded": {
+            "default": false,
+            "title": "Discarded",
+            "type": "boolean"
+          },
+          "elapsed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed"
+          },
+          "error": {
+            "title": "Error",
+            "type": "number"
+          },
+          "kept": {
+            "default": true,
+            "title": "Kept",
+            "type": "boolean"
+          },
+          "lessons": {
+            "default": 0,
+            "title": "Lessons",
+            "type": "integer"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "pivot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pivot"
+          },
+          "polished": {
+            "default": false,
+            "title": "Polished",
+            "type": "boolean"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          }
+        },
+        "required": [
+          "n",
+          "round",
+          "error"
+        ],
+        "title": "PassiveCheckpoint",
+        "type": "object"
+      },
+      "PassiveDetail": {
+        "properties": {
+          "journal": {
+            "$ref": "#/components/schemas/PassiveJournal"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PassivePlan"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/PassiveProgress"
+          },
+          "session": {
+            "$ref": "#/components/schemas/PassiveSession"
+          }
+        },
+        "required": [
+          "session",
+          "plan",
+          "progress",
+          "journal"
+        ],
+        "title": "PassiveDetail",
+        "type": "object"
+      },
+      "PassiveEvent": {
+        "additionalProperties": true,
+        "description": "One line of the trainer's journal. `type` is start, round, check, checkpoint, rollback, teacher, lesson, restart, power, pause,\nresume, stop, memory or error; the other fields depend on it (message, reason, error, from, to, ...).",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "type"
+        ],
+        "title": "PassiveEvent",
+        "type": "object"
+      },
+      "PassiveJournal": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/PassiveEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "first": {
+            "title": "First",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "events",
+          "total",
+          "first"
+        ],
+        "title": "PassiveJournal",
+        "type": "object"
+      },
+      "PassiveLesson": {
+        "description": "One thing the teacher showed the model: the prompt, the model's own reply and the better answer it should learn.",
+        "properties": {
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "checkpoint": {
+            "title": "Checkpoint",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "prompt": {
+            "default": "",
+            "title": "Prompt",
+            "type": "string"
+          },
+          "reply": {
+            "default": "",
+            "title": "Reply",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "dropped",
+              "left_out"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "round",
+          "checkpoint",
+          "status"
+        ],
+        "title": "PassiveLesson",
+        "type": "object"
+      },
+      "PassivePlan": {
+        "description": "studio_passive.plan_summary: one plain sentence per group of settings.",
+        "properties": {
+          "limits": {
+            "title": "Limits",
+            "type": "string"
+          },
+          "plateau": {
+            "title": "Plateau",
+            "type": "string"
+          },
+          "stop": {
+            "title": "Stop",
+            "type": "string"
+          },
+          "teacher": {
+            "title": "Teacher",
+            "type": "string"
+          },
+          "worse": {
+            "title": "Worse",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stop",
+          "limits",
+          "plateau",
+          "teacher",
+          "worse"
+        ],
+        "title": "PassivePlan",
+        "type": "object"
+      },
+      "PassiveProgress": {
+        "properties": {
+          "active_seconds": {
+            "default": 0,
+            "title": "Active Seconds",
+            "type": "number"
+          },
+          "batch_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Size"
+          },
+          "best": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best"
+          },
+          "best_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Error"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/PassiveCheckpoint"
+            },
+            "title": "Checkpoints",
+            "type": "array"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "current_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Error"
+          },
+          "learning_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learning Rate"
+          },
+          "limit_seconds": {
+            "title": "Limit Seconds",
+            "type": "number"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "restarts": {
+            "default": 0,
+            "title": "Restarts",
+            "type": "integer"
+          },
+          "round": {
+            "default": 0,
+            "title": "Round",
+            "type": "integer"
+          },
+          "rounds_since_best": {
+            "default": 0,
+            "title": "Rounds Since Best",
+            "type": "integer"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "teacher": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PassiveTeacher"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "worse_streak": {
+            "default": 0,
+            "title": "Worse Streak",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "limit_seconds",
+          "checkpoints"
+        ],
+        "title": "PassiveProgress",
+        "type": "object"
+      },
       "PassiveSaved": {
         "properties": {
           "created": {
@@ -4242,6 +4687,24 @@
         "title": "PassiveSession",
         "type": "object"
       },
+      "PassiveStarted": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "PassiveStarted",
+        "type": "object"
+      },
       "PassiveStatus": {
         "properties": {
           "status": {
@@ -4253,6 +4716,39 @@
           "status"
         ],
         "title": "PassiveStatus",
+        "type": "object"
+      },
+      "PassiveTeacher": {
+        "additionalProperties": true,
+        "properties": {
+          "done": {
+            "default": 0,
+            "title": "Done",
+            "type": "integer"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "reachable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachable"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "PassiveTeacher",
         "type": "object"
       },
       "PathsRequest": {
@@ -8069,6 +8565,90 @@
           "prediction"
         ],
         "title": "SplitStep",
+        "type": "object"
+      },
+      "StartPassive": {
+        "additionalProperties": false,
+        "description": "The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.",
+        "properties": {
+          "duration": {
+            "default": 8,
+            "title": "Duration",
+            "type": "number"
+          },
+          "keep_awake": {
+            "default": true,
+            "title": "Keep Awake",
+            "type": "boolean"
+          },
+          "memory_fraction": {
+            "default": 0.5,
+            "title": "Memory Fraction",
+            "type": "number"
+          },
+          "patience_rounds": {
+            "default": 3,
+            "title": "Patience Rounds",
+            "type": "integer"
+          },
+          "pause_on_battery": {
+            "default": true,
+            "title": "Pause On Battery",
+            "type": "boolean"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          },
+          "target_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Error"
+          },
+          "teacher": {
+            "default": true,
+            "title": "Teacher",
+            "type": "boolean"
+          },
+          "unit": {
+            "default": "hours",
+            "enum": [
+              "minutes",
+              "hours",
+              "days"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "StartPassive",
         "type": "object"
       },
       "StartRequest": {
@@ -14024,6 +14604,46 @@
         "tags": [
           "passive"
         ]
+      },
+      "post": {
+        "description": "Create a session from the form and start its watchdog. 400 with a sentence for a bad plan or version, 409 while another session is active.",
+        "operationId": "start_passive_passive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPassive"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Passive",
+        "tags": [
+          "passive"
+        ]
       }
     },
     "/passive/signin": {
@@ -14035,6 +14655,78 @@
           }
         },
         "summary": "Remove Passive Signin",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}": {
+      "get": {
+        "description": "One session: its row, plan, progress (phase, round, best error, the error of each checkpoint) and a page of the trainer's journal,\nthe newest `limit` events or those before event number `before`. 404 for an unknown session.",
+        "operationId": "passive_detail_passive__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Passive Detail",
         "tags": [
           "passive"
         ]
@@ -14078,6 +14770,115 @@
           }
         },
         "summary": "Keep Passive Going",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/lessons": {
+      "get": {
+        "description": "The lessons the teacher gave this session, oldest first. 404 for an unknown session.",
+        "operationId": "passive_lessons_passive__session_id__lessons_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PassiveLesson"
+                  },
+                  "title": "Response Passive Lessons Passive  Session Id  Lessons Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Passive Lessons",
+        "tags": [
+          "passive"
+        ]
+      }
+    },
+    "/passive/{session_id}/lessons/{lesson_id}": {
+      "patch": {
+        "description": "Drop a lesson (the next round leaves it out of the training) or keep it. 404 for an unknown session or lesson.",
+        "operationId": "change_passive_lesson_passive__session_id__lessons__lesson_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lesson_id",
+            "required": true,
+            "schema": {
+              "title": "Lesson Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LessonChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PassiveLesson"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Passive Lesson",
         "tags": [
           "passive"
         ]
@@ -14128,7 +14929,7 @@
     },
     "/passive/{session_id}/resume": {
       "post": {
-        "description": "Ask a paused session to carry on. 409 when it has ended or is being stopped.",
+        "description": "Ask a paused session to carry on; a stopped or failed one goes back in the queue (status \"queued\"), its watchdog starts and the\ntrainer continues from its last checkpoint. 409 when it has finished, is being stopped, or another session is active.",
         "operationId": "resume_passive_passive__session_id__resume_post",
         "parameters": [
           {
