@@ -34,6 +34,14 @@ class Version:
     score_device: str | None = None  # what scored it on the held-back text
 
 
+def passive_row(store, s):
+    """One passive session as passive() lists it: its status, plan summary and the trainer's and watchdog's facts."""
+    import studio_passive_watch as watch
+    from studio_passive import ACTIVE, plan_summary
+    facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
+    return {"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"], "error": s["error"], **facts}
+
+
 @dataclass
 class Job:
     id: str
@@ -414,6 +422,12 @@ class Services:
         data); an empty data.sources means every set of text. `version`: the number to train (the current one when None), whose
         design and best checkpoint become the plan's config and base_checkpoint. Returns the new session's id. ValueError (in
         plain words) for a bad plan or version; RuntimeError while another session is queued, running or paused."""
+        raise NotImplementedError
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        """{session, plan, progress, journal}: one passive session as the detail view shows it, or None for an unknown one. session = the
+        row passive() lists; plan = studio_passive.plan_summary's lines; progress = studio_passive.progress_summary; journal =
+        {events, total, first}: up to `limit` events before event number `before` (the newest when None), oldest first, each with its `index`."""
         raise NotImplementedError
 
     def stop_passive(self, session_id):
@@ -974,6 +988,19 @@ class FakeServices(Services):
 
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        import studio_passive
+        data = getattr(self, "passive_details", {}).get(session_id, {})  # tests set {"state": ..., "journal": [...]}
+        plan = studio_passive.merge_plan({})
+        events = data.get("journal", [])
+        end = len(events) if before is None else max(0, min(before, len(events)))
+        start = max(0, end - max(1, limit))
+        return {"session": dict(row), "plan": studio_passive.plan_summary(plan), "progress": studio_passive.progress_summary(data.get("state", {}), plan),
+                "journal": {"events": [{**events[i], "index": i} for i in range(start, end)], "total": len(events), "first": start}}
 
     def start_passive(self, plan, version=None):
         import studio_passive
@@ -1945,16 +1972,24 @@ class WorkspaceServices(Services):
 
     def passive(self):
         import studio_passive_watch as watch
-        from studio_passive import ACTIVE, PassiveStore, plan_summary
+        from studio_passive import PassiveStore
         signin = watch.installed(self.root)
         if not (self.root / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
             return {"sessions": [], "signin": signin}
-        store, rows = PassiveStore(self.root), []
-        for s in store.list()[:10]:
-            facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
-            rows.append({"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"],
-                         "error": s["error"], **facts})
-        return {"sessions": rows, "signin": signin}
+        store = PassiveStore(self.root)
+        return {"sessions": [passive_row(store, s) for s in store.list()[:10]], "signin": signin}
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        from studio_passive import PassiveStore, plan_summary, progress_summary
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        s = store.get(session_id)
+        if s is None:
+            return None
+        events, total, first = store.journal_page(session_id, limit, before)
+        return {"session": passive_row(store, s), "plan": plan_summary(s["plan"]), "progress": progress_summary(s["state"], s["plan"]),
+                "journal": {"events": events, "total": total, "first": first}}
 
     def start_passive(self, plan, version=None, **hooks):
         """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""

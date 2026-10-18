@@ -11,6 +11,7 @@ import { problem } from "@/lib/cluster";
 import { routeFor } from "@/lib/routes";
 import { PASSIVE } from "./copy";
 import { ACTIVE, competes, sessionView, type SessionRow } from "./session";
+import { SessionDetail } from "./session-detail";
 import { StartSession } from "./start-form";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
@@ -47,6 +48,7 @@ export default function Page() {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [creating, setCreating] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
 
   const stop = useMutation({
     mutationFn: (id: string) => unwrap(api.POST("/passive/{session_id}/stop", { params: { path: { session_id: id } } })),
@@ -118,7 +120,7 @@ export default function Page() {
               {sessions.map((row) => {
                 const view = sessionView(row);
                 return (
-                  <div key={row.id} data-testid={`session-${row.id}`} className="flex items-start justify-between gap-4 rounded-md border p-3">
+                  <div key={row.id} data-testid={`session-${row.id}`} aria-current={open === row.id || undefined} className="flex items-start justify-between gap-4 rounded-md border p-3">
                     <div className="flex min-w-0 flex-col gap-1">
                       <span className="font-medium">{view.headline}</span>
                       {view.lines.map((line, i) => (
@@ -127,6 +129,9 @@ export default function Page() {
                         </span>
                       ))}
                     </div>
+                    <Button variant="outline" size="sm" aria-pressed={open === row.id} onClick={() => setOpen(open === row.id ? null : row.id)}>
+                      {PASSIVE.details}
+                    </Button>
                     {(view.canPause || view.canResume || view.canRestart) && (
                       <Button
                         variant="outline"
@@ -166,6 +171,8 @@ export default function Page() {
               })}
             </CardContent>
           </Card>
+
+          {open && <SessionDetail key={open} id={open} onClose={() => setOpen(null)} />}
 
           {creating && (
             <StartSession

@@ -173,6 +173,38 @@ then is leased the slot and invited, joining at the round after. A node that fre
 up to `max_members`. Two runs owned by different nodes decide on their own polls, so they can still pick the same free node
 in the same few seconds; the second member job then waits on that node's queue.
 
+### Which job kinds leave their owner (#184)
+
+`studio_scheduler.REMOTE_KINDS` lists them. A kind moves when everything it reads can travel in the dispatch (rows, as
+`pretrain` ships its dataset) or through the version store (a checkpoint, as a key the runner pulls), and everything it makes
+can come back as a small result or as one checkpoint. The runner refuses any other kind with `409`.
+
+| kind | where | what travels |
+| --- | --- | --- |
+| `pretrain` | peer | the dataset and, for a catch-up, the checkpoint as a key; back: the finished version |
+| `post_round`, `restore_answers` | peer (prefer a CUDA node) | the rows the round reads (`studio_rl.rows_needed`: conversations, problems, held-back text and problems, pairs or corrections) in the body; the checkpoint it starts from and the teacher as store keys, resolved on the owner first (`studio_rl.resolve` runs there, never on the runner, whose own versions are none of its business). Back: the gate result and, only when the gate passed, the candidate checkpoint |
+| `compare` | peer, when this machine is busy | the experiment and its dataset; back: the result, which the owner writes as `runs/compare_<id>/{experiment,results}.json`, where its Compare page reads it. The variants' own checkpoints stay on the peer |
+| `quicktest` | owner only | it times two short runs to say how slow a draft design is *on this machine*; a peer's clock answers another question. It also reads this machine's own text for its "slice" choice |
+| `import_pretrained` | owner only | it is a download, not compute: it fills this machine's `data/pretrained` cache and a version row made here, and a detour through the store would carry the same weights over the owner's link a second time |
+| `checkpoint_now` | owner only | it continues the parent run's own `last.npz` (optimizer, sampler, RNG) and `dataset.jsonl` in that run's folder, which only the node that trained it holds; a published checkpoint is weights only |
+
+**Bringing a result home.** A runner that finishes publishes the weights and reports `result` (a round's or a comparison's,
+at most 4 MB of JSON) with the end. A round publishes its candidate (`result.checkpoint`), not the best-scoring file, and only
+when it passed its gate; a gate that failed leaves its weights on the peer and `result.checkpoint` is `None` on the owner.
+The owner then pulls the key into the folder a local run would have written to (`runs/queue_<id>/best.npz`) and points the
+job's `output_dir` (and a round's `result.checkpoint`) there, *before* it says the job ended. So whatever hears the end, the
+app recording a version or a round, finds the files here exactly as after a local run. The job's status is `done` a moment
+earlier, while the pull runs. The pull is recorded on the job (`params["landing"]`), so it is retried every `LAND_RETRY_S`
+and after a restart; after `LAND_TRIES` failures the job is failed with its key, which stays in the store.
+
+**A remote `pretrain` on new text** leaves the `restore_answers` round, as a local one does, once its version has been
+pulled (`Runner.follow_up`). That round is itself placed like any other job.
+
+Limits, kept as they are for now: the store carries weights in half precision, so a round on a peer starts from, and returns,
+weights rounded to it (the gate measures before and after on the same rounded start); a round or comparison that loses its
+runner starts again, as only a pretrain publishes checkpoints to resume from; the checkpoints a round is started from stay in
+the store, as a catch-up's start already does, until #406 deletes them.
+
 ## Training runtime: DiLoCo (#132)
 
 A distributed run has one **coordinator**, on the owner node until a failover moves it, and one or more **members**, each a

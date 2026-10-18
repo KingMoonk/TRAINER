@@ -53,6 +53,7 @@ STEPS = [
     ("passive", "GET", "/passive", None),
     ("passive-start", "POST", "/passive", {}),
     ("passive-started", "GET", "/passive", None),
+    ("passive-detail", "GET", "/passive/passive_1", None),
     ("passive-stop", "POST", "/passive/passive_1/stop", None),
     ("passive-resume", "POST", "/passive/passive_1/resume", None),
     ("traffic-rules", "GET", "/traffic/rules", None),

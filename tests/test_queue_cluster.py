@@ -223,8 +223,8 @@ class OwnerSide(unittest.TestCase):
         self.place()
         self.assertEqual(self.peer.dispatched, [])
 
-    def test_a_job_other_than_pretraining_stays_here(self):
-        job = self.runner.enqueue(Job("compare", "Compare", params={"experiment": {}}))
+    def test_a_job_that_cannot_leave_its_owner_stays_here(self):
+        job = self.runner.enqueue(Job("quicktest", "Quick test", params={"current_spec": {}, "draft_spec": {}}))
         self.place()
         self.assertEqual((job.status, self.peer.dispatched), ("waiting", []))
         self.assertEqual(self.runner._next_local(), job)
@@ -935,7 +935,7 @@ class OwnerSide(unittest.TestCase):
     def test_a_waiting_job_does_not_hold_back_the_ones_behind_it(self):
         self.net.down.add("gpu-box")
         pinned = self.runner.enqueue(self.job(pinned="gpu-box"))
-        free = self.runner.enqueue(Job("compare", "Compare"))
+        free = self.runner.enqueue(Job("quicktest", "Quick test"))
         self.place()
         self.assertEqual(self.runner._next_local(), free)
         self.assertEqual(pinned.status, "waiting")

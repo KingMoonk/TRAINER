@@ -172,8 +172,13 @@ class Placement(unittest.TestCase):
         self.assertEqual(self.decide(exclude={"gpu-box"}).where, "local")
 
     def test_a_kind_that_cannot_leave_its_owner_stays_here(self):
-        self.assertEqual(self.decide("compare").where, "local")
-        self.assertEqual(self.decide("post_round").where, "local")
+        for kind in ("quicktest", "import_pretrained", "checkpoint_now"):
+            self.assertEqual(self.decide(kind).where, "local", kind)
+
+    def test_the_other_kinds_go_to_a_free_gpu(self):
+        for kind in ("pretrain", "post_round", "restore_answers"):
+            self.assertEqual(self.decide(kind), sched.Placement("remote", "gpu-box"), kind)
+        self.assertEqual(self.decide("compare", pinned="gpu-box"), sched.Placement("remote", "gpu-box"))
 
     def test_without_a_store_nothing_leaves_this_machine(self):
         self.assertEqual(self.decide(store_ready=False).where, "local")
@@ -191,7 +196,7 @@ class Placement(unittest.TestCase):
 
     def test_the_wait_says_why(self):
         self.assertIn("not one of this cluster's machines", self.decide(pinned="ghost").reason)
-        self.assertIn("only runs on the machine that queued it", self.decide("compare", pinned="gpu-box").reason)
+        self.assertIn("only runs on the machine that queued it", self.decide("quicktest", pinned="gpu-box").reason)
         self.assertIn("version store", self.decide(pinned="gpu-box", store_ready=False).reason)
         self.assertIn("just refused", self.decide(pinned="gpu-box", exclude={"gpu-box"}).reason)
         self.assertIn("busy", self.decide(nodes=[self.cpu, node("gpu-box", "cuda", busy=True)], pinned="gpu-box").reason)
