@@ -20,6 +20,7 @@ import dataclasses
 import json
 import logging
 import os
+import shutil
 import socket
 import threading
 import time
@@ -42,6 +43,12 @@ LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "
 TERMINAL = ("done", "failed", "stopped")
 SWEEP_RETRY_S = 60.  # seconds before the owner tries again to delete checkpoints the store would not let go of
 USAGE_RETRY_S = 30.  # seconds before a checkpoint the store could not check (its size would not read) is offered again
+ROUND_KINDS = ("post_round", "restore_answers")  # their finished weights are the result's `checkpoint`, not the newest file in the folder
+RESULT_KINDS = ("compare",) + ROUND_KINDS  # kinds whose finished report carries `result`, which the app keeps in the job's params
+PULLED_KINDS = ("pretrain",) + ROUND_KINDS  # kinds whose finished weights the owner pulls from the store ("landing"), so its version is local
+RESULT_MAX_BYTES = 4 << 20  # the largest `result` a runner reports
+LAND_TRIES = 3  # attempts to bring a finished job's weights from the store before the job is failed
+LAND_RETRY_S = 30.  # seconds between those attempts
 _log = logging.getLogger(__name__)
 
 
@@ -103,6 +110,7 @@ class Cluster:
         self.gangs = sched.Gangs(clock, lease_s)  # the member slots of the distributed runs queued here
         self.guests = {}  # owner's job id -> GuestRun
         self.waiting = {}  # job id -> why it is waiting
+        self._landing, self._tries, self._retry_at = set(), {}, {}  # finished jobs being pulled now; failed pulls so far; clock time of the next try (`_land`)
         self._removed = {}  # job id -> checkpoint keys of a job taken out of the queue, still to be deleted from the store
         self._results = set()  # result keys of jobs taken out of the queue: a result can be the bytes of a checkpoint, and stays
         self._begun = set()  # keys a delete was started for: a half-finished one (its listing gone) is finished, no other unlisted key is
@@ -373,13 +381,30 @@ class Cluster:
         """The body of `POST /cluster/jobs`: the job with its training data inside, and the store key of the version it starts from.
         Sent to the node that wrote the job's last checkpoint, it also names that checkpoint (`resume_from`), so the node can continue
         from its own full copy, optimizer included, and fall back to the published weights when it cannot."""
+        import studio_jobs
+        import studio_rl
         import studio_worker
+        rounds = job.kind in studio_jobs.ROUNDS
+        if rounds and self.runner.prepare:
+            self.runner.prepare(job)  # the checkpoint and teacher a round starts from are versions of this node (studio_rl.resolve)
         params = {k: v for k, v in job.params.items() if k not in LOCAL_ONLY}
         notes = dict(sched.attempt_state(job.params))
         fetch = dict(params.pop("fetch", None) or {})
         params.pop("cluster", None)
-        if "examples" not in params:
-            params["examples"] = studio_worker.JobContext(self.runner.root, self.runner.root / "runs").examples(params)
+        context = studio_worker.JobContext(self.runner.root, self.runner.root / "runs")
+        if rounds:  # its rows ship in the body; the checkpoint and teacher are published and handed over as keys
+            for kind in studio_rl.rows_needed(studio_rl.number_of(job), params):
+                params[kind] = context.post_rows(kind)
+            before = dict(fetch)
+            for name in ("checkpoint", "teacher"):
+                path = params.pop(name, None)
+                if isinstance(path, str) and path and name not in fetch:
+                    fetch[name] = store.publish({"number": 0, "name": f"{name} of job {job.id}"}, path)
+            if fetch != before:
+                with self.runner.lock:  # recorded on the job, so a sweep sees the keys the runner is about to pull
+                    job.params = {**job.params, "fetch": dict(fetch)}
+        elif "examples" not in params:
+            params["examples"] = context.examples(params)
         if not fetch and params.get("mode") == "catch_up" and params.get("init_from"):
             fetch["init_from"] = store.publish({"number": 0, "name": f"start of job {job.id}"}, params["init_from"])
             with self.runner.lock:  # recorded on the job, so a sweep sees the key the runner is about to pull
@@ -478,6 +503,7 @@ class Cluster:
         if job is None:
             raise sched.StaleEpoch(job_id, epoch)
         key = body.get("key")
+        result = body.get("result") if job.kind in RESULT_KINDS and isinstance(body.get("result"), dict) else None
         with self._delete_lock:  # a sweep is never between "this key is free" and deleting it while the result is being recorded
             lost = bool(key) and self._missing(key)
             with self.runner.lock:
@@ -493,9 +519,120 @@ class Cluster:
                 elif key:
                     job.params = {**job.params, "remote_result": {"key": key, "node": job.node,
                                                                   "step": int(notes.get("offset", 0)) + int(body.get("step") or 0)}}
+                if result is not None and job.status != "failed":  # (a round's `checkpoint` is a path on the runner: the landing sets this node's)
+                    job.params = {**job.params, "result": {**result, "checkpoint": None} if job.kind in ROUND_KINDS else result}
                 self.runner._save()
-        self.runner._emit("job", {"job": job_id, "status": job.status, "error": job.error})
+        self._announce(job)
+
+    @staticmethod
+    def _result_key(job):
+        key = (job.params.get("remote_result") or {}).get("key")
+        return key if isinstance(key, str) else None
+
+    def _announce(self, job):
+        """Owner: a job that ran on a peer has ended. The weights of a job that finished (a pretrain's version, a round's checkpoint)
+        are pulled from the store first (`_land`), so what hears of the end finds them here as it would after a local run; the rest
+        is said at once."""
+        with self.runner.lock:
+            pull = job.status == "done" and job.kind in PULLED_KINDS and bool(self._result_key(job))
+            if pull:
+                job.params = {**job.params, "landing": True}  # persisted: a restart, or a pull that failed, finds it again (`_land_pending`)
+                self.runner._save()
+        if pull:
+            self._land_in_background(job)
+        else:
+            self._settle(job)
+
+    def _settle(self, job):
+        """Say the job ended. A compare's result is written where a local compare's would be, which is where the app reads it."""
+        if job.status == "done" and job.kind == "compare" and isinstance(job.params.get("result"), dict):
+            try:
+                self._write_compare(job)
+            except (OSError, ValueError, TypeError) as exc:
+                with self.runner.lock:
+                    job.status, job.error = "failed", f"The comparison finished on {job.node} but its result could not be saved here: {exc}"
+                    self.runner._save()
+        self.runner._emit("job", {"job": job.id, "status": job.status, "error": job.error})
         self.runner.wake.set()
+
+    def _write_compare(self, job):
+        import studio_experiments
+        from studio_core import atomic_json
+        out = self._folder(job)
+        out.mkdir(parents=True, exist_ok=True)
+        studio_experiments.ExperimentSpec(**job.params["experiment"]).normalized().save(out / "experiment.json")
+        atomic_json(out / "results.json", job.params["result"])
+        with self.runner.lock:
+            job.params = {**job.params, "output_dir": str(out)}
+            self.runner._save()
+
+    def _folder(self, job):
+        import studio_jobs
+        return studio_jobs.output_dir(job, self.runner.root / "runs")
+
+    def _land_in_background(self, job):
+        with self._keep_lock:
+            if job.id in self._landing:
+                return
+            self._landing.add(job.id)
+        if not self.threads:
+            return self._land(job)
+        threading.Thread(target=self._land, args=(job,), daemon=True, name=f"land {job.id}").start()
+
+    def _land_pending(self):
+        """Owner: bring home the weights of finished jobs whose pull has not happened (the app restarted, or the store did not answer)."""
+        with self.runner.lock:
+            due = [j for j in self.runner.jobs if not j.owner and j.params.get("landing") and self._retry_at.get(j.id, 0.) <= self.clock()]
+        for job in due:
+            self._land_in_background(job)
+
+    def _land(self, job):
+        """Pull the weights a peer finished into the folder a local run would have written them to (`best.npz`), point the job's
+        `output_dir` and, for a round, its result's `checkpoint` there, and only then say the job ended: the version is local by then.
+        A pretrain on new text then leaves its restore_answers round, as a local one does. A pull that fails is tried again, and then
+        fails the job with the key, which stays in the store."""
+        key = self._result_key(job)
+        try:
+            store = self.store()
+            if store is None:
+                raise studio_publish.StoreError(self.store_problem)
+            pulled = Path(store.pull(key, self.runner.root / "data" / "pulled"))
+            out = self._folder(job)
+            out.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(pulled), out / "best.npz")
+        except Exception as exc:  # noqa: BLE001 - the store or the disk said no: the sentence is the reason
+            return self._land_failed(job, key, str(exc) or type(exc).__name__)
+        with self._keep_lock:
+            self._landing.discard(job.id)
+            self._tries.pop(job.id, None)
+            self._retry_at.pop(job.id, None)
+        with self.runner.lock:
+            params = {k: v for k, v in job.params.items() if k != "landing"}
+            params["output_dir"] = str(out)
+            if job.kind in ROUND_KINDS and isinstance(params.get("result"), dict):
+                params["result"] = {**params["result"], "checkpoint": str(out / "best.npz")}
+            job.params = params
+            self.runner._save()
+        self._settle(job)  # (the app records the version on this event, before the follow-up below can be placed)
+        with self.runner.lock:
+            self.runner.follow_up(job)
+            self.runner._save()
+        self.runner.wake.set()
+
+    def _land_failed(self, job, key, reason):
+        with self._keep_lock:
+            self._landing.discard(job.id)
+            tries = self._tries[job.id] = self._tries.get(job.id, 0) + 1
+            self._retry_at[job.id] = self.clock() + LAND_RETRY_S
+        _log.warning("Could not bring the result %s of job %s here (try %s of %s): %s", key, job.id, tries, LAND_TRIES, reason)
+        if tries < LAND_TRIES:
+            return
+        with self.runner.lock:
+            job.status = "failed"
+            job.error = f"The job finished on {job.node}, but its result ({key}) could not be brought here: {reason} It stays in the version store."
+            job.params = {k: v for k, v in job.params.items() if k != "landing"}
+            self.runner._save()
+        self._settle(job)
 
     def _missing(self, key):
         """True only when the store says `key` is not there; a store that cannot say (no `exists`, or it fails) is believed."""
@@ -525,6 +662,7 @@ class Cluster:
         for run in list(self.guests.values()):
             self._tick_guest(run)
         self._tick_gangs()
+        self._land_pending()
         self._sweep_checkpoints()
 
     def _tick_gangs(self):
@@ -592,7 +730,7 @@ class Cluster:
             self.runner._save()
         self.runner._emit("cluster", {"job": job_id, "state": "interrupted", "node": node, "detail": note})
         if finished:
-            self.runner._emit("job", {"job": job_id, "status": "done", "error": ""})
+            self._announce(job)
         self.runner.wake.set()
 
     def jobs_view(self):
@@ -858,8 +996,8 @@ class Cluster:
         """Upload the job's newest checkpoint (weights only) so the owner can resume from it if this node is lost."""
         job = next((j for j in self.runner.jobs if j.id == run.local_id and j.status == "running"), None)
         store = self.store()
-        if job is None or store is None or run.publishing or not job.params.get("output_dir"):
-            return
+        if job is None or store is None or run.publishing or not job.params.get("output_dir") or run.spec["kind"] != "pretrain":
+            return  # (only a pretrain can continue from a checkpoint; a round or a comparison starts again)
         path = Path(job.params["output_dir"]) / "last.npz"
         try:
             mtime = path.stat().st_mtime
@@ -960,10 +1098,19 @@ class Cluster:
         while not (run.stopped_by or run.guest.fence.expired()) and any(e.get("type") in RESUME_EVENTS for e in list(run.events)):
             if self.runner.closed.wait(.2):
                 break
-        key, step = None, 0
+        key, step, kind = None, 0, run.spec["kind"]
         job = next((j for j in self.runner.jobs if j.id == run.local_id), None)
         out = Path((job.params.get("output_dir") if job else "") or "")
-        path = next((p for p in (out / "best.npz", out / "last.npz") if p.is_file()), None)
+        result = job.params.get("result") if job and kind in RESULT_KINDS and status == "done" else None
+        if result is not None and len(json.dumps(result, default=str)) > RESULT_MAX_BYTES:
+            result, status, error = None, "failed", f"The result is larger than the {RESULT_MAX_BYTES >> 20} MB a job may report."
+        if kind in ROUND_KINDS:  # the weights that count are the round's candidate, and only when it passed its gate
+            named = (result or {}).get("checkpoint") if (result or {}).get("ok") else None
+            path = Path(named) if named and Path(named).is_file() else None
+        elif kind == "compare":
+            path = None  # (a comparison keeps its checkpoints; the owner needs only what it measured)
+        else:
+            path = next((p for p in (out / "best.npz", out / "last.npz") if p.is_file()), None)
         if path is not None:
             try:
                 step = checkpoint_step(path) + run.shift
@@ -972,7 +1119,7 @@ class Cluster:
                 where = self.address or "the machine that ran it"
                 status = "failed"
                 error = f"{str(exc) or type(exc).__name__} The finished weights are kept on {where}, at {path}."
-        if self._report(run, status, error, key, step) and key:
+        if self._report(run, status, error, key, step, result) and key:
             self._forget_checkpoints(run, keep=key)
 
     def _publish_result(self, run, version, path):
@@ -988,9 +1135,9 @@ class Cluster:
                 raise
             return store.publish(version, path)
 
-    def _report(self, run, status, error, key=None, step=0):
+    def _report(self, run, status, error, key=None, step=0, result=None):
         """Tell the owner how the job ended; True when it took the report (a "stale" or undelivered report is False)."""
-        body = {"status": status, "error": error, "key": key, "step": step}
+        body = {"status": status, "error": error, "key": key, "step": step, **({"result": result} if result is not None else {})}
         delivered = False
         while not run.stopped_by and not run.guest.fence.expired():
             outcome = run.guest.finish(body)

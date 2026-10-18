@@ -28,8 +28,8 @@ DISPATCH_TIMEOUT = 120.  # the job spec carries its training data, so handing it
 REFUSAL_COOLDOWN = 30.  # seconds before a job is offered again to a node that refused it
 UP, SUSPECT, DOWN = "up", "suspect", "down"
 JOIN_GRACE = 4  # a member slot gets this many lease durations to be heard from the first time: its machine has a member to start
-REMOTE_KINDS = ("pretrain",)  # kinds whose inputs are the dataset and a published version, so they can run on another machine
-EVENTS_RELAYED = ("metric", "telemetry", "info", "sample")  # what a runner passes to the owner; the rest names files on the runner
+REMOTE_KINDS = ("pretrain", "compare", "post_round", "restore_answers")  # kinds whose inputs travel in the dispatch (rows) or the version store (checkpoints), so they can run on another machine; docs/distributed.md says why the rest stay
+EVENTS_RELAYED = ("metric", "telemetry", "info", "sample", "compare", "compare_run", "moved")  # what a runner passes to the owner; the rest names files on the runner
 
 
 class StaleEpoch(RuntimeError):
