@@ -2,6 +2,7 @@
 
 import time
 import uuid
+from time import sleep
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -27,7 +28,8 @@ class JobModel(Model):
     status: str = "waiting"  # waiting | held | running | done | failed | stopped
     eta_s: float | None = None
     created_at: float = 0.0
-    error: str = ""
+    error: str = ""  # a failed job's reason as one sentence saying what to do next
+    details: str = ""  # the raw text behind it, shown on request; "" when the sentence is all there is
     node: str = ""  # the peer it runs or ran on; "" when it runs here
     epoch: int = 0  # the lease epoch it was last placed at
     owner: str = ""  # a job another node queued and this one runs: how to reach that node
@@ -80,6 +82,7 @@ class QueueStateModel(Model):
     stopping: bool = False
     up_next: list[JobModel] = []
     plan: PlanModel = PlanModel()
+    failed: list[JobModel] = []  # jobs that ended failed (the last few), until removed
 
 
 class Outlook(BaseModel):
@@ -144,10 +147,33 @@ def enqueue(job: NewJob, services: Services) -> JobModel:
     return JobModel.model_validate(made)
 
 
+SETTLE_S = 2.5  # how long Start waits to see whether the job it starts fails at once
+SETTLE_STEP_S = .05
+
+
+def _failed_ids(services):
+    return {j.id for j in getattr(services.queue(), "failed", [])}
+
+
+def _settled(state, seen_failed, waited):
+    """True once Start can say what really happened: a job failed since the call began, the plan or a pause holds the queue, nothing
+    is left to start, or a job has been running a moment without failing."""
+    if {j.id for j in state.failed} - seen_failed or state.paused or state.blocked:
+        return True
+    return (state.job is None and not state.up_next) or (state.job is not None and waited >= .8)
+
+
 @router.post("/start")
 def start_queue(services: Services) -> QueueStateModel:
-    """Services.start_queue: let jobs saved as waiting by an earlier session run."""
+    """Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it
+    waits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`
+    with its sentence, instead of a bare 200 followed by a job that has quietly gone."""
+    before = _failed_ids(services)
     services.start_queue()
+    waited = 0.
+    while waited < SETTLE_S and not _settled(services.queue(), before, waited):
+        sleep(SETTLE_STEP_S)
+        waited += SETTLE_STEP_S
     return _state(services)
 
 
@@ -194,8 +220,9 @@ def pin(job_id: str, body: Pin, services: Services) -> QueueStateModel:
 
 @router.delete("/jobs/{job_id}")
 def remove(job_id: str, services: Services) -> QueueStateModel:
-    """Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop)."""
-    if job_id not in {j.id for j in local_jobs(services)}:
+    """Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop). On a
+    failed job it dismisses it from the list."""
+    if job_id not in {j.id for j in [*local_jobs(services), *services.queue().failed]}:
         raise HTTPException(404, f"No job {job_id}")
     services.remove(job_id)
     return _state(services)

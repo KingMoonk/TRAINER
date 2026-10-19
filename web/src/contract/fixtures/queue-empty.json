@@ -2,6 +2,7 @@
   "body": {
     "blocked": null,
     "eta_s": null,
+    "failed": [],
     "gate": {
       "reason": null,
       "resumes_at": null,

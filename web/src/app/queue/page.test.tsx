@@ -8,7 +8,7 @@ import QueuePage from "./page";
 
 // The Queue page against a mocked API (the component tier of tests/queue.spec.ts, which keeps the browser-only flows: drag and keyboard reorder).
 
-type Job = { id: string; kind: string; label: string; note: string; params: object; status: string; eta_s: number | null; created_at: number; error: string };
+type Job = { id: string; kind: string; label: string; note: string; params: object; status: string; eta_s: number | null; created_at: number; error: string; details?: string };
 const job = (id: string, label: string, over: Partial<Job> = {}): Job => ({ id, kind: "pretrain", label, note: "", params: {}, status: "waiting", eta_s: 1800, created_at: 0, error: "", ...over });
 
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
@@ -22,6 +22,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     plan: { ...PLAN } as Record<string, unknown>,
     reason: start.reason ?? (null as string | null),
     supported: start.supported ?? true,
+    failed: [] as Job[],
     up_next: [job("a", "First waiting"), job("b", "Second waiting", { note: "A note" }), job("c", "Third waiting")],
   };
   const view = () => ({
@@ -36,6 +37,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     gate: { reason: state.reason, resumes_at: null, supported: state.supported },
     stopping: state.stopping,
     up_next: state.up_next,
+    failed: state.failed,
     plan: state.plan,
   });
   const index = (path: string) => state.up_next.findIndex((j) => j.id === path.split("/queue/jobs/")[1].split("/")[0]);
@@ -55,6 +57,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     "DELETE /queue/jobs/*": ({ path }) => {
       const id = path.split("/queue/jobs/")[1];
       if (state.job?.id === id) state.job = null;
+      state.failed = state.failed.filter((j) => j.id !== id);
       state.up_next = state.up_next.filter((j) => j.id !== id);
       return reply();
     },
@@ -273,5 +276,29 @@ describe("Queue page", () => {
     await user.click(screen.getByRole("button", { name: "Pause" }));
     expect(await screen.findByText("The runner is not running")).toBeVisible();
     expect(screen.getByTestId("state-line")).toHaveTextContent("Version 3 pretraining · running");
+  });
+
+  test("a job that failed shows its sentence, with the raw details behind a toggle, and can be dismissed", async () => {
+    const { state } = server({ running: false });
+    state.failed = [job("f1", "Version 4 pretraining", { status: "failed", error: "The computer ran out of memory (RAM) while this ran.", details: "MemoryError" })];
+    renderPage(<QueuePage />);
+    const why = await screen.findByTestId("failed-why-f1");
+    expect(why).toHaveTextContent("The computer ran out of memory (RAM) while this ran.");
+    expect(screen.queryByTestId("failed-details-f1")).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show details: Version 4 pretraining" }));
+    expect(screen.getByTestId("failed-details-f1")).toHaveTextContent("MemoryError");
+    await user.click(screen.getByRole("button", { name: "Hide details: Version 4 pretraining" }));
+    expect(screen.queryByTestId("failed-details-f1")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Dismiss: Version 4 pretraining" }));
+    await waitFor(() => expect(screen.queryByTestId("failed-f1")).toBeNull());
+  });
+
+  test("a failed job whose error is its own text has no details toggle", async () => {
+    const { state } = server({ running: false });
+    state.failed = [job("f2", "Compare", { status: "failed", error: "Give one temperature, or one per reply." })];
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("failed-why-f2")).toHaveTextContent("Give one temperature");
+    expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
   });
 });
