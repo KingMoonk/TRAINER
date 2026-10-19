@@ -2698,6 +2698,43 @@
         "title": "JoinRequest",
         "type": "object"
       },
+      "JudgesOut": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "models",
+          "selected"
+        ],
+        "title": "JudgesOut",
+        "type": "object"
+      },
       "Knobs": {
         "properties": {
           "H": {
@@ -3137,6 +3174,526 @@
           "text"
         ],
         "title": "LogitLensRequest",
+        "type": "object"
+      },
+      "LoopCheckOut": {
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopCheckOut",
+        "type": "object"
+      },
+      "LoopConfigIn": {
+        "description": "The loop's settings (studio_loop.DEFAULTS); a field left out keeps the default. The first four are the stop rules.",
+        "properties": {
+          "audit_flags": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Flags"
+          },
+          "beta": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.001,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beta"
+          },
+          "candidates": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 2.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidates"
+          },
+          "dpo_steps": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dpo Steps"
+          },
+          "loss_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dpo",
+                  "ipo"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Type"
+          },
+          "max_hours": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Hours"
+          },
+          "max_length_ratio": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Length Ratio"
+          },
+          "max_rounds": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Rounds"
+          },
+          "patience": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patience"
+          },
+          "prompts_per_round": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 2.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompts Per Round"
+          }
+        },
+        "title": "LoopConfigIn",
+        "type": "object"
+      },
+      "LoopOut": {
+        "additionalProperties": true,
+        "description": "studio_loop.summary: one loop, on disk and live.",
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "anchor": {
+            "default": "",
+            "title": "Anchor",
+            "type": "string"
+          },
+          "anchor_eval": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Eval"
+          },
+          "audit_flagged": {
+            "default": 0,
+            "title": "Audit Flagged",
+            "type": "integer"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "created": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created"
+          },
+          "current": {
+            "default": "",
+            "title": "Current",
+            "type": "string"
+          },
+          "current_eval": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Eval"
+          },
+          "elapsed_s": {
+            "default": 0.0,
+            "title": "Elapsed S",
+            "type": "number"
+          },
+          "failed_streak": {
+            "default": 0,
+            "title": "Failed Streak",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kept": {
+            "default": 0,
+            "title": "Kept",
+            "type": "integer"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "phase": {
+            "default": "",
+            "title": "Phase",
+            "type": "string"
+          },
+          "round": {
+            "default": 1,
+            "title": "Round",
+            "type": "integer"
+          },
+          "rounds": {
+            "items": {
+              "$ref": "#/components/schemas/LoopRoundOut"
+            },
+            "title": "Rounds",
+            "type": "array"
+          },
+          "status": {
+            "default": "running",
+            "title": "Status",
+            "type": "string"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "updated": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "LoopOut",
+        "type": "object"
+      },
+      "LoopQueued": {
+        "properties": {
+          "job": {
+            "title": "Job",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "loop_id": {
+            "title": "Loop Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "loop_id",
+          "label"
+        ],
+        "title": "LoopQueued",
+        "type": "object"
+      },
+      "LoopRoundOut": {
+        "additionalProperties": true,
+        "description": "One finished round of a loop: the journal line, with all the evidence.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "audit": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit"
+          },
+          "audit_flag": {
+            "default": false,
+            "title": "Audit Flag",
+            "type": "boolean"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "checkpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/LoopCheckOut"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "dpo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dpo"
+          },
+          "finished": {
+            "default": "",
+            "title": "Finished",
+            "type": "string"
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge"
+          },
+          "length_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Ratio"
+          },
+          "node": {
+            "default": "",
+            "title": "Node",
+            "type": "string"
+          },
+          "pairs": {
+            "additionalProperties": true,
+            "title": "Pairs",
+            "type": "object"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "seconds": {
+            "default": 0.0,
+            "title": "Seconds",
+            "type": "number"
+          },
+          "started": {
+            "default": "",
+            "title": "Started",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "status"
+        ],
+        "title": "LoopRoundOut",
+        "type": "object"
+      },
+      "LoopStart": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/LoopConfigIn",
+            "default": {}
+          },
+          "judge_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge Model"
+          },
+          "resume": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "LoopStart",
         "type": "object"
       },
       "LossRequest": {
@@ -15119,6 +15676,178 @@
           }
         },
         "summary": "Import Pretrained",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
+    "/post-training/judges": {
+      "get": {
+        "description": "The Ollama models that could grade a loop, read from the server the workspace's settings name.",
+        "operationId": "judges_post_training_judges_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Judges",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
+    "/post-training/loops": {
+      "get": {
+        "description": "Every automated loop, newest first, with each round's evidence.",
+        "operationId": "loops_post_training_loops_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LoopOut"
+                  },
+                  "title": "Response Loops Post Training Loops Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Loops",
+        "tags": [
+          "post-training"
+        ]
+      },
+      "post": {
+        "description": "Queue the automated loop for a version, or carry on an earlier one from its last kept round. The loop is a long queue job:\nstop it from here and Start again to carry on; it also carries on by itself after an app restart.",
+        "operationId": "start_loop_post_training_loops_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Loop",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
+    "/post-training/loops/{loop_id}/adopt": {
+      "post": {
+        "description": "Make a loop's best the version's checkpoint if it holds up on ALL the held-back data. A job: it measures both models. The\nresult is the gate result (ok, checks, verdict).",
+        "operationId": "adopt_loop_post_training_loops__loop_id__adopt_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "loop_id",
+            "required": true,
+            "schema": {
+              "title": "Loop Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Adopt Loop",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
+    "/post-training/loops/{loop_id}/stop": {
+      "post": {
+        "description": "Stop a loop that is queued or running. It keeps its folder and its last kept round, and Start carries on from there.",
+        "operationId": "stop_loop_post_training_loops__loop_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "loop_id",
+            "required": true,
+            "schema": {
+              "title": "Loop Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Loop",
         "tags": [
           "post-training"
         ]

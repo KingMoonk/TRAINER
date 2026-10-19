@@ -206,6 +206,12 @@ def restore_answers(job, context, emit, stop, pause):
     return studio_rl.run_round(3, job, context, emit, stop, pause)
 
 
+def rlhf_loop(job, context, emit, stop, pause):
+    """The automated RLHF loop (studio_loop): rounds until a stop rule, resumable from its folder (params["output_dir"])."""
+    import studio_loop
+    studio_loop.run_job(job, context, emit, stop, pause)
+
+
 def quicktest(job, context, emit, stop, pause):
     import studio_quicktest
     p = job.params
@@ -230,4 +236,4 @@ def not_built(job, context, emit, stop, pause):
 
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
             "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained,
-            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member}
+            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member, "rlhf_loop": rlhf_loop}

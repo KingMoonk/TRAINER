@@ -224,6 +224,11 @@ def loopback(address):
     return host in ("localhost", "127.0.0.1", "::1")
 
 
+def across_label(version, count):
+    """The run's name: "Version 3 across 2 machines"."""
+    return f"Version {version} across {count} machine{'s' if count != 1 else ''}"
+
+
 def invite(job, client_for=PeerClient, only=None):
     """Put a member job on each machine the scheduler gave a slot (`gang` in the job's params: the addresses; every chosen machine when
     absent) or, with `only`, on just those addresses. A machine that cannot be reached, or refuses, is recorded with the reason and
@@ -256,6 +261,10 @@ def invite(job, client_for=PeerClient, only=None):
     if todo:
         with ThreadPoolExecutor(max_workers=len(todo)) as pool:
             list(pool.map(ask, todo))
+        if gang is not None and run.version is not None:  # the name counts the machines that took a slot, not the ones chosen
+            taking = sum(1 for m in run.machines if m.local or m.state == "invited")
+            if taking != len(run.machines):
+                run.label = job.label = across_label(run.version, taking)
         persist()  # who answered
 
 
