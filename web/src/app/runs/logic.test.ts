@@ -13,7 +13,7 @@ const queue = (over: Partial<Queue> = {}): Queue => ({
   gate: { supported: true }, up_next: [], failed: [], plan: { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true },
   ...over,
 });
-const round = (n: number, loss: number | null, val: number | null, seconds = 600) => ({ round: n, loss, val_loss: val, seconds, step: n * 100, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0, best: false, pivot: "", polished: false, lessons: 0 });
+const round = (n: number, loss: number | null, val: number | null, seconds = 600) => ({ round: n, loss, val_loss: val, seconds, step: n * 100, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0, best: false, pivot: "", polish: "" as const, lessons: 0 });
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id, label: "from scratch", version: 5, saved_version: null, state: "running", note: "", started_at: 100, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
   delta_dtype: "float16", term: 1, coordinator: "", handoff: "", origin: "", age_s: 0, origin_down: false, can_stop: true, paused: false, can_pause: false, can_resume: false, can_restart: false, best_round: null, best_val_loss: null, stop_rule: "", stop_reason: "", lessons: 0, lessons_left_out: 0, history: [round(6, 3.5, 3.6), round(7, 3.41, 3.47)],

@@ -6522,13 +6522,14 @@ export interface components {
              * @default
              */
             pivot: string;
+            /**
+             * Polish
+             * @default
+             * @enum {string}
+             */
+            polish: "" | "accepted" | "rejected" | "skipped";
             /** Polish Val Loss */
             polish_val_loss?: number | null;
-            /**
-             * Polished
-             * @default false
-             */
-            polished: boolean;
             /** Round */
             round: number;
             /** Seconds */
@@ -6537,6 +6538,8 @@ export interface components {
             step: number;
             /** Val Loss */
             val_loss: number | null;
+            /** Val Loss Before Polish */
+            val_loss_before_polish?: number | null;
         };
         /** RoundQueued */
         RoundQueued: {
@@ -6865,7 +6868,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons";
             /** Node */
             node: string;
             /** Round */

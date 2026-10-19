@@ -116,8 +116,9 @@ class Round(BaseModel):
     dropped: list[str]
     best: bool = False  # the lowest validation loss so far: best.npz holds this round's weights while it stays the best
     pivot: str = ""  # the pivot the stop rules applied after this round ("halve_lr", "next_dataset", "drop_lessons"), else ""
-    polished: bool = False  # the teacher polished this round's weights and they were kept (they won its head-to-head and validate no worse)
-    polish_val_loss: float | None = None  # the validation loss of the polished weights; val_loss stays the loss the round measured
+    polish: Literal["", "accepted", "rejected", "skipped"] = ""  # the teacher's polish after this round: kept ("accepted": val_loss is then the polished weights' loss), tried but not kept, or failed; "" when none ran
+    val_loss_before_polish: float | None = None  # the loss the round measured before an accepted polish replaced it
+    polish_val_loss: float | None = None  # the loss of polished weights that were not kept
     lessons: int = 0  # the teacher's better answers written after this round, to train on from the next
 
 
@@ -148,7 +149,7 @@ class RunEvent(BaseModel):
     seq: int
     t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
     kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished", "pivot", "paused", "resumed", "took_over",
-                  "stepped_down", "polish", "polish_off"]
+                  "stepped_down", "polish", "polish_off", "lessons"]
     node: str  # "" for the run
     round: int
     text: str

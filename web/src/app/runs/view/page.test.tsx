@@ -139,6 +139,15 @@ describe("Run view: a DiLoCo run", () => {
     expect(screen.queryByRole("button", { name: /Remove .* from run/ })).not.toBeInTheDocument();
   });
 
+  test("a run whose teacher is polishing says so, and its lessons event is in the journal", async () => {
+    mockApi({ "GET /distributed/runs/r1": { body: { ...diloco(), phase: "polishing", events: [event(3, { kind: "lessons", text: "Round 1: 3 lessons join training from round 2." })] } } });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    expect(await screen.findByTestId("round-phase")).toHaveTextContent("Teacher polishing");
+    const row = await screen.findByTestId("event-3");
+    await userEvent.click(within(row).getByRole("button"));
+    expect(await screen.findByLabelText("Event details")).toHaveTextContent("Lessons");
+  });
+
   test("an event row opens a popover with the event's details", async () => {
     dilocoServer();
     renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });

@@ -237,6 +237,8 @@ class Checks(unittest.TestCase):
                         {"polish_every": 2, "teacher": "t", "polish": False, "lessons": False}, {"polish": "yes"}, {"lessons": 1}):
             with self.assertRaises(ValueError, msg=str(changes)):
                 support.settings(**changes)
+        with self.assertRaisesRegex(ValueError, "polish_every must be below rounds"):
+            support.settings(polish_every=4, teacher="t")  # rounds is 4: no polish follows the final round
         with self.assertRaisesRegex(ValueError, "polish_every needs a teacher"):
             support.settings(polish_every=2)
         s = support.settings(polish_every=2, teacher="t", polish=False)

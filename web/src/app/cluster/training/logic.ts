@@ -166,7 +166,10 @@ export function errorMarks(run: Run): Mark[] {
   const marks: Mark[] = run.history.flatMap((row) =>
     row.pivot ? [{ id: `pivot-${row.round}`, x: row.round + 1, label: T.pivots[row.pivot] ?? T.pivotFallback, dash: "4 3" }] : [],
   );
-  for (const row of run.history) if (row.polished) marks.push({ id: `polish-${row.round}`, x: row.round + 1, label: T.polished, color: "var(--chart-3)", dash: "1 3" });
+  const polishColor: Record<string, string> = { accepted: "var(--chart-3)", rejected: "var(--chart-4)", skipped: "var(--muted-foreground)" };
+  for (const row of run.history) {
+    if (row.polish) marks.push({ id: `polish-${row.round}`, x: row.round + 1, label: T.polishKinds[row.polish], color: polishColor[row.polish], dash: "1 3" });
+  }
   if (run.best_round != null) marks.push({ id: "best", x: run.best_round + 1, label: T.bestRound, color: "var(--chart-2)" });
   return marks;
 }
@@ -193,6 +196,6 @@ export function trafficSeries(history: Round[]): Series[] {
 /** What the teacher added to the training text, or nothing when it added none. */
 export function lessonsText(run: Run): string {
   if (!run.lessons && !run.lessons_left_out) return "";
-  const live = T.lessonsLine.replace("{live}", String(run.lessons));
+  const live = T.lessonsLine.replace("{live}", String(run.lessons)).replace("{lessons}", run.lessons === 1 ? T.lesson : T.lessonsPlural);
   return run.lessons_left_out ? `${live}, ${T.lessonsLeftOut.replace("{out}", String(run.lessons_left_out))}` : live;
 }

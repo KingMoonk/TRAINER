@@ -397,7 +397,8 @@ def round_rows(history, best_round=None):
              "best": best_round is not None and row["round"] == best_round, "pivot": row.get("pivot") or "",
              "bytes_up": row.get("delta_bytes", 0), "bytes_down": row.get("theta_bytes", 0), "seconds": row.get("seconds", 0.),
              "members": len(row.get("members", [])), "contributed": len(row.get("contributed", [])),
-             "dropped": list(row.get("dropped", [])), "polished": bool(row.get("polished")), "polish_val_loss": row.get("polish_val_loss"),
+             "dropped": list(row.get("dropped", [])), "polish": row.get("polish", ""), "val_loss_before_polish": row.get("val_loss_before_polish"),
+             "polish_val_loss": row.get("polish_val_loss"),
              "lessons": row.get("lessons", 0)} for row in history]
 
 

@@ -159,13 +159,19 @@ class Polishing(unittest.TestCase):
         c = self.coordinator(Teacher(win=True, rows=[]), [5., 4., 3.5], lessons=False)
         self.play(c, 2)
         row = c.history[1]
-        self.assertEqual((row["polished"], row["polish_val_loss"], row["val_loss"], row["best"]), (True, 3.5, 4., True))
+        self.assertEqual((row["polish"], row["val_loss"], row["val_loss_before_polish"], row["best"]), ("accepted", 3.5, 4., True))
+        self.assertNotIn("polish_val_loss", row)
         self.assertEqual((c.rules.best_round, c.rules.best_loss, c.rules.rounds_since_best), (1, 3.5, 0))
         with np.load(self.dir / "last.npz") as last, np.load(self.dir / "best.npz") as best:
             for name, value in c.theta.items():
                 np.testing.assert_array_equal(last["weight::" + name], value)
                 np.testing.assert_array_equal(best["weight::" + name], value)
-        self.assertEqual(self.record()["history"][1]["polish_val_loss"], 3.5)
+        self.assertEqual(self.record()["history"][1]["val_loss"], 3.5)
+        metrics = [json.loads(line) for line in (self.dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(m["round"], m["val_loss"]) for m in metrics], [(0, 5.), (1, 3.5)])
+        self.assertEqual(metrics[1]["val_loss_before_polish"], 4.)
+        with np.load(self.dir / "last.npz", allow_pickle=False) as last:
+            self.assertEqual(json.loads(str(last["metadata"]))["best"], 3.5)
         run = support.read_json(self.dir / "run.json")
         self.assertEqual((run["val_loss"], run["best_val_loss"], run["best_round"]), (3.5, 3.5, 1))
         self.assertIn("kept the polished weights", self.events(c, "polish")[-1])
@@ -191,14 +197,15 @@ class Polishing(unittest.TestCase):
         for name, value in c.theta.items():
             np.testing.assert_array_equal(value, before[name])
         row = c.history[1]
-        self.assertNotIn("polished", row)
+        self.assertEqual((row["polish"], row["val_loss"], row["polish_val_loss"]), ("rejected", 4., 4.5))
+        self.assertNotIn("val_loss_before_polish", row)
         self.assertEqual((c.rules.best_round, c.rules.best_loss), (1, 4.))
         self.assertIn("no better on the validation windows", self.events(c, "polish")[-1])
 
     def test_a_polish_that_lost_the_head_to_head_is_not_even_scored(self):
         c = self.coordinator(Teacher(win=False, rows=[]), [5., 4.], lessons=False)
         self.play(c, 2)
-        self.assertNotIn("polished", c.history[1])
+        self.assertEqual(c.history[1]["polish"], "rejected")
         self.assertIn("did not win the teacher's head-to-head", self.events(c, "polish")[-1])
 
     def test_with_polish_off_only_lessons_are_kept(self):
@@ -207,7 +214,7 @@ class Polishing(unittest.TestCase):
         before = {name: value.copy() for name, value in c.theta.items()}
         self.play(c, 2)
         self.assertEqual(c.history[1].get("lessons"), 3)
-        self.assertNotIn("polished", c.history[1])
+        self.assertNotIn("polish", c.history[1])
         for name in before:
             self.assertFalse(np.array_equal(c.theta[name], before[name]))  # trained, not shifted by the teacher's .5
         self.assertEqual(len(c.lessons), 1)
@@ -224,7 +231,7 @@ class Polishing(unittest.TestCase):
         c = self.coordinator(Teacher(win=True, rows=[]), [3., 5., 4.], lessons=False)  # round 0 best at 3; the polish of round 1 reaches 4: still behind
         self.play(c, 2)
         self.assertEqual((c.rules.best_round, c.rules.best_loss), (0, 3.))
-        self.assertTrue(c.history[1]["polished"])
+        self.assertEqual(c.history[1]["polish"], "accepted")
         self.assertFalse(c.history[1]["best"])
         self.assertEqual(c.rules.rounds_since_best, 1)
 
@@ -271,10 +278,12 @@ class Polishing(unittest.TestCase):
     def test_a_fresh_run_in_the_folder_forgets_old_lessons(self):
         c = self.coordinator(Teacher(win=False), [5., 4.])
         self.play(c, 2)
+        (self.dir / "prompts.jsonl").write_text('{"stale": true}\n', encoding="utf-8")
         (self.dir / "diloco.json").unlink()
         fresh = support.build(self.dir, clock=Clock(), inner_steps=2, rounds=8, polish_every=2, teacher="t")
         self.assertEqual((fresh.lessons, fresh.lesson_windows), ([], {}))
         self.assertFalse((self.dir / "lessons.jsonl").exists())
+        self.assertNotIn("stale", (self.dir / "prompts.jsonl").read_text(encoding="utf-8"))
 
     def test_rows_that_make_no_training_window_add_no_lesson(self):
         bad = [{"messages": [], "chosen": "x"}, {"messages": [{"role": "user", "content": "hi"}], "chosen": ""}]
@@ -320,8 +329,8 @@ class Polishing(unittest.TestCase):
         self.play(c, 3)
         self.assertEqual(c.lessons, [])
         self.assertEqual(c.next_round, 3)
-        self.assertIn("skipped (Cannot reach Ollama", self.events(c, "polish")[-1])
-        self.assertNotIn("polished", c.history[1])
+        self.assertIn("skipped (the teacher failed: Cannot reach Ollama", self.events(c, "polish")[-1])
+        self.assertEqual(c.history[1]["polish"], "skipped")
 
     def test_stopping_during_a_polish_discards_it(self):
         gate = threading.Event()
@@ -362,6 +371,170 @@ class Polishing(unittest.TestCase):
         self.assertEqual((snap["settings"]["polish_every"], snap["settings"]["polish"], snap["settings"]["lessons"]), (2, True, True))
 
 
+    # -- how the rounds and files record it
+    def test_the_lessons_have_an_event_of_their_own(self):
+        c = self.coordinator(Teacher(win=False), [5., 4.])
+        self.play(c, 2)
+        self.assertEqual(self.events(c, "lessons"), ["Round 1: 3 lessons join training from round 2."])
+
+    def test_a_lesson_never_reuses_a_shard_id_a_crash_left_in_the_file(self):
+        c = self.coordinator(Teacher(win=False), [5., 4.])
+        with (self.dir / "lessons.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"shard": 4, "round": 1, "messages": [], "chosen": "x"}) + "\n")  # written, but never named in diloco.json
+        self.play(c, 2)
+        self.assertEqual([e["shard"] for e in c.lessons], [5])
+
+    def test_a_polish_that_used_up_max_seconds_ends_the_run_there(self):
+        gate = threading.Event()
+        c = self.coordinator(Teacher(win=False, rows=[], gate=gate), [5., 4.], max_seconds=50.)
+        c.join("a")
+        self.send(c)
+        self.send(c)
+        self.clock.now += 100.  # the teacher takes its time
+        gate.set()
+        self.settle(c)
+        self.assertEqual((c.finished, c.rules.stop_rule), (True, "max_seconds"))
+        self.assertEqual(support.read_json(self.dir / "run.json")["status"], "completed")
+
+    def test_the_preference_runs_of_the_teacher_are_deleted_once_read(self):
+        def polish(directory, found, checkpoint, prompts, device, stop, emit):
+            folder = Path(directory) / "rlhf_abc123"
+            folder.mkdir(parents=True)
+            with np.load(checkpoint, allow_pickle=False) as stored:
+                arrays = {key: stored[key] + .5 if key.startswith("weight::") else stored[key] for key in stored.files}
+            with open(folder / "last.npz", "wb") as stream:
+                np.savez(stream, **arrays)
+            return {"checkpoint": str(folder / "last.npz"), "win_rate": .7, "lessons": []}
+        c = self.coordinator(polish, [5., 4., 3.5], lessons=False)
+        self.play(c, 2)
+        self.assertEqual(c.history[1]["polish"], "accepted")
+        self.assertEqual(list((self.dir / "teacher").glob("rlhf_*")), [])
+
+    def test_a_polish_thread_that_cannot_start_leaves_the_gate_open(self):
+        real = threading.Thread
+
+        def thread(*args, **kwargs):
+            if kwargs.get("name") == "diloco-polish":
+                raise RuntimeError("can't start new thread")
+            return real(*args, **kwargs)
+        c = self.coordinator(Teacher(win=False), [5., 4.])
+        with mock.patch.object(studio_diloco.threading, "Thread", side_effect=thread):
+            self.play(c, 2)
+        self.assertFalse(c.polishing)
+        self.assertEqual(c.history[1]["polish"], "skipped")
+        self.assertIn("could not start", self.events(c, "polish")[-1])
+        self.assertEqual(c.round_view(2, "a")["state"], "open")
+
+    # -- when the work after the teacher fails, the lessons are still kept
+    def test_scoring_the_polished_weights_can_fail_and_the_lessons_stay(self):
+        c = self.coordinator(Teacher(win=True), [5., 4.])
+        calls = []
+
+        def evaluate(theta):
+            calls.append(1)
+            if len(calls) > 2:
+                raise RuntimeError("out of memory")
+            return 5. if len(calls) == 1 else 4.
+        c.evaluate = evaluate
+        self.play(c, 2)
+        row = c.history[1]
+        self.assertEqual((row["polish"], row["lessons"], row["val_loss"]), ("skipped", 3, 4.))
+        self.assertEqual(len(c.lessons), 1)
+        self.assertIn("could not be scored: out of memory", self.events(c, "polish")[-1])
+        self.assertEqual(c.round_view(2, "a")["state"], "open")
+
+    def test_unreadable_polished_weights_skip_the_polish_and_keep_the_lessons(self):
+        def polish(directory, found, checkpoint, prompts, device, stop, emit):
+            return {"checkpoint": str(Path(directory) / "missing.npz"), "win_rate": .7, "lessons": [dict(row) for row in ROWS]}
+        c = self.coordinator(polish, [5., 4.])
+        self.play(c, 2)
+        self.assertEqual((c.history[1]["polish"], c.history[1]["lessons"]), ("skipped", 3))
+        self.assertIn("could not be read", self.events(c, "polish")[-1])
+
+    # -- a polish meets a pause, a successor, a release
+    def test_a_pause_during_a_polish_holds_the_next_round_after_it(self):
+        gate = threading.Event()
+        teacher = Teacher(win=False, rows=[], gate=gate)
+        c = self.coordinator(teacher, [5., 4., 3.])
+        c.join("a")
+        self.send(c)
+        self.send(c)
+        self.assertTrue(teacher.started.wait(10))
+        c.pause()
+        gate.set()
+        self.settle(c)
+        view = c.round_view(2, "a")
+        self.assertEqual((view["state"], view["paused"], view["polishing"]), ("pending", True, False))
+        self.assertEqual(c.snapshot()["phase"], "paused")
+        c.resume()
+        self.assertEqual(c.round_view(2, "a")["state"], "open")
+
+    def test_a_successor_term_during_a_polish_discards_it(self):
+        gate = threading.Event()
+        teacher = Teacher(win=True, gate=gate)
+        c = self.coordinator(teacher, [5., 4., 1.])
+        c.join("a")
+        self.send(c)
+        self.send(c)
+        before = {name: value.copy() for name, value in c.theta.items()}
+        self.assertTrue(teacher.started.wait(10))
+        c.step_down(c.term + 1)
+        gate.set()
+        self.settle(c)
+        self.assertEqual(c.lessons, [])
+        self.assertNotIn("polish", c.history[1])
+        for name, value in c.theta.items():
+            np.testing.assert_array_equal(value, before[name])
+
+    def test_releasing_the_run_during_a_polish_discards_it(self):
+        gate = threading.Event()
+        teacher = Teacher(win=True, gate=gate)
+        c = self.coordinator(teacher, [5., 4., 1.])
+        c.join("a")
+        self.send(c)
+        self.send(c)
+        self.assertTrue(teacher.started.wait(10))
+        c.release()
+        gate.set()
+        self.settle(c)
+        self.assertEqual((c.theta, c.lessons), ({}, []))
+        self.assertNotIn("polish", c.history[1])
+
+    # -- it survives the coordinator
+    def test_a_rebuilt_coordinator_holds_the_polished_weights_the_best_and_the_lessons(self):
+        c = self.coordinator(Teacher(win=True), [5., 4., 3.5])
+        self.play(c, 2)
+        self.assertEqual(c.history[1]["polish"], "accepted")
+        again = support.build(self.dir, clock=Clock(), inner_steps=2, rounds=8, polish_every=2, teacher="t")
+        for name, value in c.theta.items():
+            np.testing.assert_array_equal(again.theta[name], value)
+        self.assertEqual((again.rules.best_round, again.rules.best_loss), (1, 3.5))
+        self.assertEqual((again.history[1]["val_loss"], again.history[1]["polish"]), (3.5, "accepted"))
+        self.assertEqual(again.lessons, c.lessons)
+        self.assertEqual(again.next_round, 2)
+
+    def test_a_coordinator_made_from_a_replica_polishes_no_more_and_leaves_the_lessons_out(self):
+        c = self.coordinator(Teacher(win=True), [5., 4., 3.5])
+        self.play(c, 2)
+        replica, shards = Path(self.tmp.name) / "replica", Path(self.tmp.name) / "shards"
+        replica.mkdir()
+        (replica / "theta.npz").write_bytes(studio_diloco.encode_arrays(c.theta))
+        (replica / "momentum.npz").write_bytes(studio_diloco.encode_arrays(c.momentum))
+        (replica / "diloco.json").write_bytes((self.dir / "diloco.json").read_bytes())
+        (replica / "info.json").write_text(json.dumps(c.info()), encoding="utf-8")
+        (replica / "validation.npz").write_bytes(c.validation_bytes())
+        for shard in range(c.shard_count):
+            studio_diloco.install_shard(shards, shard, c.shard_bytes(shard), c.tokenizer.vocab_size)
+        taken = studio_diloco.Coordinator.from_replica("run1", Path(self.tmp.name) / "taken", replica, shards, 2, clock=Clock())
+        self.assertFalse(taken.polish_on)
+        self.assertEqual([e["status"] for e in taken.lessons], ["left_out"])
+        self.assertEqual([e["kind"] for e in taken.snapshot()["events"] if e["kind"] == "polish_off"], ["polish_off"])
+        self.assertEqual((taken.rules.best_round, taken.rules.best_loss), (1, 3.5))  # relabelled from the polished loss the replica holds
+        self.assertEqual(taken.record["val_loss"], 3.5)
+        taken.join("a")
+        self.assertEqual(sorted(taken.round_view(2, "a")["shards"]), [0, 1, 2, 3])
+
+
 class Preflight(unittest.TestCase):
     def job(self, **params):
         return SimpleNamespace(id="job1", params={"config": dict(support.CONFIG), "examples": support.EXAMPLES, "inner_steps": 2, "rounds": 4, **params})
@@ -385,6 +558,34 @@ class Preflight(unittest.TestCase):
                 studio_diloco.default_polish(Path(tmp), found, "x.npz", [], "cpu", threading.Event(), lambda event: None)
             with self.assertRaisesRegex(RuntimeError, "Cannot reach Ollama"):
                 studio_diloco.check_teacher(found)
+
+    def test_a_resumed_run_does_not_check_the_teacher_again(self):
+        job = self.job(polish_every=2, teacher="t", resuming={"round": 1})
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, \
+                mock.patch.object(studio_diloco, "check_teacher") as check, \
+                mock.patch.object(studio_diloco.Coordinator, "build", side_effect=ValueError("different data")):
+            with self.assertRaisesRegex(ValueError, "Ended: this machine restarted at round 1"):
+                studio_diloco.prepare(job, SimpleNamespace(), tmp, 8000)
+        check.assert_not_called()
+
+    def test_the_check_wants_the_model_and_waits_only_briefly(self):
+        found = studio_diloco.teacher_settings(support.settings(polish_every=2, teacher="t"))
+        timeouts = []
+
+        def models(teacher):
+            timeouts.append(teacher.timeout)
+            return ["other:latest"]
+        with mock.patch("studio_rlhf.OllamaTeacher.models", models):
+            with self.assertRaisesRegex(RuntimeError, "has no model called t.*other:latest"):
+                studio_diloco.check_teacher(found)
+        self.assertEqual(timeouts, [studio_diloco.PREFLIGHT_TIMEOUT])
+        with mock.patch("studio_rlhf.OllamaTeacher.models", lambda teacher: ["t:latest"]):
+            studio_diloco.check_teacher(found)
+
+    def test_a_dataset_without_conversations_fails_the_build_in_a_sentence(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            with self.assertRaisesRegex(ValueError, "no conversations for the teacher"):
+                studio_diloco.Coordinator.build("run1", tmp, support.CONFIG, support.EXAMPLES[:40], support.settings(polish_every=2, teacher="t"))
 
 
 if __name__ == "__main__":

@@ -49,6 +49,8 @@ def check(s):
     _number(s.polish_every, "polish_every", 0, integer=True)
     if not isinstance(s.polish, bool) or not isinstance(s.lessons, bool):
         raise ValueError("polish and lessons must each be true or false.")
+    if s.polish_every and s.polish_every >= s.rounds:
+        raise ValueError(f"polish_every must be below rounds ({s.rounds}): there is no polish after the final round, so it would never run.")
     if s.polish_every and not s.teacher:
         raise ValueError("polish_every needs a teacher: set teacher to the name of an Ollama model.")
     if s.polish_every and not (s.polish or s.lessons):

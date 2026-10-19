@@ -3,6 +3,7 @@ import {
   bytesText, deltaText, errorMarks, lessonsText, holdButtons, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
+import { TRAINING as T } from "@/lib/copy/training";
 import { member as build, round, run } from "./test-data";
 
 // the shared member, with the numbers these tests were written around
@@ -136,10 +137,24 @@ describe("the charts", () => {
     expect(errorMarks(run({ history: [round(0)] }))).toEqual([]);
   });
 
-  test("the error curve marks a polished round and says what the lessons did", () => {
-    const r = run({ history: [round(0), round(1, { polished: true, polish_val_loss: 3, lessons: 4 })] });
-    expect(errorMarks(r).map((m) => [m.id, m.x, m.label])).toEqual([["polish-1", 2, "Teacher polish"]]);
+  test("the error curve marks each polish, kept, not kept or skipped, apart", () => {
+    const r = run({ history: [round(0, { polish: "accepted", val_loss_before_polish: 5 }), round(1, { polish: "rejected", polish_val_loss: 4.4 }), round(2, { polish: "skipped" }), round(3)] });
+    const marks = errorMarks(r);
+    expect(marks.map((m) => [m.id, m.x, m.label])).toEqual([
+      ["polish-0", 1, "Teacher polish kept"], ["polish-1", 2, "Teacher polish not kept"], ["polish-2", 3, "Teacher polish skipped"],
+    ]);
+    expect(new Set(marks.map((m) => m.color)).size).toBe(3);
+  });
+
+  test("the journal and the phase line have words for the teacher's polish and lessons", () => {
+    expect(T.phases.polishing).toBe("Teacher polishing");
+    expect([T.eventKinds.polish, T.eventKinds.polish_off, T.eventKinds.lessons]).toEqual(["Teacher polish", "Polish off", "Lessons"]);
+    expect(T.pivots.drop_lessons).toBe("Lessons left out");
+  });
+
+  test("the run says how many lessons the teacher added, in the singular too", () => {
     expect(lessonsText(run())).toBe("");
+    expect(lessonsText(run({ lessons: 1 }))).toBe("1 lesson from the teacher in the training text");
     expect(lessonsText(run({ lessons: 4 }))).toBe("4 lessons from the teacher in the training text");
     expect(lessonsText(run({ lessons: 4, lessons_left_out: 2 }))).toBe("4 lessons from the teacher in the training text, 2 left out");
   });

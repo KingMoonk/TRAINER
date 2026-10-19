@@ -7776,6 +7776,17 @@
             "title": "Pivot",
             "type": "string"
           },
+          "polish": {
+            "default": "",
+            "enum": [
+              "",
+              "accepted",
+              "rejected",
+              "skipped"
+            ],
+            "title": "Polish",
+            "type": "string"
+          },
           "polish_val_loss": {
             "anyOf": [
               {
@@ -7786,11 +7797,6 @@
               }
             ],
             "title": "Polish Val Loss"
-          },
-          "polished": {
-            "default": false,
-            "title": "Polished",
-            "type": "boolean"
           },
           "round": {
             "title": "Round",
@@ -7814,6 +7820,17 @@
               }
             ],
             "title": "Val Loss"
+          },
+          "val_loss_before_polish": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Val Loss Before Polish"
           }
         },
         "required": [
@@ -8610,7 +8627,8 @@
               "took_over",
               "stepped_down",
               "polish",
-              "polish_off"
+              "polish_off",
+              "lessons"
             ],
             "title": "Kind",
             "type": "string"

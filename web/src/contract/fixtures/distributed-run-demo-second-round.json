@@ -59,12 +59,13 @@
         "loss": 5.0509,
         "members": 2,
         "pivot": "",
+        "polish": "",
         "polish_val_loss": null,
-        "polished": false,
         "round": 0,
         "seconds": 6.0,
         "step": 100,
-        "val_loss": 5.1309
+        "val_loss": 5.1309,
+        "val_loss_before_polish": null
       }
     ],
     "id": "demo-run",

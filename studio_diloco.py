@@ -507,9 +507,6 @@ class Coordinator:
         coordinator.model_spec = model.spec
         for number, more in enumerate(later, 1):
             coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, directory / "windows" / f"source{number}"))
-        if settings.polish_every:
-            coordinator._write_prompts(training)
-            coordinator.teacher_settings = teacher_settings(settings)  # prepare replaces it with the workspace's own
         coordinator._load_lessons()
         if coordinator.rules.source >= len(coordinator.spans):
             raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "
@@ -520,6 +517,9 @@ class Coordinator:
             if held.is_file():
                 saved = json.loads(held.read_text(encoding="utf-8"))
                 coordinator.paused, coordinator.rules = bool(saved.get("paused")), drules.State.from_json(saved.get("rules"))
+        if settings.polish_every:  # after _start_files, which clears a new run's prompts
+            coordinator._write_prompts(training)
+            coordinator.teacher_settings = teacher_settings(settings)  # prepare replaces it with the workspace's own
         return coordinator
 
     @staticmethod
@@ -639,9 +639,13 @@ class Coordinator:
         if path.is_file():
             return
         from studio_rlhf import prompts_from
+        prompts = prompts_from(training)
+        if not prompts:
+            raise ValueError("polish_every is set, but the training text has no conversations for the teacher to answer: "
+                             "use a chat dataset, or turn polish_every off.")
         temporary = path.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as stream:
-            for prompt in prompts_from(training):
+            for prompt in prompts:
                 stream.write(json.dumps(prompt, ensure_ascii=False) + "\n")
         temporary.replace(path)
 
@@ -706,6 +710,7 @@ class Coordinator:
         atomic_json(self.directory / "spec.json", model.spec)
         atomic_json(self.directory / "tokenizer.json", self.tokenizer.serialize())
         (self.directory / "metrics.jsonl").write_text("", encoding="utf-8")
+        (self.directory / "prompts.jsonl").unlink(missing_ok=True)  # ... nor prompts: they are made from this run's own training split
         (self.directory / "lessons.jsonl").unlink(missing_ok=True)  # a new run has no lessons: the rows of an earlier one in this folder are not its own
         self.record = {"name": self.cfg["name"], "createdAt": now(), "status": "training", "step": 0, "steps": self.cfg["steps"],
                        "parameters": model.parameter_count, "vocabulary": self.tokenizer.vocab_size, "backend": "diloco",
@@ -1354,23 +1359,42 @@ class Coordinator:
         self.polishing = True
         self._event("polish", "", current.number, f"Round {current.number}: the teacher ({self.settings.teacher}) is polishing the weights. "
                                                  f"No round opens until it is done.")
-        threading.Thread(target=self._polish_run, args=(context, stop), daemon=True, name="diloco-polish").start()
+        try:
+            threading.Thread(target=self._polish_run, args=(context, stop), daemon=True, name="diloco-polish").start()
+        except Exception as exc:  # no thread to be had: the gate must not stay shut
+            self.polishing = False
+            row["polish"] = "skipped"
+            self._event("polish", "", current.number, f"Round {current.number}: the teacher polish could not start ({exc}). Training goes on without it.")
 
     def _polish_run(self, context, stop):
         """The polish thread: ask the teacher (self.polisher), score a polished checkpoint on the validation windows, then hand the outcome
-        to _polish_done under the lock. Nothing here touches the run's state; no round is open to change it."""
+        to _polish_done under the lock. Nothing here touches the run's state; no round is open to change it. What failed is said in
+        outcome["error"]; the teacher's lessons are kept whichever step after it failed."""
         outcome = {"error": "", "rows": [], "theta": None, "loss": None}
         try:
             base = self.directory / "last.npz"
-            result = self.polisher(self.directory / "teacher", self.teacher_settings, str(base), context["prompts"], self.cfg.get("device", "auto"),
-                                   stop, lambda event: None)
-            outcome["rows"] = [dict(found) for found in result.get("lessons") or []]
-            path = result.get("checkpoint")
-            if self.settings.polish and path and not stop.is_set() and Path(path).resolve() != base.resolve():
-                outcome["theta"] = self._weights_of(path, self.theta)
-                outcome["loss"] = self.evaluate(outcome["theta"])
-        except Exception as exc:  # the teacher is optional: a failed polish is skipped and the run goes on
-            outcome["error"] = (str(exc) or type(exc).__name__)[:300]
+            try:
+                result = self.polisher(self.directory / "teacher", self.teacher_settings, str(base), context["prompts"], self.cfg.get("device", "auto"),
+                                       stop, lambda event: None)
+            except Exception as exc:  # the teacher is optional: a failed polish is skipped and the run goes on
+                outcome["error"] = "the teacher failed: " + (str(exc) or type(exc).__name__)[:300]
+            else:
+                outcome["rows"] = [dict(found) for found in result.get("lessons") or []]
+                path = result.get("checkpoint")
+                if self.settings.polish and path and not stop.is_set() and Path(path).resolve() != base.resolve():
+                    try:
+                        outcome["theta"] = self._weights_of(path, self.theta)
+                    except Exception as exc:
+                        outcome["error"] = "the polished weights could not be read: " + (str(exc) or type(exc).__name__)[:300]
+                    else:
+                        try:
+                            outcome["loss"] = self.evaluate(outcome["theta"])
+                        except Exception as exc:
+                            outcome["theta"] = None
+                            outcome["error"] = "the polished weights could not be scored: " + (str(exc) or type(exc).__name__)[:300]
+        finally:
+            for folder in (self.directory / "teacher").glob("rlhf_*"):  # the preference runs have given what they had: their checkpoints are not kept
+                shutil.rmtree(folder, ignore_errors=True)
         with self.cond:
             try:
                 self._polish_done(context, outcome, stop)
@@ -1381,53 +1405,89 @@ class Coordinator:
 
     def _polish_done(self, context, outcome, stop):
         """Take the teacher's work into the run (lock held). The polished weights replace theta only when the teacher's head-to-head gate
-        passed (the polisher returned another checkpoint) and their validation loss is no worse than the round's; the better answers
-        become a lesson: extra shards from the next round on. A stopped, released or superseded run takes nothing."""
+        passed (the polisher returned another checkpoint) and their validation loss is no worse than the round's: the round's val_loss is
+        then the polished one (the old one is kept as val_loss_before_polish) and every file says so. The better answers become a
+        lesson: an extra shard from the next round on. A stopped, released or superseded run takes nothing."""
         if stop.is_set() or self.superseded or self.finished or not self.theta:
+            self._remember()
             return
         number, row, old, new = context["number"], context["row"], context["old"], outcome["loss"]
-        if outcome["error"]:
-            self._event("polish", "", number, f"Round {number}: the teacher polish was skipped ({outcome['error']}). Training goes on without it.")
-            return
+        drules.accrue(self.rules, self.clock(), self._counting())  # the time the teacher took counts toward max_seconds
         said = []
-        if outcome["theta"] is not None:
+        added = self._add_lessons(number, outcome["rows"]) if self.settings.lessons else 0  # the file first: a lesson never reuses a shard id
+        if added:
+            row["lessons"] = added
+        accepted = False
+        if outcome["error"]:
+            row["polish"] = "skipped"
+            said.append(f"polish was skipped ({outcome['error']}). Training goes on without it")
+        elif outcome["theta"] is not None:
             if old is not None and new is not None and math.isfinite(new) and new <= old:
+                accepted = True
                 self.theta = outcome["theta"]
                 self._params, self._state = (None, b""), (None, b"")
                 verdict = drules.revise(self.rules, self.settings, number, context["step"], old, new)
-                row.update({"polished": True, "polish_val_loss": float(new), "best": self.rules.best_round == number})
+                row.update({"polish": "accepted", "val_loss_before_polish": float(old), "val_loss": float(new), "best": self.rules.best_round == number})
                 if verdict["improved"]:
                     self._write_best()
                 if verdict["action"] == "stop":
                     self.finished = True
                 said.append(f"kept the polished weights (validation loss {new:.4g}, was {old:.4g})")
             else:
+                row["polish"] = "rejected"
+                if new is not None and math.isfinite(new):
+                    row["polish_val_loss"] = float(new)
                 said.append("kept the weights it had: the polished ones were no better on the validation windows"
                             + (f" ({new:.4g} against {old:.4g})" if new is not None and old is not None else ""))
         elif self.settings.polish:
+            row["polish"] = "rejected"
             said.append("the polished weights did not win the teacher's head-to-head, so they were not kept")
-        added = self._add_lessons(number, outcome["rows"]) if self.settings.lessons else 0
-        if added:
-            row["lessons"] = added
-            said.append(f"wrote {added} lesson{'s' if added != 1 else ''} to train on from the next round")
-        elif self.settings.lessons:
-            said.append("had no lessons to give")
-        self._persist(context["members"], self.deal)
+        if not accepted and not self.finished:
+            found = drules.stop_reason(self.rules, self.settings)  # the polish may have used up max_seconds
+            if found:
+                self.rules.stop_rule, self.rules.stop_text = found
+                self.finished = True
+        self._persist(context["members"], self.deal)  # right after best.npz: the files agree on the weights held
+        if accepted:
+            self._rewrite_metric(row)
         self._write_record(row)
+        if self.settings.lessons and not added and not outcome["error"]:
+            said.append("had no lessons to give")
         self._event("polish", "", number, f"Round {number}: the teacher " + ("; ".join(said) or "had nothing to add") + ".")
+        if added:
+            self._event("lessons", "", number, f"Round {number}: {added} lesson{'s' if added != 1 else ''} join training from round {number + 1}.")
         if self.finished:
             self._event("finished", "", number, self.rules.stop_text or f"The run finished after {self.next_round} rounds.")
         self._remember()
 
+    def _rewrite_metric(self, row):
+        """metrics.jsonl with round `row`'s line carrying its polished val_loss (and the one it replaced)."""
+        path = self.directory / "metrics.jsonl"
+        lines = []
+        for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if entry.get("round") == row["round"]:
+                entry.update({"val_loss": row["val_loss"], "val_loss_before_polish": row["val_loss_before_polish"]})
+            lines.append(json.dumps(entry))
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+        temporary.replace(path)
+
     def _add_lessons(self, number, rows):
-        """Keep the teacher's rewrites as one lesson: a new shard (the ids after the data sources' and the earlier lessons') that the
-        next round deals with the others. Returns how many rows it holds; 0 when they make no training window."""
+        """Keep the teacher's rewrites as one lesson: a new shard (the ids after the data sources' and every lesson's, also those a crash
+        left in lessons.jsonl) that the next round deals with the others. Returns how many rows it holds; 0 when they make no training window."""
         rows = [row for row in rows if row.get("messages") and row.get("chosen")]
         windows = self._lesson_windows(rows) if rows else []
         if not len(windows):
             return 0
-        shard = self.shard_count + len(self.lessons)
-        with (self.directory / "lessons.jsonl").open("a", encoding="utf-8") as stream:
+        path = self.directory / "lessons.jsonl"
+        used = [entry["shard"] for entry in self.lessons]
+        if path.is_file():
+            used += [json.loads(line).get("shard", -1) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        shard = max([self.shard_count - 1, *used]) + 1
+        with path.open("a", encoding="utf-8") as stream:
             for row in rows:
                 stream.write(json.dumps({"shard": shard, "round": number, "messages": row["messages"], "chosen": row["chosen"],
                                          "rejected": row.get("rejected", "")}, ensure_ascii=False) + "\n")
@@ -1464,10 +1524,10 @@ class Coordinator:
         self._remember()
 
     def _write_record(self, row):
-        """run.json as it stands after round `row` (the weights now in theta, so a polished round counts with its polished loss)."""
+        """run.json as it stands after round `row` (a polished round's val_loss is already the polished loss)."""
         from studio_core import atomic_json, now
         self.record.update({"step": self.next_round * self.settings.inner_steps,
-                            "val_loss": row["polish_val_loss"] if row.get("polished") else row["val_loss"],
+                            "val_loss": row["val_loss"],
                             "status": "completed" if self.finished else "training",
                             "best_round": self.rules.best_round, "best_val_loss": self.rules.best_loss})
         if self.rules.stop_rule:
@@ -1578,9 +1638,18 @@ def _teacher(found):
     return OllamaTeacher(found["url"], found["teacher_model"], rubric=found.get("rubric"), judge_model=found.get("judge_model") or None)
 
 
+PREFLIGHT_TIMEOUT = 10  # seconds the start-up check waits for Ollama
+
+
 def check_teacher(found):
-    """RuntimeError, saying why, when the Ollama teacher cannot be reached."""
-    _teacher(found).models()
+    """RuntimeError, saying why, when the Ollama teacher cannot be reached or does not have the model the run polishes with."""
+    teacher = _teacher(found)
+    teacher.timeout = PREFLIGHT_TIMEOUT
+    names = teacher.models()
+    wanted = found["teacher_model"]
+    if wanted not in names and f"{wanted}:latest" not in names:
+        raise RuntimeError(f"Ollama at {teacher.url} has no model called {wanted}. Pull it first"
+                           + (f", or pick one of: {', '.join(names[:5])}." if names else "."))
 
 
 def default_polish(directory, found, checkpoint, prompts, device, stop, emit):
@@ -1620,14 +1689,15 @@ def prepare(job, services, directory, port, client_for=None):
     config = dict(p["config"])
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
-    if settings.polish_every:  # fail the job now, not at the first polish, when the teacher cannot be reached
-        teacher = teacher_settings(settings, getattr(services, "root", None))
-        try:
-            check_teacher(teacher)
-        except RuntimeError as exc:
-            raise ValueError(f"The run polishes with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
     examples = p["examples"] if "examples" in p else services.examples(p)
     try:
+        if settings.polish_every:
+            teacher = teacher_settings(settings, getattr(services, "root", None))
+            if not p.get("resuming"):  # a new run fails now, not at the first polish, when the teacher cannot be used; a resumed one meets it then
+                try:
+                    check_teacher(teacher)
+                except RuntimeError as exc:
+                    raise ValueError(f"The run polishes with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
                                        start_from=p.get("restart_from"))
     except ValueError as exc:
