@@ -71,7 +71,7 @@ class Member(BaseModel):
     local: bool
     device: str  # cuda | mps | cpu, as the machine reported when the run started; "" when unknown
     device_name: str
-    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "finished"]
+    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "unplaced", "never_joined", "finished"]
     note: str  # one sentence: why it is behind, dropped or unreachable
     missed: int  # rounds in a row it has missed
     sent: bool  # its change for the open round has arrived

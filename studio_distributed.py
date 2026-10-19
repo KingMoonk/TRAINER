@@ -302,6 +302,17 @@ def member_stats(history, node):
     return out
 
 
+def left_after_finish(snap, node):
+    """Whether `node` left the run only after the run had finished (the coordinator's own member does, once the last round is done):
+    its `left` event comes after the run's `finished` event."""
+    events = (snap or {}).get("events", [])
+    finished = [e["seq"] for e in events if e["kind"] == "finished"]
+    return bool(finished) and any(e["kind"] == "left" and e["node"] == node and e["seq"] > finished[0] for e in events)
+
+
+NEVER_JOINED = "It was invited but never joined the run."
+
+
 def member_rows(run, snap, ended):
     """One row per machine chosen, then any other node the coordinator knows. A machine the coordinator has not heard from yet is
     `invited` (or, for this computer, starting) until it joins."""
@@ -310,9 +321,9 @@ def member_rows(run, snap, ended):
     rows = []
     for machine in run.machines:
         known = nodes.get(machine.node)
-        rows.append(_member(machine.node, machine, known, history, ended))
+        rows.append(_member(machine.node, machine, known, history, ended, snap))
     chosen = {m.node for m in run.machines}
-    rows.extend(_member(node, None, known, history, ended) for node, known in nodes.items() if node not in chosen)
+    rows.extend(_member(node, None, known, history, ended, snap) for node, known in nodes.items() if node not in chosen)
     return rows
 
 
@@ -338,7 +349,7 @@ def phase_of(snap, state):
     return (snap or {}).get("phase") or "waiting"
 
 
-def _member(node, machine, known, history, ended):
+def _member(node, machine, known, history, ended, snap=None):
     local = machine is not None and machine.local
     row = {"node": node, "address": machine.address if machine else "", "local": local, "device": machine.device if machine else "",
            "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, **member_stats(history, node),
@@ -349,6 +360,11 @@ def _member(node, machine, known, history, ended):
         state, note, row["missed"], row["sent"] = known["state"], known["note"], known["missed"], known["sent"]
         if ended and state in ("training", "behind", "joining"):
             state = "finished" if ended == "finished" else "stopped"
+        elif ended == "finished" and state == "left" and left_after_finish(snap, node):
+            state, note = "finished", ""  # it left because the run was over, not because anything went wrong
+    elif ended and machine is not None and not local:
+        # never heard from, so it never joined: keep why (no slot, or invited and silent) instead of calling it finished
+        state, note = ("unplaced", machine.reason) if machine.state == "unplaced" else ("never_joined", NEVER_JOINED)
     elif ended:
         state, note = ("finished" if ended == "finished" else "stopped"), ""
     elif machine is not None and machine.state == "unplaced":

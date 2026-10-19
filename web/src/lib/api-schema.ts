@@ -4829,7 +4829,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "finished";
+            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "unplaced" | "never_joined" | "finished";
             /** Step In Round */
             step_in_round: number;
             /** Steps */
