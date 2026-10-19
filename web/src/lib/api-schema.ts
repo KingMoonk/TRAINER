@@ -6450,6 +6450,11 @@ export interface components {
              * @enum {string}
              */
             phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "polishing" | "judging" | "finished" | "stopped";
+            /**
+             * Reviewed Only
+             * @default false
+             */
+            reviewed_only: boolean;
             /** Round */
             round: number;
             /** Rounds */
@@ -6813,6 +6818,11 @@ export interface components {
             overlap: boolean;
             /** Replaces */
             replaces?: string | null;
+            /**
+             * Reviewed Only
+             * @default false
+             */
+            reviewed_only: boolean;
             /**
              * Rounds
              * @default 10

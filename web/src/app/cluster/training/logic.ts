@@ -23,7 +23,7 @@ export function lessonFrom(lesson: Lesson): string {
 }
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; coordinator: string };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -43,6 +43,7 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     minMachines: "",
     maxMachines: "",
     overlap: false,
+    reviewedOnly: false,
     coordinator: "",
   };
 }
@@ -91,6 +92,7 @@ export function startBody(form: Form): StartRun | null {
     ...(least !== undefined ? { min_members: least } : {}),
     ...(most !== undefined ? { max_members: most } : {}),
     overlap: form.overlap,
+    reviewed_only: form.reviewedOnly,
   };
 }
 

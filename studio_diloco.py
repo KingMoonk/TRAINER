@@ -2012,6 +2012,8 @@ def prepare(job, services, directory, port, client_for=None):
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
     examples = p["examples"] if "examples" in p else services.examples(p)
+    if not examples and p.get("reviewed_only"):
+        raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
     try:
         if settings.polish_every or settings.target_win_rate is not None:
             teacher = teacher_settings(settings, getattr(services, "root", None))

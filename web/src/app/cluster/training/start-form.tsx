@@ -96,6 +96,11 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
             </label>
           ))
         )}
+        <label className="mt-1 flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={form.reviewedOnly} onChange={(e) => set({ reviewedOnly: e.target.checked })} />
+          <span>{T.reviewedOnly}</span>
+        </label>
+        <p className="max-w-prose text-xs text-muted-foreground">{T.reviewedOnlyHelp}</p>
       </fieldset>
 
       <fieldset className="flex flex-col gap-1">

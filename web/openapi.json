@@ -7941,6 +7941,11 @@
             "title": "Phase",
             "type": "string"
           },
+          "reviewed_only": {
+            "default": false,
+            "title": "Reviewed Only",
+            "type": "boolean"
+          },
           "round": {
             "title": "Round",
             "type": "integer"
@@ -8907,6 +8912,11 @@
               }
             ],
             "title": "Replaces"
+          },
+          "reviewed_only": {
+            "default": false,
+            "title": "Reviewed Only",
+            "type": "boolean"
           },
           "rounds": {
             "default": 10,

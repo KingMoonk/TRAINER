@@ -57,6 +57,7 @@ class StartRun(BaseModel):
     min_members: int | None = Field(None, ge=1, le=64)  # the run waits in the queue until this many machines (this one included) are free at once
     max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
+    reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool = False  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs
 
 
@@ -193,6 +194,7 @@ class Run(BaseModel):
     delta_dtype: str
     members: list[Member]
     history: list[Round]
+    reviewed_only: bool = False  # the run trains only on examples marked Good
     can_stop: bool
     paused: bool = False  # the owner paused it: no new round opens until it is resumed (a round in flight finishes)
     can_pause: bool = False
@@ -409,6 +411,8 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     unknown = [d for d in dataset_ids if d not in known]
     if unknown or not dataset_ids:
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
+    if body.reviewed_only and not services.has_reviewed_text(dataset_ids):
+        raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
                                       outer_momentum=body.outer_momentum, **shape)  # ValueError -> 400
@@ -434,7 +438,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)
