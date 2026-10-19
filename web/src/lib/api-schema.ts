@@ -5865,6 +5865,20 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * QueueLimits
+         * @description What a machine's queue plan allows its jobs, so the run-start form can say it before a machine is chosen.
+         */
+        QueueLimits: {
+            /** Blocked */
+            blocked?: string | null;
+            /**
+             * Paused
+             * @default false
+             */
+            paused: boolean;
+            plan: components["schemas"]["PlanModel"];
+        };
         /** QueueNode */
         QueueNode: {
             /** Address */
@@ -5878,6 +5892,7 @@ export interface components {
             error: string;
             /** Hostname */
             hostname: string;
+            limits?: components["schemas"]["QueueLimits"] | null;
             /**
              * Listed
              * @default true

@@ -11,6 +11,7 @@ export { nodeName } from "@/lib/node-name";
 
 export type ClusterQueue = components["schemas"]["ClusterQueue"];
 export type QueueNode = components["schemas"]["QueueNode"];
+export type QueueLimits = components["schemas"]["QueueLimits"];
 export type QueueRow = components["schemas"]["QueueRow"];
 export type PublishedVersion = components["schemas"]["PublishedVersion"];
 
