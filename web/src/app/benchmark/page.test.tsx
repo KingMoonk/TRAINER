@@ -89,6 +89,61 @@ describe("Benchmark page", () => {
     expect(screen.queryByRole("button", { name: "Check the rest" })).not.toBeInTheDocument();
   });
 
+  test("shows the suite as a trend across a lineage, with the paired test beside each step and what was left out", async () => {
+    const point = (number: number, tokens: number, bpc: number, accuracy: number, extra: Record<string, unknown> = {}) => ({
+      number,
+      tokens,
+      bpc,
+      bpc_band: [bpc - 0.05, bpc + 0.05],
+      few_shot: accuracy,
+      few_shot_band: [accuracy - 0.1, accuracy + 0.1],
+      problems: 0.1,
+      dropped: {},
+      gain: null,
+      ...extra,
+    });
+    const trended = {
+      ...track(true),
+      sources: ["Books", "Forum"],
+      lineages: [
+        {
+          lineage: "a",
+          versions: [1, 2],
+          points: [
+            point(1, 200_000, 2.6, 0.3, { dropped: { docs: 2, choice: 1 } }),
+            point(2, 800_000, 2.2, 0.35, { gain: { bpc: { diff: -0.4, better: true, docs: 24 }, few_shot: { diff: 0.05, better: false, items: 40 }, problems: null } }),
+          ],
+        },
+        { lineage: "b", versions: [3], points: [point(3, 500_000, 2.4, 0.33)] },
+      ],
+    };
+    mockApi({ ...read(() => trended) });
+    renderPage(<BenchmarkPage />);
+
+    expect(await screen.findByText("Does it keep getting better?")).toBeVisible();
+    expect(screen.getByText("Passages come from: Books, Forum.")).toBeVisible();
+    const table = screen.getByRole("table", { name: "Design A: versions 1, 2" });
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1", "200K", "2.60 (2.55 to 2.65)", "–", "30% (20% to 40%)", "–", "3"]);
+    expect(within(rows[2]).getAllByRole("cell").map((c) => c.textContent)).toEqual([
+      "2",
+      "800K",
+      "2.20 (2.15 to 2.25)",
+      "better (-0.40)",
+      "35% (25% to 45%)",
+      "not sure (+5 points)",
+      "0",
+    ]);
+    expect(screen.getByRole("table", { name: "Design B: versions 3" })).toBeVisible();
+  });
+
+  test("a version scored under an older method is reported as waiting to be checked again", async () => {
+    const stale = { ...track(true), rows: track(true).rows.map((r) => (r.number === 2 ? { ...r, result: null, stale: true } : r)) };
+    mockApi({ ...read(() => stale) });
+    renderPage(<BenchmarkPage />);
+    expect(await screen.findByText(/1 of 3 trained versions have not been checked yet\. One was checked before the scoring method changed/)).toBeVisible();
+  });
+
   test("shows a skeleton until the job is done, and reads the job once in case the event came first", async () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
