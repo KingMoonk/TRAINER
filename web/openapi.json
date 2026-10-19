@@ -1682,13 +1682,6 @@
             "title": "Example",
             "type": "string"
           },
-          "links": {
-            "items": {
-              "$ref": "#/components/schemas/PartLink"
-            },
-            "title": "Links",
-            "type": "array"
-          },
           "module": {
             "title": "Module",
             "type": "string"
@@ -1711,8 +1704,7 @@
           "what",
           "module",
           "module_text",
-          "example",
-          "links"
+          "example"
         ],
         "title": "Explained",
         "type": "object"
@@ -4211,29 +4203,6 @@
           }
         },
         "title": "PairSaved",
-        "type": "object"
-      },
-      "PartLink": {
-        "properties": {
-          "block": {
-            "title": "Block",
-            "type": "integer"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "route": {
-            "title": "Route",
-            "type": "string"
-          }
-        },
-        "required": [
-          "route",
-          "label",
-          "block"
-        ],
-        "title": "PartLink",
         "type": "object"
       },
       "Parts": {
