@@ -54,12 +54,12 @@ class Recovery(test_cluster_facts.TwoNodes):
         self.assertEqual(self.b.cluster.contact("A"), (2., studio_remote.POLL_EVERY - 2))
         self.net.down.add("A")
         self.clock.advance(30)
-        self.b.cluster.poll_once()  # fails: asked again after the first wait
+        self.b.cluster.poll_once()  # fails: asked again after the wait
         self.clock.advance(3)
-        self.assertEqual(self.b.cluster.contact("A"), (35., studio_remote.POLL_EVERY - 3))
+        self.assertEqual(self.b.cluster.contact("A"), (35., studio_remote.POLL_BACKOFF_MAX - 3))
         row = self.nodes(answering=False)["A"]
         self.assertFalse(row["online"])
-        self.assertEqual((row["last_heard_s"], row["next_check_s"]), (35., 2.))
+        self.assertEqual((row["last_heard_s"], row["next_check_s"]), (35., 7.))
         self.net.down.discard("A")
         self.clock.advance(studio_remote.POLL_EVERY)
         self.sync()

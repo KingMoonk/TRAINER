@@ -329,7 +329,7 @@ class Cluster:
                 self._answered[address] = self._probed[address]
             else:
                 count = self._silent.get(address, (0,))[0] + 1
-                self._silent[address] = (count, self._probed[address] + min(POLL_BACKOFF_MAX, POLL_EVERY * 2 ** (count - 1)))
+                self._silent[address] = (count, self._probed[address] + min(POLL_BACKOFF_MAX, 2 * POLL_EVERY * 2 ** (count - 1)))
         self.polled.set()
         try:  # who coordinates which run, from the store as it is after this poll's syncs (studio_failover)
             self.failover.step()
