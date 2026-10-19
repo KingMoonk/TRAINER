@@ -192,7 +192,7 @@ def reap(folder, *, command_line=None, alive=None, terminate=None, grace=0., sle
     own spec is stopped: after a reboot the pid may be anyone's. A worker whose app has gone is already saving and leaving, so it gets
     up to `grace` seconds to exit by itself (its last checkpoint is the one the job continues from) before it is stopped.
     Returns the pids it stopped."""
-    import studio_passive_watch as procs
+    import studio_platform as procs
     command_line, alive, terminate = command_line or procs.command_line, alive or procs.alive, terminate or procs.terminate
     stopped = []
     for spec, pid in strays(folder):

@@ -401,11 +401,15 @@ NEVER_JOINED = "It was invited but never joined the run."
 def peer_facts(run, cluster):
     """What this node's copy of the observation store says about each other machine of `run`, for the member rows: {node: {"down":
     the machine is not answering, "member_running": its member job is running, "blocking": {"label", "eta_s"} of the other job it is
-    busy with, else None}}. A machine the store holds no queue of is left out."""
+    busy with, else None, "limits": the queue limits holding it now, {"blocked", "paused"}, or None}}. A machine the store holds no
+    queue of is left out; this computer is in it only for its limits."""
     import studio_facts
     out = {}
     for machine in run.machines:
+        held = _held(studio_facts.limits_facts(cluster, machine.node))
         if machine.local:
+            if held:
+                out[machine.node] = {"down": False, "member_running": False, "blocking": None, "limits": held}
             continue
         jobs, age = studio_facts.queue_facts(cluster, machine.node)
         if age is None:
@@ -413,8 +417,32 @@ def peer_facts(run, cluster):
         mine = next((j for j in jobs if machine.peer_job and j["id"] == machine.peer_job), None)
         other = next((j for j in jobs if j["status"] == "running" and j["id"] != machine.peer_job), None)
         out[machine.node] = {"down": cluster.is_down(machine.node), "member_running": bool(mine and mine["status"] == "running"),
-                             "blocking": {"label": other["label"], "eta_s": other.get("eta_s")} if other else None}
+                             "blocking": {"label": other["label"], "eta_s": other.get("eta_s")} if other else None, "limits": held}
     return out
+
+
+def _held(limits):
+    """{"blocked", "paused"} of a node's published queue limits when its plan or its person is holding its jobs now, else None."""
+    if not limits or not (limits.get("blocked") or limits.get("paused")):
+        return None
+    return {"blocked": limits.get("blocked"), "paused": bool(limits.get("paused"))}
+
+
+def limit_reason(node, held):
+    """Why a member is not training: its own machine's queue plan (or its person) is holding it, and what ends that. One text for the
+    run view and the machine's own queue."""
+    blocked = held.get("blocked") or ""
+    if blocked == "on battery":
+        return f"{node} is on battery and its plan pauses training then. It continues when it is plugged in."
+    if blocked == "outside hours":
+        return f"It is outside the hours {node}'s plan allows. It continues when they start."
+    if blocked == "computer in use":
+        return f"{node} is in use and its plan trains only while it is idle. It continues when it is idle again."
+    if blocked.startswith("passive training"):
+        return f"{node} is running passive training, which holds its queue. It continues when that ends."
+    if blocked:
+        return f"{node}'s queue plan holds it: {blocked}. It continues when that ends."
+    return f"The queue on {node} is paused. It continues when someone resumes it there."
 
 
 def busy_reason(blocking):
@@ -491,6 +519,9 @@ def _member(node, machine, known, history, ended, snap=None, peer=None):
         state, note = "waiting", machine.reason
     else:
         state, note = "invited", "Added to its queue. It joins by itself once the machine is free."
+    held = (peer or {}).get("limits")
+    if held and not ended and state in ("training", "behind", "joining", "invited", "waiting"):
+        state, note = ("waiting" if state == "invited" else state), limit_reason(node, held)  # the machine's own limits say why
     row["state"], row["note"], row["reason"] = state, note, note
     placed = machine is None or machine.state != "unplaced"
     row["can_stop"] = not ended and not local and placed and state in ("invited", "training", "behind", "joining", "waiting")

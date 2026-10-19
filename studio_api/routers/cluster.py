@@ -23,7 +23,7 @@ import studio_facts
 import studio_peer
 import studio_scheduler as sched
 from studio_api.app import get_services
-from studio_api.routers.queue import local_jobs
+from studio_api.routers.queue import PlanModel, local_jobs
 from studio_api.version import app_version
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
@@ -76,6 +76,14 @@ class ClusterJob(BaseModel):
     checkpoint_step: int | None = None
 
 
+class QueueLimits(BaseModel):
+    """What a machine's queue plan allows its jobs, so the run-start form can say it before a machine is chosen."""
+
+    plan: PlanModel
+    blocked: str | None = None  # why its plan holds its jobs right now ("on battery", "outside hours", "computer in use", passive training)
+    paused: bool = False  # its person paused its queue
+
+
 class QueueNode(BaseModel):
     address: str  # the entry in the list, or "local" for this machine
     hostname: str  # "" for a machine that never answered
@@ -88,6 +96,7 @@ class QueueNode(BaseModel):
     age_s: float | None = None  # seconds since the node last wrote its queue into this computer's copy of the store; 0 for this machine
     origin_down: bool = False
     listed: bool = True  # False for a node this computer knows only from the store (another node's list names it)
+    limits: QueueLimits | None = None  # its queue plan and what holds it now; None when it could not be read
 
 
 class QueueRow(BaseModel):
@@ -245,12 +254,22 @@ def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQue
     peers = _with_store_queues(cluster, peers)
     shared = any(p.info.hostname.lower() == own.hostname.lower() for p in peers)  # a hostname pin would name two machines
     own_pin = own.address if shared or not own.hostname else own.hostname
-    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own_pin, local=True, online=True, **_queue_stamp(cluster, own.hostname)),
+    own_limits = studio_cluster_queue.limits_of({"plan": running.plan, "blocked": running.blocked, "paused": running.paused})
+    nodes = [QueueNode(address=own.address, hostname=own.hostname, pin=own_pin, local=True, online=True, limits=own_limits,
+                       **_queue_stamp(cluster, own.hostname)),
              *(QueueNode(address=p.info.address, hostname=p.info.hostname, pin=p.info.address, local=False,
                          online=p.info.online, error=p.info.error, seen_at=p.seen_at, listed=p.info.address in addresses,
-                         **_queue_stamp(cluster, p.info.hostname)) for p in peers)]
+                         limits=p.limits or _stored_limits(cluster, p.info.hostname), **_queue_stamp(cluster, p.info.hostname))
+               for p in peers)]
     rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None), progress)
     return ClusterQueue(nodes=nodes, jobs=[QueueRow(**asdict(r)) for r in rows])
+
+
+def _stored_limits(cluster, hostname):
+    """The limits a node last wrote into this computer's copy of the store: what a machine that does not answer is shown with."""
+    if cluster is None or not hostname:
+        return None
+    return studio_facts.limits_facts(cluster, hostname)
 
 
 def _queue_stamp(cluster, hostname):

@@ -222,26 +222,29 @@ def _resume(job, cfg, out, init, options, context=None):
         return None
 
 
-def _member(job, context, emit, stop, name):
-    """Run a DiLoCo member (studio_diloco) against params["coordinator_url"]; it keeps its own training folder next to the job's."""
+def _member(job, context, emit, stop, pause, name):
+    """Run a DiLoCo member (studio_diloco) against params["coordinator_url"]; it keeps its own training folder next to the job's.
+    It lives by this machine's queue plan like any job: `pause` is the plan's pause (battery, hours, idle) and params["memory_share"]
+    the share of memory the plan gives it."""
     import socket
     import studio_diloco
     from studio_peer import PeerClient
     p = job.params
     folder = Path(p["output_dir"]) / "member" if p.get("output_dir") else Path(context.run_dir) / f"{name}_{job.id}"
     studio_diloco.run_member(PeerClient(p["coordinator_url"]), p["run"], p.get("node") or socket.gethostname(), int(p.get("epoch", 0)),
-                             context.root, folder, emit, stop, **{"locate": studio_diloco.file_locator(context.root), **p.get("member_options", {})})
+                             context.root, folder, emit, stop, **{"locate": studio_diloco.file_locator(context.root), "pause": pause,
+                                                                    "memory_share": p.get("memory_share"), **p.get("member_options", {})})
 
 
 def pretrain_distributed(job, context, emit, stop, pause):
     """The owner's job: the coordinator already runs in the app (prepare); this process is its local member."""
-    _member(job, context, emit, stop, "diloco")
+    _member(job, context, emit, stop, pause, "diloco")
 
 
 def diloco_member(job, context, emit, stop, pause):
     """A member for a run whose coordinator is on another node: params coordinator_url, run, node and epoch."""
     job.params.setdefault("output_dir", str(Path(context.run_dir) / f"diloco_member_{job.id}"))
-    _member(job, context, emit, stop, "diloco_member")
+    _member(job, context, emit, stop, pause, "diloco_member")
 
 
 def import_pretrained(job, context, emit, stop, pause):

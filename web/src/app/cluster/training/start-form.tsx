@@ -21,6 +21,7 @@ import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
 import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
+import { Limits } from "./limits";
 import { Roster } from "./roster";
 import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./use-training";
 
@@ -125,6 +126,7 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
       )}
 
       <Roster items={chosen} />
+      <Limits items={chosen} cluster={cluster} />
 
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">{T.shape}</legend>

@@ -92,10 +92,10 @@ class OwnerSide(unittest.TestCase):
         import studio_facts
         cluster = types.SimpleNamespace(is_down=lambda node: False)
         queue = [{"id": "other", "status": "running", "label": "Version 1", "eta_s": 600.}, {"id": "job-box", "status": "waiting", "label": "m"}]
-        with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)):
+        with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
             facts = runs.peer_facts(self.run, cluster)
-        self.assertEqual(facts, {"box": {"down": False, "member_running": False, "blocking": {"label": "Version 1", "eta_s": 600.}}})
-        with mock.patch.object(studio_facts, "queue_facts", return_value=([], None)):
+        self.assertEqual(facts, {"box": {"down": False, "member_running": False, "blocking": {"label": "Version 1", "eta_s": 600.}, "limits": None}})
+        with mock.patch.object(studio_facts, "queue_facts", return_value=([], None)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
             self.assertEqual(runs.peer_facts(self.run, cluster), {})
 
 

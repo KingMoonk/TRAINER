@@ -222,6 +222,20 @@ class QueueRoute(ApiCase):
         self.assertEqual([(r["id"], r["status"], r["hostname"], r["queued_on"], r["queued_here"], r["stale"]) for r in body["jobs"]],
                          [(mine["id"], "waiting", "", "here-box", True, False), ("p1", "running", "gpu-box", "gpu-box", False, False)])
 
+    def test_each_node_carries_the_limits_of_its_queue_plan_and_what_holds_it(self):
+        self.net.peers["gpu"]["queue"] = {"job": None, "plan": {"memory": "half", "keep_awake": True, "pause_on_battery": True},
+                                          "blocked": "on battery", "paused": False}
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        here, gpu = self.call("GET", "/cluster/merged")["nodes"]
+        self.assertEqual((gpu["limits"]["plan"]["memory"], gpu["limits"]["plan"]["keep_awake"], gpu["limits"]["blocked"], gpu["limits"]["paused"]),
+                         ("half", True, "on battery", False))
+        self.assertIsNone(here["limits"]["blocked"])  # this machine's own plan, from its own queue
+        self.assertIn("pause_on_battery", here["limits"]["plan"])
+
+    def test_a_peer_that_does_not_say_its_plan_has_no_limits(self):
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        self.assertIsNone(self.call("GET", "/cluster/merged")["nodes"][1]["limits"])
+
     def test_a_note_on_a_job_running_on_a_peer_is_in_its_row(self):
         self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
         away = Job("pretrain", "away", status="running", id="far1", node="gpu", note="the bucket is full")
