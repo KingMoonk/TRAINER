@@ -7727,6 +7727,11 @@
       },
       "Round": {
         "properties": {
+          "best": {
+            "default": false,
+            "title": "Best",
+            "type": "boolean"
+          },
           "bytes_down": {
             "title": "Bytes Down",
             "type": "integer"
@@ -7760,6 +7765,11 @@
           "members": {
             "title": "Members",
             "type": "integer"
+          },
+          "pivot": {
+            "default": "",
+            "title": "Pivot",
+            "type": "string"
           },
           "round": {
             "title": "Round",
@@ -8014,6 +8024,11 @@
             ],
             "title": "Members"
           },
+          "paused": {
+            "default": false,
+            "title": "Paused",
+            "type": "boolean"
+          },
           "rank": {
             "anyOf": [
               {
@@ -8262,6 +8277,43 @@
             "title": "Age S",
             "type": "number"
           },
+          "best_round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Round"
+          },
+          "best_val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Val Loss"
+          },
+          "can_pause": {
+            "default": false,
+            "title": "Can Pause",
+            "type": "boolean"
+          },
+          "can_restart": {
+            "default": false,
+            "title": "Can Restart",
+            "type": "boolean"
+          },
+          "can_resume": {
+            "default": false,
+            "title": "Can Resume",
+            "type": "boolean"
+          },
           "can_stop": {
             "title": "Can Stop",
             "type": "boolean"
@@ -8366,9 +8418,15 @@
             "title": "Owner",
             "type": "string"
           },
+          "paused": {
+            "default": false,
+            "title": "Paused",
+            "type": "boolean"
+          },
           "phase": {
             "enum": [
               "waiting",
+              "paused",
               "next_round",
               "training",
               "collecting",
@@ -8414,6 +8472,16 @@
               "failed"
             ],
             "title": "State",
+            "type": "string"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "stop_rule": {
+            "default": "",
+            "title": "Stop Rule",
             "type": "string"
           },
           "term": {
@@ -8498,7 +8566,12 @@
               "stale",
               "outer_step",
               "checkpoint",
-              "finished"
+              "finished",
+              "pivot",
+              "paused",
+              "resumed",
+              "took_over",
+              "stepped_down"
             ],
             "title": "Kind",
             "type": "string"
@@ -14717,6 +14790,135 @@
           }
         },
         "summary": "Stop Member",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/pause": {
+      "post": {
+        "description": "Hold a run: no new round opens until it is resumed. A round in flight finishes, the members wait, and the paused time does not\ncount toward the run's time limit. It stays paused over a restart of the app. 409 when the run is over or not going. A run\nanother computer coordinates is paused by asking that computer.",
+        "operationId": "pause_run_distributed_runs__run_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/restart": {
+      "post": {
+        "description": "Start a new run (a new id) from an ended one: the same design, text, settings and machines, with the weights of the old run's\nbest round (else its last) as the starting point. The outer momentum starts at zero. 409 for a run that is still going, one\nthat saved no weights, or one this computer did not start. A run another computer coordinates is restarted by that computer.",
+        "operationId": "restart_run_distributed_runs__run_id__restart_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restart Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/resume": {
+      "post": {
+        "description": "Undo a pause: the next round opens as soon as the members are in. 409 when the run is over or not going.",
+        "operationId": "resume_run_distributed_runs__run_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Run",
         "tags": [
           "distributed"
         ]

@@ -23,6 +23,7 @@ from tests.fake_cluster import Clock, Net
 from tests.test_api_cluster import ClusterServices, FakePeers, node_payload, probed
 from tests.test_queue_cluster import own_node
 
+COMMANDS = ("/stop", "/pause", "/resume", "/restart")
 MACHINES = [{"node": "A", "address": "local", "device": "mps", "device_name": "M3"},
             {"node": "B", "address": "B", "device": "cuda", "device_name": "RTX"}]
 
@@ -89,8 +90,8 @@ class TwoNodes(unittest.TestCase):
                 return node_payload(node.name)
             if path == "state/sync":
                 return node.state.handle_sync(json.loads(json.dumps(body)))
-            if path.startswith("distributed/runs/") and path.endswith("/stop"):  # a command: the owner answers with the run it reads
-                return node.client.get("/" + path.split("/members/")[0].removesuffix("/stop")).json()
+            if path.startswith("distributed/runs/") and path.endswith(COMMANDS):  # a command: the owner answers with the run it reads
+                return node.client.get("/" + path.split("/members/")[0].rsplit("/", 1)[0]).json()
             raise PeerError(f"answered 404: {path}", status=404, detail=path)
         return handler
 
@@ -172,6 +173,18 @@ class TwoNodes(unittest.TestCase):
         self.assertEqual([(a, m, p) for a, m, p, _, _ in self.net.calls], [("A", "POST", "distributed/runs/run1/stop")])
         self.assertEqual(self.b.facts(), before)
         self.assertEqual(self.b.state.vector(), vector)
+
+    def test_pause_resume_and_restart_go_to_the_owner_the_same_way(self):
+        self.a.runs.append(a_run())
+        self.sync()
+        before = self.b.facts()
+        self.net.calls.clear()
+        for verb, status in (("pause", 200), ("resume", 200), ("restart", 201)):
+            reply = self.b.client.post(f"/distributed/runs/run1/{verb}")
+            self.assertEqual((reply.status_code, reply.json()["origin"]), (status, "A"), reply.text)
+        self.assertEqual([(a, m, p) for a, m, p, _, _ in self.net.calls],
+                         [("A", "POST", f"distributed/runs/run1/{verb}") for verb in ("pause", "resume", "restart")])
+        self.assertEqual(self.b.facts(), before)
 
     def test_a_command_for_an_owner_that_does_not_answer_is_a_502_and_changes_nothing(self):
         self.a.runs.append(a_run())

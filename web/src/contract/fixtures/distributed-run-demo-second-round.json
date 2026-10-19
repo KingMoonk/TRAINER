@@ -1,6 +1,11 @@
 {
   "body": {
     "age_s": 0.0,
+    "best_round": 0,
+    "best_val_loss": 5.1309,
+    "can_pause": true,
+    "can_restart": false,
+    "can_resume": false,
     "can_stop": true,
     "contributed": 0,
     "coordinator": "mac-mini",
@@ -45,12 +50,14 @@
     "handoff": "",
     "history": [
       {
+        "best": true,
         "bytes_down": 8000000,
         "bytes_up": 4000000,
         "contributed": 2,
         "dropped": [],
         "loss": 5.0509,
         "members": 2,
+        "pivot": "",
         "round": 0,
         "seconds": 6.0,
         "step": 100,
@@ -203,12 +210,15 @@
     "outer_lr": 0.7,
     "outer_momentum": 0.9,
     "owner": "mac-mini",
+    "paused": false,
     "phase": "training",
     "round": 1,
     "rounds": 400,
     "saved_version": null,
     "started_at": 1700000000.0,
     "state": "running",
+    "stop_reason": "",
+    "stop_rule": "",
     "term": 1,
     "theta_bytes": 4000000,
     "timeline": [

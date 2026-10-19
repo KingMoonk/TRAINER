@@ -158,7 +158,7 @@ describe("the Training tab's live view on the recorded demo run", () => {
     expect(await screen.findByTestId("round-title")).toHaveTextContent(`Round ${run.round + 1} of ${run.rounds}`);
     expect(screen.getByTestId("timeline-round-1")).toHaveAttribute("data-open", "false");
     expect(screen.getByTestId("timeline-round-2")).toHaveAttribute("data-open", "true");
-    const kinds = within(screen.getByRole("region", { name: "Events" })).getAllByRole("listitem").map((li) => li.getAttribute("data-kind"));
+    const kinds = within(screen.getByRole("region", { name: "Journal" })).getAllByRole("listitem").map((li) => li.getAttribute("data-kind"));
     expect(kinds).toEqual(run.events.map((e) => e.kind).reverse());
     expect(kinds.slice(0, 2)).toEqual(["checkpoint", "outer_step"]);
   });

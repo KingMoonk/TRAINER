@@ -6,6 +6,7 @@ import io
 import logging
 import queue
 import socket
+import tempfile
 import threading
 import time
 import urllib.error
@@ -968,7 +969,9 @@ class FakeServices(Services):
         import studio_distributed
         from studio_ia.fake_distributed import FakeCoordinator
         q = self._queue
-        coordinator = FakeCoordinator(studio_distributed.run_of(job), job.params.get("settings") or {}, unit=self.step_seconds * 1.5)
+        run = studio_distributed.run_of(job)
+        run.folder = tempfile.mkdtemp(prefix="fake_run_")  # the stub weights a restart starts from
+        coordinator = FakeCoordinator(run, job.params.get("settings") or {}, unit=self.step_seconds * 1.5)
         studio_diloco.register(job.id, coordinator)
         studio_distributed.invite(job)
         coordinator.start()

@@ -23,6 +23,8 @@ LOST = "Ended: this machine restarted at round {round}; outer state for that rou
 INVITE_TIMEOUT = 5.  # seconds a peer has to take its member job
 ACTIVE = ("queued", "starting", "waiting", "running")
 UNPLACED = "It was busy when the run was placed. It joins a later round if it is free by then."
+ENDED = ("finished", "stopped", "failed")
+NOT_RESTARTED = ("resuming", "restart_from", "gang")  # params of one run's own life, not of its setup
 STATES = ("queued", "starting", "waiting", "running", "finished", "stopped", "failed")
 
 RUNS = {}  # run id -> Run
@@ -64,6 +66,9 @@ class Run:
     term: int = 1  # the coordinator's term when its account was kept (archive)
     saved: int | None = None  # the version whose weights this run saved when it finished
     restarted: bool = False  # read back from the workspace while its last account still said it was going
+    params: dict = field(default_factory=dict)  # what the job was started with (all of its params but NOT_RESTARTED): a restart starts a new run from it
+    restarted_as: str = ""  # the id of the run started from this one, once there is one
+    folder: str = ""  # where the coordinator keeps the run's files (best.npz, last.npz), once it has been built
     handoff: str = ""  # the node the person chose to coordinate: this computer starts the run and hands it over once that node holds a round
 
 
@@ -89,6 +94,7 @@ def run_of(job):
             p = job.params
             run = RUNS[job.id] = Run(job.id, job.label, p.get("version"), job.created_at or time.time(), dict(p.get("settings") or {}),
                                      p.get("owner") or socket.gethostname(), machines_of(p.get("machines", [])))
+            run.params = {key: value for key, value in p.items() if key not in NOT_RESTARTED and not (key == "examples" and "datasets" in p)}
             run.handoff = next((m.node for m in run.machines if p.get("coordinator") and m.address == p["coordinator"]), "")
             for key in list(RUNS)[:-KEPT]:
                 del RUNS[key]
@@ -366,8 +372,29 @@ def lapse(run, node, client_for=PeerClient):
 
 # ---- the read model ---------------------------------------------------------------------------------------------------
 
-def round_rows(history):
+def checkpoint_of(run):
+    """The checkpoint a restart of `run` starts from: best.npz when the run kept one, else last.npz, else None."""
+    if not run.folder:
+        return None
+    folder = Path(run.folder)
+    return next((path for path in (folder / "best.npz", folder / "last.npz") if path.is_file()), None)
+
+
+def stop_reason(state, rules, rounds):
+    """The plain sentence for why a run ended, "" while it goes: the rule that ended it, else who stopped it or that every round is done."""
+    if state not in ENDED:
+        return ""
+    if rules.get("stop_text"):
+        return rules["stop_text"]
+    if state == "stopped":
+        return "You stopped the run."
+    return f"All {rounds} rounds are done." if state == "finished" else ""
+
+
+def round_rows(history, best_round=None):
+    """The rounds for the wire; only the round the rules name as the best is marked best."""
     return [{"round": row["round"], "step": row["step"], "loss": row.get("loss"), "val_loss": row.get("val_loss"),
+             "best": best_round is not None and row["round"] == best_round, "pivot": row.get("pivot") or "",
              "bytes_up": row.get("delta_bytes", 0), "bytes_down": row.get("theta_bytes", 0), "seconds": row.get("seconds", 0.),
              "members": len(row.get("members", [])), "contributed": len(row.get("contributed", [])),
              "dropped": list(row.get("dropped", []))} for row in history]
@@ -550,11 +577,17 @@ def view(run, coordinator, job, peers=None):
         note = "Waiting for enough members to join."
     ended = state in ("finished", "stopped", "failed") and (state if state != "failed" else "stopped")
     settings = (snap or {}).get("settings") or run.settings
+    rules = (snap or {}).get("rules") or {}
+    paused = bool((snap or {}).get("paused")) and state in ("waiting", "running")
     return {"id": run.id, "label": run.label, "version": run.version, "state": state, "note": note, "started_at": run.started_at,
             "owner": run.owner, "handoff": run.handoff, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or "", peers),
-            "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,
+            "history": round_rows((snap or {}).get("history", []), rules.get("best_round")), "can_stop": state in ACTIVE,
+            "paused": paused, "can_pause": state in ("waiting", "running") and not paused and coordinator is not None, "can_resume": paused,
+            "can_restart": state in ENDED and not restart_blocker(run, getattr(coordinator, "term", run.term)),
+            "best_round": rules.get("best_round"), "best_val_loss": rules.get("best_loss"), "stop_rule": rules.get("stop_rule") or "",
+            "stop_reason": stop_reason(state, rules, settings.get("rounds", 0)),
             "phase": phase_of(snap, state), "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
             "window_s": (snap or {}).get("window_s"), "contributed": (snap or {}).get("contributed", 0), "expected": (snap or {}).get("expected", 0),
             "theta_bytes": (snap or {}).get("theta_bytes", 0), "now_s": (snap or {}).get("now_s", 0.),
@@ -569,3 +602,26 @@ def stop_run(run, coordinator, client_for=PeerClient):
     persist()
     for machine in run.machines:
         release_member(run, machine.node, client_for)
+
+
+def restart_blocker(run, term=1):
+    """Why an ended run cannot be restarted from this computer, in a sentence, or "" when it can."""
+    if not run.params:
+        return "This computer did not start this run, so it does not know how it was set up. Start a new run instead."
+    if term > 1:
+        return "Another computer coordinated this run for a while, so the weights in this computer's folder are out of date. Start a new run instead."
+    if run.restarted_as:
+        return f"This run was already restarted (as run {run.restarted_as})."
+    if checkpoint_of(run) is None:
+        return "The run saved no weights to start from (it ended before its first round finished)."
+    return ""
+
+
+def restart_params(run, term=1):
+    """The params of a new job that starts `run` over from its best weights (else its last): the run's own params and `restart_from`, the
+    checkpoint's path. ValueError, saying why, when it cannot be restarted (restart_blocker)."""
+    why = restart_blocker(run, term)
+    if why:
+        raise ValueError(why)
+    path = checkpoint_of(run)
+    return {**json.loads(json.dumps(run.params)), "restart_from": str(path)}

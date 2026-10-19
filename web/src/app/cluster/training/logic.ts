@@ -1,7 +1,7 @@
 // The Training tab's rules, apart from the page so a test can check them without a browser.
 import type { components } from "@/lib/api-schema";
 import { TRAINING as T } from "@/lib/copy/training";
-import type { Series } from "@/components/series-chart";
+import type { Mark, Series } from "@/components/series-chart";
 
 export type Run = components["schemas"]["Run"];
 export type Member = components["schemas"]["Member"];
@@ -159,6 +159,25 @@ export function lossSeries(history: Round[]): Series[] {
     id, label, points: history.flatMap((row) => (pick(row) == null ? [] : [{ x: row.round + 1, y: pick(row) as number }])),
   });
   return [line("loss", T.trainLoss, (row) => row.loss), line("val_loss", T.validationLoss, (row) => row.val_loss)].filter((s) => s.points.length > 0);
+}
+
+/** The marks on the error curve: the best round (lowest validation loss so far) and each round after which the stop rules changed course. */
+export function errorMarks(run: Run): Mark[] {
+  const marks: Mark[] = run.history.flatMap((row) =>
+    row.pivot ? [{ id: `pivot-${row.round}`, x: row.round + 1, label: T.pivots[row.pivot] ?? T.pivotFallback, dash: "4 3" }] : [],
+  );
+  if (run.best_round != null) marks.push({ id: "best", x: run.best_round + 1, label: T.bestRound, color: "var(--chart-2)" });
+  return marks;
+}
+
+/** Which of Pause, Resume and Restart the run offers right now: only the ones the server says it can do. */
+export function holdButtons(run: Run): { pause: boolean; resume: boolean; restart: boolean } {
+  return { pause: run.can_pause && !run.paused, resume: run.can_resume && run.paused, restart: run.can_restart };
+}
+
+/** Why the run ended, in a sentence, or "" while it goes. */
+export function stopReasonText(run: Run): string {
+  return run.stop_reason ? T.stopReason.replace("{why}", run.stop_reason) : "";
 }
 
 /** Bytes moved each round, up to the coordinator and back down, in megabytes so the axis reads as small numbers. */

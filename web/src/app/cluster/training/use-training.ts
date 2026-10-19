@@ -106,6 +106,33 @@ export function useStopRun() {
   });
 }
 
+/** Pause or resume a run; the answer is the run, so its buttons and phase change at once. */
+export function useHoldRun(verb: "pause" | "resume") {
+  const write = useRunWrite();
+  return useMutation({
+    mutationFn: (id: string) =>
+      verb === "pause"
+        ? unwrap(api.POST("/distributed/runs/{run_id}/pause", { params: { path: { run_id: id } } }))
+        : unwrap(api.POST("/distributed/runs/{run_id}/resume", { params: { path: { run_id: id } } })),
+    onSuccess: write,
+    onError: (error) => toast.error((verb === "pause" ? T.couldNotPause : T.couldNotResume).replace("{why}", problem(error))),
+  });
+}
+
+/** Start a new run from an ended one (a new id); `onRestarted` gets it so the page can show it. */
+export function useRestartRun(onRestarted: (run: Run) => void) {
+  const write = useRunWrite();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/distributed/runs/{run_id}/restart", { params: { path: { run_id: id } } })),
+    onSuccess: (run) => {
+      write(run);
+      toast.success(T.restarted);
+      onRestarted(run);
+    },
+    onError: (error) => toast.error(T.couldNotRestart.replace("{why}", problem(error))),
+  });
+}
+
 export function useStopMember() {
   const write = useRunWrite();
   return useMutation({

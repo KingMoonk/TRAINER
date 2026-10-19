@@ -1597,6 +1597,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Run
+         * @description Hold a run: no new round opens until it is resumed. A round in flight finishes, the members wait, and the paused time does not
+         *     count toward the run's time limit. It stays paused over a restart of the app. 409 when the run is over or not going. A run
+         *     another computer coordinates is paused by asking that computer.
+         */
+        post: operations["pause_run_distributed_runs__run_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart Run
+         * @description Start a new run (a new id) from an ended one: the same design, text, settings and machines, with the weights of the old run's
+         *     best round (else its last) as the starting point. The outer momentum starts at zero. 409 for a run that is still going, one
+         *     that saved no weights, or one this computer did not start. A run another computer coordinates is restarted by that computer.
+         */
+        post: operations["restart_run_distributed_runs__run_id__restart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Run
+         * @description Undo a pause: the next round opens as soon as the members are in. 409 when the run is over or not going.
+         */
+        post: operations["resume_run_distributed_runs__run_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/stop": {
         parameters: {
             query?: never;
@@ -6431,6 +6495,11 @@ export interface components {
         };
         /** Round */
         Round: {
+            /**
+             * Best
+             * @default false
+             */
+            best: boolean;
             /** Bytes Down */
             bytes_down: number;
             /** Bytes Up */
@@ -6443,6 +6512,11 @@ export interface components {
             loss: number | null;
             /** Members */
             members: number;
+            /**
+             * Pivot
+             * @default
+             */
+            pivot: string;
             /** Round */
             round: number;
             /** Seconds */
@@ -6542,6 +6616,11 @@ export interface components {
             member: boolean;
             /** Members */
             members?: number | null;
+            /**
+             * Paused
+             * @default false
+             */
+            paused: boolean;
             /** Rank */
             rank?: number | null;
             /**
@@ -6633,6 +6712,25 @@ export interface components {
              * @default 0
              */
             age_s: number;
+            /** Best Round */
+            best_round?: number | null;
+            /** Best Val Loss */
+            best_val_loss?: number | null;
+            /**
+             * Can Pause
+             * @default false
+             */
+            can_pause: boolean;
+            /**
+             * Can Restart
+             * @default false
+             */
+            can_restart: boolean;
+            /**
+             * Can Resume
+             * @default false
+             */
+            can_resume: boolean;
             /** Can Stop */
             can_stop: boolean;
             /** Contributed */
@@ -6688,10 +6786,15 @@ export interface components {
             /** Owner */
             owner: string;
             /**
+             * Paused
+             * @default false
+             */
+            paused: boolean;
+            /**
              * Phase
              * @enum {string}
              */
-            phase: "waiting" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "finished" | "stopped";
+            phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "finished" | "stopped";
             /** Round */
             round: number;
             /** Rounds */
@@ -6705,6 +6808,16 @@ export interface components {
              * @enum {string}
              */
             state: "queued" | "starting" | "waiting" | "running" | "finished" | "stopped" | "failed";
+            /**
+             * Stop Reason
+             * @default
+             */
+            stop_reason: string;
+            /**
+             * Stop Rule
+             * @default
+             */
+            stop_rule: string;
             /**
              * Term
              * @default 1
@@ -6725,7 +6838,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down";
             /** Node */
             node: string;
             /** Round */
@@ -10318,6 +10431,99 @@ export interface operations {
             path: {
                 run_id: string;
                 node: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_run_distributed_runs__run_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restart_run_distributed_runs__run_id__restart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_run_distributed_runs__run_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
             };
             cookie?: never;
         };
