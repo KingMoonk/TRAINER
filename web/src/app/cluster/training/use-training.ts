@@ -142,3 +142,30 @@ export function useStopMember() {
     onError: (error) => toast.error(T.couldNotStop.replace("{why}", problem(error))),
   });
 }
+
+/** What the teacher gave a run (GET /distributed/runs/{id}/lessons), re-read every few seconds while `enabled`. */
+export function useLessons(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...RUNS, id, "lessons"],
+    queryFn: ({ signal }) => unwrap(api.GET("/distributed/runs/{run_id}/lessons", { params: { path: { run_id: id } }, signal })),
+    enabled,
+    refetchInterval: enabled ? 5_000 : false,
+    retry: false,
+  });
+}
+
+/** Drop a lesson or keep it again; the answer is the lessons as they stand, and the run's counts are re-read. */
+export function useChangeLesson(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ lesson, verb }: { lesson: number; verb: "drop" | "keep" }) =>
+      verb === "drop"
+        ? unwrap(api.POST("/distributed/runs/{run_id}/lessons/{lesson}/drop", { params: { path: { run_id: id, lesson } } }))
+        : unwrap(api.POST("/distributed/runs/{run_id}/lessons/{lesson}/keep", { params: { path: { run_id: id, lesson } } })),
+    onSuccess: (lessons) => {
+      client.setQueryData([...RUNS, id, "lessons"], lessons);
+      void client.invalidateQueries({ queryKey: RUNS, exact: true });
+    },
+    onError: (error) => toast.error(T.couldNotChangeLesson.replace("{why}", problem(error))),
+  });
+}

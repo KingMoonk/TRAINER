@@ -150,10 +150,26 @@ class RunEvent(BaseModel):
     seq: int
     t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
     kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished", "pivot", "paused", "resumed", "took_over",
-                  "stepped_down", "polish", "polish_off", "lessons", "win_rate", "win_rate_off", "judging"]
+                  "stepped_down", "polish", "polish_off", "lessons", "win_rate", "win_rate_off", "judging", "lesson_dropped", "lesson_kept"]
     node: str  # "" for the run
     round: int
     text: str
+
+
+class LessonItem(BaseModel):
+    prompt: str  # what the teacher asked the model
+    reply: str  # what the model said
+    answer: str  # the teacher's better answer, which the run trains on
+
+
+class Lesson(BaseModel):
+    id: int  # the lesson's shard id
+    round: int  # the round the polish that wrote it followed
+    rows: int  # how many answers it holds
+    status: Literal["live", "dropped", "left_out"]  # dealt to the members, dropped by you, or left out by a step back or a new coordinator
+    keepable: bool  # Keep can deal it again: it is not dealt now and this computer still holds its answers
+    items: list[LessonItem]  # the first few of its answers
+    more: int  # ... and how many are not shown
 
 
 class Run(BaseModel):
@@ -191,7 +207,7 @@ class Run(BaseModel):
     stop_rule: str = ""  # which stop rule ended the run, "" when none did
     stop_reason: str = ""  # why the run ended, in a sentence; "" while it goes
     lessons: int = 0  # the teacher's answers the run trains on as extra shards now
-    lessons_left_out: int = 0  # ... and those a drop_lessons pivot, or a successor coordinator, left out
+    lessons_left_out: int = 0  # ... and those you dropped, a drop_lessons pivot, or a successor coordinator, left out
     phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "polishing", "judging", "finished", "stopped"]
     deadline_s: float | None  # seconds left to the open round's deadline
     grace_s: float  # the wait after the deadline for a member's download and upload
@@ -291,17 +307,25 @@ def get_run(run_id: str, services: Services) -> Run:
     return Run.model_validate(_found(services, run_id))
 
 
-def _forward(services, row, path):
-    """Send a command to the node that owns the run (it is not this one) and return the run as that node answers. The replica is not
-    written: the owner writes the outcome and it arrives by sync."""
+def _ask(services, row, path, read=False):
+    """What the node that owns the run (it is not this one) answers to a command, or to a read when `read`."""
     cluster = _cluster(services)
     address = cluster.address_of(row["origin"]) if cluster is not None else None
     if address is None:
         raise HTTPException(409, f"{row['origin']} coordinates this run and is not one of this computer's listed machines.")
+    client = cluster.client_for(address, retries=0, timeout=10.)
     try:
-        answer = cluster.client_for(address, retries=0, timeout=10.).post_json(path, {})
+        return client.get_json(path) if read else client.post_json(path, {})
     except studio_peer.PeerError as exc:
-        raise HTTPException(502, str(exc)) from None
+        if exc.status is not None and 400 <= exc.status < 500:  # the owner refused: say what it said (404 no lesson, 409 run over)
+            raise HTTPException(exc.status, exc.detail or str(exc)) from None
+        raise HTTPException(502, str(exc)) from None  # not reached, or the owner failed
+
+
+def _forward(services, row, path):
+    """Send a command to the node that owns the run (it is not this one) and return the run as that node answers. The replica is not
+    written: the owner writes the outcome and it arrives by sync."""
+    answer = _ask(services, row, path)
     return Run.model_validate({**answer, "coordinator": row["origin"], "origin": row["origin"], "age_s": 0., "origin_down": False})
 
 
@@ -472,6 +496,48 @@ def pause_run(run_id: str, services: Services) -> Run:
 def resume_run(run_id: str, services: Services) -> Run:
     """Undo a pause: the next round opens as soon as the members are in. 409 when the run is over or not going."""
     return _hold(services, run_id, "resume")
+
+
+def _lessons(services, run_id, verb=None, lesson=None):
+    """The run's lessons, after `verb` ("drop" or "keep") on one: this computer's coordinator answers, else the computer that
+    coordinates the run is asked."""
+    suffix = f"/{lesson}/{verb}" if verb else ""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        answer = _ask(services, remote, f"distributed/runs/{run_id}/lessons{suffix}", read=verb is None)
+        return [Lesson.model_validate(row) for row in answer]
+    _find(services, run_id)
+    coordinator = studio_diloco.COORDINATORS.get(run_id)
+    if coordinator is None:
+        raise HTTPException(409, "The run is not going.")
+    try:
+        if verb:
+            getattr(coordinator, f"{verb}_lesson")(lesson)
+    except KeyError:
+        raise HTTPException(404, f"Run {run_id} has no lesson {lesson}.") from None
+    except studio_diloco.Stale as exc:
+        raise HTTPException(409, str(exc)) from None
+    return [Lesson.model_validate(row) for row in coordinator.lesson_list()]
+
+
+@router.get("/runs/{run_id}/lessons")
+def run_lessons(run_id: str, services: Services) -> list[Lesson]:
+    """What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the
+    run is not going. A run another computer coordinates is read by asking that computer."""
+    return _lessons(services, run_id)
+
+
+@router.post("/runs/{run_id}/lessons/{lesson}/drop")
+def drop_run_lesson(run_id: str, lesson: int, services: Services) -> list[Lesson]:
+    """Leave a lesson out of the rounds that open from now on; the round in flight keeps it. 404 for an id that is no lesson, 409 when
+    the run is over or not going. Answers the lessons as they stand."""
+    return _lessons(services, run_id, "drop", lesson)
+
+
+@router.post("/runs/{run_id}/lessons/{lesson}/keep")
+def keep_run_lesson(run_id: str, lesson: int, services: Services) -> list[Lesson]:
+    """Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop."""
+    return _lessons(services, run_id, "keep", lesson)
 
 
 @router.post("/runs/{run_id}/restart", status_code=201)
