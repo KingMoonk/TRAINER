@@ -3,7 +3,8 @@ export const BENCH = {
   h1: "Benchmark",
   lead: "The same three checks on every trained version, charted against how much text it trained on. Use it to see whether more training or a different design really helped.",
   fixed: (docs: number, questions: number, problems: number) =>
-    `Every version gets the same ${docs} passages, ${questions} questions and ${problems} problems, picked once and kept fixed, so the numbers can be compared. If your held-back data changes, the checks are asked again. The passages are the ones marked held back now; the questions and problems are not yet checked for overlap with the training text.`,
+    `Every version gets the same ${docs} passages, ${questions} questions and ${problems} problems. They were picked once from your held-back data and are kept, so a version made next year is checked on the same items as one made today. A new version is checked by itself when it finishes training. Anything that shares a 13-word run with a version's training text is left out of that version's score and counted.`,
+  sources: (names: string[]) => `Passages come from: ${names.join(", ")}.`,
   axis: "Text the version trained on (tokens). Further right is more training.",
   xLabel: "Tokens trained on",
   design: (letter: string, numbers: number[]) => `Design ${letter}: versions ${numbers.join(", ")}`,
@@ -28,6 +29,7 @@ export const BENCH = {
   whatFewShot: "multiple-choice problems",
   whatProblems: "checkable problems",
   waiting: (n: number, total: number) => `${n} of ${total} trained versions have not been checked yet.`,
+  waitingStale: (n: number) => ` ${n === 1 ? "One was" : `${n} were`} checked before the scoring method changed and will be checked again.`,
   allDone: "Every trained version has been checked.",
   run: "Check the rest",
   runningNow: "Checking in the background. The app stays usable.",
@@ -35,6 +37,15 @@ export const BENCH = {
   failed: (number: number, error: string) => `Could not check version ${number}: ${error}`,
   unplaced: (numbers: number[]) => `Left off the chart: version ${numbers.join(", ")}. There is no record of how much text it trained on.`,
   dropped: (n: number) => `${n} items were left out of the checks.`,
+  trendTitle: "Does it keep getting better?",
+  trendHint:
+    "Each version next to the one before it, on the same items. A gain is only called a gain when luck in which items were asked cannot explain it; with too few items the table says so instead of guessing. The ranges show how far a number moves with the choice of items.",
+  trendHead: ["Version", "Tokens", "Error (bits per character)", "Against the one before", "Multiple choice", "Against the one before", "Items left out"],
+  gainBetter: (change: string) => `better (${change})`,
+  gainUnsure: (change: string) => `not sure (${change})`,
+  gainFew: (change: string, items: number) => `too few items to tell (${change} over ${items})`,
+  gainNone: "not measured",
+  trendEmpty: "No version has been checked yet, so there is no trend.",
   readFailed: "The benchmark could not be read.",
   retry: "Try again",
   // Learning from examples in the question

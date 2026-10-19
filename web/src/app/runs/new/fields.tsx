@@ -7,7 +7,8 @@ import { nodeName } from "@/lib/node-name";
 import { cn } from "@/lib/utils";
 import { deviceText } from "../../cluster/machines/logic";
 import { fill, NEW_RUN as T } from "./copy";
-import type { Node } from "./logic";
+import type { QueueRow } from "@/lib/cluster";
+import { runningText, type Node } from "./logic";
 
 export const FIELD = "min-h-11 rounded-lg border border-input bg-background px-3 text-base text-foreground";
 
@@ -31,9 +32,11 @@ export function Workers({
   workers,
   forced,
   multiple,
+  rows,
   onToggle,
 }: {
   nodes: Node[];
+  rows: QueueRow[];
   workers: string[];
   forced: boolean;
   multiple: boolean;
@@ -71,6 +74,11 @@ export function Workers({
                 <span className="font-mono text-sm text-muted-foreground">{status}</span>
               </span>
               <span className="text-sm text-muted-foreground">{deviceText(node) || node.device_name || node.hostname}</span>
+              {node.online && node.busy && (
+                <span className="text-sm text-warning" data-testid={`busy-${node.address}`}>
+                  {runningText(node.address, rows) ? fill(T.busyWith, { job: runningText(node.address, rows) }) : T.busyUnknown}
+                </span>
+              )}
             </button>
           );
           const tip = required ? T.localRequired : !node.online ? node.error : "";

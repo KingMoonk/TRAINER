@@ -122,14 +122,25 @@ export function memberDevice(member: Member): string {
   return member.device_name ? `${member.device_name} (${member.device})` : member.device;
 }
 
+/** Whether a member never took part in the run: it got no slot, or was invited and never joined. */
+export function neverJoined(member: Member): boolean {
+  return member.state === "unplaced" || member.state === "never_joined";
+}
+
+/** Whether a member's row shows a problem (red): it is out of the run or late. A machine that never joined is no problem; it only says why. */
+export function isProblem(member: Member): boolean {
+  return member.state === "unreachable" || member.state === "dropped" || member.state === "behind" || ((member.state === "left" || member.state === "stopped") && member.note !== "");
+}
+
 /** Whether a member's row needs a reason shown under it. */
 export function needsReason(member: Member): boolean {
-  return member.state === "unreachable" || member.state === "dropped" || member.state === "behind" || ((member.state === "left" || member.state === "stopped") && member.note !== "");
+  return neverJoined(member) || isProblem(member);
 }
 
 /** One sentence on why a member is not training, from what the server said, else a plain fallback. */
 export function reasonText(member: Member): string {
   if (member.note) return member.note;
+  if (neverJoined(member)) return T.neverJoinedFallback;
   if (member.state === "dropped") return T.droppedFallback;
   if (member.state === "behind") return T.behindFallback;
   return T.unreachableFallback;
