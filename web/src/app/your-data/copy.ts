@@ -3,11 +3,6 @@
 
 export type Kind = "text" | "conversations" | "problems";
 export const KINDS: Kind[] = ["text", "conversations", "problems"];
-export const MAKE_LABELS: Record<Kind, string> = {
-  text: "Generate prose",
-  conversations: "Make extra conversations",
-  problems: "Generate problems a rule can check",
-};
 
 export const T = {
   h1: "Your data",
