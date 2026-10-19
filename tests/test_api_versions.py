@@ -130,6 +130,32 @@ class VersionsApiTest(unittest.TestCase):
         self.services.export_version = lambda version, kind, path: {}
         self.assertEqual(self.client.get("/versions/1/export", params={"kind": "gguf"}).status_code, 404)
 
+    def test_continuing_a_version_queues_a_job_that_names_what_it_continues(self):
+        self.save()
+        for body, label in (({"kind": "same", "steps": 50}, "Version 1 continued from step 100"),
+                            ({"kind": "new_data", "steps": 50, "dataset_ids": ["stories"]}, "Version 1 continued from step 100 on new data"),
+                            ({"kind": "grow", "steps": 50, "width": 64, "layers": 4}, "Version 2 grown from version 1 (step 100)")):
+            with self.subTest(body["kind"]):
+                job = self.job(self.client.post("/versions/1/continue", json=body))
+                self.assertEqual((job["kind"], job["status"]), ("versions.continue", "done"))
+                self.assertEqual((job["result"]["label"], job["result"]["from_step"], job["result"]["kind"]), (label, 100, body["kind"]))
+        self.assertEqual([j.label for j in self.services.continued][:1], ["Version 1 continued from step 100"])
+
+    def test_continuing_needs_what_it_continues_on(self):
+        self.save()
+        for body in ({"kind": "new_data", "steps": 5}, {"kind": "grow", "steps": 5}, {"kind": "grow", "steps": 5, "width": 64}):
+            self.assertEqual(self.client.post("/versions/1/continue", json=body).status_code, 422, body)
+        for body in ({"kind": "same", "steps": 0}, {"kind": "sideways", "steps": 5}, {"steps": 5}):
+            self.assertEqual(self.client.post("/versions/1/continue", json=body).status_code, 422, body)
+        self.assertEqual(self.client.post("/versions/9/continue", json={"kind": "same", "steps": 5}).status_code, 404)
+
+    def test_a_run_that_cannot_be_continued_fails_its_job_with_the_sentence(self):
+        self.save()
+        self.services.continue_run = raising(ValueError("This run has no full checkpoint (last.npz) to continue from."))
+        job = self.job(self.client.post("/versions/1/continue", json={"kind": "same", "steps": 5}))
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("no full checkpoint", job["error"])
+
     def test_export_without_a_checkpoint_is_a_409(self):
         self.save()
         self.services.export_version = raising(NoCheckpoint(1))

@@ -831,6 +831,16 @@ class Coordinator:
                 self._state = (number, encode_state(self.momentum, path.read_bytes()))
             return self._state[1]
 
+    def final_bytes(self):
+        """last.npz of a finished run: its final weights, for the owner when the run finished under this coordinator after a failover
+        (#361). Stale (409) while rounds are left, and for a stopped run, which saves nothing (#333)."""
+        with self.cond:
+            if self.stopped:
+                raise Stale(f"Run {self.run} was stopped; it saves no weights.")
+            if not self.finished:
+                raise Stale(f"Run {self.run} has not finished; {self.settings.rounds - self.next_round} rounds are left.")
+            return (self.directory / "last.npz").read_bytes()
+
     def validation_bytes(self):
         """The validation windows, as a shard is: for a replica, once per run. A replica never trains on them."""
         return shard_blob(self.val, 0, len(self.val))
@@ -1683,10 +1693,11 @@ def where_file(root, run):
     return Path(root) / "data" / "diloco_where" / f"{run}.json"
 
 
-def file_locator(root):
+def file_locator(root, client_for=None):
     """`locate` for a member in a worker process, which has no store: it reads where_file, written by the app on its node. Returns
-    (node, term, client) or None when the app has written nothing for the run."""
-    from studio_peer import PeerClient
+    (node, term, client) or None when the app has written nothing for the run. `client_for(url)` makes the client (a PeerClient)."""
+    if client_for is None:
+        from studio_peer import PeerClient as client_for
     clients = {}
 
     def locate(run):
@@ -1696,7 +1707,7 @@ def file_locator(root):
         except (OSError, ValueError, KeyError, TypeError):
             return None
         if url not in clients:
-            clients[url] = PeerClient(url)
+            clients[url] = client_for(url)
         return node, term, clients[url]
     return locate
 

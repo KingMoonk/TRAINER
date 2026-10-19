@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import studio_passive_watch as platform_helpers  # battery + keep-awake live there; never duplicated
-from studio_core import atomic_json
+from studio_core import atomic_json, read_json
 from studio_passive import PassiveStore
 from studio_timing import timed
 
@@ -143,6 +143,27 @@ def passive_running(root):
     return passive_session(root) is not None
 
 
+def run_folders(root, job):
+    """Where a job wrote (or would have): its `output_dir` when the app had picked one, else the folder the app names after it."""
+    runs = Path(root) / "runs"
+    found = [Path(job.params["output_dir"])] if job.params.get("output_dir") else []
+    return found + [runs / f"{name}_{job.id}" for name in ("queue", "compare")]
+
+
+def reconcile_run(folder):
+    """A run whose process has died must not say it is training: mark its run.json "stopped" (and `interrupted`, so a page can say the
+    app stopped under it). True when it changed one. Only a record still saying "training" is touched."""
+    record = Path(folder) / "run.json"
+    try:
+        data = read_json(record)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("status") != "training":
+        return False
+    atomic_json(record, {**data, "status": "stopped", "interrupted": True})
+    return True
+
+
 def in_window(plan, hour):
     if plan.hours == "any":
         return True
@@ -182,6 +203,9 @@ class Runner:
         self.subscribers = []
         self.jobs, self.plan = [], Plan()
         self.user_paused = False       # a user intent: restored from queue.json, so a pause survives a restart
+        self.stopping_job = ""         # the id of a running job the person stopped: persisted, so a restart does not run it again
+        self.reap_grace = 35.          # seconds a worker an earlier app left gets to leave by itself (studio_worker.EXIT_GRACE and a margin)
+        self.dead_runs = []            # jobs whose process an earlier app left running: their run.json is reconciled once it is stopped
         self._load()
         self.running = None            # Job on the runner thread
         self.yielding = None           # (id of the running job being stepped aside, the status it goes back to) until it has stopped
@@ -208,14 +232,20 @@ class Runner:
         self.plan = Plan(**{k: v for k, v in data.get("plan", {}).items() if k in Plan.__dataclass_fields__})
         self.jobs = [Job(**j) for j in data.get("jobs", [])]
         self.user_paused = bool(data.get("user_paused", False))
+        self.stopping_job = str(data.get("stopping") or "")
         for job in self.jobs:          # a run cut short by a restart goes back to the front
-            if job.owner and job.status in ("running", "waiting", "held"):  # another node's job cannot renew its lease now: its owner places it again
+            if job.status == "running" and not job.owner and not job.node:
+                self.dead_runs.append(job)
+            if job.status == "running" and job.id == self.stopping_job and not job.owner and not job.node:
+                job.status, job.error = "stopped", ""  # the person stopped it; the app went before it ended
+            elif job.owner and job.status in ("running", "waiting", "held"):  # another node's job cannot renew its lease now: its owner places it again
                 job.status, job.error = "stopped", "This machine restarted while it ran the job for another machine, which will place it again."
             elif job.status == "running" and job.node:  # running on a peer: placed again, at the next epoch, so the peer's copy is fenced
                 import studio_scheduler
                 studio_scheduler.interrupt(job)  # from its last checkpoint, with the steps left and the offset that go with it
             elif job.status == "running":
                 job.status = "waiting"
+        self.stopping_job = ""
 
     def _save(self):
         done = [j for j in self.jobs if j.status not in ("waiting", "running", "held")][-50:]
@@ -224,7 +254,7 @@ class Runner:
         if dropped and getattr(self, "cluster", None) is not None:
             self.cluster.trimmed(dropped)  # (no I/O: it only remembers their result keys, which a sweep must not delete)
         self.jobs = done + live
-        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused,
+        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused, "stopping": self.stopping_job,
                                 "jobs": [dataclasses.asdict(j) for j in self.jobs]})
 
     # ---- events
@@ -300,6 +330,8 @@ class Runner:
         with self.lock:
             job = next((j for j in self.jobs if j.id == job_id), None)
             if job is self.running:
+                self.stopping_job = job.id  # saved first: an app that goes before the job ends must not run it again
+                self._save()
                 self.stop_event.set()  # the running job is stopped (the runner thread tells its worker); the runner marks it
             elif job and job.node and job.status == "running":
                 remote = job           # running on a peer: it is told to stop, and the record is kept as stopped
@@ -467,12 +499,18 @@ class Runner:
         threading.Thread(target=work, daemon=True).start()
 
     def _reap(self):
-        """Workers an app that crashed left behind: their jobs went back to waiting in _load, so stop them before those run again."""
+        """Workers an app that crashed left behind: their jobs went back to waiting in _load. A worker whose app went away is already
+        saving its checkpoint and leaving by itself, so each gets up to the worker's own grace to finish before it is stopped; then the
+        runs they left saying "training" are marked stopped."""
         import studio_worker
         try:
-            studio_worker.reap(self.root / "data" / "workers")
+            studio_worker.reap(self.root / "data" / "workers", grace=self.reap_grace)
         except OSError:
             pass
+        dead, self.dead_runs = self.dead_runs, []
+        for job in dead:
+            for folder in run_folders(self.root, job):
+                reconcile_run(folder)
 
     def _start(self, job, handler, emit, on_end=None):
         """Start `job` in a worker process; the handle is tracked until the process ends."""
@@ -612,6 +650,8 @@ class Runner:
         if not short:
             try:
                 handle = self._start(job, handler, emit, self.wake.set)
+                with self.lock:
+                    self._save()  # prepare filled in the job's output folder and resume point: a restart now finds them
             except Exception as exc:  # noqa: BLE001 - prepare or the spawn failed: the job fails with the reason
                 error = str(exc) or type(exc).__name__
         self._emit("job", {"job": job.id, "status": "running"})
@@ -634,6 +674,7 @@ class Runner:
             job.error = error
             self.running = None
             self.stopping = False
+            self.stopping_job = ""
             self.follow_up(job)
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start
