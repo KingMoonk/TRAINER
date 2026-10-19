@@ -15,6 +15,7 @@ import { RemoveMemberButton, SoloControls, StopRunButton } from "./controls";
 import { T, fill } from "./copy";
 import { EventLog } from "./event-log";
 import { ProgressCard, RunHeader } from "./header";
+import { HealthPanel } from "./health-panel";
 import { factAge, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
 import { dilocoShape, runViewHref, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
@@ -80,6 +81,7 @@ export function DilocoView({ run }: { run: Run }) {
           }
         />
       </section>
+      <HealthPanel run={run} />
       <div className="rounded-xl border border-border bg-card p-5">
         <Timeline run={run} />
       </div>

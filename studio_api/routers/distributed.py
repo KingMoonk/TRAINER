@@ -172,6 +172,57 @@ class Lesson(BaseModel):
     more: int  # ... and how many are not shown
 
 
+class MemberHealth(BaseModel):
+    """One member's share of one round, measured (studio_run_health.record). compute + wait + sync is the round's seconds."""
+
+    loss: float | None  # its inner loss
+    steps: int
+    tokens: int
+    compute_s: float  # seconds it spent training
+    tokens_per_s: float | None  # tokens / compute_s: its speed alone
+    wait_s: float | None  # seconds its change was in before the slowest member's; null when the arrival was not recorded
+    sync_s: float  # the rest: download, upload, outer step, validation
+
+
+class RoundHealth(BaseModel):
+    round: int
+    seconds: float
+    tokens: int
+    members: dict[str, MemberHealth]
+    slowest: str | None  # the member whose change came in last (null with one member)
+    val_loss: float | None  # outer loss: the shared weights on the held-back text after the outer step
+    loss: float | None
+    lr: float | None  # the outer learning rate
+    update_norm: float | None  # size of the outer step
+    bytes_up: int
+    bytes_down: int
+    dtype: str
+    compression: float | None  # full-precision size of the weights over the size of one change as sent
+    sync_s: float  # seconds of the round the slowest member was not computing
+
+
+class HealthVerdict(BaseModel):
+    state: Literal["working", "not_helping", "diverging", "not_enough_data"]
+    text: str  # one sentence with its reason
+
+
+class RunHealth(BaseModel):
+    """Is the cluster helping (studio_run_health.summarize)? The numbers are over the latest rounds that had two or more members."""
+
+    verdict: HealthVerdict
+    basis: str  # what the speed-up compares, in a sentence
+    rounds: list[RoundHealth]
+    window: int  # rounds the numbers below cover
+    aggregate_tokens_per_s: float | None
+    baseline_node: str  # the fastest member alone
+    baseline_tokens_per_s: float | None  # its measured compute speed
+    speedup: float | None  # aggregate over baseline; null until enough rounds
+    comm_share: float | None  # share of wall time the slowest member was not computing
+    wait_node: str  # the member that waits longest for the others
+    wait_share: float | None  # its share of a round spent waiting
+    straggler: str  # the member whose change most often comes in last
+
+
 class Run(BaseModel):
     id: str
     label: str
@@ -195,6 +246,7 @@ class Run(BaseModel):
     delta_dtype: str
     members: list[Member]
     history: list[Round]
+    health: RunHealth | None = None  # null for an account from a computer on an older version
     reviewed_only: bool = False  # the run trains only on examples marked Good
     can_stop: bool
     paused: bool = False  # the owner paused it: no new round opens until it is resumed (a round in flight finishes)
