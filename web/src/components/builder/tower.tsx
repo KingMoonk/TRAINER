@@ -150,7 +150,10 @@ export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, w
     <section className="flex flex-col gap-3" aria-label={BUILDER.h1}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-semibold">Layer stack</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="font-semibold tracking-tight">Architecture</h2>
+            <Badge variant="secondary" className="tabular-nums">{draft.L} {draft.L === 1 ? "layer" : "layers"}</Badge>
+          </div>
           <p className="text-sm text-muted-foreground">↑ Text flows from input at the bottom to output at the top.</p>
         </div>
         <Button variant="outline" aria-pressed={advanced} onClick={() => setAdvanced(!advanced)}>Advanced modules</Button>
@@ -248,7 +251,7 @@ type BlockProps = {
 function Block({ view, registry, draft, picker, explain, advanced, onAdvanced }: BlockProps) {
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState<"all" | "one">("all");
-  const { index: i, parts, own, added, removed, tag, before } = view;
+  const { index: i, parts, own, removed, tag, before } = view;
   const heads = hasField(registry, "mixer", parts.mixer, "heads") ? view.choices.H : 0;
   const width = hasField(registry, "channel", parts.channel, "d_ff") ? registry.widths[view.choices.W] : null;
   const showDetail = open && !removed;
@@ -256,18 +259,19 @@ function Block({ view, registry, draft, picker, explain, advanced, onAdvanced }:
   const selected = !removed && (showDetail || explain.explaining?.block === i);
   return (
     <div
-      className={cn("rounded-lg border", selected && "border-primary ring-1 ring-primary", added && "bg-warning/10", own.length > 0 && !added && "bg-part-own/10", removed && "border-dashed bg-muted/40")}
+      className={cn("rounded-lg border bg-card", selected && "border-primary/60 bg-muted/30", removed && "border-dashed bg-muted/40")}
       data-testid={`block-${i}`}
     >
-      <div className="flex flex-wrap items-center gap-3 px-3 py-2">
-        <Button variant="ghost" className="min-h-11 px-2" aria-label={`${showDetail ? "close block" : "open block"} ${i + 1}`} aria-expanded={showDetail} aria-controls={`block-details-${i}`} onClick={() => setOpen(!open)} disabled={removed} title={BUILDER.block_parts_tip}>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 px-3 py-2">
+        <Button variant="ghost" className="min-h-11 min-w-24 justify-start px-2" aria-label={`${showDetail ? "close block" : "open block"} ${i + 1}`} aria-expanded={showDetail} aria-controls={`block-details-${i}`} onClick={() => setOpen(!open)} disabled={removed} title={BUILDER.block_parts_tip}>
           <span aria-hidden="true">{showDetail ? "▾" : "▸"}</span>
           <span className={cn("text-sm font-medium", removed && "text-muted-foreground line-through")}>Layer {i + 1}</span>
         </Button>
+        <div className="flex flex-wrap items-center gap-x-3">
         {heads > 0 && (
           <button
             type="button"
-            className={cn("min-h-10 rounded-sm border border-transparent px-2 text-xs text-part-attention", isExplained(explain.explaining, "mixer", i) && "selected-box")}
+            className={cn("min-h-10 rounded-sm border border-transparent px-2 text-xs tabular-nums text-muted-foreground hover:text-foreground", isExplained(explain.explaining, "mixer", i) && "selected-box")}
             aria-label={fill(BUILDER.explain_open, { part: `${partName("mixer")} · block ${i + 1}` })}
             data-testid={`explain-heads-${i}`}
             onClick={() => explain.onExplain("mixer", i)}
@@ -278,7 +282,7 @@ function Block({ view, registry, draft, picker, explain, advanced, onAdvanced }:
         {width && (
           <button
             type="button"
-            className={cn("min-h-10 rounded-sm border border-transparent px-2 text-xs text-part-mlp", isExplained(explain.explaining, "channel", i) && "selected-box")}
+            className={cn("min-h-10 rounded-sm border border-transparent px-2 text-xs text-muted-foreground hover:text-foreground", isExplained(explain.explaining, "channel", i) && "selected-box")}
             aria-label={fill(BUILDER.explain_open, { part: `${partName("channel")} · block ${i + 1}` })}
             data-testid={`explain-room-${i}`}
             onClick={() => explain.onExplain("channel", i)}
@@ -286,9 +290,11 @@ function Block({ view, registry, draft, picker, explain, advanced, onAdvanced }:
             Width · {width}
           </button>
         )}
-        <span className="text-xs text-muted-foreground">
+        </div>
+        <span className="col-span-2 px-2 pb-2 text-xs text-muted-foreground sm:col-start-2 sm:col-span-1">
           {moduleName(registry, "mixer", parts.mixer)} · {moduleName(registry, "channel", parts.channel)}
         </span>
+        <div className="col-span-2 flex flex-wrap items-center gap-2 px-2 empty:hidden sm:col-start-2 sm:col-span-1">
         {tag && (
           <Badge variant="outline" className={cn(tag === BUILDER.own_parts ? VIOLET : AMBER)}>
             {tag}
@@ -296,6 +302,7 @@ function Block({ view, registry, draft, picker, explain, advanced, onAdvanced }:
         )}
         {own.length > 0 && tag !== BUILDER.own_parts && <Badge variant="outline" className={VIOLET}>{BUILDER.own_parts}</Badge>}
         {selected && <span className="text-xs text-primary">Selected</span>}
+        </div>
       </div>
       {showDetail && (
         <div id={`block-details-${i}`} className="flex flex-col gap-3 border-t p-3">
