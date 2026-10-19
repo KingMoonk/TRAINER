@@ -77,10 +77,10 @@ class Settings(unittest.TestCase):
 class Cleaning(unittest.TestCase):
     def test_personal_data_and_secrets_are_replaced(self):
         text = ("Write to jane.doe@example.com or call +1 415 555 0132 or (415) 555-0199. "
-                "key = AKIAABCDEFGHIJKLMNOP and token: ghp_" + "a" * 36 + " and password = hunter2hunter2hunter2. "
+                "key = " + "AKIA" + "ABCDEFGHIJKLMNOP" + " and token: ghp_" + "a" * 36 + " and password = hunter2hunter2hunter2. "
                 "See https://user:secretpass@example.org/x.")
         out, n = clean.strip_pii(text)
-        for leaked in ("jane.doe", "555", "AKIAABCDEFGH", "ghp_", "hunter2", "secretpass"):
+        for leaked in ("jane.doe", "555", "ABCDEFGHIJKL", "ghp_", "hunter2", "secretpass"):
             self.assertNotIn(leaked, out)
         self.assertIn("[EMAIL]", out)
         self.assertGreaterEqual(n, 6)
