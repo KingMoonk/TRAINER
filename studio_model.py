@@ -920,7 +920,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
             if distributed is not None:
-                rate = schedule.rate(distributed.rate_step(next_step), distributed.total_steps, cfg["learning_rate"])
+                rate = schedule.rate(distributed.rate_step(next_step), distributed.total_steps, cfg["learning_rate"]) * getattr(distributed, "rate_scale", 1.)
             else:
                 rate = (schedule.rate(schedule_window[0] + next_step, schedule_window[1], cfg["learning_rate"]) if schedule_window
                         else schedule.rate(next_step, planned, cfg["learning_rate"]))

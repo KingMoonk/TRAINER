@@ -7994,6 +7994,11 @@
             ],
             "title": "Generation"
           },
+          "lr_scale": {
+            "default": 1.0,
+            "title": "Lr Scale",
+            "type": "number"
+          },
           "member": {
             "title": "Member",
             "type": "boolean"

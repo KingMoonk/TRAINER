@@ -261,6 +261,8 @@ class Failover(unittest.TestCase):
         self.assertEqual(rounds, list(range(ROUNDS)))  # continued from the last completed round: none repeated, none skipped
         self.assertLess(coordinator.history[-1]["val_loss"], coordinator.history[0]["val_loss"])  # and kept converging
         self.assertEqual(coordinator.snapshot()["round"], ROUNDS)
+        self.assertTrue((coordinator.directory / "best.npz").is_file())  # it holds a best of its own: the replica's round, or a later one
+        self.assertGreaterEqual(coordinator.rules.best_round, last_round - 1)
 
         # the old coordinator comes back with its coordinator still in its registry: its first poll shows the higher claim
         old = fleet.first

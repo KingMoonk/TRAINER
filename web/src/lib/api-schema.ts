@@ -6533,6 +6533,11 @@ export interface components {
             deadline_s?: number | null;
             /** Generation */
             generation?: number | null;
+            /**
+             * Lr Scale
+             * @default 1
+             */
+            lr_scale: number;
             /** Member */
             member: boolean;
             /** Members */

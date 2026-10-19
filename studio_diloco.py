@@ -40,6 +40,8 @@ from pathlib import Path
 
 import numpy as np
 
+import studio_diloco_rules as drules
+
 FORMAT = 1
 TERM_HEADER = "X-Run-Term"  # every answer on /collective/{run} carries the coordinator's term here and in its JSON body
 TERM_STALE = "Stale term"  # the start of the 409 message for a term that is not the coordinator's
@@ -98,6 +100,7 @@ class Entered:
     deadline_s: float
     shards: list
     skipped: bool = False
+    lr_scale: float = 1.  # the factor the run's pivots put on the global learning-rate schedule
 
 
 class Stale(RuntimeError):
@@ -153,6 +156,17 @@ class Settings:
     first_round_seconds: float = 900.  # the deadline of a round nobody has timed yet
     missed_limit: int = 3           # rounds in a row without a contribution before a member is dropped from the run
     replicas: int = 2               # R: the lowest-ranked members keep a copy of the latest round, so it outlives the coordinator
+    # stop rules, plateau and pivots (studio_diloco_rules): all off by default, so a run goes to `rounds`
+    max_seconds: float | None = None   # active wall-clock; time with fewer than min_members does not count
+    patience_rounds: int = 0           # rounds without a better val_loss
+    target_val_loss: float | None = None
+    target_win_rate: float | None = None  # not available yet (#508): rejected
+    teacher: str = ""                  # the teacher model's name (#508)
+    plateau_checks: int = 0            # rounds the val_loss must have improved within, else it is a plateau (0: off)
+    plateau_min_improvement: float = .01
+    worse_limit: int = 0               # rounds in a row worse than the best before the coordinator goes back to the best and pivots (0: off)
+    pivots: tuple = ()                 # what to try, in order: halve_lr (also the outer learning rate), next_dataset
+    keep_checkpoints: int = 0          # per-round checkpoints (round_<n>.npz) kept in the run folder; 0: none besides last.npz and best.npz
 
     def __post_init__(self):
         if self.inner_steps < 1 or self.rounds < 1 or self.shards < 1:
@@ -165,6 +179,8 @@ class Settings:
             raise ValueError("replicas must not be negative.")
         if self.outer_lr <= 0 or not 0 <= self.outer_momentum < 1:
             raise ValueError("outer_lr must be positive and outer_momentum in [0, 1).")
+        object.__setattr__(self, "pivots", tuple(self.pivots))  # a list from JSON
+        drules.check(self)
 
     @classmethod
     def from_params(cls, params, steps=None):
@@ -205,10 +221,10 @@ def replica_nodes(members, count, prefer=()):
     return (first + [node for node in order if node not in first])[:max(0, count)]
 
 
-def deal_shards(seed, round_number, members, shard_count):
-    """{member: sorted shard ids}: the shards shuffled by (seed, round, membership) and dealt round-robin, so a rerun with the
-    same membership history deals the same, and one member always holds every shard in order."""
-    order = list(range(shard_count))
+def deal_shards(seed, round_number, members, shard_count, first=0):
+    """{member: sorted shard ids}: the shards first..first+shard_count-1 (one data source's) shuffled by (seed, round, membership) and
+    dealt round-robin, so a rerun with the same membership history deals the same, and one member always holds every shard in order."""
+    order = list(range(first, first + shard_count))
     random.Random(f"{seed}:{round_number}:{','.join(members)}").shuffle(order)
     return {member: sorted(order[index::len(members)]) for index, member in enumerate(members)}
 
@@ -405,6 +421,8 @@ class Coordinator:
         self.split, self.split_hash, self.state_file, self.record = {"strategy": "lineage-v1"}, "", None, {}
         self.shard_count = max(1, min(settings.shards, len(train)))
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
+        self.spans, self.later = [(0, self.shard_count)], []  # per data source: its first shard id and shard count; the (windows, bounds) of the sources after the first
+        self.rules = drules.State()
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
@@ -419,13 +437,15 @@ class Coordinator:
             self.momentum = state["momentum"]
             self.next_round, self.generation = state["round"], state["generation"]
             self.history, self.step_time, self.state_file = state["history"], state.get("step_time"), state["state_file"]
-            self.finished = self.next_round >= settings.rounds
+            self.rules = drules.State.from_json(state.get("rules"))
+            self.finished = self.next_round >= settings.rounds or bool(state.get("finished"))
 
     # -- building and resuming
     @classmethod
-    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None):
+    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=()):
         """Tokenize `examples` once the way studio_model.train does, cut the windows, start theta from the config's seeded
-        initialization, and continue from diloco.json if the folder has one."""
+        initialization, and continue from diloco.json if the folder has one. `later` are the example lists of the data sources
+        the next_dataset pivot moves on to, in order: cut with the first source's tokenizer, never part of the validation."""
         import studio_model as sm
         from studio_core import fingerprint
         from studio_planning import merge_duplicate_lineage
@@ -464,6 +484,11 @@ class Coordinator:
         coordinator = cls(run, directory, cfg, tokenizer, train, val, settings, theta, _evaluator(model, val, cfg["batch_size"]), digest, clock, state)
         coordinator.split_hash, coordinator.split = split_hash, split
         coordinator.model_spec = model.spec
+        for number, more in enumerate(later, 1):
+            coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, directory / "windows" / f"source{number}"))
+        if coordinator.rules.source >= len(coordinator.spans):
+            raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "
+                             f"{'is' if len(coordinator.spans) == 1 else 'are'} supplied (later_examples); training on the first would be a different run.")
         if not state:
             coordinator._start_files(model)
         return coordinator
@@ -503,14 +528,27 @@ class Coordinator:
         cfg = info["config"]
         model = sm.ScratchTransformer(cfg, vocabulary)
         state = {"term": term, "momentum": momentum, "round": int(record["round"]), "generation": int(record["generation"]),
-                 "history": record["history"], "step_time": record.get("step_time"), "state_file": None}
+                 "history": record["history"], "step_time": record.get("step_time"), "state_file": None, "rules": record.get("rules")}
         coordinator = cls(run, directory, cfg, Tokenizer.restore(info["tokenizer"]), Windows(parts), val, settings, theta,
                           _evaluator(model, val, cfg["batch_size"]), record["digest"], clock, state, on_step_down)
         coordinator.shard_count, coordinator.parts = count, parts
+        sizes = [int(n) for n in record.get("layout") or [count]]
+        coordinator.spans = [(sum(sizes[:k]), n) for k, n in enumerate(sizes)]
         coordinator.split, coordinator.split_hash = {"strategy": record.get("split_strategy", "lineage-v1")}, record.get("split_hash", "")
         coordinator.model_spec = model.spec
         coordinator.deal = record.get("shard_deal") or {}
         coordinator._start_files(model)
+        if coordinator.history:  # only the latest round's weights came over: they are the best this coordinator can keep
+            last, rules = coordinator.history[-1], coordinator.rules
+            loss = last.get("val_loss")
+            if rules.best_round != last["round"]:
+                # The replica holds one round's weights, so that round is the only best this coordinator can claim (run.json and the
+                # saved Version name it): relabel it, and restart the streaks the old best's rounds counted against.
+                finite = loss is not None and loss == loss and abs(loss) != float("inf")
+                rules.best_round, rules.best_loss = (last["round"], float(loss)) if finite else (None, None)
+                rules.rounds_since_best, rules.worse_streak, rules.points = 0, 0, []
+            if rules.best_round is not None:
+                coordinator._write_best()
         last = coordinator.history[-1] if coordinator.history else {}
         with (directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
             for row in coordinator.history:
@@ -524,6 +562,27 @@ class Coordinator:
         return coordinator
 
     @staticmethod
+    def _windows_of(sm, examples, tokenizer, cfg, directory):
+        """The training windows of one later data source."""
+        from studio_core import fingerprint
+        examples = list(examples)
+        if sm.characters_in(examples) >= sm.STREAM_CHARS:
+            key = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
+            windows = sm.shard_windows(examples, [], tokenizer, cfg, key, directory)[0]
+        else:
+            windows = sm.samples_from(examples, tokenizer, cfg)
+        if not len(windows):
+            raise ValueError("A later data source has no trainable target tokens.")
+        return windows
+
+    def add_source(self, windows):
+        """Append a data source the next_dataset pivot can move on to: its windows are cut into shards that get the ids after the others'."""
+        count = max(1, min(self.settings.shards, len(windows)))
+        self.later.append((windows, np.linspace(0, len(windows), count + 1).astype(int)))
+        self.spans.append((self.shard_count, count))
+        self.shard_count += count
+
+    @staticmethod
     def _read_state(directory, cfg, settings, digest):
         path = directory / "diloco.json"
         if not path.is_file():
@@ -535,7 +594,8 @@ class Coordinator:
             theta = {key[len(STATE_PREFIXES[0]):]: archive[key].copy() for key in archive.files if key.startswith(STATE_PREFIXES[0])}
             momentum = {key[len(STATE_PREFIXES[1]):]: archive[key].copy() for key in archive.files if key.startswith(STATE_PREFIXES[1])}
         return {"theta": theta, "momentum": momentum, "state_file": saved["state_file"], "round": saved["round"], "generation": saved["generation"],
-                "history": saved["history"], "step_time": saved.get("step_time"), "term": saved.get("term", 1)}
+                "history": saved["history"], "step_time": saved.get("step_time"), "term": saved.get("term", 1),
+                "rules": saved.get("rules"), "finished": saved.get("finished", False)}
 
     def _start_files(self, model):
         from studio_core import atomic_json, now
@@ -665,6 +725,7 @@ class Coordinator:
         self.events.append({"seq": self.event_seq, "t": self.clock() - self.started, "kind": kind, "node": node, "round": number, "text": text})
 
     def _advance(self):
+        drules.accrue(self.rules, self.clock(), not self.finished and len(self.members) >= self.settings.min_members)
         while not self.finished and not self.superseded:  # a coordinator that has seen a higher term closes and opens nothing
             now = self.clock()
             current = self.current
@@ -718,7 +779,8 @@ class Coordinator:
             self.generation += 1
             self.last_members = active
         window = round_seconds(self.settings, self.step_time)
-        self.current = Round(self.next_round, self.generation, active, deal_shards(self.cfg["seed"], self.next_round, active, self.shard_count),
+        first, count = self.spans[min(self.rules.source, len(self.spans) - 1)]
+        self.current = Round(self.next_round, self.generation, active, deal_shards(self.cfg["seed"], self.next_round, active, count, first),
                              now, now + window, window)
         return True
 
@@ -735,8 +797,9 @@ class Coordinator:
         delta = token_average([(tokens, d) for tokens, _, _, _, d in sent.values()])
         norm = 0.
         if delta is not None:
-            outer_step(self.theta, self.momentum, delta, self.settings.outer_lr, self.settings.outer_momentum)
-            norm = step_size(delta, self.momentum, self.settings.outer_lr, self.settings.outer_momentum)
+            outer_lr = self.settings.outer_lr * self.rules.lr_scale  # halve_lr scales the outer step too
+            outer_step(self.theta, self.momentum, delta, outer_lr, self.settings.outer_momentum)
+            norm = step_size(delta, self.momentum, outer_lr, self.settings.outer_momentum)
             self._event("outer_step", "", current.number, f"Outer step applied for round {current.number}: size {norm:.4g}, "
                                                           f"from {len(sent)} of {len(current.members)} members.")
         self.stage = "validating"
@@ -760,19 +823,56 @@ class Coordinator:
                "theta_bytes": sum(value.nbytes for value in self.theta.values()) * len(current.members),  # what the members downloaded
                "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
-               "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
+               "lr": self.settings.outer_lr * self.rules.lr_scale, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
                "outer_step_norm": norm}
         self.history.append(row)
         self.deal = current.deal
         self.next_round += 1
         self.current = None
         self.finished = self.next_round >= self.settings.rounds
+        verdict = self._apply_rules(row, current)
+        if verdict["action"] == "stop":
+            self.finished = True
         self.timelines.append(self._timeline(current))
         self._boundary()
         self._save(row, current)
         if self.finished:
-            self._event("finished", "", current.number, f"The run finished after {self.next_round} rounds.")
+            self._event("finished", "", current.number, self.rules.stop_text or f"The run finished after {self.next_round} rounds.")
         self.cond.notify_all()
+
+    def _apply_rules(self, row, current):
+        """Fold the closed round into the stop and pivot rules (studio_diloco_rules): keep the best weights, go back to them and apply the
+        next pivot when the loss kept getting worse or stopped improving, or end the run with the rule's reason. Returns the verdict."""
+        rules = self.rules
+        drules.accrue(rules, self.clock(), len(self.members) >= self.settings.min_members)
+        verdict = drules.observe(rules, self.settings, current.number, row["step"], row["val_loss"], sources=len(self.spans),
+                                 final=self.finished)  # the round `rounds` ends anyway: keep the best, no restore or stop reason
+        row["best"] = rules.best_round == current.number
+        if verdict["improved"]:
+            self._write_best()
+        if verdict["action"] == "pivot" and rules.best_round is not None:
+            self._restore_best()
+            row["pivot"] = verdict["name"]
+            before = f"{verdict['before']:.4g}" if verdict["before"] is not None else "no number"
+            why = (f"the validation loss got worse {verdict['streak']} rounds in a row" if verdict["why"] == "worse"
+                   else "the validation loss stopped improving")
+            self._event("pivot", "", current.number,
+                        f"Round {current.number}: {why} ({before}, best {verdict['best']:.4g} at round {verdict['best_round']}). "
+                        f"Went back to round {verdict['best_round']}'s weights and {drules.PIVOT_TEXT[verdict['name']]}.")
+        return verdict
+
+    def _write_best(self):
+        """best.npz: the best round's weights as a checkpoint, plus the outer momentum it had (so a pivot continues from exactly there)."""
+        arrays = self._checkpoint_arrays((self.rules.best_round + 1) * self.settings.inner_steps)
+        arrays.update({STATE_PREFIXES[1] + k: v for k, v in self.momentum.items()})
+        self._write_npz(self.directory / "best.npz", arrays)
+
+    def _restore_best(self):
+        with np.load(self.directory / "best.npz") as stored:
+            for name in self.theta:
+                self.theta[name] = np.array(stored["weight::" + name], dtype=np.float32)
+                self.momentum[name] = np.array(stored[STATE_PREFIXES[1] + name], dtype=np.float32)
+        self._params, self._state = (None, b""), (None, b"")
 
     def _view(self, number, node):
         entry = self.members.get(node) or self.pending.get(node)
@@ -786,7 +886,8 @@ class Coordinator:
             rank = current.members.index(node)
             return {**base, "state": "open", "generation": current.generation, "rank": rank,
                     "replica": node in replica_nodes(current.members, self.settings.replicas, self.prefer),
-                    "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members)}
+                    "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members),
+                    "lr_scale": self.rules.lr_scale}
         return {**base, "state": "pending"}
 
     def round_view(self, number, node="", wait=0.):
@@ -839,13 +940,15 @@ class Coordinator:
 
     def final_bytes(self):
         """last.npz of a finished run: its final weights, for the owner when the run finished under this coordinator after a failover
-        (#361). Stale (409) while rounds are left, and for a stopped run, which saves nothing (#333)."""
+        (#361): the best round's weights (best.npz) when the run kept any, else last.npz. Stale (409) while rounds are left, and for a
+        stopped run, which saves nothing (#333)."""
         with self.cond:
             if self.stopped:
                 raise Stale(f"Run {self.run} was stopped; it saves no weights.")
             if not self.finished:
                 raise Stale(f"Run {self.run} has not finished; {self.settings.rounds - self.next_round} rounds are left.")
-            return (self.directory / "last.npz").read_bytes()
+            best = self.directory / "best.npz"
+            return (best if best.is_file() else self.directory / "last.npz").read_bytes()
 
     def validation_bytes(self):
         """The validation windows, as a shard is: for a replica, once per run. A replica never trains on them."""
@@ -896,7 +999,12 @@ class Coordinator:
             raise KeyError(shard)
         if self.parts is not None:
             return shard_blob(self.parts[shard], 0, len(self.parts[shard]))
-        return shard_blob(self.train, int(self.bounds[shard]), int(self.bounds[shard + 1]))
+        windows, bounds, first = self.train, self.bounds, 0
+        for (low, count), (later, edges) in zip(self.spans[1:], self.later):
+            if shard >= low:
+                windows, bounds, first = later, edges, low
+        shard -= first
+        return shard_blob(windows, int(bounds[shard]), int(bounds[shard + 1]))
 
     def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0, term=None):
         """Take a member's pseudo-gradient for the open round. Stale is raised (409) for any other round or generation, a
@@ -1010,7 +1118,8 @@ class Coordinator:
                 "deadline_s": max(0., current.deadline - now) if current is not None else None, "grace_s": self.settings.grace_seconds,
                 "window_s": current.window if current is not None else None, "contributed": len(current.contributions) if current is not None else 0,
                 "expected": len(self._expected(current)) if current is not None else 0, "theta_bytes": self.theta_nbytes, "now_s": now - self.started,
-                "timeline": timelines, "events": [dict(event) for event in self.events]}
+                "timeline": timelines, "events": [dict(event) for event in self.events],
+                "rules": {**self.rules.to_json(), "points": len(self.rules.points)}}
         self._last = view
         return view
 
@@ -1073,7 +1182,10 @@ class Coordinator:
             stream.write(json.dumps({k: row[k] for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")}
                                     | {"round": row["round"], "timeline": self._timeline(closed)}) + "\n")
         self._event("checkpoint", "", row["round"], f"Round {row['round']} checkpoint written.")
-        self.record.update({"step": step, "val_loss": row["val_loss"], "status": "completed" if self.finished else "training"})
+        self.record.update({"step": step, "val_loss": row["val_loss"], "status": "completed" if self.finished else "training",
+                            "best_round": self.rules.best_round, "best_val_loss": self.rules.best_loss})
+        if self.rules.stop_rule:
+            self.record.update({"stop_rule": self.rules.stop_rule, "stop_reason": self.rules.stop_text})
         if row["loss"] is not None:
             self.record["loss"] = row["loss"]
         if self.finished:
@@ -1091,6 +1203,20 @@ class Coordinator:
         arrays.update({STATE_PREFIXES[1] + k: v for k, v in self.momentum.items()})
         self._write_npz(self.directory / self.state_file, arrays)
         step = self.next_round * self.settings.inner_steps
+        self._write_npz(self.directory / "last.npz", self._checkpoint_arrays(step))
+        self._keep_checkpoint()
+        atomic_json(self.directory / "diloco.json", {
+            "format": FORMAT, "run": self.run, "term": self.term, "round": self.next_round, "generation": self.generation, "state_file": self.state_file,
+            "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
+            "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
+            "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash,
+            "rules": self.rules.to_json(), "layout": [count for _, count in self.spans]})
+        if old and old != self.state_file:
+            (self.directory / old).unlink(missing_ok=True)
+        return step
+
+    def _checkpoint_arrays(self, step):
+        """The arrays of a checkpoint (.npz) holding theta at `step`."""
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": self.cfg,
                     "tokenizer": self.tokenizer.serialize(), "step": step, "best": min([r["val_loss"] for r in self.history if r["val_loss"] is not None], default=None),
                     "optimizer_steps": step, "history": [], "data_hash": self.digest, "sampler_state": list(random.Random(self.cfg["seed"]).getstate()),
@@ -1098,15 +1224,18 @@ class Coordinator:
                     "split_strategy": self.split["strategy"], "split_hash": self.split_hash}
         checkpoint = {"metadata": np.array(json.dumps(metadata))}
         checkpoint.update({"weight::" + k: v for k, v in self.theta.items()})
-        self._write_npz(self.directory / "last.npz", checkpoint)
-        atomic_json(self.directory / "diloco.json", {
-            "format": FORMAT, "run": self.run, "term": self.term, "round": self.next_round, "generation": self.generation, "state_file": self.state_file,
-            "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
-            "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
-            "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash})
-        if old and old != self.state_file:
-            (self.directory / old).unlink(missing_ok=True)
-        return step
+        return checkpoint
+
+    def _keep_checkpoint(self):
+        """With keep_checkpoints = N, also keep last.npz of the latest N rounds as round_<n>.npz, and delete the older ones."""
+        keep = self.settings.keep_checkpoints
+        if not keep:
+            return
+        shutil.copyfile(self.directory / "last.npz", self.directory / f"round_{self.next_round}.npz")
+        stale = self.next_round - keep
+        for path in self.directory.glob("round_*.npz"):
+            if path.stem[6:].isdigit() and int(path.stem[6:]) <= stale:
+                path.unlink(missing_ok=True)
 
     @staticmethod
     def _write_npz(path, arrays):
@@ -1172,7 +1301,7 @@ def prepare(job, services, directory, port, client_for=None):
     settings = Settings.from_params(p, steps=config.get("steps"))
     examples = p["examples"] if "examples" in p else services.examples(p)
     try:
-        coordinator = Coordinator.build(job.id, directory, config, examples, settings)
+        coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or ())
     except ValueError as exc:
         if p.get("resuming"):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None
@@ -1225,6 +1354,11 @@ class Member:
 
     def rate_step(self, number):
         return self.round * self.info["inner_steps"] + (number - self.first_step)
+
+    @property
+    def rate_scale(self):
+        """The factor the run's pivots (halve_lr) put on the learning rate, as the round in hand was opened with."""
+        return self.entered.lr_scale if self.entered is not None else 1.
 
     def due(self, step, trained_tokens):
         self.round_step = step - self.first_step  # the reporter thread reads it; nothing here waits on the network
@@ -1524,7 +1658,8 @@ class Member:
                         want = self.info["round"]
                         continue
                     raise
-                return Entered(want, theta, view["generation"], view["rank"], view["deadline_s"], shards, want != asked)
+                return Entered(want, theta, view["generation"], view["rank"], view["deadline_s"], shards, want != asked,
+                               float(view.get("lr_scale", 1.)))
         return None
 
     def _fetch(self, wanted):
