@@ -11,7 +11,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, unwrap } from "@/lib/api";
-import { problem } from "@/lib/cluster";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { problem, useCluster } from "@/lib/cluster";
+import { nodeName } from "@/lib/node-name";
+import { jobRows } from "../../cluster/machines/logic";
 import { useEvent } from "@/lib/events";
 import { cn } from "@/lib/utils";
 import { initialForm, startBody, toggled, type Defaults, type Form, type TextSet } from "../../cluster/training/logic";
@@ -21,7 +26,7 @@ import { planBody } from "../../pretraining/logic";
 import { QUICKTEST } from "../../quick-test/copy";
 import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fields";
 import { fill, NEW_RUN as T } from "./copy";
-import { ctaLabel, defaultSftVersion, localForced, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node, type Stage } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node, type Stage } from "./logic";
 
 type Guess = (typeof QUICKTEST.guesses)[number];
 
@@ -96,6 +101,8 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const [minutes, setMinutes] = useState<"1" | "3" | "10">("3");
   const [guess, setGuess] = useState<Guess | "">("");
   const [failure, setFailure] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const rows = jobRows(useCluster().data, undefined);
   const change = (patch: Partial<Form>) => {
     setForm((f) => ({ ...f, ...patch }));
     setFailure("");
@@ -182,9 +189,13 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     return sftVersion === null ? T.noVersions : "";
   })();
 
+  // Chosen machines that are busy get no slot: say so before the run starts without them.
+  const left = several ? busyPeers(workers, nodes) : [];
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!blocker) submit.mutate();
+    if (blocker) return;
+    if (left.length > 0) setConfirming(true);
+    else submit.mutate();
   };
   const latest = stage === "pretrain" ? T.versionNewest : T.versionBest;
 
@@ -269,7 +280,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
       <Slot query={machines} title={T.workers} loading={T.loadingMachines} failed={T.machinesFailed}>
         {() => (
           <>
-            <Workers nodes={nodes} workers={workers} forced={localForced(stage, picked, nodes)} multiple={stage === "pretrain"} onToggle={toggle} />
+            <Workers nodes={nodes} rows={rows} workers={workers} forced={localForced(stage, picked, nodes)} multiple={stage === "pretrain"} onToggle={toggle} />
             <div role="status" className="flex items-center">
               <Hint tip={shape.tip} className="rounded-full border border-border px-3.5 py-2 font-mono text-sm text-highlight">{shape.label}</Hint>
             </div>
@@ -302,6 +313,21 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
           {submit.isPending ? T.working : ctaLabel(outlook.data?.outlook)}
         </Button>
       </div>
+
+      <AlertDialog open={confirming && left.length > 0} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{fill(T.busyTitle, { names: nameList(left.map((n) => nodeName(n, nodes))) })}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {fill(left.length === 1 ? T.busyBodyOne : T.busyBodyMany, { names: nameList(left.map((n) => nodeName(n, nodes))) })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{T.cancel}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => submit.mutate()}>{T.launchAnyway}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   );
 }

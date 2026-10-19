@@ -151,10 +151,10 @@ class ScratchTransformer(CompiledModel):
     Older configs (layers/heads/expansion, or a per-block "groundwork-arch/1" architecture) are converted
     to the equivalent ModelSpec and produce exactly the parameter names of their checkpoints.
     """
-    def __init__(self, config, vocabulary):
+    def __init__(self, config, vocabulary, probe=False):
         self.config = validate_config(config)
         cfg = self.config
-        super().__init__(model_spec(cfg), vocabulary, seed=cfg["seed"], device=cfg["device"], batch_size=cfg["batch_size"])
+        super().__init__(model_spec(cfg), vocabulary, seed=cfg["seed"], device=cfg["device"], batch_size=cfg["batch_size"], probe=probe)
 
 
 class AdamW(_AdamW):
@@ -769,7 +769,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             train_samples, val_samples = samples_from(training, tokenizer, cfg), samples_from(validation, tokenizer, cfg)
     if not train_samples:
         raise ValueError("No trainable target tokens were found.")
-    model = ScratchTransformer(cfg, tokenizer.vocab_size)
+    model = ScratchTransformer(cfg, tokenizer.vocab_size, probe=True)  # "auto" times real steps on each device
     transplanted = _initialize_from(model, tokenizer, init_from) if init_from else None
     trainable = attach_lora(model, cfg["lora"]) if cfg["lora"] else model  # LoRA: the base is frozen; the optimizer sees only the adapters
     optimizer, schedule = build_optimizer(trainable, offload=offload_optimizer)
@@ -800,7 +800,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     record = {"name": cfg["name"], "createdAt": now(), "status": "training", "step": step, "steps": cfg["steps"],
               "parameters": model.parameter_count, "vocabulary": tokenizer.vocab_size,
               "backend": "torch", "device": model.backend.device,
-              "device_name": model.backend.name,
+              "device_name": model.backend.name, "device_probe": model.backend.probe,
               "train_examples": len(training), "validation_examples": len(validation), "resumed_from": str(resume) if resume else None,
               "initialized_from": str(init_from) if init_from else None,
               "best_loss": best if math.isfinite(best) else None, "split": split}

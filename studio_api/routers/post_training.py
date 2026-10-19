@@ -242,6 +242,164 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
     return RoundQueued(id=job.id, label=job.label, round=body.round, params=params)
 
 
+class LoopConfigIn(BaseModel):
+    """The loop's settings (studio_loop.DEFAULTS); a field left out keeps the default. The first four are the stop rules."""
+    max_rounds: int | None = Field(None, ge=1, le=100000)
+    patience: int | None = Field(None, ge=1, le=1000)
+    max_hours: float | None = Field(None, gt=0)
+    audit_flags: int | None = Field(None, ge=1, le=100)
+    prompts_per_round: int | None = Field(None, ge=2, le=5000)
+    candidates: int | None = Field(None, ge=2, le=8)
+    dpo_steps: int | None = Field(None, ge=1, le=5000)
+    loss_type: Literal["dpo", "ipo"] | None = None
+    beta: float | None = Field(None, ge=.001, le=10)
+    max_length_ratio: float | None = Field(None, ge=1)
+
+
+class LoopStart(BaseModel):
+    version: int | None = None  # None = the current version
+    resume: str | None = None  # the id of a loop to carry on from its last kept round (its settings count as this many MORE rounds)
+    judge_model: str | None = None  # the Ollama model that grades; None = the workspace's teacher, or none (checked problems only)
+    config: LoopConfigIn = LoopConfigIn()
+
+
+class LoopQueued(BaseModel):
+    job: str
+    loop_id: str
+    label: str
+
+
+class LoopCheckOut(BaseModel):
+    name: str
+    detail: str = ""
+    ok: bool | None = None  # None: could not be measured, never counts as a failure
+
+
+class LoopRoundOut(BaseModel):
+    """One finished round of a loop: the journal line, with all the evidence."""
+    model_config = ConfigDict(extra="allow")
+    round: int
+    status: str  # kept | rolled_back | too_few_pairs
+    reason: str = ""
+    started: str = ""
+    finished: str = ""
+    seconds: float = 0.
+    node: str = ""  # the machine that collected the round's pairs; "" = this one
+    pairs: dict[str, Any] = Field(default_factory=dict)  # total, verified, comparison, rewrite, skipped {reason: n}, errors
+    checks: list[LoopCheckOut] = Field(default_factory=list)
+    before: dict[str, Any] | None = None  # the held-back evidence of the version the round started from
+    after: dict[str, Any] | None = None
+    judge: dict[str, Any] | None = None
+    length_ratio: float | None = None
+    audit: dict[str, Any] | None = None
+    audit_flag: bool = False
+    dpo: dict[str, Any] | None = None
+    checkpoint: str | None = None
+
+
+class LoopOut(BaseModel):
+    """studio_loop.summary: one loop, on disk and live."""
+    model_config = ConfigDict(extra="allow")
+    id: str
+    version: int | None = None
+    status: str = "running"  # running | waiting_judge | stopped | finished | failed
+    stop_reason: str = ""
+    round: int = 1  # the round it is on, or will do next
+    kept: int = 0
+    failed_streak: int = 0
+    audit_flagged: int = 0
+    elapsed_s: float = 0.
+    created: str | None = None
+    updated: str | None = None
+    phase: str = ""
+    note: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    anchor: str = ""
+    current: str = ""
+    anchor_eval: dict[str, Any] | None = None
+    current_eval: dict[str, Any] | None = None
+    rounds: list[LoopRoundOut] = Field(default_factory=list)
+    active: bool = False  # a job for it is queued or running now
+
+
+class JudgesOut(BaseModel):
+    url: str
+    models: list[str]
+    selected: str  # the workspace's teacher model
+    error: str | None = None  # why Ollama could not be read, in words
+
+
+def loop_jobs(services):
+    """The queued or running rlhf_loop jobs."""
+    state = services.queue()
+    return [j for j in [state.job, *state.up_next] if j is not None and j.kind == "rlhf_loop"]
+
+
+def loop_blocker(counts, has_judge, resume):
+    """Why a new loop cannot start yet (plain words), or None. A loop that carries on already has its data."""
+    if resume or has_judge or (counts.get("problems") or 0) >= 1:
+        return None
+    return "Make problems a rule can check in Your data, or choose an Ollama judge: the loop needs something to learn from."
+
+
+@router.get("/loops", response_model=list[LoopOut])
+def loops(services=Depends(get_services)):
+    """Every automated loop, newest first, with each round's evidence."""
+    active = {j.params.get("loop_id") for j in loop_jobs(services)}
+    return [LoopOut(**{**loop, "active": loop.get("id") in active}) for loop in services.post_loops()]
+
+
+@router.post("/loops", response_model=LoopQueued)
+def start_loop(body: LoopStart, services=Depends(get_services)):
+    """Queue the automated loop for a version, or carry on an earlier one from its last kept round. The loop is a long queue job:
+    stop it from here and Start again to carry on; it also carries on by itself after an app restart."""
+    version = pick_version(services, body.version)
+    if version is None:
+        raise ValueError("There is no version yet. Build one first.")
+    counts = (services.post_training(version) or {}).get("counts", {})
+    import studio_rlhf
+    root = getattr(services, "root", None)
+    has_judge = bool(body.judge_model or (root and studio_rlhf.load_settings(root).get("teacher_model")))
+    why = loop_blocker(counts, has_judge, body.resume)
+    if why:
+        raise ValueError(why)
+    config = {k: v for k, v in body.config.model_dump().items() if v is not None}
+    return LoopQueued(**services.start_loop(version.number, config, body.resume, body.judge_model))
+
+
+@router.post("/loops/{loop_id}/stop")
+def stop_loop(loop_id: str, services=Depends(get_services)):
+    """Stop a loop that is queued or running. It keeps its folder and its last kept round, and Start carries on from there."""
+    jobs = [j for j in loop_jobs(services) if j.params.get("loop_id") == loop_id]
+    if not jobs:
+        raise ValueError("This loop is not queued or running.")
+    for job in jobs:
+        services.remove(job.id)
+    return {"stopped": True}
+
+
+@router.post("/loops/{loop_id}/adopt", response_model=JobOut, status_code=202)
+def adopt_loop(request: Request, loop_id: str):
+    """Make a loop's best the version's checkpoint if it holds up on ALL the held-back data. A job: it measures both models. The
+    result is the gate result (ok, checks, verdict)."""
+    services = request.app.state.services
+    return start_job(request, "post_training.adopt_loop", lambda stop: services.adopt_loop(loop_id))
+
+
+@router.get("/judges", response_model=JudgesOut)
+def judges(services=Depends(get_services)):
+    """The Ollama models that could grade a loop, read from the server the workspace's settings name."""
+    import studio_rlhf
+    root = getattr(services, "root", None)
+    settings = studio_rlhf.load_settings(root) if root else dict(studio_rlhf.SETTINGS_DEFAULTS)
+    try:
+        models = studio_rlhf.OllamaTeacher(settings["url"], timeout=3, retries=0).models()
+        error = None
+    except Exception as exc:  # Ollama not running is an ordinary state, said in words
+        models, error = [], str(exc)
+    return JudgesOut(url=settings["url"], models=models, selected=settings.get("teacher_model", ""), error=error)
+
+
 def keep_weights(services, name, upload):
     """Copy an uploaded model file into the workspace's pretrained folder, so the import job finds it instead of downloading it.
     The file must be the published one: its size and sha256 are checked as it is copied, and it is kept only when both match."""
