@@ -207,6 +207,7 @@
     "owner": "mac-mini",
     "paused": false,
     "phase": "training",
+    "reviewed_only": false,
     "round": 0,
     "rounds": 400,
     "saved_version": null,

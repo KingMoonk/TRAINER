@@ -255,6 +255,7 @@
     "owner": "mac-mini",
     "paused": false,
     "phase": "collecting",
+    "reviewed_only": false,
     "round": 0,
     "rounds": 400,
     "saved_version": null,

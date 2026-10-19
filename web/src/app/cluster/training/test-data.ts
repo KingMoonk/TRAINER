@@ -24,7 +24,7 @@ export const event = (seq: number, over: Partial<RunEvent> = {}): RunEvent => ({
 
 export const run = (over: Partial<Run> = {}): Run => ({
   id: "r1", label: "Version 2 across machines", version: 2, saved_version: null, state: "running", note: "", started_at: 100, owner: "mac-mini", round: 2, rounds: 10, inner_steps: 100,
-  outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", term: 1, coordinator: "", handoff: "", origin: "", age_s: 0, origin_down: false, can_stop: true, paused: false, can_pause: false, can_resume: false, can_restart: false, best_round: null, best_val_loss: null, stop_rule: "", stop_reason: "", lessons: 0, lessons_left_out: 0, history: [round(0), round(1)],
+  outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", term: 1, coordinator: "", handoff: "", origin: "", age_s: 0, origin_down: false, can_stop: true, paused: false, can_pause: false, can_resume: false, can_restart: false, best_round: null, best_val_loss: null, stop_rule: "", stop_reason: "", lessons: 0, lessons_left_out: 0, reviewed_only: false, history: [round(0), round(1)],
   phase: "training", deadline_s: null, grace_s: 2, window_s: null, contributed: 0, expected: 2, theta_bytes: 0, now_s: 20, timeline: [], events: [],
   members: [
     member("mac-mini", { address: "local", local: true, device: "mps", device_name: "Apple M2", rounds_done: 2, steps: 200, tokens_per_second: 2048, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", can_stop: false }),

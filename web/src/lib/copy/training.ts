@@ -12,6 +12,8 @@ export const TRAINING = {
   version: "Version {number}",
   data: "Text to train on",
   dataLead: "Tick the text sets to use. The same text is read on every machine.",
+reviewedOnly: "Reviewed examples only",
+reviewedOnlyHelp: "Train only on examples marked Good, and check the run on those too. Safer, but you need to have reviewed some first.",
   noData: "There is no text yet. Add some in",
   machines: "Machines to join",
   machinesLead: "This computer always takes part. Add machines on the Machines tab.",
