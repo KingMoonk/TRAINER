@@ -85,6 +85,16 @@ export function factsAge(node: ClusterNode): string {
   return (node.origin_down ? T.factsDown : T.factsAge).replace("{age}", ageText(node.age_s));
 }
 
+/** When this computer last heard from a machine and when it will ask it next: "Last heard 40 s ago · next check in 8 s". "" for this machine. */
+export function contactText(node: ClusterNode): string {
+  if (node.local) return "";
+  const heard = node.last_heard_s;
+  const first = heard == null ? T.neverHeard : heard < 1 ? T.heardNow : T.heardAgo.replace("{age}", ageText(heard));
+  const next = node.next_check_s;
+  const then = next == null ? "" : next < 1 ? T.checkDue : T.checkIn.replace("{age}", ageText(next));
+  return [first, then].filter(Boolean).join(" · ");
+}
+
 /** A job that has a page of its own on this computer: a training run that was queued here (its events arrive here whatever machine runs it). */
 export function runPage(row: QueueRow): string | null {
   return row.status === "running" && row.queued_here && row.kind === "pretrain" ? "/training-run" : null;

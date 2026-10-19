@@ -890,7 +890,7 @@ class OwnerSide(unittest.TestCase):
             self.runner.cluster.poll_once()
             asked.append(len(self.net.to("gpu-box")) - before)
             self.clock.advance(studio_remote.POLL_EVERY)
-        self.assertEqual(asked, [1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0])  # after 0 s, 10 s, 30 s; the next is due at 70 s
+        self.assertEqual(asked, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0])  # every 10 s: never longer than POLL_BACKOFF_MAX
         self.net.down.clear()
         self.clock.advance(studio_remote.POLL_BACKOFF_MAX)
         self.runner.cluster.poll_once()

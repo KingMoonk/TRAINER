@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { QueueRow } from "@/lib/cluster";
-import { changed, cleanList, deviceText, factsAge, fraction, jobRows, lastSeen, machineJobs, progressText, refusedUs, runPage, waitingPlace, type ClusterNode } from "./logic";
+import { changed, cleanList, contactText, deviceText, factsAge, fraction, jobRows, lastSeen, machineJobs, progressText, refusedUs, runPage, waitingPlace, type ClusterNode } from "./logic";
 
 const node = (address: string, over: Partial<ClusterNode> = {}): ClusterNode => ({
   address, local: false, hostname: "", version: "", device: "", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: false, error: "", tailnet_name: "", origin: "", origin_down: false, ...over,
@@ -94,5 +94,21 @@ describe("how old the facts about a machine are here", () => {
   test("another machine says the age of this computer's copy, and when it is down says so", () => {
     expect(factsAge(node("beast", { origin: "beast", age_s: 5 }))).toBe("Its facts here are 5 s old");
     expect(factsAge(node("beast", { origin: "beast", age_s: 120, origin_down: true }))).toContain("2 min old");
+  });
+});
+
+describe("when a machine was last heard from and will be asked next", () => {
+  test("this machine says nothing", () => {
+    expect(contactText(node("local", { local: true }))).toBe("");
+  });
+
+  test("a machine says how long ago it was heard and when it is asked next", () => {
+    expect(contactText(node("beast", { last_heard_s: 40, next_check_s: 8 }))).toBe("Last heard 40 s ago · next check in 8 s");
+    expect(contactText(node("beast", { last_heard_s: 0, next_check_s: 0.4 }))).toBe("Heard just now · next check due now");
+    expect(contactText(node("beast", { last_heard_s: 300, next_check_s: null }))).toBe("Last heard 5 min ago");
+  });
+
+  test("a machine never heard from says so", () => {
+    expect(contactText(node("beast"))).toBe("Not heard yet");
   });
 });

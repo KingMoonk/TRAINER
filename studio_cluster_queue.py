@@ -19,8 +19,8 @@ import studio_cluster
 from studio_peer import PeerClient
 
 STATES = ("running", "waiting", "held")
-BACKOFF_FIRST = 10.  # seconds before a peer that did not answer is asked again; doubled with each failure in a row
-BACKOFF_MAX = 60.  # the longest wait between asks of a peer that stays silent
+BACKOFF_FIRST = 5.  # seconds before a peer that did not answer is asked again; doubled with each failure in a row
+BACKOFF_MAX = 10.  # the longest wait between asks of a peer that stays silent: one that answers again is seen within this
 
 
 def fetch(address, path, timeout=studio_cluster.POLL_TIMEOUT):

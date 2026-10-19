@@ -674,6 +674,17 @@
             "title": "Hostname",
             "type": "string"
           },
+          "last_heard_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heard S"
+          },
           "local": {
             "title": "Local",
             "type": "boolean"
@@ -681,6 +692,17 @@
           "memory_bytes": {
             "title": "Memory Bytes",
             "type": "integer"
+          },
+          "next_check_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Check S"
           },
           "online": {
             "title": "Online",

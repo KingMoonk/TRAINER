@@ -55,6 +55,8 @@ class ClusterNode(BaseModel):
     origin: str = ""  # the node whose facts these are: its name in the observation store; "" when this node holds none of its facts
     age_s: float | None = None  # seconds since the node last wrote its heartbeat into this computer's copy of the store; 0 for this machine
     origin_down: bool = False  # the store says the node is not answering
+    last_heard_s: float | None = None  # seconds since this computer last heard from the node (an answer, or its heartbeat); None when never, or for this machine
+    next_check_s: float | None = None  # seconds until this computer's poll asks the node again; None for this machine and before the first poll
 
 
 class NodeList(BaseModel):
@@ -205,7 +207,9 @@ def nodes(request: Request, services=Depends(get_services)) -> list[ClusterNode]
         local = info.address == studio_cluster.LOCAL
         name = cluster.hostname if cluster is not None and local else (info.hostname or (cluster._names.get(info.address, "") if cluster is not None else ""))
         facts = studio_facts.node_facts(cluster, name) if cluster is not None else None
+        heard, check = (None, None) if local or cluster is None else cluster.contact(info.address)
         rows.append(ClusterNode(**asdict(info), local=local, tailnet_name=tailnet if local else "",
+                                last_heard_s=0. if info.online and not local else heard, next_check_s=check,  # this very survey just heard it
                                 **({"origin": facts[0], "age_s": facts[1], "origin_down": facts[2]} if facts else {})))
     return rows
 

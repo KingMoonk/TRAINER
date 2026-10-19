@@ -248,6 +248,8 @@ class ClusterHost(Host):
                         0. if origin == self.name else min(ages), (value or {}).get("state", "running"))
         if value is None:
             return None
+        if claim is not None and value.get("state", "running") not in ENDED:
+            return None  # it released its claim (stepped down or withdrew): its run row, until the next publish, is not a coordinator to yield to
         return Seen(Claim(run, origin, int(value.get("term", 1)), int(value.get("round", 0)), 0), 0. if origin == self.name else row["age"],
                     value.get("state", "running"))
 
@@ -334,14 +336,18 @@ class ClusterHost(Host):
         return True
 
     def step_down(self, run, claim):
-        coordinator = self.cluster.coordinators.pop(run, None)
+        coordinator = self.cluster.coordinators.get(run)
+        if coordinator is not None:  # the members here learn where the run went before the coordinator leaves the registry, so a call that lands in between finds the new one
+            coordinator.defer(claim.term if claim is not None else coordinator.superseded or coordinator.term)
+            if claim is not None:
+                self.point(run, claim, self.is_down(claim.node))
+        self.cluster.coordinators.pop(run, None)
         self.claims.pop(run, None)
         self.cluster.claims[run] = {"released": True}
         self.cluster.state.put(CLAIM, run, {"released": True})
         if coordinator is not None:
             import studio_distributed
             term = claim.term if claim is not None else coordinator.superseded or coordinator.term
-            coordinator.defer(term)
             studio_distributed.archive(run, coordinator)  # the Training tab keeps what it showed of the term that ended
             self.cluster.runner._emit("cluster", {"job": run, "state": "stepped_down", "node": self.name,
                                                   "detail": f"Term {term} is coordinated on {claim.node if claim else 'another node'}; rounds closed here are discarded."})

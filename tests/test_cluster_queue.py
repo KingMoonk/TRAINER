@@ -146,7 +146,7 @@ class Merge(unittest.TestCase):
         net = Net(gpu=DOWN)
         clock = [100.]
         peers = cq.Peers(clock=lambda: clock[0])
-        for now, calls in ((100., 3), (105., 0), (110., 1), (120., 0), (130., 1), (170., 1), (230., 1), (260., 0)):
+        for now, calls in ((100., 3), (102., 0), (105., 1), (110., 0), (115., 1), (125., 1), (130., 0)):
             clock[0], before = now, len(net.calls)
             [peer_] = peers.survey(["gpu"], net, 1)
             self.assertEqual(len(net.calls) - before, calls, now)
