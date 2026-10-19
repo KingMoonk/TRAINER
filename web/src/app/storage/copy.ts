@@ -20,6 +20,23 @@ export const STORAGE = {
   loadFailed: "Could not read what is on disk.",
 };
 
+export const LEFTOVERS = {
+  kicker: "LEFTOVERS",
+  desc:
+    "Attempts the app moved aside when it restarted a job, runs that failed, and copies of training data no run uses. " +
+    "A running job, the checkpoint a waiting job will continue from and every saved version are never listed.",
+  none: "Nothing left over.",
+  kinds: { interrupted: "Interrupted attempt", failed: "Failed run", snapshot: "Unused training data" },
+  shared: "{size} is shared with other runs and stays",
+  select: "Select {name}",
+  remove: "Remove selected…",
+  removing: "Removing",
+  confirm: "Remove {n} items and free {size}? This cannot be undone.",
+  confirmOne: "Remove 1 item and free {size}? This cannot be undone.",
+  removed: "Freed {size}",
+  loadFailed: "Could not read what training left behind.",
+};
+
 export const EXPORT = {
   kicker: "EXPORT",
   desc:

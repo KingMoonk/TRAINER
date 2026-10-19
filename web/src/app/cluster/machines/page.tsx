@@ -123,17 +123,18 @@ export default function MachinesPage() {
   );
 }
 
-/** This machine's MagicDNS name, to copy and give to someone, or why it is not known. */
+/** This machine's address for another machine's list, `https://<MagicDNS name>` (the form `tailscale serve` publishes), or why it is not known. */
 function TailnetName({ name }: { name: string }) {
   if (!name) return <p className="text-sm text-muted-foreground" data-testid="tailnet-name-missing">{T.noName}</p>;
+  const address = `https://${name}`;
   const copy = () =>
-    navigator.clipboard.writeText(name).then(
+    navigator.clipboard.writeText(address).then(
       () => toast.success(T.copied),
       () => toast.error(T.copyFailed),
     );
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <code className="rounded-md border border-border bg-muted px-2 py-1 font-mono text-sm select-all" data-testid="tailnet-name">{name}</code>
+      <code className="rounded-md border border-border bg-muted px-2 py-1 font-mono text-sm select-all" data-testid="tailnet-name">{address}</code>
       <Button variant="outline" size="sm" onClick={copy}>
         <Copy aria-hidden="true" />
         {T.copy}

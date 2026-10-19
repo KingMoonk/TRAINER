@@ -1,4 +1,4 @@
-"""Benchmark: the fixed suite scored on every trained version, the few-shot check, how much training one version saved over
+"""Benchmark: the frozen suite scored on every trained version (and its trend across a lineage), the few-shot check, how much training one version saved over
 another, and the Compare runs experiments. Reads that score a checkpoint or parse the held-back data are jobs: POST answers with
 its id and the result arrives on GET /events (and GET /jobs/{id})."""
 
@@ -26,15 +26,37 @@ class BenchmarkRow(Loose):
     number: int
     name: str = ""
     lineage: str = ""
+    continues: int | None = Field(None, description="the version whose weights this one was started from")
     tokens: int | None = None
+    stale: bool = Field(False, description="scored once, but under an older suite or scoring method: it needs scoring again")
     result: dict[str, Any] | None = None  # studio_bench.run_suite's dict; None until the suite has run on this version
+
+
+class TrendPoint(Loose):
+    number: int
+    tokens: int | None = None
+    bpc: float | None = None
+    bpc_band: list[float] | None = Field(None, description="10th to 90th percentile over resamples of the held-back passages")
+    few_shot: float | None = None
+    few_shot_band: list[float] | None = Field(None, description="95% interval of the accuracy over the questions asked")
+    problems: float | None = None
+    dropped: dict[str, int] = Field(default_factory=dict, description="items left out of this version's score for sharing a 13-gram with its training text")
+    gain: dict[str, Any] | None = Field(None, description="against the point before it: {bpc, few_shot, problems} paired tests; a gain counts where better is true")
+
+
+class Lineage(Loose):
+    lineage: str
+    versions: list[int] = Field(default_factory=list)
+    points: list[TrendPoint] = Field(default_factory=list)
 
 
 class BenchmarkOut(Loose):
     suite: str
     sizes: dict[str, int] = Field(default_factory=dict)
     dropped: dict[str, int] = Field(default_factory=dict)
+    sources: list[str] = Field(default_factory=list, description="the data sources the frozen passages come from")
     rows: list[BenchmarkRow] = Field(default_factory=list)
+    lineages: list[Lineage] = Field(default_factory=list, description="the suite across versions, a lineage at a time, with paired tests")
 
 
 class FewShotRow(Loose):

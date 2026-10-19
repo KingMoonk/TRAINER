@@ -2,12 +2,13 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { emit, mockApi } from "@/test/network";
+import { invite } from "@/test/invites";
 import { renderPage } from "@/test/render";
 import QueuePage from "./page";
 
 // The Queue page against a mocked API (the component tier of tests/queue.spec.ts, which keeps the browser-only flows: drag and keyboard reorder).
 
-type Job = { id: string; kind: string; label: string; note: string; params: object; status: string; eta_s: number | null; created_at: number; error: string };
+type Job = { id: string; kind: string; label: string; note: string; params: object; status: string; eta_s: number | null; created_at: number; error: string; details?: string };
 const job = (id: string, label: string, over: Partial<Job> = {}): Job => ({ id, kind: "pretrain", label, note: "", params: {}, status: "waiting", eta_s: 1800, created_at: 0, error: "", ...over });
 
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
@@ -21,6 +22,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     plan: { ...PLAN } as Record<string, unknown>,
     reason: start.reason ?? (null as string | null),
     supported: start.supported ?? true,
+    failed: [] as Job[],
     up_next: [job("a", "First waiting"), job("b", "Second waiting", { note: "A note" }), job("c", "Third waiting")],
   };
   const view = () => ({
@@ -35,6 +37,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     gate: { reason: state.reason, resumes_at: null, supported: state.supported },
     stopping: state.stopping,
     up_next: state.up_next,
+    failed: state.failed,
     plan: state.plan,
   });
   const index = (path: string) => state.up_next.findIndex((j) => j.id === path.split("/queue/jobs/")[1].split("/")[0]);
@@ -54,6 +57,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     "DELETE /queue/jobs/*": ({ path }) => {
       const id = path.split("/queue/jobs/")[1];
       if (state.job?.id === id) state.job = null;
+      state.failed = state.failed.filter((j) => j.id !== id);
       state.up_next = state.up_next.filter((j) => j.id !== id);
       return reply();
     },
@@ -110,6 +114,30 @@ describe("Queue page", () => {
     expect(screen.getByRole("radio", { name: "Any time" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Most" })).toBeChecked();
     expect(idleSwitch()).toBeChecked();
+  });
+
+  test("a member job shows the run it belongs to, its state, and the run's round and progress", async () => {
+    const mine = invite({ job_id: "run1", state: "training", round: 6, rounds: 50, tokens_per_second: 1200 });
+    server({}, { "GET /distributed/invites": { body: { invites: [mine], pause_requests: [] } } });
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("member-of")).toHaveTextContent("Member of 'Version 7' from Michael's Mac");
+    expect(within(screen.getByTestId("member-of")).getByText("Training")).toBeVisible();
+    expect(screen.getByTestId("member-round")).toHaveTextContent("Round 6 of 50, 1,200 tok/s");
+    expect(screen.getByRole("progressbar", { name: "Run progress" })).toHaveAttribute("aria-valuenow", "12");
+    expect(screen.queryByTestId("progress-line")).toBeNull(); // the job's own step line gives way to the run's round
+  });
+
+  test("a member job whose owner has not reported a round yet says it is waiting for that report", async () => {
+    server({}, { "GET /distributed/invites": { body: { invites: [invite({ job_id: "run1", state: "joining" })], pause_requests: [] } } });
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("member-round")).toHaveTextContent("Waiting for Michael's Mac's first report on the round");
+  });
+
+  test("a job that is not a member job keeps its own step line", async () => {
+    server({}, { "GET /distributed/invites": { body: { invites: [invite({ job_id: "other" })], pause_requests: [] } } });
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("progress-line")).toHaveTextContent("step 100 of 1,000");
+    expect(screen.queryByTestId("member-row")).toBeNull();
   });
 
   test("hold, release, move, run next and remove a waiting job", async () => {
@@ -248,5 +276,29 @@ describe("Queue page", () => {
     await user.click(screen.getByRole("button", { name: "Pause" }));
     expect(await screen.findByText("The runner is not running")).toBeVisible();
     expect(screen.getByTestId("state-line")).toHaveTextContent("Version 3 pretraining · running");
+  });
+
+  test("a job that failed shows its sentence, with the raw details behind a toggle, and can be dismissed", async () => {
+    const { state } = server({ running: false });
+    state.failed = [job("f1", "Version 4 pretraining", { status: "failed", error: "The computer ran out of memory (RAM) while this ran.", details: "MemoryError" })];
+    renderPage(<QueuePage />);
+    const why = await screen.findByTestId("failed-why-f1");
+    expect(why).toHaveTextContent("The computer ran out of memory (RAM) while this ran.");
+    expect(screen.queryByTestId("failed-details-f1")).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show details: Version 4 pretraining" }));
+    expect(screen.getByTestId("failed-details-f1")).toHaveTextContent("MemoryError");
+    await user.click(screen.getByRole("button", { name: "Hide details: Version 4 pretraining" }));
+    expect(screen.queryByTestId("failed-details-f1")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Dismiss: Version 4 pretraining" }));
+    await waitFor(() => expect(screen.queryByTestId("failed-f1")).toBeNull());
+  });
+
+  test("a failed job whose error is its own text has no details toggle", async () => {
+    const { state } = server({ running: false });
+    state.failed = [job("f2", "Compare", { status: "failed", error: "Give one temperature, or one per reply." })];
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("failed-why-f2")).toHaveTextContent("Give one temperature");
+    expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
   });
 });

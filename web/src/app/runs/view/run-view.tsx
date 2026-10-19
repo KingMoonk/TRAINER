@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { SeriesChart } from "@/components/series-chart";
 import { Badge } from "@/components/ui/badge";
-import { isActive, trafficSeries, type Run } from "@/app/cluster/training/logic";
+import { errorMarks, isActive, stopReasonText, trafficSeries, type Run } from "@/app/cluster/training/logic";
+import { RunControls } from "@/app/cluster/training/run-controls";
 import { useStopMember, useStopRun } from "@/app/cluster/training/use-training";
 import { useQueueActions } from "@/app/queue/use-queue";
 import { etaText, runEta } from "@/app/runs/logic";
@@ -15,7 +17,7 @@ import { EventLog } from "./event-log";
 import { ProgressCard, RunHeader } from "./header";
 import { factAge, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
-import { dilocoShape, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
+import { dilocoShape, runViewHref, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
 import { RoundBanner } from "./round-banner";
 import { Timeline } from "./timeline";
 import { Topology } from "./topology";
@@ -25,6 +27,7 @@ const PANEL = "flex min-w-0 flex-1 basis-96 flex-col gap-3 rounded-xl border bor
 
 /** A run spread over several machines: the round, who is doing what, the round timeline, the loss by round and the events. */
 export function DilocoView({ run }: { run: Run }) {
+  const router = useRouter();
   const stopRun = useStopRun();
   const stopMember = useStopMember();
   const eta = runEta(run);
@@ -40,14 +43,19 @@ export function DilocoView({ run }: { run: Run }) {
         shape={dilocoShape(run)}
         freshness={factAge(run)}
         controls={
-          run.can_stop && isActive(run) ? (
-            <div role="group" aria-label={T.controls} className="flex items-center gap-2">
-              <span className="font-mono text-xs text-warning">{T.coordinatorLabel}</span>
-              <StopRunButton pending={stopRun.isPending && stopRun.variables === run.id} onConfirm={() => stopRun.mutate(run.id)} />
-            </div>
-          ) : undefined
+          <div className="flex flex-wrap items-center gap-2">
+            <RunControls run={run} onRestarted={(made) => router.push(runViewHref(made.id))} />
+            {run.can_stop && isActive(run) && (
+              <div role="group" aria-label={T.controls} className="flex items-center gap-2">
+                <span className="font-mono text-xs text-warning">{T.coordinatorLabel}</span>
+                <StopRunButton pending={stopRun.isPending && stopRun.variables === run.id} onConfirm={() => stopRun.mutate(run.id)} />
+              </div>
+            )}
+          </div>
         }
       />
+      {run.paused && <p className="text-sm text-warning" data-testid="run-paused">{TR.pausedNote}</p>}
+      {stopReasonText(run) && <p className="text-sm text-muted-foreground" data-testid="run-stop-reason">{stopReasonText(run)}</p>}
       {run.note && <p className="text-sm text-muted-foreground" data-testid="run-note">{run.note}</p>}
       <ProgressCard
         now={fill(T.roundOf, { round: roundNumber(run) })}
@@ -76,7 +84,7 @@ export function DilocoView({ run }: { run: Run }) {
         <Timeline run={run} />
       </div>
       <div className="flex flex-wrap gap-4">
-        <LossPanel id="run-loss" title={T.lossVsRound} series={roundSeries(run.history)} xLabel={T.lossAxisRound} readouts={readouts} empty={TR.noRounds} />
+        <LossPanel id="run-loss" title={T.lossVsRound} series={roundSeries(run.history)} xLabel={T.lossAxisRound} readouts={readouts} empty={TR.noRounds} marks={errorMarks(run)} />
         <div className={PANEL}>
           <EventLog run={run} />
         </div>

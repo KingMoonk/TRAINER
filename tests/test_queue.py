@@ -7,8 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import studio_queue
-from studio_passive import PassiveStore
-from studio_queue import PASSIVE, Job, Plan, Runner
+from studio_queue import Job, Plan, Runner
 
 ANY = Plan(hours="any", idle_only=False, pause_on_battery=False)
 
@@ -108,6 +107,14 @@ class QueueTests(unittest.TestCase):
         again = Runner(self.path, self.handlers)
         self.assertEqual([j.status for j in again.jobs], ["done"] * 3)
 
+    def test_a_reason_a_watchdog_left_on_the_job_becomes_its_error(self):
+        r = self.runner()
+        r.enqueue(self.job("ended", ended_reason="Ended: the driver stopped responding at round 2, so the run was stopped."))
+        r.start()
+        self.assertTrue(wait(lambda: r.jobs[0].status == "failed"))
+        self.assertEqual(r.jobs[0].error, "Ended: the driver stopped responding at round 2, so the run was stopped.")
+        self.assertNotIn("ended_reason", r.jobs[0].params)
+
     def test_persistence_across_restart_requeues_interrupted_job(self):
         r = self.runner()
         r.enqueue(self.job("long", "pretrain"))
@@ -199,41 +206,6 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(r.state().blocked, "outside hours")
         r.clock = lambda: datetime(2026, 1, 1, 23)
         self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
-
-    def test_queue_waits_while_a_passive_session_is_active(self):
-        root = self.path.parent.parent
-        self.assertFalse(studio_queue.passive_running(root))
-        self.assertIsNone(studio_queue.passive_session(root))
-        self.assertFalse((root / "data" / "passive.sqlite").exists())  # asking never creates the record
-        store = PassiveStore(root)
-        session = store.create({})
-        r = self.runner()
-        r.enqueue(self.job("a"))
-        r.start()
-        self.assertTrue(wait(lambda: r.state().gate.reason == f"{PASSIVE} (session {session})"))
-        for status in ("running", "paused"):  # a paused trainer still holds its model in memory
-            store.update(session, status=status)
-            time.sleep(.1)
-            self.assertEqual((self.fake.ran, r.state().blocked), ([], f"{PASSIVE} (session {session})"))
-        store.update(session, status="stopped")
-        self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
-        self.assertIsNone(r.state().gate.reason)
-
-    def test_a_passive_session_pauses_the_running_job_until_it_ends(self):
-        r = self.runner()
-        r.enqueue(self.job("long", "pretrain"))
-        r.start()
-        self.assertTrue(wait(lambda: self.fake.steps > 3))
-        store = PassiveStore(self.path.parent.parent)
-        session = store.create({})
-        self.assertTrue(wait(lambda: r.state().blocked == f"{PASSIVE} (session {session})"))
-        time.sleep(.05)
-        frozen = self.fake.steps
-        time.sleep(.1)
-        self.assertEqual(self.fake.steps, frozen)
-        store.update(session, status="finished")
-        self.assertTrue(wait(lambda: self.fake.steps > frozen + 3))
-        self.fake.gate.set()
 
     def test_gate_carries_the_next_start(self):
         plan = Plan(hours="nights", idle_only=False, pause_on_battery=False)
@@ -388,6 +360,30 @@ class QueueTests(unittest.TestCase):
         r.stop_after_cooldown()
         self.assertTrue(wait(lambda: main.status == "stopped"))
         self.assertIn("cooldown of " + main.id, self.fake.ran)
+
+    def test_yield_running_runs_the_waiting_job_first_and_puts_the_running_one_back_in_the_queue(self):
+        r = self.runner()
+        main = r.enqueue(self.job("long", "pretrain"))
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.steps > 2))
+        urgent = r.enqueue(self.job("urgent"))
+        self.assertFalse(r.yield_running("nope"))
+        self.assertTrue(r.yield_running(urgent.id))
+        self.assertTrue(wait(lambda: self.fake.ran[:2] == ["long", "urgent"]))
+        self.assertTrue(wait(lambda: urgent.status == "done"))
+        self.assertNotEqual(main.status, "stopped")  # it was stepped aside, not stopped: it runs again from its place
+        self.assertTrue(wait(lambda: self.fake.ran == ["long", "urgent", "long"]))
+        self.fake.gate.set()
+        self.assertTrue(wait(lambda: main.status == "done"))
+
+    def test_yield_running_without_a_job_holds_the_running_one_and_does_nothing_when_idle(self):
+        r = self.runner()
+        self.assertFalse(r.yield_running())
+        main = r.enqueue(self.job("long", "pretrain"))
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.steps > 2))
+        self.assertTrue(r.yield_running())
+        self.assertTrue(wait(lambda: main.status == "held"))
 
     def test_user_text_pretrain_appends_restore_answers(self):
         r = self.runner()

@@ -24,7 +24,6 @@ class TestIACopy(unittest.TestCase):
         "INSIDE3D": "Inside the network",
         "PRETRAINING": "Pretraining",
         "FEEDBACK": "Post-training",
-        "MAKEDATA": "Make extra data",
         "YOURDATA": "Your data",
         "NAV": "Network designer",  # First item in NAV
     }
@@ -46,10 +45,8 @@ class TestIACopy(unittest.TestCase):
             copy.INSIDE3D,
             copy.PRETRAINING,
             copy.FEEDBACK,
-            copy.MAKEDATA,
             copy.YOURDATA,
             copy.STORAGE,
-            copy.PASSIVE,
         ]
 
         for page_dict in page_dicts:
@@ -73,7 +70,6 @@ class TestIACopy(unittest.TestCase):
             (copy.INSIDE3D, self.EXPECTED_H1_VALUES["INSIDE3D"]),
             (copy.PRETRAINING, self.EXPECTED_H1_VALUES["PRETRAINING"]),
             (copy.FEEDBACK, self.EXPECTED_H1_VALUES["FEEDBACK"]),
-            (copy.MAKEDATA, self.EXPECTED_H1_VALUES["MAKEDATA"]),
             (copy.YOURDATA, self.EXPECTED_H1_VALUES["YOURDATA"]),
         ]
 
@@ -106,10 +102,8 @@ class TestIACopy(unittest.TestCase):
             copy.INSIDE3D,
             copy.PRETRAINING,
             copy.FEEDBACK,
-            copy.MAKEDATA,
             copy.YOURDATA,
             copy.STORAGE,
-            copy.PASSIVE,
             copy.NAV,
             copy.MACHINE_STRIP,
         ]

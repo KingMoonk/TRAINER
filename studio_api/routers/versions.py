@@ -129,6 +129,32 @@ def run_speed(number: int, request: Request, services=Depends(get_services)):
     return _job(request, "versions.run_speed", lambda stop: services.run_speed(number))
 
 
+class ContinueBody(BaseModel):
+    kind: Literal["same", "new_data", "grow"] = Field(description="same: more steps on the same data, with the optimizer, sampler and random "
+                                                                  "state it had; new_data: more steps on other text, same weights and step; "
+                                                                  "grow: a bigger design started from these weights")
+    steps: int = Field(ge=1, le=10_000_000, description="steps to add (same, new_data), or to train the grown design for (grow)")
+    dataset_ids: list[str] = Field([], description="the text to continue on (new_data; grow, default the run's own)")
+    width: int | None = Field(None, ge=8, le=8192, description="grow: the design's width (with layers), when no spec is given")
+    layers: int | None = Field(None, ge=1, le=96)
+    spec: dict | None = Field(None, description="grow: the bigger design itself")
+    rows: int = Field(16, ge=1, le=256, description="grow: rows per step")
+    hold: float = Field(0.05, ge=0.0, lt=0.5, description="grow: fraction of the text held back")
+
+
+@router.post("/{number}/continue", response_model=JobOut, status_code=202)
+def continue_version(number: int, body: ContinueBody, request: Request, services=Depends(get_services)):
+    """Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the
+    queued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a
+    design its weights cannot go into) fails the job with a sentence."""
+    _known(services, number)
+    if body.kind == "new_data" and not body.dataset_ids:
+        raise HTTPException(422, "Choose the text to continue on.")
+    if body.kind == "grow" and not (body.spec or (body.width and body.layers)):
+        raise HTTPException(422, "Say the bigger design: a spec, or a width and layers.")
+    return _job(request, "versions.continue", lambda stop: services.continue_run(number, **body.model_dump()))
+
+
 @router.get("/published", response_model=list[PublishedVersion])
 def published_versions(services=Depends(get_services)):
     """The versions in the version store, newest first. 409 with a sentence on what to set up when no store is configured, or on what

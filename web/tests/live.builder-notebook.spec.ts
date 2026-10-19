@@ -22,6 +22,7 @@ async function seed(page: Page, request: APIRequestContext, more = 1) {
 test("the notebook lists each change with its guess and updates its rows in place", async ({ page, request }) => {
   const { base } = await seed(page, request);
   await page.goto("/builder/");
+  await page.locator("summary").filter({ hasText: "Lab notebook · one line per version" }).click();
   const first = page.getByTestId(`notebook-${base}`);
   await expect(first).toContainText(`Version ${base} · Builder notebook fixture`);
   await first.evaluate((element) => element.setAttribute("data-original-row", "yes"));
@@ -49,6 +50,7 @@ test("a skipped guess is recorded as no guess in the notebook", async ({ page, r
   await page.getByTestId("save").click();
   const saved = savedNumber(page);
   await page.getByTestId("guess-skip").click();
+  await page.locator("summary").filter({ hasText: "Lab notebook · one line per version" }).click();
   const row = page.getByTestId(`notebook-${await saved}`);
   await expect(row).toBeVisible();
   await expect(row.getByTestId("notebook-guess")).toHaveText("no guess"); // the Tk page's line for a version saved without one
@@ -59,8 +61,10 @@ test("clicking a part explains it on the example sentence", async ({ page, reque
   await seed(page, request);
   await page.goto("/builder/");
   const panel = page.getByTestId("explain");
+  await expect(panel).not.toBeVisible();
   await expect(panel).toContainText("Click any part of the model");
   await page.getByTestId("explain-position").click();
+  await expect(panel).toBeVisible();
   await expect(panel.getByTestId("explain-title")).toHaveText("Position");
   await expect(panel.getByTestId("explain-example")).toContainText("pieces are read at once");
   await expect(page.getByTestId("explain-position")).toHaveAttribute("aria-pressed", "true");
@@ -74,6 +78,7 @@ test("clicking a part explains it on the example sentence", async ({ page, reque
 test("a starting question sets up one change and goes with the version", async ({ page, request }) => {
   const { blocks } = await seed(page, request, 0);
   await page.goto("/builder/");
+  await page.locator("summary").filter({ hasText: "Experiments & diagnostics" }).click();
   await page.getByTestId("try-depth").click();
   await expect(page.getByTestId("block-count")).toHaveText(String(blocks + 1));
   await expect(page.getByTestId("experiment-asking")).toContainText("Is depth or width better?");

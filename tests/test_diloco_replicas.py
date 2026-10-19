@@ -24,6 +24,11 @@ class Selection(unittest.TestCase):
         self.assertEqual(studio_diloco.replica_nodes(["a"], 2), ["a"])
         self.assertEqual(studio_diloco.replica_nodes(["a", "b"], 0), [])
 
+    def test_a_preferred_member_is_a_replica_ahead_of_its_rank(self):
+        self.assertEqual(studio_diloco.replica_nodes(["a", "b", "c", "d"], 2, ("d",)), ["d", "a"])
+        self.assertEqual(studio_diloco.replica_nodes(["a", "b"], 1, ("c",)), ["a"])  # not a member: nothing to put first
+        self.assertEqual(studio_diloco.replica_nodes(["a", "b"], 0, ("b",)), [])
+
     def flags(self, coordinator, nodes, number):
         views = {node: coordinator.round_view(number, node) for node in nodes}
         return {node: (view["rank"], view["replica"]) for node, view in views.items() if view["state"] == "open"}

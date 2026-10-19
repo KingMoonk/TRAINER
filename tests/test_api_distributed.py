@@ -1,5 +1,6 @@
 """The Training tab's backend: a coordinator's snapshot and controls (studio_diloco), the invitations and the read model
 (studio_distributed), and the routes over FakeServices (studio_api.routers.distributed)."""
+import json
 import socket
 import tempfile
 import threading
@@ -205,6 +206,46 @@ class ReadModel(unittest.TestCase):
         self.assertEqual(view["history"][0]["bytes_up"], 2000)
         self.assertEqual((view["history"][0]["bytes_down"], view["history"][0]["val_loss"]), (4000, 3.5))
 
+    def test_the_view_marks_the_best_and_pivot_rounds_and_says_why_a_run_ended(self):
+        snap = self.snap(state="finished", round=4, rules={"best_round": 0, "best_loss": 3.5, "stop_rule": "patience", "stop_text": "No better loss for 3 rounds."})
+        snap["history"][0].update({"best": True, "pivot": "halve_lr"})
+        view = runs.view(self.run, self.coordinator(snap), None)
+        self.assertEqual((view["history"][0]["best"], view["history"][0]["pivot"]), (True, "halve_lr"))
+        self.assertEqual((view["best_round"], view["best_val_loss"], view["stop_rule"], view["stop_reason"]), (0, 3.5, "patience", "No better loss for 3 rounds."))
+        going = runs.view(self.run, self.coordinator(self.snap()), self.job)
+        self.assertEqual((going["best_round"], going["stop_reason"], going["history"][0]["best"], going["history"][0]["pivot"]), (None, "", False, ""))
+
+    def test_pause_and_restart_are_offered_only_where_they_work(self):
+        going = runs.view(self.run, self.coordinator(self.snap()), self.job)
+        self.assertEqual((going["can_pause"], going["can_resume"], going["can_restart"]), (True, False, False))
+        paused = runs.view(self.run, self.coordinator(self.snap(paused=True, phase="paused")), self.job)
+        self.assertEqual((paused["paused"], paused["can_pause"], paused["can_resume"], paused["phase"]), (True, False, True, "paused"))
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            self.run.folder = folder
+            ended = self.coordinator(self.snap(state="stopped", round=1))
+            self.assertFalse(runs.view(self.run, ended, None)["can_restart"])  # nothing saved yet
+            (Path(folder) / "last.npz").write_bytes(b"x")
+            self.assertEqual(runs.checkpoint_of(self.run), Path(folder) / "last.npz")
+            self.assertTrue(runs.view(self.run, ended, None)["can_restart"])
+            (Path(folder) / "best.npz").write_bytes(b"x")
+            self.assertEqual(runs.checkpoint_of(self.run), Path(folder) / "best.npz")  # the best is preferred
+            self.assertEqual(runs.restart_params(self.run)["restart_from"], str(Path(folder) / "best.npz"))
+            self.assertFalse(runs.view(self.run, self.coordinator(self.snap()), self.job)["can_restart"])  # not while it goes
+
+    def test_a_run_coordinated_elsewhere_after_a_handoff_cannot_be_restarted(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            self.run.folder = folder
+            (Path(folder) / "last.npz").write_bytes(b"x")
+            ended = types.SimpleNamespace(snapshot=lambda: self.snap(state="stopped", round=1), term=2)
+            self.assertFalse(runs.view(self.run, ended, None)["can_restart"])
+            with self.assertRaisesRegex(ValueError, "coordinated"):
+                runs.restart_params(self.run, 2)
+            self.assertTrue(runs.view(self.run, self.coordinator(self.snap(state="stopped", round=1)), None)["can_restart"])
+
+    def test_only_the_best_round_is_marked_best(self):
+        rows = runs.round_rows([{"round": n, "step": n, "contributed": [], "members": [], "dropped": []} for n in range(3)], 1)
+        self.assertEqual([r["best"] for r in rows], [False, True, False])
+
     def test_a_run_that_has_not_started_is_queued_or_starting_and_its_machines_are_invited(self):
         self.job.status = "waiting"
         view = runs.view(self.run, None, self.job)
@@ -226,6 +267,35 @@ class ReadModel(unittest.TestCase):
         runs.archive("run1", self.coordinator(snap))
         again = runs.view(self.run, None, None)
         self.assertEqual((again["state"], len(again["history"])), ("finished", 1))
+
+    def ended_rows(self, state, nodes, events=()):
+        snap = self.snap(state=state, round=4, nodes=nodes, events=list(events))
+        return {m["node"]: m for m in runs.view(self.run, self.coordinator(snap), None)["members"]}
+
+    def test_an_ended_run_keeps_why_a_machine_never_joined(self):
+        box = self.run.machines[1]
+        box.state, box.reason = "unplaced", runs.UNPLACED
+        rows = self.ended_rows("finished", {"mac": {"state": "training", "missed": 0, "sent": False, "note": ""}})
+        self.assertEqual((rows["mac"]["state"], rows["mac"]["note"]), ("finished", ""))
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"], rows["box"]["can_stop"]), ("never_joined", runs.UNPLACED, False))
+        self.assertEqual((rows["old"]["state"], rows["old"]["note"]), ("unreachable", "old did not answer within 2 seconds."))
+        self.assertEqual(self.ended_rows("stopped", {})["box"]["state"], "never_joined")
+
+    def test_an_invited_machine_that_was_never_heard_from_never_joined_when_the_run_ends(self):
+        rows = self.ended_rows("finished", {"mac": {"state": "training", "missed": 0, "sent": False, "note": ""}})
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"]), ("never_joined", runs.NEVER_JOINED))
+        self.assertEqual(rows["mac"]["state"], "finished")  # this computer's own member is never "never joined"
+        self.assertEqual(self.ended_rows("finished", {})["mac"]["state"], "finished")
+
+    def test_a_member_that_left_once_the_run_finished_reads_as_finished_but_one_that_left_earlier_still_left(self):
+        left = {"state": "left", "missed": 0, "sent": False, "note": "Left the run."}
+        events = [{"seq": 1, "kind": "left", "node": "box", "round": 1}, {"seq": 2, "kind": "finished", "node": "", "round": 3},
+                  {"seq": 3, "kind": "left", "node": "mac", "round": 4}]
+        rows = self.ended_rows("finished", {"mac": left, "box": left}, events)
+        self.assertEqual((rows["mac"]["state"], rows["mac"]["note"]), ("finished", ""))
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"]), ("left", "Left the run."))
+        stopped = self.ended_rows("stopped", {"mac": left, "box": left}, events)
+        self.assertEqual(stopped["mac"]["state"], "left")
 
     def test_stopping_a_run_that_waits_in_the_queue_ends_it(self):
         runs.stop_run(self.run, None, clients())
@@ -332,6 +402,91 @@ class Routes(unittest.TestCase):
         stopped_run = self.wait_state(run_id, "stopped")
         self.assertEqual((stopped_run["members"][0]["state"], stopped_run["saved_version"]), ("stopped", None))
 
+    def test_a_run_can_be_paused_and_resumed_and_says_so(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        before = self.client.get(f"/distributed/runs/{run_id}").json()
+        self.assertEqual((before["paused"], before["can_pause"], before["can_resume"], before["can_restart"]), (False, True, False, False))
+        paused = self.client.post(f"/distributed/runs/{run_id}/pause")
+        self.assertEqual(paused.status_code, 200, paused.text)
+        body = paused.json()
+        self.assertEqual((body["paused"], body["phase"], body["can_pause"], body["can_resume"], body["can_stop"]), (True, "paused", False, True, True))
+        self.assertIn("paused", [e["kind"] for e in body["events"]])
+        self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/pause").status_code, 200)  # a second pause changes nothing
+        held = self.client.get(f"/distributed/runs/{run_id}").json()["round"]
+        time.sleep(.2)
+        self.assertEqual(self.client.get(f"/distributed/runs/{run_id}").json()["round"], held)
+        resumed = self.client.post(f"/distributed/runs/{run_id}/resume").json()
+        self.assertEqual((resumed["paused"], resumed["can_pause"], resumed["can_resume"]), (False, True, False))
+        self.assertIn("resumed", [e["kind"] for e in resumed["events"]])
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+
+    def test_pausing_a_run_that_is_not_going_is_a_409_with_a_sentence(self):
+        self.assertEqual(self.client.post("/distributed/runs/nope/pause").status_code, 404)
+        self.assertEqual(self.client.post("/distributed/runs/nope/resume").status_code, 404)
+        self.services.pause()
+        queued = self.start().json()
+        self.assertEqual((queued["can_pause"], queued["can_resume"]), (False, False))
+        self.assertEqual(self.client.post(f"/distributed/runs/{queued['id']}/pause").json()["detail"], "The run is not going.")
+        self.client.post(f"/distributed/runs/{queued['id']}/stop")
+        run_id = self.start(rounds=2000).json()["id"]
+        self.services.resume()
+        self.wait_state(run_id, "running")
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        over = self.client.post(f"/distributed/runs/{run_id}/pause")
+        self.assertEqual((over.status_code, over.json()["detail"]), (409, "The run is over; there is nothing to pause."))
+        self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/resume").status_code, 409)
+
+    def test_a_finished_run_is_restarted_as_a_new_run_from_its_best_weights(self):
+        first = self.wait_state(self.start(outer_lr=.5).json()["id"], "finished")
+        self.assertEqual((first["can_restart"], first["best_round"], first["stop_reason"]), (True, 2, "All 3 rounds are done."))
+        self.assertEqual([r["best"] for r in first["history"]], [False, False, True])  # one best round, not every one
+        queued = []
+        enqueue = self.services.enqueue
+        self.services.enqueue = lambda job: (queued.append(job), enqueue(job))[1]
+        restarted = self.client.post(f"/distributed/runs/{first['id']}/restart")
+        self.assertEqual(restarted.status_code, 201, restarted.text)
+        fresh = restarted.json()
+        self.assertNotEqual(fresh["id"], first["id"])
+        self.assertEqual((fresh["rounds"], fresh["inner_steps"], fresh["version"]), (3, 2, 1))
+        self.assertEqual(fresh["label"], f"{first['label']}, restarted")
+        self.assertEqual([j.id for j in queued], [fresh["id"]])
+        params = queued[0].params
+        self.assertTrue(params["restart_from"].endswith("best.npz"), params["restart_from"])
+        self.assertEqual((params["rounds"], params["datasets"], params["outer_lr"]), (3, ["Your files"], .5))
+        original = runs.RUNS[first["id"]].params
+        carried = lambda p: json.loads(json.dumps({k: v for k, v in p.items() if k not in runs.NOT_RESTARTED}))
+        self.assertEqual(carried(original), carried(params))  # every setting carried
+        self.assertEqual(self.wait_state(fresh["id"], "finished")["round"], 3)
+        again = self.client.post(f"/distributed/runs/{first['id']}/restart")  # a run is restarted once
+        self.assertEqual(again.status_code, 409, again.text)
+        self.assertFalse(self.client.get(f"/distributed/runs/{first['id']}").json()["can_restart"])
+
+    def test_a_run_that_is_going_or_saved_nothing_cannot_be_restarted(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        going = self.client.post(f"/distributed/runs/{run_id}/restart")
+        self.assertEqual((going.status_code, going.json()["detail"]), (409, "The run is still going. Stop it first."))
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        self.assertEqual(self.client.post("/distributed/runs/nope/restart").status_code, 404)
+        self.services.pause()
+        queued = self.start().json()["id"]
+        self.client.post(f"/distributed/runs/{queued}/stop")
+        none = self.client.get(f"/distributed/runs/{queued}").json()
+        self.assertFalse(none["can_restart"])
+        refused = self.client.post(f"/distributed/runs/{queued}/restart")
+        self.assertEqual(refused.status_code, 409)
+        self.assertIn("saved no weights", refused.json()["detail"])
+
+    def test_a_run_this_computer_did_not_start_cannot_be_restarted(self):
+        run = runs.Run(id="adopted", label="x", version=1, started_at=1., settings={"rounds": 3}, owner="other",
+                       final={**{"state": "finished", "round": 3, "rounds": 3, "history": [], "settings": {"rounds": 3}}})
+        runs.RUNS[run.id] = run
+        self.assertFalse(self.client.get("/distributed/runs/adopted").json()["can_restart"])
+        refused = self.client.post("/distributed/runs/adopted/restart")
+        self.assertEqual(refused.status_code, 409)
+        self.assertIn("did not start this run", refused.json()["detail"])
+
     def test_a_run_waiting_in_the_queue_can_be_stopped_before_it_runs(self):
         self.services.pause()
         run_id = self.start().json()["id"]
@@ -407,6 +562,76 @@ class AllMachines(unittest.TestCase):
         self.services.save_version(default_spec(), "second")
         run = self.start(version=2, dataset_ids=["nope"]).json()
         self.assertEqual(run["version"], 1)
+
+
+class CoordinatorChoice(unittest.TestCase):
+    """Choosing which machine coordinates a run: validated at the start, kept on the job, and nothing changes without it."""
+
+    PEERS = {"box": studio_cluster.NodeInfo(address="box", hostname="box", version="1.0.0", device="cuda", device_name="RTX"),
+             "off": studio_cluster.offline("off", "off did not answer within 2 seconds."),
+             "new": studio_cluster.NodeInfo(address="new", hostname="newpc", version="2.0.0", device="cuda"),
+             "spare": studio_cluster.NodeInfo(address="spare", hostname="spare", version="1.0.0", device="mps")}
+
+    def setUp(self):
+        self.services = FakeServices(step_seconds=.005)
+        self.services.save_version(default_spec(), "first")
+        self.services.pause()
+        with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
+            self.client = self.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
+        self.addCleanup(runs.RUNS.clear)
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+        self.services.set_setting("nodes", list(self.PEERS))
+        self.enterContext(mock.patch("studio_api.routers.distributed.app_version", return_value="1.0.0"))
+        self.enterContext(mock.patch.object(studio_cluster, "survey", lambda state, own, *a, **k: [own, *(self.PEERS[x] for x in state["studioConfig"]["nodes"])]))
+
+    def start(self, **body):
+        return self.client.post("/distributed/runs", json={"dataset_ids": ["Your files"], "rounds": 3, "inner_steps": 2, **body})
+
+    def job(self, run):
+        return next(j for j in self.services.queue().up_next if j.id == run["id"])
+
+    def test_a_chosen_machine_that_is_invited_and_answers_is_kept_on_the_job_and_named_on_the_run(self):
+        started = self.start(machines=["box", "spare"], coordinator="box")
+        self.assertEqual(started.status_code, 201, started.text)
+        self.assertEqual(self.job(started.json()).params["coordinator"], "box")
+        self.assertEqual(started.json()["handoff"], "box")
+        self.assertEqual(self.client.get(f"/distributed/runs/{started.json()['id']}").json()["handoff"], "box")
+
+    def test_all_machines_lets_any_listed_machine_that_answers_coordinate(self):
+        started = self.start(all_machines=True, coordinator="spare")
+        self.assertEqual((started.status_code, started.json()["handoff"]), (201, "spare"))
+
+    def test_without_a_choice_this_computer_coordinates_as_before(self):
+        started = self.start(machines=["box"])
+        self.assertEqual(started.status_code, 201, started.text)
+        self.assertNotIn("coordinator", self.job(started.json()).params)
+        self.assertEqual(started.json()["handoff"], "")
+        self.assertEqual(self.start(machines=["box"], coordinator="").json()["handoff"], "")
+
+    def test_a_machine_that_is_not_invited_cannot_coordinate(self):
+        refused = self.start(machines=["box"], coordinator="spare")
+        self.assertEqual((refused.status_code, refused.json()["detail"]),
+                         (400, "spare cannot coordinate the run: it is not one of the machines chosen for it."))
+        self.assertEqual(self.start(machines=["box"], coordinator="ghost").status_code, 400)
+        self.assertEqual(self.services.queue().up_next, [])  # nothing was queued
+
+    def test_a_machine_that_does_not_answer_or_runs_another_version_cannot_coordinate(self):
+        down = self.start(machines=["box", "off"], coordinator="off")
+        self.assertEqual((down.status_code, down.json()["detail"]), (409, "off cannot coordinate the run: off did not answer within 2 seconds."))
+        old = self.start(machines=["box", "new"], coordinator="new")
+        self.assertEqual((old.status_code, old.json()["detail"]),
+                         (409, "newpc cannot coordinate the run: it runs app version 2.0.0; this computer runs 1.0.0."))
+        every = self.start(all_machines=True, coordinator="off")
+        self.assertEqual(every.status_code, 409)  # also when the rest of the machines would have been enough
+        self.assertEqual(self.services.queue().up_next, [])
+
+    def test_the_run_remembers_the_node_the_chosen_machine_joins_under(self):
+        job = Job(id="run9", created_at=1., kind="pretrain_distributed", label="x", params={
+            "machines": [MACHINES[0], {"node": "peer", "address": "box"}], "coordinator": "box", "owner": "me"})
+        self.addCleanup(runs.RUNS.clear)
+        self.assertEqual(runs.run_of(job).handoff, "peer")
+        plain = Job(id="run8", created_at=1., kind="pretrain_distributed", label="x", params={"machines": [MACHINES[0]], "owner": "me"})
+        self.assertEqual(runs.run_of(plain).handoff, "")
 
 
 class Invited(unittest.TestCase):

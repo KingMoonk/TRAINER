@@ -80,6 +80,10 @@ class RoundView(Versioned):
     shards: list[int] | None = None
     members: int | None = None
     replica: bool = False  # this member is one of the run's replicas: it also takes GET /state each round and GET /validation once
+    lr_scale: float = 1.  # the factor the run's pivots (halve_lr) put on the learning rate from this round on
+    steps: int = 0  # the inner steps dealt to this member for the round (0: the run's H, as an older coordinator says)
+    paused: bool = False  # the owner paused the run: a pending round stays pending until it is resumed
+    polishing: bool = False  # the teacher is polishing the weights: a pending round stays pending until it is done
 
 
 class Accepted(Versioned):
@@ -151,6 +155,12 @@ def state(round: int, found: "studio_diloco.Coordinator" = Depends(member_call))
 def validation(found: "studio_diloco.Coordinator" = Depends(member_call)):
     """The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them."""
     return binary(found, found.validation_bytes())
+
+
+@router.get("/weights", response_class=Response, responses=BINARY)
+def weights(found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left."""
+    return binary(found, found.final_bytes())
 
 
 @router.post("/rounds/{round}/delta", status_code=202, response_model=Accepted,

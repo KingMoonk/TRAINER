@@ -246,8 +246,24 @@ class OwnerCluster(unittest.TestCase):
         rows = {m.node: m for m in runs.run_of(job).machines}
         self.assertEqual((rows["b"].state, rows["c"].state), ("invited", "unplaced"))
         view = runs.member_rows(runs.run_of(job), None, "")
-        self.assertEqual([(r["node"], r["state"], r["can_stop"]) for r in view], [("laptop", "invited", False), ("b", "invited", True), ("c", "invited", False)])
+        self.assertEqual([(r["node"], r["state"], r["can_stop"]) for r in view], [("laptop", "invited", False), ("b", "invited", True), ("c", "waiting", False)])
         self.assertEqual(view[2]["note"], runs.UNPLACED)
+
+    def test_the_run_is_named_for_the_machines_that_took_a_slot(self):
+        job = self.job("b", "c", max_members=2, version=3)
+        job.label = "Version 3 across 3 machines"
+        self.poll()
+        self.runner.cluster.place(job)
+        runs.invite(job, self.net.client_for)
+        self.assertEqual((runs.run_of(job).label, job.label), ("Version 3 across 2 machines",) * 2)
+
+    def test_the_name_is_kept_when_every_chosen_machine_took_a_slot(self):
+        job = self.job("b", "c", max_members=3, version=3)
+        job.label = "Version 3 across 3 machines"
+        self.poll()
+        self.runner.cluster.place(job)
+        runs.invite(job, self.net.client_for)
+        self.assertEqual(runs.run_of(job).label, "Version 3 across 3 machines")
 
     def test_a_lapsed_member_slot_is_freed_and_a_newly_free_node_is_invited(self):
         job = self.job("b", "c", "d", min_members=2, max_members=3)
