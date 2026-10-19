@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -186,9 +187,11 @@ def strays(folder):
         yield spec, pid
 
 
-def reap(folder, *, command_line=None, alive=None, terminate=None):
+def reap(folder, *, command_line=None, alive=None, terminate=None, grace=0., sleep=time.sleep):
     """Stop the workers an app that crashed left running, then forget their specs. Only a process whose command line names its
-    own spec is stopped: after a reboot the pid may be anyone's. Returns the pids it stopped."""
+    own spec is stopped: after a reboot the pid may be anyone's. A worker whose app has gone is already saving and leaving, so it gets
+    up to `grace` seconds to exit by itself (its last checkpoint is the one the job continues from) before it is stopped.
+    Returns the pids it stopped."""
     import studio_passive_watch as procs
     command_line, alive, terminate = command_line or procs.command_line, alive or procs.alive, terminate or procs.terminate
     stopped = []
@@ -196,8 +199,13 @@ def reap(folder, *, command_line=None, alive=None, terminate=None):
         if pid and alive(pid):
             line = command_line(pid) or ""
             if "studio_worker" in line and str(spec) in line:
-                terminate(pid)
-                stopped.append(pid)
+                waited = 0.
+                while waited < grace and alive(pid):
+                    sleep(.25)
+                    waited += .25
+                if alive(pid):
+                    terminate(pid)
+                    stopped.append(pid)
         spec.unlink(missing_ok=True)
     return stopped
 

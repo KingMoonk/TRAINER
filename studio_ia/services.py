@@ -368,6 +368,9 @@ class Services:
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
 
+    def resume_queue_at_start(self):
+        """Carry on the queue the last run of the app left going (no-op where there is no real queue)."""
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
@@ -2131,6 +2134,12 @@ class WorkspaceServices(Services):
         """Start the runner when jobs are waiting from an earlier session; otherwise the first enqueue starts it."""
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
+
+    def resume_queue_at_start(self):
+        """Carry on the queue a restart cut short: jobs waiting from the last session run again with no Start pressed (a job that
+        was running continues from its own checkpoint, studio_jobs.continue_here). A pause or stop the person made is saved in
+        queue.json and still holds: the runner starts but runs nothing while paused."""
+        self.start_queue()
 
     @timed("services.refresh_downloads")
     def refresh_downloads(self):
