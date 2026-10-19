@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, holdButtons, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { member as build, round, run } from "./test-data";
@@ -126,5 +126,25 @@ describe("the charts", () => {
     const [up, down] = trafficSeries([round(0)]);
     expect(up.points).toEqual([{ x: 1, y: 1 }]);
     expect(down.points).toEqual([{ x: 1, y: 2 }]);
+  });
+
+  test("the error curve marks the best round and each pivot round, counting rounds from one", () => {
+    const r = run({ best_round: 1, history: [round(0), round(1), round(2, { pivot: "halve_lr" }), round(3, { pivot: "next_dataset" }), round(4, { pivot: "something_new" })] });
+    expect(errorMarks(r).map((m) => [m.id, m.x, m.label])).toEqual([
+      ["pivot-2", 3, "Learning rate halved"], ["pivot-3", 4, "Next text"], ["pivot-4", 5, "Changed course"], ["best", 2, "Best"],
+    ]);
+    expect(errorMarks(run({ history: [round(0)] }))).toEqual([]);
+  });
+
+  test("Pause shows while the run can be paused, Resume while it is paused, Restart once it ended", () => {
+    expect(holdButtons(run({ can_pause: true }))).toEqual({ pause: true, resume: false, restart: false });
+    expect(holdButtons(run({ can_pause: true, can_resume: true, paused: true }))).toEqual({ pause: false, resume: true, restart: false });
+    expect(holdButtons(run({ state: "stopped", can_restart: true }))).toEqual({ pause: false, resume: false, restart: true });
+    expect(holdButtons(run())).toEqual({ pause: false, resume: false, restart: false });
+  });
+
+  test("the stop reason is a sentence, or nothing while the run goes", () => {
+    expect(stopReasonText(run({ stop_reason: "The loss stopped improving." }))).toBe("Stopped because: The loss stopped improving.");
+    expect(stopReasonText(run())).toBe("");
   });
 });

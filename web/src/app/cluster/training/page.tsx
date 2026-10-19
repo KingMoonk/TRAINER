@@ -39,6 +39,7 @@ export default function TrainingPage() {
             stoppingNode={stopMember.isPending && stopMember.variables.id === live.id ? stopMember.variables.node : ""}
             onStopRun={() => stopRun.mutate(live.id)}
             onStopMember={(node) => stopMember.mutate({ id: live.id, node })}
+            onRestarted={(made) => setChosen(made.id)}
           />
         ) : (
           <p className="text-sm text-muted-foreground">{T.noRuns}</p>

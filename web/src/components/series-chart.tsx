@@ -1,6 +1,6 @@
 "use client";
 
-import { CartesianGrid, Line, LineChart, ReferenceArea, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
 import {
   ChartContainer,
   ChartLegend,
@@ -22,6 +22,8 @@ export type Series = {
   /** Mark each point with a dot (the held-out loss, which is measured now and then, not every step). */
   dots?: boolean;
 };
+/** A vertical line at one x with a short label: the best round, or a round where the run changed course. */
+export type Mark = { id: string; x: number; label: string; color?: string; dash?: string };
 export type Band = { id: string; label: string; from: number; to: number; color?: string };
 
 const COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
@@ -36,6 +38,7 @@ export function SeriesChart({
   yLabel,
   rightLabel,
   bands = [],
+  marks = [],
   className,
 }: {
   series: Series[];
@@ -43,6 +46,7 @@ export function SeriesChart({
   yLabel: string;
   rightLabel?: string;
   bands?: Band[];
+  marks?: Mark[];
   className?: string;
 }) {
   const config: ChartConfig = Object.fromEntries(
@@ -65,6 +69,9 @@ export function SeriesChart({
         {bands.map((band, index) => <ReferenceArea key={band.id} yAxisId="left" x1={band.from} x2={band.to} ifOverflow="hidden"
           className="schedule-band" data-phase={band.label} fill={band.color ?? COLORS[index % COLORS.length]} fillOpacity={0.08} strokeOpacity={0}
           label={{ value: band.label, position: "insideTop", fontSize: 10, fill: "var(--muted-foreground)" }} />)}
+        {marks.map((mark) => <ReferenceLine key={mark.id} yAxisId="left" x={mark.x} ifOverflow="hidden" className="series-mark" data-mark={mark.id}
+          stroke={mark.color ?? "var(--muted-foreground)"} strokeDasharray={mark.dash}
+          label={{ value: mark.label, position: "insideTopRight", fontSize: 10, fill: "var(--muted-foreground)" }} />)}
         <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <>
           <span className="text-muted-foreground">{config[String(name)]?.label ?? String(name)}</span>
           <span className="ml-auto font-mono font-medium tabular-nums">{typeof value === "number"

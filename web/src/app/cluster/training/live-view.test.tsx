@@ -132,12 +132,12 @@ describe("Training tab: the live view", () => {
   test("the event log lists the newest first, and the charts are drawn", async () => {
     server([midRound()]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
-    const log = within(await screen.findByRole("region", { name: "Events" }));
+    const log = within(await screen.findByRole("region", { name: "Journal" }));
     const items = log.getAllByRole("listitem");
     expect(items.map((li) => li.getAttribute("data-kind"))).toEqual(["stale", "checkpoint", "outer_step", "joined"]);
     expect(items[0]).toHaveTextContent("gpu-box sent a change for an old round; refused.");
     expect(items[0]).toHaveTextContent("2 s ago");
-    for (const name of ["Loss over the rounds", "Loss inside the open round", "Tokens per second", "Bytes moved per round"]) {
+    for (const name of ["Error curve", "Loss inside the open round", "Tokens per second", "Bytes moved per round"]) {
       expect(screen.getByRole("region", { name })).toBeInTheDocument();
     }
   });

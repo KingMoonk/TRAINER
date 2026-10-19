@@ -10,7 +10,9 @@ import { SeriesChart, type Series } from "@/components/series-chart";
 import { TRAINING as T } from "@/lib/copy/training";
 import { EventLog } from "@/app/runs/view/event-log";
 import { liveLossSeries, tokensSeries } from "@/app/runs/view/live";
-import { bytesText, lossSeries, trafficSeries, type Run } from "./logic";
+import { ErrorCurve } from "./error-curve";
+import { bytesText, stopReasonText, trafficSeries, type Run } from "./logic";
+import { RunControls } from "./run-controls";
 import { MemberAlerts } from "./member-alerts";
 import { RoundBanner } from "@/app/runs/view/round-banner";
 import { Timeline } from "@/app/runs/view/timeline";
@@ -32,7 +34,7 @@ function Chart({ title, lead, series, xLabel, yLabel, empty }: { title: string; 
 function Charts({ run }: { run: Run }) {
   return (
     <div className="grid gap-6 lg:grid-cols-2">
-      <Chart title={T.progress} lead={T.progressLead} series={lossSeries(run.history)} xLabel={T.roundAxis} yLabel={T.lossAxis} empty={T.noRounds} />
+      <ErrorCurve run={run} />
       <Chart title={T.liveLossTitle} lead={T.liveLossLead} series={liveLossSeries(run)} xLabel={T.stepAxis} yLabel={T.lossAxis} empty={T.noSamples} />
       <Chart title={T.tokensTitle} lead={T.tokensLead} series={tokensSeries(run)} xLabel={T.stepAxis} yLabel={T.tokensAxis} empty={T.noSamples} />
       <Chart title={T.traffic} lead={T.trafficLead} series={run.history.length === 0 ? [] : trafficSeries(run.history)} xLabel={T.roundAxis} yLabel="MB" empty={T.noRounds} />
@@ -81,8 +83,8 @@ function RoundsTable({ run }: { run: Run }) {
  * The live view of one run: its state and settings, the round and its phase, the machines with their edges to the coordinator, the round
  * timeline, the charts, the event log, and the table of finished rounds.
  */
-export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMember }: {
-  run: Run; stoppingRun: boolean; stoppingNode: string; onStopRun: () => void; onStopMember: (node: string) => void;
+export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMember, onRestarted }: {
+  run: Run; stoppingRun: boolean; stoppingNode: string; onStopRun: () => void; onStopMember: (node: string) => void; onRestarted: (run: Run) => void;
 }) {
   return (
     <Card data-testid={`run-${run.id}`} aria-label={T.liveRunLabel.replace("{label}", run.label)}>
@@ -98,6 +100,9 @@ export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMemb
             {T.settingsLine.replace("{steps}", run.inner_steps.toLocaleString("en-US")).replace("{lr}", String(run.outer_lr)).replace("{momentum}", String(run.outer_momentum))}
           </span>
         </CardDescription>
+        {run.paused && <p className="text-sm text-warning" data-testid={`run-paused-${run.id}`}>{T.pausedNote}</p>}
+        {stopReasonText(run) && <p className="text-sm text-muted-foreground" data-testid={`run-stop-reason-${run.id}`}>{stopReasonText(run)}</p>}
+        <RunControls run={run} onRestarted={onRestarted} />
         {run.note && <p className="text-sm text-muted-foreground" data-testid={`run-note-${run.id}`}>{run.note}</p>}
         {run.saved_version != null && (
           <p className="flex flex-wrap items-center gap-x-2 text-sm" data-testid={`run-saved-${run.id}`}>
