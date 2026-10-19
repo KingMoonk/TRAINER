@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 
 import studio_core
-import studio_passive_watch as watch
+import studio_platform as watch
 from studio_collect import config as cfg
 from studio_collect.config import collect_dir
 from studio_collect.dedup import Seen
@@ -30,6 +30,23 @@ WAIT_POLL = 10.0
 IDLE_RECHECK = 3600.0
 REPLAN = 24 * 3600.0
 ADAPTERS = {"hub": "studio_collect.hub", "stackexchange": "studio_collect.stackexchange", "github": "studio_collect.github", "web": "studio_collect.web"}
+
+
+def take_lock(path):
+    """An exclusive OS lock on `path`, held while the returned file stays open; None when another process holds it."""
+    handle = open(path, "a+b")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
 
 
 def plan_key(config):
@@ -102,8 +119,7 @@ def run(root, *, transport=None, probes=None, sleep=time.sleep, clock=time.time,
     collect_dir(root).mkdir(parents=True, exist_ok=True)
     handle = None
     if lock:
-        import studio_passive
-        handle = studio_passive.take_lock(collect_dir(root) / "service.lock")
+        handle = take_lock(collect_dir(root) / "service.lock")
         if handle is None:
             return "another"          # a collector already runs for this workspace
     state, journal = State(root), Journal(root)
