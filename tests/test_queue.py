@@ -397,6 +397,30 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(wait(lambda: main.status == "stopped"))
         self.assertIn("cooldown of " + main.id, self.fake.ran)
 
+    def test_yield_running_runs_the_waiting_job_first_and_puts_the_running_one_back_in_the_queue(self):
+        r = self.runner()
+        main = r.enqueue(self.job("long", "pretrain"))
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.steps > 2))
+        urgent = r.enqueue(self.job("urgent"))
+        self.assertFalse(r.yield_running("nope"))
+        self.assertTrue(r.yield_running(urgent.id))
+        self.assertTrue(wait(lambda: self.fake.ran[:2] == ["long", "urgent"]))
+        self.assertTrue(wait(lambda: urgent.status == "done"))
+        self.assertNotEqual(main.status, "stopped")  # it was stepped aside, not stopped: it runs again from its place
+        self.assertTrue(wait(lambda: self.fake.ran == ["long", "urgent", "long"]))
+        self.fake.gate.set()
+        self.assertTrue(wait(lambda: main.status == "done"))
+
+    def test_yield_running_without_a_job_holds_the_running_one_and_does_nothing_when_idle(self):
+        r = self.runner()
+        self.assertFalse(r.yield_running())
+        main = r.enqueue(self.job("long", "pretrain"))
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.steps > 2))
+        self.assertTrue(r.yield_running())
+        self.assertTrue(wait(lambda: main.status == "held"))
+
     def test_user_text_pretrain_appends_restore_answers(self):
         r = self.runner()
         r.enqueue(Job("pretrain", "night", params={"user_text": True, "previous_best": "best.npz"}))
