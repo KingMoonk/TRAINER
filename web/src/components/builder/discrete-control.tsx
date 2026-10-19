@@ -26,13 +26,13 @@ export function DiscreteControl({ label, help, options, value, saved, disabled, 
     if (!unavailable && Number.isInteger(index) && index >= 0 && index < options.length) onChange(index);
   };
   return (
-    <div className="min-w-0 rounded-lg border bg-background/60 p-3" data-testid={testId}>
+    <div className="min-w-0 py-1" data-testid={testId}>
       <div className="flex items-baseline justify-between gap-3">
         <label htmlFor={id} className="text-sm font-medium">{label}</label>
         <span className="text-lg font-semibold tabular-nums" data-testid={`${testId}-value`}>{valid ? options[value] : "—"}</span>
       </div>
       <p id={`${id}-help`} className="mt-1 text-xs leading-relaxed text-muted-foreground">{help}</p>
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-2 flex items-center gap-2">
         <Button type="button" variant="outline" size="icon" className="size-11" aria-label={fill(BUILDER.control_decrease, { name: label })} disabled={unavailable || value === 0} onClick={() => choose(value - 1)}>−</Button>
         <input
           id={id}
@@ -49,7 +49,7 @@ export function DiscreteControl({ label, help, options, value, saved, disabled, 
         />
         <Button type="button" variant="outline" size="icon" className="size-11" aria-label={fill(BUILDER.control_increase, { name: label })} disabled={unavailable || value === options.length - 1} onClick={() => choose(value + 1)}>+</Button>
       </div>
-      <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={fill(BUILDER.control_choices, { name: label })}>
+      <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label={fill(BUILDER.control_choices, { name: label })}>
         {options.map((option, index) => (
           <Button key={index} type="button" variant={index === value ? "secondary" : "ghost"} size="sm" className={cn("min-h-9 min-w-9 tabular-nums", changed && index === saved && "border-part-own")} aria-pressed={index === value} disabled={disabled || !valid} onClick={() => choose(index)}>{option}</Button>
         ))}

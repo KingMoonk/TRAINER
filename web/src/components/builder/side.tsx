@@ -148,7 +148,7 @@ type ControlsProps = {
 export function Controls({ registry, cur, draft, knobs, onKnob }: ControlsProps) {
   return (
     <Panel title={BUILDER.model_controls} testId="controls">
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
         <div className="min-w-0">
           <DiscreteControl label={BUILDER.look_back_heads} help={BUILDER.heads_help} options={registry.heads} value={registry.heads.indexOf(draft.H)} saved={registry.heads.indexOf(cur.H)} onChange={(i) => onKnob("H", registry.heads[i])} disabled={!knobs?.H} testId="heads" />
           {knobs && !knobs.H && <p className="mt-2 text-xs text-muted-foreground">{BUILDER.no_heads}</p>}
@@ -341,6 +341,7 @@ type TrayProps = {
 
 export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, onSave, onSplit, onDiscard }: TrayProps) {
   const nv = nextVersionName(base);
+  const unchanged = base !== null && !cannotWrite && chips.length === 0;
   const saveButton = (
     <Button size="sm" onClick={onSave} disabled={!canSave || saving} id="builder-save" data-testid="save">
       {fill(BUILDER.save_as, { version: nv })}
@@ -393,8 +394,8 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
     text = fill(BUILDER.no_changes_text, { version: versionName(base) });
   }
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-4 shadow-sm" data-testid="tray" aria-live="polite">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className={cn("flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4", unchanged ? "py-2" : "py-3")} data-testid="tray" aria-live="polite">
+      <div className={cn("flex min-w-0 flex-1 gap-1", unchanged ? "flex-wrap items-baseline gap-x-3" : "flex-col")}>
         <p className={cn("text-sm font-medium", (cannotWrite || chips.length > 0) && AMBER)}>{kicker}</p>
         <p className="text-xs text-muted-foreground">{text}</p>
         {chips.length > 1 && base !== null && !cannotWrite && (

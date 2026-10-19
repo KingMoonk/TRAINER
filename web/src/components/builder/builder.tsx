@@ -377,7 +377,6 @@ export function Builder() {
         <Loading />
       ) : (
         <>
-          <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
           {asking ? (
             <GuessPanel
               steps={guessSteps}
@@ -409,22 +408,27 @@ export function Builder() {
               {fill(BUILDER.text_sets_failed, { reason: detailOf(textSetsQ.error) })}
             </p>
           )}
-          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <Tower
-              registry={registry}
-              cur={cur}
-              draft={draft}
-              curTower={curTowerQ.data}
-              draftTower={draftTowerQ.data}
-              writeBase={writeBase}
-              was={was}
-              onPick={pick}
-              onResize={resize}
-              onWords={setWords}
-              explaining={explaining}
-              onExplain={(part, block) => setExplaining({ part, block })}
-            />
-            <div className="flex flex-col gap-3">
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="min-w-0 lg:col-start-2 lg:row-start-1">
+              <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
+            </div>
+            <div className="min-w-0 lg:col-start-1 lg:row-start-1 lg:row-span-2">
+              <Tower
+                registry={registry}
+                cur={cur}
+                draft={draft}
+                curTower={curTowerQ.data}
+                draftTower={draftTowerQ.data}
+                writeBase={writeBase}
+                was={was}
+                onPick={pick}
+                onResize={resize}
+                onWords={setWords}
+                explaining={explaining}
+                onExplain={(part, block) => setExplaining({ part, block })}
+              />
+            </div>
+            <div className="flex min-w-0 flex-col gap-3 lg:col-start-2 lg:row-start-2">
               <Costs now={sizesNowQ.data} next={draftSpec ? sizesNewQ.data : sizesNowQ.data} warm={warm} lines={lines} />
               <BuilderDisclosure title={BUILDER.start_from} hint={BUILDER.design_start_hint}>
                 <StartFrom
