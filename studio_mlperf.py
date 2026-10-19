@@ -300,8 +300,8 @@ class Energy:
 
 
 def _peak_memory(kind):
-    if kind == "cuda":
-        import torch
+    import torch
+    if kind == "cuda" and torch.cuda.is_available():
         return int(torch.cuda.max_memory_allocated())
     return None  # CPU and Metal report none without a platform library the app does not require
 
@@ -395,7 +395,7 @@ def run_benchmark(task_id, device="cpu", attempts=None, runner=train_runner, clo
     limit = limit or peak(info, task.precision, measure)
     flops = flops_per_token(task)
     energy = Energy(info.get("kind"))
-    if info.get("kind") == "cuda":
+    if info.get("kind") == "cuda" and __import__("torch").cuda.is_available():
         import torch
         torch.cuda.reset_peak_memory_stats()
     done = []
