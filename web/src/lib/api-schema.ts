@@ -4846,6 +4846,13 @@ export interface components {
             hostname: string;
             /** Memory Bytes */
             memory_bytes: number;
+            /**
+             * Speeds
+             * @default {}
+             */
+            speeds: {
+                [key: string]: components["schemas"]["Speed"];
+            };
             /** Version */
             version: string;
         };
@@ -5265,10 +5272,20 @@ export interface components {
         };
         /** PresetCost */
         PresetCost: {
+            /**
+             * Device
+             * @default cpu
+             */
+            device: string;
             /** Fits */
             fits: boolean | null;
             /** Lines */
             lines: string[];
+            /**
+             * Measured
+             * @default false
+             */
+            measured: boolean;
             /** Need */
             need: number;
             /** Params */
@@ -6738,6 +6755,19 @@ export interface components {
             spec: {
                 [key: string]: unknown;
             };
+        };
+        /** Speed */
+        Speed: {
+            /** Age S */
+            age_s: number;
+            /** Device */
+            device: string;
+            /** Seconds */
+            seconds: {
+                [key: string]: number;
+            };
+            /** Tokens */
+            tokens: number;
         };
         /** SplitBody */
         SplitBody: {

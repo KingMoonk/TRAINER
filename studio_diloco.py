@@ -623,7 +623,7 @@ class Coordinator:
         directory.mkdir(parents=True, exist_ok=True)
         val = install_shard(directory / "windows", "val", validation, vocabulary)
         cfg = info["config"]
-        model = sm.ScratchTransformer(cfg, vocabulary)
+        model = sm.ScratchTransformer(cfg, vocabulary, probe=True)
         state = {"term": term, "momentum": momentum, "round": int(record["round"]), "generation": int(record["generation"]),
                  "history": record["history"], "step_time": record.get("step_time"), "state_file": None, "rules": record.get("rules"), "paused": record.get("paused"),
                  "lessons": record.get("lessons")}
