@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { checkSource } from "./theme-guard.mjs";
 
@@ -48,4 +50,10 @@ test("chart.tsx is exempt only for recharts' own selector colours", () => {
   expect(bad(`const a = ${selectors};`, "components/ui/chart.tsx")).toEqual([]);
   expect(bad(`const a = ${selectors};`, "app/other.tsx").length).toBe(1);
   expect(bad(`const a = "text-amber-500";`, "components/ui/chart.tsx").length).toBe(1);
+});
+
+test("check-theme.mjs walks src/ to completion (exits 0 on the real tree)", () => {
+  // Runs the script for real: on Windows a bad src path made it throw before checking anything.
+  const script = resolve("scripts/check-theme.mjs"); // pnpm test runs from web/
+  expect(execFileSync(process.execPath, [script], { encoding: "utf8" })).toContain("theme guard: no raw palette classes");
 });

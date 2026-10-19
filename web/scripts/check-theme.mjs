@@ -4,9 +4,11 @@
 // See the top of globals.css. The rules are in theme-guard.mjs and tested by theme-guard.test.mjs.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkSource } from "./theme-guard.mjs";
 
-const SRC = new URL("../src/", import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: the pathname is "/C:/..." on Windows, which join() would turn into "C:\C:\...".
+const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 const THEME = "app/globals.css";
 // Skipped whole, with the reason. (The one narrow exemption, for chart.tsx, is in theme-guard.mjs.)
 const SKIP = new Map([["lib/api-schema.ts", "generated from openapi.json"]]);
