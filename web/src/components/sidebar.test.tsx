@@ -61,7 +61,7 @@ describe("Sidebar", () => {
     const group = screen.getByRole("group", { name: "Pages in this area" });
     expect(within(group).getByRole("button", { name: "Look inside" })).toHaveAttribute("aria-expanded", "true");
     expect(within(group).getByRole("link", { name: route.title })).toHaveAttribute("aria-current", "location");
-    expect(screen.getByRole("link", { name: "Models", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Models" })).toHaveAttribute("aria-current", "page");
   });
 
   test("reveals a diagnostic route after navigation even when the group was collapsed", async () => {

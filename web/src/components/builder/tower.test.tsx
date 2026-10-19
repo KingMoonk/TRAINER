@@ -57,14 +57,14 @@ describe("Tower layer presentation", () => {
     expect(screen.getByText(/including custom choices/)).toBeInTheDocument();
     await user.click(screen.getByTestId("picker-mixer"));
     expect(await screen.findByRole("option", { name: /Needs more heads/ })).toHaveAttribute("aria-disabled", "true");
-    await user.click(screen.getByRole("option", { name: "Linear", exact: true }));
+    await user.click(screen.getByRole("option", { name: "Linear" }));
     expect(onPick).toHaveBeenLastCalledWith("mixer", "linear", null);
     await user.click(screen.getByRole("radio", { name: fill(BUILDER.scope_one, { n: 2 }) }));
     expect(screen.getByText("Editing scope · Layer 2 only")).toBeInTheDocument();
     await user.click(screen.getByTestId("picker-mixer-1"));
-    await user.click(await screen.findByRole("option", { name: "Linear", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Linear" }));
     expect(onPick).toHaveBeenLastCalledWith("mixer", "linear", 1);
-    await user.click(screen.getByRole("button", { name: "Advanced modules", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Advanced modules" }));
     expect(screen.queryByTestId("picker-position")).toBeNull();
     expect(screen.getByRole("button", { name: "close block 2" })).toHaveAttribute("aria-expanded", "true");
   });

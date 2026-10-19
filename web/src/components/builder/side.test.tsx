@@ -45,7 +45,7 @@ describe("model controls", () => {
     expect(onKnob).toHaveBeenLastCalledWith("H", 8);
     fireEvent.change(screen.getByRole("slider", { name: BUILDER.thinking_room }), { target: { value: "2" } });
     expect(onKnob).toHaveBeenLastCalledWith("W", 2);
-    fireEvent.click(within(screen.getByTestId("heads")).getByRole("button", { name: "1", exact: true }));
+    fireEvent.click(within(screen.getByTestId("heads")).getByRole("button", { name: "1" }));
     expect(onKnob).toHaveBeenLastCalledWith("H", 1);
   });
 
