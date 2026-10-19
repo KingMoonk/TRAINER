@@ -78,7 +78,6 @@ STEPS = [
     ("versions-published-refused", "GET", "/versions/published", None),
     ("design-registry", "GET", "/design/registry", None),
     ("design-presets", "GET", "/design/presets", None),
-    ("viewer-status", "GET", "/viewer/status", None),
 ]
 
 # (fixture name, beat of the demo run's clock): the demo run's first round is about five beats, a second round follows at six

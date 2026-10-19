@@ -57,22 +57,6 @@ test("saved versions keep their rows through queue, hold, training and completio
   await expect(page.getByText("Version 2 · held-back error: 1.600 bits per character", { exact: true })).toBeVisible();
 });
 
-test("every inspector link follows the selected version without mobile overflow", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await setup(page);
-  await page.goto("/builder/");
-  const history = page.getByRole("region", { name: "Version history" });
-  const links = [
-    ["Trace a position", "trace"], ["Head lab", "head-lab"], ["Inside a head", "head-zoom"],
-    ["Loss", "loss"], ["Value map", "value-map"], ["Inside the network", "inside-3d"],
-  ];
-  for (const [name, path] of links) await expect(history.getByRole("link", { name, exact: false })).toHaveAttribute("href", `/${path}/?version=2`);
-  await history.getByRole("button", { name: /Version 1/ }).click();
-  for (const [name, path] of links) await expect(history.getByRole("link", { name, exact: false })).toHaveAttribute("href", `/${path}/?version=1`);
-  await expect(history.getByRole("button", { name: /Version 1/ })).toHaveAttribute("aria-pressed", "true");
-  expect(await page.locator("main").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
-});
-
 test("an empty workspace explains where version history comes from", async ({ page }) => {
   const state = await setup(page);
   state.versions = [];

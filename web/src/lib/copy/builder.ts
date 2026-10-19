@@ -161,7 +161,6 @@ export const BUILDER = {
   explain_hint:
     "Click any part of the model to read what it does and see it work on the example sentence. In a block, click its heads (the dots) or its thinking-room bar.",
   explain_example: "On the example sentence",
-  explain_see: "See it working:",
   explain_close: "Close",
   explain_failed: "This part could not be explained:",
   explain_loading: "Reading the part…",
