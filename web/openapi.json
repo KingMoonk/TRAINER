@@ -4073,6 +4073,14 @@
             "title": "Memory Bytes",
             "type": "integer"
           },
+          "speeds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Speed"
+            },
+            "default": {},
+            "title": "Speeds",
+            "type": "object"
+          },
           "version": {
             "title": "Version",
             "type": "string"
@@ -5096,6 +5104,11 @@
       },
       "PresetCost": {
         "properties": {
+          "device": {
+            "default": "cpu",
+            "title": "Device",
+            "type": "string"
+          },
           "fits": {
             "anyOf": [
               {
@@ -5113,6 +5126,11 @@
             },
             "title": "Lines",
             "type": "array"
+          },
+          "measured": {
+            "default": false,
+            "title": "Measured",
+            "type": "boolean"
           },
           "need": {
             "title": "Need",
@@ -8695,6 +8713,37 @@
           "spec"
         ],
         "title": "SpecBody",
+        "type": "object"
+      },
+      "Speed": {
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "number"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "seconds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Seconds",
+            "type": "object"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device",
+          "seconds",
+          "tokens",
+          "age_s"
+        ],
+        "title": "Speed",
         "type": "object"
       },
       "SplitBody": {
