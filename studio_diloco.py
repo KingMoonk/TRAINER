@@ -2326,10 +2326,11 @@ class Member:
                     event = {**event, "total": max(self.total_steps, event.get("step") or 0)}
                 emit(event)
             cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": min(1_000_000, self.info["rounds"] * max(self.info["inner_steps"], int(self.info["inner_steps"] * MAX_SHARE)))}  # the loop bound (train() caps steps at 1,000,000): no member is dealt more than MAX_SHARE of H a round; the schedule length is total_steps
+            import studio_memory
+            offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), self.memory_share or 1.)  # as a job does: CUDA only, and only when the state cannot fit; train() says so
             if self.memory_share:
-                import studio_memory
                 declared = cfg["batch_size"]
-                cfg["batch_size"] = studio_memory.batch_cap(cfg, self.memory_share)
+                cfg["batch_size"] = studio_memory.batch_cap(cfg, self.memory_share, offload=offload)
                 if cfg["batch_size"] < declared:
                     emit({"type": "info", "text": f"A batch of {declared} does not fit the {self.memory_share:.0%} of memory this node's plan "
                                                   f"allows: this member trains with batch size {cfg['batch_size']}."})
@@ -2338,7 +2339,7 @@ class Member:
                 self.first_step, found, self.warm = 0, None, False
                 try:
                     studio_model.train(cfg, [], directory if not attempt else Path(f"{directory}_{attempt}"), emit=watch,
-                                       stop=Halt(self.stop, self.ended), pause=self.pause, distributed=self, telemetry_every=0)
+                                       stop=Halt(self.stop, self.ended), pause=self.pause, distributed=self, telemetry_every=0, offload_optimizer=offload)
                     if (self.superseded or self.moved) and not self.finished and not self.stop.is_set():
                         found = self._relocated_within()
                 except Rebound as bound:

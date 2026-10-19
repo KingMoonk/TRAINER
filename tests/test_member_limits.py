@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
+
 import studio_cluster_queue
 import studio_diloco
 import studio_distributed
@@ -129,6 +131,68 @@ class MemberJob(unittest.TestCase):
         with mock.patch.object(studio_memory, "batch_cap", capped):
             self.assertEqual(studio_memory.batch_cap({}, member.memory_share), 1)
         self.assertEqual(calls["share"], .5)
+
+
+class Offload(unittest.TestCase):
+    """A member keeps its optimizer state on the host exactly when studio_memory.offload_wanted says so (issue #515), as a job does."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.client = self.enterContext(support.TermClient(support.app()))
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+
+    def drive(self, wanted, memory_share=None):
+        """One member through a whole tiny run with offload_wanted faked; returns what train() was given and what the member said."""
+        import studio_memory
+        import studio_model
+        coordinator = support.build(self.dir / "run", "run", inner_steps=2, rounds=3, outer_lr=1.)
+        studio_diloco.COORDINATORS["run"] = coordinator
+        train, asked, events = studio_model.train, [], []
+
+        def offload_wanted(cfg, share, **options):
+            asked.append(share)
+            return wanted
+
+        def spy(*args, **options):
+            train.calls.append(options.get("offload_optimizer"))
+            return train(*args, **options)
+        train.calls = []
+        with mock.patch.object(studio_memory, "offload_wanted", offload_wanted), mock.patch.object(studio_model, "train", spy):
+            rounds = studio_diloco.run_member(support.Peer(self.client), "run", "solo", 0, self.dir / "shards", self.dir / "out",
+                                              events.append, threading.Event(), wait=.2, memory_share=memory_share)
+        self.assertTrue(coordinator.finished)
+        self.assertIsNotNone(rounds)
+        return train.calls, asked, events
+
+    def test_a_member_whose_state_does_not_fit_trains_with_it_on_the_host_and_finishes_the_run(self):
+        calls, asked, events = self.drive(True, memory_share=.5)
+        self.assertEqual(calls, [True])
+        self.assertEqual(asked, [.5])
+        self.assertTrue(any("optimizer state in host memory" in event.get("text", "") for event in events))
+        losses = [event["loss"] for event in events if event.get("type") == "metric" and event.get("loss") is not None]
+        self.assertTrue(losses and all(np.isfinite(losses)))  # the state stays valid across the outer steps that swap the weights
+
+    def test_a_member_whose_state_fits_does_not_offload(self):
+        calls, _, events = self.drive(False)
+        self.assertEqual(calls, [False])
+        self.assertFalse(any("optimizer state in host memory" in event.get("text", "") for event in events))
+
+    def test_a_member_without_a_plan_asks_for_the_whole_device_like_a_job(self):
+        _, asked, _ = self.drive(False)
+        self.assertEqual(asked, [1.])
+
+    def test_the_batch_is_capped_with_the_state_off_the_device_when_offloading(self):
+        import studio_memory
+        seen = {}
+
+        def capped(config, share, **options):
+            seen.update(options)
+            return config["batch_size"]
+        with mock.patch.object(studio_memory, "batch_cap", capped):
+            self.drive(True, memory_share=.5)
+        self.assertIs(seen["offload"], True)
 
 
 def run_of(node="laptop", **machine):
