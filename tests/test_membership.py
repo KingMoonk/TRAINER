@@ -63,7 +63,7 @@ class OwnerSide(unittest.TestCase):
     def test_a_machine_that_is_not_answering_is_unreachable_with_why(self):
         row = self.row({"box": peer(down=True)})
         self.assertEqual(row["state"], "unreachable")
-        self.assertIn("box is not answering", row["reason"])
+        self.assertIn("box did not answer", row["reason"])
 
     def test_a_machine_that_refused_the_invite_is_unreachable_with_the_refusal(self):
         self.box.state, self.box.reason = "unreachable", "box refused the connection."
