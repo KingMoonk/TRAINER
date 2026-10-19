@@ -33,6 +33,7 @@
     "members": [
       {
         "address": "local",
+        "blocking_job": null,
         "can_stop": false,
         "device": "mps",
         "device_name": "Apple M2",
@@ -45,6 +46,7 @@
         "node": "mac-mini",
         "note": "",
         "phase": "training",
+        "reason": "",
         "reported_ago": 0.20000000000000018,
         "round_steps": 100,
         "rounds_done": 0,
@@ -131,6 +133,7 @@
       },
       {
         "address": "gpu-box:8787",
+        "blocking_job": null,
         "can_stop": true,
         "device": "cuda",
         "device_name": "NVIDIA GeForce RTX 4090",
@@ -143,6 +146,7 @@
         "node": "gpu-box",
         "note": "",
         "phase": "waiting",
+        "reason": "",
         "reported_ago": 0.20000000000000018,
         "round_steps": 100,
         "rounds_done": 0,

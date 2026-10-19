@@ -184,6 +184,7 @@ class Runner:
         self.user_paused = False       # a user intent: restored from queue.json, so a pause survives a restart
         self._load()
         self.running = None            # Job on the runner thread
+        self.yielding = None           # (id of the running job being stepped aside, the status it goes back to) until it has stopped
         self.progress = {}
         self.stopping = False
         self.gate = Gate()
@@ -310,6 +311,25 @@ class Runner:
             self.cluster.cancel(remote)
         self.wake.set()
         self._emit("queue", {"job": job_id})
+
+    def yield_running(self, to=None):
+        """Step the running job aside so the waiting job `to` runs next: the running job is stopped and goes back to waiting behind it,
+        and continues from its own checkpoint when its turn comes (studio_jobs.continue_here). With no `to` it is held instead, until the
+        person releases it. False when nothing runs, or `to` is not waiting."""
+        with self.lock:
+            running, ahead = self.running, next((j for j in self._queued() if j.id == to), None)
+            if running is None or (to is not None and ahead is None):
+                return False
+            if ahead is not None:
+                self.jobs.remove(ahead)
+                self.jobs.insert(self.jobs.index(running), ahead)
+                ahead.status = "waiting"
+            self.yielding = (running.id, "waiting" if ahead is not None else "held")
+            self.stop_event.set()
+            self._save()
+        self.wake.set()
+        self._emit("queue", {"job": running.id})
+        return True
 
     def pause(self):
         """Stop starting jobs (and pause the running one) until resume(); saved, and announced as a "queue" event."""
@@ -608,6 +628,9 @@ class Runner:
                 job.params.update(handle.params)
                 error = handle.error
             job.status = "failed" if error else "stopped" if self.stop_event.is_set() else "done"
+            if self.yielding and self.yielding[0] == job.id and job.status == "stopped":
+                job.status = self.yielding[1]  # stepped aside for another job: back in the queue, not in the history
+            self.yielding = None
             job.error = error
             self.running = None
             self.stopping = False

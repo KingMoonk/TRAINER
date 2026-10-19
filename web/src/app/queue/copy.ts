@@ -71,7 +71,7 @@ export const T = {
   pinnedTo: "Pinned to {node}: it runs there or waits",
   runningOn: "Running on {node}",
   queuedOn: "queued on {node}",
-  notAnswering: "{node} is not answering{seen}. This is what it last reported.",
+  notAnswering: "{node} is unreachable{seen}. This is what it last reported.",
   lastKnown: "last known",
   offline: "offline",
 } as const;

@@ -38,7 +38,7 @@ class Machine:
     device: str = ""
     device_name: str = ""
     error: str = ""
-    state: str = "invited"  # invited | unplaced (the scheduler did not give it a slot: busy, or past max_members) | unreachable
+    state: str = "invited"  # invited | unplaced (the scheduler did not give it a slot: busy, or past max_members; read as `waiting`) | unreachable
     reason: str = ""
     peer_job: str = ""  # the member job's id on that machine's queue
 
@@ -322,15 +322,42 @@ def left_after_finish(snap, node):
 NEVER_JOINED = "It was invited but never joined the run."
 
 
-def member_rows(run, snap, ended):
+def peer_facts(run, cluster):
+    """What this node's copy of the observation store says about each other machine of `run`, for the member rows: {node: {"down":
+    the machine is not answering, "member_running": its member job is running, "blocking": {"label", "eta_s"} of the other job it is
+    busy with, else None}}. A machine the store holds no queue of is left out."""
+    import studio_facts
+    out = {}
+    for machine in run.machines:
+        if machine.local:
+            continue
+        jobs, age = studio_facts.queue_facts(cluster, machine.node)
+        if age is None:
+            continue
+        mine = next((j for j in jobs if machine.peer_job and j["id"] == machine.peer_job), None)
+        other = next((j for j in jobs if j["status"] == "running" and j["id"] != machine.peer_job), None)
+        out[machine.node] = {"down": cluster.is_down(machine.node), "member_running": bool(mine and mine["status"] == "running"),
+                             "blocking": {"label": other["label"], "eta_s": other.get("eta_s")} if other else None}
+    return out
+
+
+def busy_reason(blocking):
+    """Why a machine waits: busy with another job, and for about how long."""
+    eta = blocking.get("eta_s")
+    left = "" if eta is None else f", about {max(1, round(eta / 60))} min left"
+    return f"Busy with '{blocking['label']}'{left}. It joins when that finishes."
+
+
+def member_rows(run, snap, ended, peers=None):
     """One row per machine chosen, then any other node the coordinator knows. A machine the coordinator has not heard from yet is
-    `invited` (or, for this computer, starting) until it joins."""
+    `invited` (or, for this computer, starting) until it joins. Every row speaks the shared vocabulary (invited, waiting, joining,
+    training, behind, left, unreachable) with its `reason` and, for `waiting`, the `blocking_job`; `peers` is `peer_facts`."""
     nodes = (snap or {}).get("nodes", {})
     history = (snap or {}).get("history", [])
     rows = []
     for machine in run.machines:
         known = nodes.get(machine.node)
-        rows.append(_member(machine.node, machine, known, history, ended, snap))
+        rows.append(_member(machine.node, machine, known, history, ended, snap, (peers or {}).get(machine.node)))
     chosen = {m.node for m in run.machines}
     rows.extend(_member(node, None, known, history, ended, snap) for node, known in nodes.items() if node not in chosen)
     return rows
@@ -358,11 +385,11 @@ def phase_of(snap, state):
     return (snap or {}).get("phase") or "waiting"
 
 
-def _member(node, machine, known, history, ended, snap=None):
+def _member(node, machine, known, history, ended, snap=None, peer=None):
     local = machine is not None and machine.local
     row = {"node": node, "address": machine.address if machine else "", "local": local, "device": machine.device if machine else "",
-           "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, **member_stats(history, node),
-           **live_fields(known)}
+           "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, "blocking_job": None,
+           **member_stats(history, node), **live_fields(known)}
     if machine is not None and machine.state == "unreachable":
         state, note = "unreachable", machine.reason
     elif known is not None:
@@ -373,22 +400,30 @@ def _member(node, machine, known, history, ended, snap=None):
             state, note = "finished", ""  # it left because the run was over, not because anything went wrong
     elif ended and machine is not None and not local:
         # never heard from, so it never joined: keep why (no slot, or invited and silent) instead of calling it finished
-        state, note = ("unplaced", machine.reason) if machine.state == "unplaced" else ("never_joined", NEVER_JOINED)
+        state, note = ("never_joined", machine.reason if machine.state == "unplaced" else NEVER_JOINED)
     elif ended:
         state, note = ("finished" if ended == "finished" else "stopped"), ""
+    elif local:
+        state, note = "invited", "Starting."
+    elif peer and peer["down"]:
+        state, note = "unreachable", f"{node} did not answer. Check that it is on and that Tailscale is running on it."
+    elif peer and peer["member_running"]:
+        state, note = "joining", f"Starting up on {node}."
+    elif peer and peer["blocking"]:
+        state, note, row["blocking_job"] = "waiting", busy_reason(peer["blocking"]), peer["blocking"]
     elif machine is not None and machine.state == "unplaced":
-        state, note = "invited", machine.reason
+        state, note = "waiting", machine.reason
     else:
-        state, note = "invited", "Starting." if local else "Invited. It joins once its own queue gets to the member job."
-    row["state"], row["note"] = state, note
+        state, note = "invited", "Added to its queue. It joins by itself once the machine is free."
+    row["state"], row["note"], row["reason"] = state, note, note
     placed = machine is None or machine.state != "unplaced"
-    row["can_stop"] = not ended and not local and placed and state in ("invited", "training", "behind", "joining")
+    row["can_stop"] = not ended and not local and placed and state in ("invited", "training", "behind", "joining", "waiting")
     return row
 
 
-def view(run, coordinator, job):
+def view(run, coordinator, job, peers=None):
     """The run as the tab shows it. `coordinator` is the live one or None; `job` is the owner job from the queue (anything with
-    status and error) or None when the queue no longer lists it."""
+    status and error) or None when the queue no longer lists it; `peers` is `peer_facts(run, cluster)`."""
     snap = coordinator.snapshot() if coordinator is not None else run.final
     note = ""
     if snap is not None:
@@ -411,7 +446,7 @@ def view(run, coordinator, job):
     return {"id": run.id, "label": run.label, "version": run.version, "state": state, "note": note, "started_at": run.started_at,
             "owner": run.owner, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
-            "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or ""),
+            "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or "", peers),
             "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,
             "phase": phase_of(snap, state), "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
             "window_s": (snap or {}).get("window_s"), "contributed": (snap or {}).get("contributed", 0), "expected": (snap or {}).get("expected", 0),

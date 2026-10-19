@@ -90,12 +90,12 @@ describe("a member that is out", () => {
   });
 
   test("a machine that never joined shows its reason but is not a problem; one that left at the finish is not either", () => {
-    for (const state of ["unplaced", "never_joined"] as const) {
-      expect(needsReason(member({ state }))).toBe(true);
-      expect(isProblem(member({ state }))).toBe(false);
-      expect(neverJoined(member({ state }))).toBe(true);
-    }
-    expect(reasonText(member({ state: "unplaced", note: "It was busy." }))).toBe("It was busy.");
+    expect(needsReason(member({ state: "never_joined" }))).toBe(true);
+    expect(isProblem(member({ state: "never_joined" }))).toBe(false);
+    expect(neverJoined(member({ state: "never_joined" }))).toBe(true);
+    expect(reasonText(member({ state: "never_joined", note: "It was busy.", reason: "It was busy." }))).toBe("It was busy.");
+    expect(needsReason(member({ state: "waiting", reason: "Busy with 'Version 1'." }))).toBe(true);
+    expect(neverJoined(member({ state: "waiting" }))).toBe(false);
     expect(reasonText(member({ state: "never_joined" }))).toMatch(/never joined/i);
     expect(needsReason(member({ state: "finished", note: "" }))).toBe(false);
     expect(isProblem(member({ state: "left", note: "Left the run." }))).toBe(true);
