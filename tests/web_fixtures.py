@@ -50,13 +50,6 @@ STEPS = [
     ("distributed-defaults", "GET", "/distributed/defaults", None),
     ("distributed-runs-empty", "GET", "/distributed/runs", None),
     ("node", "GET", "/node", None),
-    ("passive", "GET", "/passive", None),
-    ("passive-start", "POST", "/passive", {}),
-    ("passive-started", "GET", "/passive", None),
-    ("passive-detail", "GET", "/passive/passive_1", None),
-    ("passive-lessons", "GET", "/passive/passive_1/lessons", None),
-    ("passive-stop", "POST", "/passive/passive_1/stop", None),
-    ("passive-resume", "POST", "/passive/passive_1/resume", None),
     ("traffic-rules", "GET", "/traffic/rules", None),
     ("storage", "GET", "/storage", None),
     ("storage-free", "GET", "/storage/free", None),
@@ -78,7 +71,6 @@ STEPS = [
     ("versions-published-refused", "GET", "/versions/published", None),
     ("design-registry", "GET", "/design/registry", None),
     ("design-presets", "GET", "/design/presets", None),
-    ("viewer-status", "GET", "/viewer/status", None),
 ]
 
 # (fixture name, beat of the demo run's clock): the demo run's first round is about five beats, a second round follows at six

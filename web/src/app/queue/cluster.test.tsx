@@ -199,7 +199,7 @@ describe("Queue page with several machines", () => {
     expect(members).toHaveTextContent("Trains on mac-mini, gpu-box together");
     expect(members).toHaveTextContent("Left out: old did not answer within 2 seconds.");
     expect(calls.find((c) => c.path === "/distributed/runs")?.body).toEqual({
-      replaces: "w1", all_machines: true, machines: [], version: 3, dataset_ids: ["Your files"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
+      replaces: "w1", all_machines: true, machines: [], version: 3, dataset_ids: ["Your files"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false, reviewed_only: false,
     });
     // A run is not pinned: its row has no "Run on" picker and no place line.
     expect(screen.queryByRole("combobox", { name: `Run on: ${run.label}` })).toBeNull();
@@ -255,7 +255,7 @@ describe("Queue page with several machines", () => {
     expect(other.getByTestId("other-g2")).toHaveAttribute("data-stale", "true");
     expect(other.getByTestId("other-g1")).toHaveTextContent("last known");
     expect(other.getByTestId("other-g1")).toHaveTextContent("Version 9 pretraining");
-    expect(other.getByRole("status")).toHaveTextContent("gpu-box is not answering");
+    expect(other.getByRole("status")).toHaveTextContent("gpu-box is unreachable");
     expect(other.getByTestId("node-gpu-box:8000")).toHaveClass("opacity-60");
     // The "Run on" list still names the machine, marked.
     expect(machines(screen.getByRole("combobox", { name: "Run on: First waiting" }))).toEqual(["Any machine", "All machines (DiLoCo)", "mac-mini (this machine)", "gpu-box (offline)"]);

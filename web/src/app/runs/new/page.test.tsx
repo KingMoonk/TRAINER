@@ -93,7 +93,7 @@ describe("New run", () => {
     server();
     renderPage(<NewRunPage />, { route: "/runs/new/" });
     expect(await screen.findByTestId("worker-lab")).toBeDisabled();
-    expect(screen.getByTestId("worker-lab")).toHaveTextContent("Not answering");
+    expect(screen.getByTestId("worker-lab")).toHaveTextContent("Unreachable");
   });
 
   test("a peer alone is pinned with params.pinned", async () => {
@@ -130,7 +130,7 @@ describe("New run", () => {
     await user.click(await cta());
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
     expect(sent("POST", "/distributed/runs")?.body).toEqual({
-      version: null, dataset_ids: ["stories"], machines: ["beast"], rounds: 12, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
+      version: null, dataset_ids: ["stories"], machines: ["beast"], rounds: 12, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false, reviewed_only: false,
     });
   });
 

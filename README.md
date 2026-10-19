@@ -162,7 +162,7 @@ The window has four areas in the sidebar, then Queue and Resources, and a machin
 
 **Queue** (or the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
 
-**Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it, and **Passive training**, which lists the sessions that train on their own outside the queue, with their trainer and watchdog status, New session, Resume and Stop buttons, and a way to stop the watchdog starting when you sign in.
+**Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
@@ -229,23 +229,29 @@ Workspace datasets and drafts live in `data/workspace.json`. Existing exports ar
 
 `--steps` is the total optimizer-step target, including resumed steps. Pass `--config config.json` for model/training settings or `--output path` for a run folder. Press Ctrl+C to stop after the current optimizer step and save.
 
-## Passive training
-
-Passive training keeps training on its own: it trains until the test error settles, saves a checkpoint, learns from the teacher model if one is set up, then goes again or steps back to the best checkpoint. It runs in a separate process, so it keeps going with Groundwork closed.
-
-A small watchdog (`studio_passive_watch.py`) checks the trainer's heartbeat. After 60 seconds of silence, or if the process is gone, it starts the trainer again from the last saved step; after 5 restarts in 10 minutes it gives up and records why. It also registers itself to start at sign-in (a LaunchAgent on macOS, a Task Scheduler task on Windows) and removes that entry when the session ends. The plan can keep the computer awake (`caffeinate` on macOS, a keep-awake request on Windows) and pause on battery.
-
-A session's best checkpoint can become a version: the **Save best as a version** button on Resources > Passive training (`POST /passive/{id}/save`) makes a trained version from it, scored on the held-back text like a pretrain, and its description names the session, its rounds and its best error. Saving the same best again returns the same version. A session that has ended with at least one checkpoint is saved this way by itself the next time the app looks at the list. Passive training itself runs only on the machine that started it; a saved version can be pulled or published like any other.
-
-Each round that carries on from the last checkpoint resumes it: the weights, Adam's moments and the step count (so the learning-rate schedule goes on) come across, and the round trains on its own data with its own seed, learning rate and batch size. The first round, and a round after a step back to an earlier best, start with a fresh optimizer from the weights alone; so does a round whose checkpoint has no optimizer state (a polished one). The journal's `round` event says `resumed` or `fresh`, and an `optimizer` event gives the reason when a resume was refused. On CUDA the optimizer state moves to host memory when it cannot fit the GPU, as in the queue.
-
-The record lives in `data/passive.sqlite` (plan, state, process ids, heartbeat) and `runs/<session id>/` (journal, checkpoints, `trainer.log`). To start one, press New session on Resources > Passive training: pick the version to train, the text to train on (all of it, or chosen sets), when to stop (time limit, rounds without a better checkpoint, an optional target error), whether the teacher polishes each checkpoint, the memory share, keep awake and pause on battery. Only one session is active at a time. To stop a session, press Stop; the watchdog then exits by itself. Details on a row opens the session: its phase, round and best test error, a chart of the test error of each checkpoint, the plan, the lessons the teacher gave it (Drop leaves one out of the next round's training, Keep puts it back), and the trainer's journal (newest first, with the reason for each step back or restart). A failed or stopped session has a Resume button: it goes back in the queue, the watchdog starts again and the trainer carries on from the last checkpoint it saved.
-
 ## Releases
 
 Push a `v*` tag (for example `git tag v1.0.0 && git push origin v1.0.0`) and `.github/workflows/release.yml` builds the app with PyInstaller on macOS and Windows and attaches `Groundwork-macos.zip` and `Groundwork-windows.zip` to a GitHub Release for that tag. Running the workflow by hand (Actions, Release, Run workflow) builds and uploads the zips as workflow artifacts without creating a release.
 
 The builds are unsigned, so macOS Gatekeeper (right-click the app, Open) and Windows SmartScreen (More info, Run anyway) will warn on first launch. A packaged app keeps `data/` and `runs/` in your user data folder (`~/Library/Application Support/Groundwork` on macOS, `%APPDATA%\Groundwork` on Windows) so they survive an upgrade.
+
+## Agent PRs
+
+`.github/workflows/agent.yml` hands a GitHub issue to Claude Code and opens a pull request with the result. Start it from Actions, Agent PR, Run workflow, or from the command line:
+
+```
+gh workflow run agent.yml -f issue=123
+gh workflow run agent.yml -f issue=123 -f instructions="Keep the change to studio_queue.py" -f base=wedd-compute-cluster -f draft=true
+```
+
+`model` (default `opus`) and `max_budget_usd` (default 20) are inputs too. The run assigns the issue to whoever started it and comments the run link on it; it refuses an issue assigned to someone else. Claude Code then works on a fresh `agent/issue-<N>-<run id>` branch on an Ubuntu runner with a `.venv` holding the CPU build of PyTorch, following `CLAUDE.md` and `.claude/rules/` with the CI exceptions in `.github/agent/prompt.md`: it reads the issue, related issues, PRs and CI logs with `gh`, uses web fetch and search, runs the affected tests with `tasks.py test`, commits, and merges the base branch. The publish job then pushes the branch, files the agent's follow-up issues, opens the PR (`Closes #N`) and links it on the issue. If the agent makes no commits, writes no valid Conventional Commit title, or stops on the budget, the run posts that on the issue and hands the issue back. The job log shows the agent's messages and tool calls; the full transcript is in the run's `agent-out` artifact.
+
+Setup, once:
+
+- Model access: a repository secret `ANTHROPIC_API_KEY` (an API key; give it a spend limit in the Claude Console), or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` to bill a Claude subscription.
+- CI on the agent's PRs: a PR opened with the workflow's own `GITHUB_TOKEN` starts no other workflow, so CI and the title lint would not run on it (close and reopen the PR to start them). Give the publish job its own identity instead: a GitHub App installed on this repository with Contents, Pull requests and Issues read/write (repository variable `AGENT_APP_CLIENT_ID`, secret `AGENT_APP_PRIVATE_KEY`), or a fine-grained token with the same permissions (secret `AGENT_GH_TOKEN`).
+
+How it is contained: the job that runs the model has a read-only `GITHUB_TOKEN`, so the agent cannot push, merge, or post anything, whatever an issue, comment or web page tells it. Its commits leave that job as a git bundle, and only the publish job, which runs no repository code and no model, holds a token that writes. That job refuses commits that change `.github/workflows/`, because a workflow changed on a branch of this repository runs with its secrets once the PR opens. The model key is visible to commands the agent runs, which is why it should be a key with a spend limit used for nothing else.
 
 ## Codebase structure
 

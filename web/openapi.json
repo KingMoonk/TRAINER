@@ -1,64 +1,6 @@
 {
   "components": {
     "schemas": {
-      "AblateRequest": {
-        "properties": {
-          "heads": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "prefixItems": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "integer"
-                    }
-                  ],
-                  "type": "array"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Heads"
-          },
-          "mode": {
-            "default": "zero",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "AblateRequest",
-        "type": "object"
-      },
       "Access": {
         "description": "Who may call this node's API straight over the tailnet (studioConfig.cluster, docs/cluster.md, \"ACL\").",
         "properties": {
@@ -113,184 +55,6 @@
         "title": "AccessBody",
         "type": "object"
       },
-      "ActionOut": {
-        "properties": {
-          "answer": {
-            "title": "Answer"
-          },
-          "scene": {
-            "additionalProperties": true,
-            "title": "Scene",
-            "type": "object"
-          },
-          "state": {
-            "$ref": "#/components/schemas/ViewControls"
-          }
-        },
-        "required": [
-          "state",
-          "scene"
-        ],
-        "title": "ActionOut",
-        "type": "object"
-      },
-      "ActionRequest": {
-        "properties": {
-          "action": {
-            "additionalProperties": true,
-            "title": "Action",
-            "type": "object"
-          },
-          "arrays": {
-            "default": "inline",
-            "enum": [
-              "inline",
-              "binary"
-            ],
-            "title": "Arrays",
-            "type": "string"
-          },
-          "cell": {
-            "items": {
-              "type": "integer"
-            },
-            "maxItems": 2,
-            "minItems": 2,
-            "title": "Cell",
-            "type": "array"
-          },
-          "headStage": {
-            "default": "pattern",
-            "enum": [
-              "scores",
-              "scale",
-              "mask",
-              "pattern",
-              "values"
-            ],
-            "title": "Headstage",
-            "type": "string"
-          },
-          "level": {
-            "default": "Model",
-            "enum": [
-              "Model",
-              "Window",
-              "Head",
-              "Weights"
-            ],
-            "title": "Level",
-            "type": "string"
-          },
-          "mode": {
-            "default": "Build",
-            "enum": [
-              "Build",
-              "Train",
-              "Ride a token"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "note": {
-            "default": "",
-            "title": "Note",
-            "type": "string"
-          },
-          "playing": {
-            "default": false,
-            "title": "Playing",
-            "type": "boolean"
-          },
-          "probing": {
-            "default": false,
-            "title": "Probing",
-            "type": "boolean"
-          },
-          "reduce_motion": {
-            "default": false,
-            "title": "Reduce Motion",
-            "type": "boolean"
-          },
-          "selection": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selection"
-          },
-          "show_numbers": {
-            "default": true,
-            "title": "Show Numbers",
-            "type": "boolean"
-          },
-          "since": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Since"
-          },
-          "snapshot": {
-            "default": 0,
-            "title": "Snapshot",
-            "type": "integer"
-          },
-          "spec": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spec"
-          },
-          "thermal": {
-            "default": false,
-            "title": "Thermal",
-            "type": "boolean"
-          },
-          "tileKind": {
-            "default": "weight",
-            "enum": [
-              "weight",
-              "gradient",
-              "update"
-            ],
-            "title": "Tilekind",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "action"
-        ],
-        "title": "ActionRequest",
-        "type": "object"
-      },
       "AddRequest": {
         "properties": {
           "fields": {
@@ -320,6 +84,44 @@
         "title": "Added",
         "type": "object"
       },
+      "AskPause": {
+        "properties": {
+          "from_node": {
+            "minLength": 1,
+            "title": "From Node",
+            "type": "string"
+          },
+          "run_label": {
+            "default": "",
+            "title": "Run Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_node"
+        ],
+        "title": "AskPause",
+        "type": "object"
+      },
+      "AskPeer": {
+        "properties": {
+          "address": {
+            "minLength": 1,
+            "title": "Address",
+            "type": "string"
+          },
+          "run_label": {
+            "default": "",
+            "title": "Run Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "AskPeer",
+        "type": "object"
+      },
       "Block": {
         "properties": {
           "block": {
@@ -347,6 +149,32 @@
           "own"
         ],
         "title": "Block",
+        "type": "object"
+      },
+      "BlockingJob": {
+        "description": "The job on a machine that a member waits behind.",
+        "properties": {
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta S"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "eta_s"
+        ],
+        "title": "BlockingJob",
         "type": "object"
       },
       "Body_import_data_data__kind__import_post": {
@@ -846,6 +674,17 @@
             "title": "Hostname",
             "type": "string"
           },
+          "last_heard_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heard S"
+          },
           "local": {
             "title": "Local",
             "type": "boolean"
@@ -853,6 +692,17 @@
           "memory_bytes": {
             "title": "Memory Bytes",
             "type": "integer"
+          },
+          "next_check_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Check S"
           },
           "online": {
             "title": "Online",
@@ -1512,6 +1362,98 @@
         "title": "ConfigUpdate",
         "type": "object"
       },
+      "ContinueBody": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "description": "the text to continue on (new_data; grow, default the run's own)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "hold": {
+            "default": 0.05,
+            "description": "grow: fraction of the text held back",
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
+            "type": "number"
+          },
+          "kind": {
+            "description": "same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights",
+            "enum": [
+              "same",
+              "new_data",
+              "grow"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "layers": {
+            "anyOf": [
+              {
+                "maximum": 96.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layers"
+          },
+          "rows": {
+            "default": 16,
+            "description": "grow: rows per step",
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "grow: the bigger design itself",
+            "title": "Spec"
+          },
+          "steps": {
+            "description": "steps to add (same, new_data), or to train the grown design for (grow)",
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Steps",
+            "type": "integer"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "maximum": 8192.0,
+                "minimum": 8.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "grow: the design's width (with layers), when no spec is given",
+            "title": "Width"
+          }
+        },
+        "required": [
+          "kind",
+          "steps"
+        ],
+        "title": "ContinueBody",
+        "type": "object"
+      },
       "CorrectionRequest": {
         "properties": {
           "correction": {
@@ -1985,6 +1927,36 @@
         "title": "Dropped",
         "type": "object"
       },
+      "Ended": {
+        "description": "Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "text"
+        ],
+        "title": "Ended",
+        "type": "object"
+      },
       "EnoughText": {
         "properties": {
           "headline": {
@@ -2148,6 +2120,68 @@
         "title": "Expectations",
         "type": "object"
       },
+      "Expected": {
+        "description": "What the plan can expect of the validation error. `fit`: drawn from this design's own earlier run; `rule`: no run to read.",
+        "properties": {
+          "basis": {
+            "enum": [
+              "fit",
+              "rule"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "curve": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Curve",
+            "type": "array"
+          },
+          "flat_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flat Steps"
+          },
+          "loss_flat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Flat"
+          },
+          "loss_planned": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Planned"
+          }
+        },
+        "required": [
+          "basis"
+        ],
+        "title": "Expected",
+        "type": "object"
+      },
       "Experiment": {
         "properties": {
           "question": {
@@ -2252,13 +2286,6 @@
             "title": "Example",
             "type": "string"
           },
-          "links": {
-            "items": {
-              "$ref": "#/components/schemas/PartLink"
-            },
-            "title": "Links",
-            "type": "array"
-          },
           "module": {
             "title": "Module",
             "type": "string"
@@ -2281,8 +2308,7 @@
           "what",
           "module",
           "module_text",
-          "example",
-          "links"
+          "example"
         ],
         "title": "Explained",
         "type": "object"
@@ -2369,218 +2395,6 @@
           "status"
         ],
         "title": "Finished",
-        "type": "object"
-      },
-      "ForwardRequest": {
-        "properties": {
-          "hooks": {
-            "default": true,
-            "title": "Hooks",
-            "type": "boolean"
-          },
-          "ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "integer"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ids"
-          },
-          "names": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Names"
-          },
-          "text": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ForwardRequest",
-        "type": "object"
-      },
-      "FrameRequest": {
-        "properties": {
-          "arrays": {
-            "default": "inline",
-            "enum": [
-              "inline",
-              "binary"
-            ],
-            "title": "Arrays",
-            "type": "string"
-          },
-          "cell": {
-            "items": {
-              "type": "integer"
-            },
-            "maxItems": 2,
-            "minItems": 2,
-            "title": "Cell",
-            "type": "array"
-          },
-          "headStage": {
-            "default": "pattern",
-            "enum": [
-              "scores",
-              "scale",
-              "mask",
-              "pattern",
-              "values"
-            ],
-            "title": "Headstage",
-            "type": "string"
-          },
-          "level": {
-            "default": "Model",
-            "enum": [
-              "Model",
-              "Window",
-              "Head",
-              "Weights"
-            ],
-            "title": "Level",
-            "type": "string"
-          },
-          "mode": {
-            "default": "Build",
-            "enum": [
-              "Build",
-              "Train",
-              "Ride a token"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "note": {
-            "default": "",
-            "title": "Note",
-            "type": "string"
-          },
-          "playing": {
-            "default": false,
-            "title": "Playing",
-            "type": "boolean"
-          },
-          "probing": {
-            "default": false,
-            "title": "Probing",
-            "type": "boolean"
-          },
-          "reduce_motion": {
-            "default": false,
-            "title": "Reduce Motion",
-            "type": "boolean"
-          },
-          "selection": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selection"
-          },
-          "show_numbers": {
-            "default": true,
-            "title": "Show Numbers",
-            "type": "boolean"
-          },
-          "since": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Since"
-          },
-          "snapshot": {
-            "default": 0,
-            "title": "Snapshot",
-            "type": "integer"
-          },
-          "spec": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spec"
-          },
-          "thermal": {
-            "default": false,
-            "title": "Thermal",
-            "type": "boolean"
-          },
-          "tileKind": {
-            "default": "weight",
-            "enum": [
-              "weight",
-              "gradient",
-              "update"
-            ],
-            "title": "Tilekind",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "FrameRequest",
         "type": "object"
       },
       "FreeSpace": {
@@ -2797,67 +2611,6 @@
         "title": "HasText",
         "type": "object"
       },
-      "HeadStatsRequest": {
-        "properties": {
-          "pattern": {
-            "items": {},
-            "minItems": 1,
-            "title": "Pattern",
-            "type": "array"
-          }
-        },
-        "required": [
-          "pattern"
-        ],
-        "title": "HeadStatsRequest",
-        "type": "object"
-      },
-      "HeadsOffRequest": {
-        "properties": {
-          "mode": {
-            "default": "mean",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "off": {
-            "items": {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "integer"
-                }
-              ],
-              "type": "array"
-            },
-            "title": "Off",
-            "type": "array"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "off"
-        ],
-        "title": "HeadsOffRequest",
-        "type": "object"
-      },
       "Hold": {
         "properties": {
           "held": {
@@ -3055,9 +2808,40 @@
         "title": "ImportModelOut",
         "type": "object"
       },
-      "Inspect": {
+      "Invite": {
+        "description": "A run another computer added this one to: its member job in this computer's queue, in the shared member vocabulary.",
         "properties": {
-          "version": {
+          "blocking_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockingJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "can_pause_and_join": {
+            "title": "Can Pause And Join",
+            "type": "boolean"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "round": {
             "anyOf": [
               {
                 "type": "integer"
@@ -3066,10 +2850,91 @@
                 "type": "null"
               }
             ],
-            "title": "Version"
+            "title": "Round"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_label": {
+            "title": "Run Label",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "invited",
+              "joining",
+              "training",
+              "behind",
+              "dropped",
+              "left",
+              "stopped",
+              "unreachable",
+              "waiting",
+              "never_joined",
+              "finished"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
           }
         },
-        "title": "Inspect",
+        "required": [
+          "job_id",
+          "run_id",
+          "run_label",
+          "owner",
+          "node",
+          "state",
+          "reason",
+          "can_pause_and_join"
+        ],
+        "title": "Invite",
+        "type": "object"
+      },
+      "Invites": {
+        "properties": {
+          "invites": {
+            "items": {
+              "$ref": "#/components/schemas/Invite"
+            },
+            "title": "Invites",
+            "type": "array"
+          },
+          "pause_requests": {
+            "items": {
+              "$ref": "#/components/schemas/PauseRequest"
+            },
+            "title": "Pause Requests",
+            "type": "array"
+          }
+        },
+        "required": [
+          "invites",
+          "pause_requests"
+        ],
+        "title": "Invites",
         "type": "object"
       },
       "Job": {
@@ -3133,6 +2998,11 @@
             "default": 0.0,
             "title": "Created At",
             "type": "number"
+          },
+          "details": {
+            "default": "",
+            "title": "Details",
+            "type": "string"
           },
           "epoch": {
             "default": 0,
@@ -3424,77 +3294,6 @@
         "title": "Knobs",
         "type": "object"
       },
-      "LandscapeRequest": {
-        "description": "What to draw: the loss over a plane of weights. `live` asks for the cheap frame a training run can afford between steps.",
-        "properties": {
-          "grid": {
-            "default": 21,
-            "maximum": 41.0,
-            "minimum": 5.0,
-            "title": "Grid",
-            "type": "integer"
-          },
-          "live": {
-            "default": false,
-            "title": "Live",
-            "type": "boolean"
-          },
-          "mode": {
-            "default": "random",
-            "enum": [
-              "random",
-              "pca"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "new_anchor": {
-            "default": false,
-            "title": "New Anchor",
-            "type": "boolean"
-          },
-          "seed": {
-            "default": 0,
-            "maximum": 2147483647.0,
-            "minimum": 0.0,
-            "title": "Seed",
-            "type": "integer"
-          },
-          "snapshot": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Snapshot"
-          },
-          "span": {
-            "default": 1.0,
-            "maximum": 4.0,
-            "minimum": 0.1,
-            "title": "Span",
-            "type": "number"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "LandscapeRequest",
-        "type": "object"
-      },
       "Lane": {
         "description": "One member's round on the coordinator's clock: seconds since the round opened. A moment is null when it never reported it.",
         "properties": {
@@ -3741,22 +3540,125 @@
         "title": "LeaveRequest",
         "type": "object"
       },
-      "LessonChange": {
-        "additionalProperties": false,
+      "Leftover": {
         "properties": {
+          "belongs_to": {
+            "description": "the job it came from, or why nothing needs it",
+            "title": "Belongs To",
+            "type": "string"
+          },
+          "bytes": {
+            "description": "what removing it frees",
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "id": {
+            "description": "what to send back to remove it; a path under the workspace",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "interrupted",
+              "failed",
+              "snapshot"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shared": {
+            "description": "bytes it holds that other runs still link to (not freed)",
+            "title": "Shared",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "belongs_to",
+          "bytes",
+          "shared"
+        ],
+        "title": "Leftover",
+        "type": "object"
+      },
+      "Lesson": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LessonItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "keepable": {
+            "title": "Keepable",
+            "type": "boolean"
+          },
+          "more": {
+            "title": "More",
+            "type": "integer"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
           "status": {
             "enum": [
-              "pending",
-              "dropped"
+              "live",
+              "dropped",
+              "left_out"
             ],
             "title": "Status",
             "type": "string"
           }
         },
         "required": [
-          "status"
+          "id",
+          "round",
+          "rows",
+          "status",
+          "keepable",
+          "items",
+          "more"
         ],
-        "title": "LessonChange",
+        "title": "Lesson",
+        "type": "object"
+      },
+      "LessonItem": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "reply": {
+            "title": "Reply",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "reply",
+          "answer"
+        ],
+        "title": "LessonItem",
         "type": "object"
       },
       "LicenceOption": {
@@ -4031,38 +3933,6 @@
           "entries"
         ],
         "title": "Listing",
-        "type": "object"
-      },
-      "LogitLensRequest": {
-        "properties": {
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "top_k": {
-            "default": 5,
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Top K",
-            "type": "integer"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "LogitLensRequest",
         "type": "object"
       },
       "LoopCheckOut": {
@@ -4585,41 +4455,6 @@
         "title": "LoopStart",
         "type": "object"
       },
-      "LossRequest": {
-        "properties": {
-          "pos": {
-            "default": -1,
-            "title": "Pos",
-            "type": "integer"
-          },
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "trained": {
-            "default": true,
-            "title": "Trained",
-            "type": "boolean"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "LossRequest",
-        "type": "object"
-      },
       "LrBody": {
         "properties": {
           "current": {
@@ -4704,6 +4539,16 @@
             "title": "Address",
             "type": "string"
           },
+          "blocking_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockingJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "can_stop": {
             "title": "Can Stop",
             "type": "boolean"
@@ -4786,6 +4631,11 @@
             ],
             "title": "Phase"
           },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
           "reported_ago": {
             "anyOf": [
               {
@@ -4830,7 +4680,7 @@
               "left",
               "stopped",
               "unreachable",
-              "unplaced",
+              "waiting",
               "never_joined",
               "finished"
             ],
@@ -5530,29 +5380,6 @@
         "title": "PairSaved",
         "type": "object"
       },
-      "PartLink": {
-        "properties": {
-          "block": {
-            "title": "Block",
-            "type": "integer"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "route": {
-            "title": "Route",
-            "type": "string"
-          }
-        },
-        "required": [
-          "route",
-          "label",
-          "block"
-        ],
-        "title": "PartLink",
-        "type": "object"
-      },
       "Parts": {
         "properties": {
           "channel": {
@@ -5591,614 +5418,6 @@
         "title": "Parts",
         "type": "object"
       },
-      "Passive": {
-        "properties": {
-          "sessions": {
-            "items": {
-              "$ref": "#/components/schemas/PassiveSession"
-            },
-            "title": "Sessions",
-            "type": "array"
-          },
-          "signin": {
-            "title": "Signin",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "sessions",
-          "signin"
-        ],
-        "title": "Passive",
-        "type": "object"
-      },
-      "PassiveCheckpoint": {
-        "properties": {
-          "at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "At"
-          },
-          "best": {
-            "default": false,
-            "title": "Best",
-            "type": "boolean"
-          },
-          "discarded": {
-            "default": false,
-            "title": "Discarded",
-            "type": "boolean"
-          },
-          "elapsed": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Elapsed"
-          },
-          "error": {
-            "title": "Error",
-            "type": "number"
-          },
-          "kept": {
-            "default": true,
-            "title": "Kept",
-            "type": "boolean"
-          },
-          "lessons": {
-            "default": 0,
-            "title": "Lessons",
-            "type": "integer"
-          },
-          "n": {
-            "title": "N",
-            "type": "integer"
-          },
-          "parent": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent"
-          },
-          "pivot": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pivot"
-          },
-          "polished": {
-            "default": false,
-            "title": "Polished",
-            "type": "boolean"
-          },
-          "round": {
-            "title": "Round",
-            "type": "integer"
-          },
-          "win_rate": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Win Rate"
-          }
-        },
-        "required": [
-          "n",
-          "round",
-          "error"
-        ],
-        "title": "PassiveCheckpoint",
-        "type": "object"
-      },
-      "PassiveDetail": {
-        "properties": {
-          "journal": {
-            "$ref": "#/components/schemas/PassiveJournal"
-          },
-          "plan": {
-            "$ref": "#/components/schemas/PassivePlan"
-          },
-          "progress": {
-            "$ref": "#/components/schemas/PassiveProgress"
-          },
-          "session": {
-            "$ref": "#/components/schemas/PassiveSession"
-          }
-        },
-        "required": [
-          "session",
-          "plan",
-          "progress",
-          "journal"
-        ],
-        "title": "PassiveDetail",
-        "type": "object"
-      },
-      "PassiveEvent": {
-        "additionalProperties": true,
-        "description": "One line of the trainer's journal. `type` is start, round, check, checkpoint, rollback, teacher, lesson, restart, power, pause,\nresume, stop, memory or error; the other fields depend on it (message, reason, error, from, to, ...).",
-        "properties": {
-          "at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "At"
-          },
-          "index": {
-            "title": "Index",
-            "type": "integer"
-          },
-          "type": {
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index",
-          "type"
-        ],
-        "title": "PassiveEvent",
-        "type": "object"
-      },
-      "PassiveJournal": {
-        "properties": {
-          "events": {
-            "items": {
-              "$ref": "#/components/schemas/PassiveEvent"
-            },
-            "title": "Events",
-            "type": "array"
-          },
-          "first": {
-            "title": "First",
-            "type": "integer"
-          },
-          "total": {
-            "title": "Total",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "events",
-          "total",
-          "first"
-        ],
-        "title": "PassiveJournal",
-        "type": "object"
-      },
-      "PassiveLesson": {
-        "description": "One thing the teacher showed the model: the prompt, the model's own reply and the better answer it should learn.",
-        "properties": {
-          "answer": {
-            "default": "",
-            "title": "Answer",
-            "type": "string"
-          },
-          "at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "At"
-          },
-          "checkpoint": {
-            "title": "Checkpoint",
-            "type": "integer"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "prompt": {
-            "default": "",
-            "title": "Prompt",
-            "type": "string"
-          },
-          "reply": {
-            "default": "",
-            "title": "Reply",
-            "type": "string"
-          },
-          "round": {
-            "title": "Round",
-            "type": "integer"
-          },
-          "status": {
-            "enum": [
-              "pending",
-              "dropped",
-              "left_out"
-            ],
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "round",
-          "checkpoint",
-          "status"
-        ],
-        "title": "PassiveLesson",
-        "type": "object"
-      },
-      "PassivePlan": {
-        "description": "studio_passive.plan_summary: one plain sentence per group of settings.",
-        "properties": {
-          "limits": {
-            "title": "Limits",
-            "type": "string"
-          },
-          "plateau": {
-            "title": "Plateau",
-            "type": "string"
-          },
-          "stop": {
-            "title": "Stop",
-            "type": "string"
-          },
-          "teacher": {
-            "title": "Teacher",
-            "type": "string"
-          },
-          "worse": {
-            "title": "Worse",
-            "type": "string"
-          }
-        },
-        "required": [
-          "stop",
-          "limits",
-          "plateau",
-          "teacher",
-          "worse"
-        ],
-        "title": "PassivePlan",
-        "type": "object"
-      },
-      "PassiveProgress": {
-        "properties": {
-          "active_seconds": {
-            "default": 0,
-            "title": "Active Seconds",
-            "type": "number"
-          },
-          "batch_size": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Batch Size"
-          },
-          "best": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Best"
-          },
-          "best_error": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Best Error"
-          },
-          "checkpoints": {
-            "items": {
-              "$ref": "#/components/schemas/PassiveCheckpoint"
-            },
-            "title": "Checkpoints",
-            "type": "array"
-          },
-          "current": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current"
-          },
-          "current_error": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Error"
-          },
-          "learning_rate": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Learning Rate"
-          },
-          "limit_seconds": {
-            "title": "Limit Seconds",
-            "type": "number"
-          },
-          "phase": {
-            "title": "Phase",
-            "type": "string"
-          },
-          "restarts": {
-            "default": 0,
-            "title": "Restarts",
-            "type": "integer"
-          },
-          "round": {
-            "default": 0,
-            "title": "Round",
-            "type": "integer"
-          },
-          "rounds_since_best": {
-            "default": 0,
-            "title": "Rounds Since Best",
-            "type": "integer"
-          },
-          "stop_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stop Reason"
-          },
-          "teacher": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PassiveTeacher"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "win_rate": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Win Rate"
-          },
-          "worse_streak": {
-            "default": 0,
-            "title": "Worse Streak",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "phase",
-          "limit_seconds",
-          "checkpoints"
-        ],
-        "title": "PassiveProgress",
-        "type": "object"
-      },
-      "PassiveSaved": {
-        "properties": {
-          "created": {
-            "title": "Created",
-            "type": "boolean"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "created"
-        ],
-        "title": "PassiveSaved",
-        "type": "object"
-      },
-      "PassiveSession": {
-        "additionalProperties": true,
-        "properties": {
-          "checkpoints": {
-            "default": 0,
-            "title": "Checkpoints",
-            "type": "integer"
-          },
-          "created": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created"
-          },
-          "error": {
-            "title": "Error"
-          },
-          "heard": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Heard"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "restarts": {
-            "default": 0,
-            "title": "Restarts",
-            "type": "integer"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "stop": {
-            "title": "Stop"
-          },
-          "trainer": {
-            "default": "",
-            "title": "Trainer",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          },
-          "watchdog": {
-            "default": "",
-            "title": "Watchdog",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "status"
-        ],
-        "title": "PassiveSession",
-        "type": "object"
-      },
-      "PassiveStarted": {
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "status"
-        ],
-        "title": "PassiveStarted",
-        "type": "object"
-      },
-      "PassiveStatus": {
-        "properties": {
-          "status": {
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "title": "PassiveStatus",
-        "type": "object"
-      },
-      "PassiveTeacher": {
-        "additionalProperties": true,
-        "properties": {
-          "done": {
-            "default": 0,
-            "title": "Done",
-            "type": "integer"
-          },
-          "model": {
-            "default": "",
-            "title": "Model",
-            "type": "string"
-          },
-          "reachable": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reachable"
-          },
-          "total": {
-            "default": 0,
-            "title": "Total",
-            "type": "integer"
-          }
-        },
-        "title": "PassiveTeacher",
-        "type": "object"
-      },
       "PathsRequest": {
         "properties": {
           "paths": {
@@ -6213,6 +5432,45 @@
           "paths"
         ],
         "title": "PathsRequest",
+        "type": "object"
+      },
+      "PauseRequest": {
+        "description": "Another computer asked this one to pause the job it is running. Only a person here acts on it.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "blocking_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockingJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_node": {
+            "title": "From Node",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "run_label": {
+            "title": "Run Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "from_node",
+          "run_label",
+          "at"
+        ],
+        "title": "PauseRequest",
         "type": "object"
       },
       "PhaseModel": {
@@ -6341,6 +5599,13 @@
             "title": "Hold",
             "type": "number"
           },
+          "hours": {
+            "default": 4.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1440.0,
+            "title": "Hours",
+            "type": "number"
+          },
           "mode": {
             "default": "catch_up",
             "enum": [
@@ -6357,6 +5622,17 @@
             "title": "Passes",
             "type": "integer"
           },
+          "plateau": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau"
+          },
           "preview_rows": {
             "default": 6,
             "maximum": 256.0,
@@ -6371,6 +5647,19 @@
             "title": "Rows",
             "type": "integer"
           },
+          "steps": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
           "version": {
             "anyOf": [
               {
@@ -6384,6 +5673,47 @@
           }
         },
         "title": "PlanRequest",
+        "type": "object"
+      },
+      "PlateauRule": {
+        "description": "studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.",
+        "properties": {
+          "min_gain": {
+            "title": "Min Gain",
+            "type": "number"
+          },
+          "min_steps": {
+            "default": 0,
+            "title": "Min Steps",
+            "type": "integer"
+          },
+          "window_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Seconds"
+          },
+          "window_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Steps"
+          }
+        },
+        "required": [
+          "min_gain"
+        ],
+        "title": "PlateauRule",
         "type": "object"
       },
       "PostTrainingJobOut": {
@@ -6808,10 +6138,35 @@
             "title": "Pieces Per Step",
             "type": "integer"
           },
+          "plateau": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlateauRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plateau_line": {
+            "default": "",
+            "title": "Plateau Line",
+            "type": "string"
+          },
           "reason": {
             "default": "",
             "title": "Reason",
             "type": "string"
+          },
+          "sizing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sizing"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "steps": {
             "anyOf": [
@@ -7024,30 +6379,6 @@
           }
         },
         "title": "PreviewRequest",
-        "type": "object"
-      },
-      "ProbeRequest": {
-        "properties": {
-          "text": {
-            "default": "The cat sat on the mat because it was tired.",
-            "minLength": 2,
-            "title": "Text",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ProbeRequest",
         "type": "object"
       },
       "ProblemRule": {
@@ -7354,6 +6685,35 @@
         "title": "QuestionBody",
         "type": "object"
       },
+      "QueueLimits": {
+        "description": "What a machine's queue plan allows its jobs, so the run-start form can say it before a machine is chosen.",
+        "properties": {
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked"
+          },
+          "paused": {
+            "default": false,
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanModel"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "QueueLimits",
+        "type": "object"
+      },
       "QueueNode": {
         "properties": {
           "address": {
@@ -7379,6 +6739,16 @@
           "hostname": {
             "title": "Hostname",
             "type": "string"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueLimits"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "listed": {
             "default": true,
@@ -7546,6 +6916,14 @@
               }
             ],
             "title": "Eta S"
+          },
+          "failed": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/JobModel"
+            },
+            "title": "Failed",
+            "type": "array"
           },
           "gate": {
             "$ref": "#/components/schemas/studio_api__routers__queue__GateModel",
@@ -8223,32 +7601,6 @@
         "title": "RangeResult",
         "type": "object"
       },
-      "RankRequest": {
-        "properties": {
-          "mode": {
-            "default": "mean",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "RankRequest",
-        "type": "object"
-      },
       "RebuiltJob": {
         "properties": {
           "created_at": {
@@ -8443,6 +7795,24 @@
         "title": "RemoteStop",
         "type": "object"
       },
+      "RemoveLeftovers": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "RemoveLeftovers",
+        "type": "object"
+      },
       "Renewal": {
         "properties": {
           "checkpoint": {
@@ -8542,6 +7912,58 @@
         "title": "Reply",
         "type": "object"
       },
+      "ReplyRequest": {
+        "properties": {
+          "ablate": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ablate"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ReplyRequest",
+        "type": "object"
+      },
       "ResizeBody": {
         "properties": {
           "choices": {
@@ -8575,6 +7997,11 @@
       },
       "Round": {
         "properties": {
+          "best": {
+            "default": false,
+            "title": "Best",
+            "type": "boolean"
+          },
           "bytes_down": {
             "title": "Bytes Down",
             "type": "integer"
@@ -8594,6 +8021,11 @@
             "title": "Dropped",
             "type": "array"
           },
+          "lessons": {
+            "default": 0,
+            "title": "Lessons",
+            "type": "integer"
+          },
           "loss": {
             "anyOf": [
               {
@@ -8608,6 +8040,33 @@
           "members": {
             "title": "Members",
             "type": "integer"
+          },
+          "pivot": {
+            "default": "",
+            "title": "Pivot",
+            "type": "string"
+          },
+          "polish": {
+            "default": "",
+            "enum": [
+              "",
+              "accepted",
+              "rejected",
+              "skipped"
+            ],
+            "title": "Polish",
+            "type": "string"
+          },
+          "polish_val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polish Val Loss"
           },
           "round": {
             "title": "Round",
@@ -8631,6 +8090,17 @@
               }
             ],
             "title": "Val Loss"
+          },
+          "val_loss_before_polish": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Val Loss Before Polish"
           }
         },
         "required": [
@@ -8842,6 +8312,11 @@
             ],
             "title": "Generation"
           },
+          "lr_scale": {
+            "default": 1.0,
+            "title": "Lr Scale",
+            "type": "number"
+          },
           "member": {
             "title": "Member",
             "type": "boolean"
@@ -8856,6 +8331,16 @@
               }
             ],
             "title": "Members"
+          },
+          "paused": {
+            "default": false,
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "polishing": {
+            "default": false,
+            "title": "Polishing",
+            "type": "boolean"
           },
           "rank": {
             "anyOf": [
@@ -8894,6 +8379,11 @@
           "state": {
             "title": "State",
             "type": "string"
+          },
+          "steps": {
+            "default": 0,
+            "title": "Steps",
+            "type": "integer"
           },
           "term": {
             "default": 1,
@@ -9105,6 +8595,43 @@
             "title": "Age S",
             "type": "number"
           },
+          "best_round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Round"
+          },
+          "best_val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Val Loss"
+          },
+          "can_pause": {
+            "default": false,
+            "title": "Can Pause",
+            "type": "boolean"
+          },
+          "can_restart": {
+            "default": false,
+            "title": "Can Restart",
+            "type": "boolean"
+          },
+          "can_resume": {
+            "default": false,
+            "title": "Can Resume",
+            "type": "boolean"
+          },
           "can_stop": {
             "title": "Can Stop",
             "type": "boolean"
@@ -9148,6 +8675,11 @@
             "title": "Grace S",
             "type": "number"
           },
+          "handoff": {
+            "default": "",
+            "title": "Handoff",
+            "type": "string"
+          },
           "history": {
             "items": {
               "$ref": "#/components/schemas/Round"
@@ -9166,6 +8698,16 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "lessons": {
+            "default": 0,
+            "title": "Lessons",
+            "type": "integer"
+          },
+          "lessons_left_out": {
+            "default": 0,
+            "title": "Lessons Left Out",
+            "type": "integer"
           },
           "members": {
             "items": {
@@ -9204,19 +8746,32 @@
             "title": "Owner",
             "type": "string"
           },
+          "paused": {
+            "default": false,
+            "title": "Paused",
+            "type": "boolean"
+          },
           "phase": {
             "enum": [
               "waiting",
+              "paused",
               "next_round",
               "training",
               "collecting",
               "outer_step",
               "validating",
+              "polishing",
+              "judging",
               "finished",
               "stopped"
             ],
             "title": "Phase",
             "type": "string"
+          },
+          "reviewed_only": {
+            "default": false,
+            "title": "Reviewed Only",
+            "type": "boolean"
           },
           "round": {
             "title": "Round",
@@ -9254,6 +8809,16 @@
             "title": "State",
             "type": "string"
           },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "stop_rule": {
+            "default": "",
+            "title": "Stop Rule",
+            "type": "string"
+          },
           "term": {
             "default": 1,
             "title": "Term",
@@ -9280,6 +8845,17 @@
               }
             ],
             "title": "Version"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
           },
           "window_s": {
             "anyOf": [
@@ -9336,7 +8912,20 @@
               "stale",
               "outer_step",
               "checkpoint",
-              "finished"
+              "finished",
+              "pivot",
+              "paused",
+              "resumed",
+              "took_over",
+              "stepped_down",
+              "polish",
+              "polish_off",
+              "lessons",
+              "win_rate",
+              "win_rate_off",
+              "judging",
+              "lesson_dropped",
+              "lesson_kept"
             ],
             "title": "Kind",
             "type": "string"
@@ -9393,6 +8982,16 @@
           },
           "curve": {
             "$ref": "#/components/schemas/CurveModel"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ended"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "gate_vs": {
             "anyOf": [
@@ -9748,6 +9347,114 @@
         "title": "SizesBody",
         "type": "object"
       },
+      "Sizing": {
+        "description": "Does the model fit the text and the time? (studio_ia.sizing.sizing)",
+        "properties": {
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expected"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gpu_note": {
+            "default": "",
+            "title": "Gpu Note",
+            "type": "string"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "boolean"
+          },
+          "run_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Hours"
+          },
+          "seconds_per_step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Per Step"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Suggestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_per_param": {
+            "title": "Tokens Per Param",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          },
+          "verdict": {
+            "enum": [
+              "model_too_small",
+              "data_too_small",
+              "balanced"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "warning": {
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "warning",
+          "tokens_per_param",
+          "measured",
+          "hours"
+        ],
+        "title": "Sizing",
+        "type": "object"
+      },
       "SlotInfo": {
         "properties": {
           "modules": {
@@ -9777,24 +9484,6 @@
           "modules"
         ],
         "title": "SlotInfo",
-        "type": "object"
-      },
-      "SnapshotOut": {
-        "properties": {
-          "index": {
-            "title": "Index",
-            "type": "integer"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index",
-          "name"
-        ],
-        "title": "SnapshotOut",
         "type": "object"
       },
       "Source": {
@@ -10212,120 +9901,8 @@
         "title": "StackExchangeUpdate",
         "type": "object"
       },
-      "StartPassive": {
-        "additionalProperties": false,
-        "description": "The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.",
-        "properties": {
-          "duration": {
-            "default": 8,
-            "title": "Duration",
-            "type": "number"
-          },
-          "keep_awake": {
-            "default": true,
-            "title": "Keep Awake",
-            "type": "boolean"
-          },
-          "memory_fraction": {
-            "default": 0.5,
-            "title": "Memory Fraction",
-            "type": "number"
-          },
-          "patience_rounds": {
-            "default": 3,
-            "title": "Patience Rounds",
-            "type": "integer"
-          },
-          "pause_on_battery": {
-            "default": true,
-            "title": "Pause On Battery",
-            "type": "boolean"
-          },
-          "sources": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sources"
-          },
-          "target_error": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target Error"
-          },
-          "teacher": {
-            "default": true,
-            "title": "Teacher",
-            "type": "boolean"
-          },
-          "unit": {
-            "default": "hours",
-            "enum": [
-              "minutes",
-              "hours",
-              "days"
-            ],
-            "title": "Unit",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "StartPassive",
-        "type": "object"
-      },
-      "StartRequest": {
-        "properties": {
-          "level": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Level"
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mode"
-          }
-        },
-        "title": "StartRequest",
-        "type": "object"
-      },
       "StartRun": {
-        "description": "What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.",
+        "description": "What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.",
         "properties": {
           "all_machines": {
             "anyOf": [
@@ -10337,6 +9914,17 @@
               }
             ],
             "title": "All Machines"
+          },
+          "coordinator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coordinator"
           },
           "dataset_ids": {
             "items": {
@@ -10415,6 +10003,11 @@
               }
             ],
             "title": "Replaces"
+          },
+          "reviewed_only": {
+            "default": false,
+            "title": "Reviewed Only",
+            "type": "boolean"
           },
           "rounds": {
             "default": 10,
@@ -10532,6 +10125,170 @@
         "title": "StatusRequest",
         "type": "object"
       },
+      "StepRate": {
+        "description": "studio_scaling.measure_step_rate: what a step of the design costs on this computer, on the device a run would use.",
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "seconds_per_step": {
+            "title": "Seconds Per Step",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "title": "Tokens Per Second",
+            "type": "number"
+          }
+        },
+        "required": [
+          "seconds_per_step",
+          "tokens_per_second",
+          "device",
+          "device_name",
+          "rows",
+          "context"
+        ],
+        "title": "StepRate",
+        "type": "object"
+      },
+      "StepRateJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StepRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "StepRateJob",
+        "type": "object"
+      },
+      "StepRateRequest": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "preview_rows": {
+            "default": 6,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Preview Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "StepRateRequest",
+        "type": "object"
+      },
       "Stop": {
         "properties": {
           "epoch": {
@@ -10561,6 +10318,55 @@
           "bytes"
         ],
         "title": "StorageUse",
+        "type": "object"
+      },
+      "Suggestion": {
+        "description": "The design and step count that fit the hours given (studio_ia.sizing.suggest_design).",
+        "properties": {
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "layers": {
+            "title": "Layers",
+            "type": "integer"
+          },
+          "params": {
+            "title": "Params",
+            "type": "integer"
+          },
+          "same_design": {
+            "title": "Same Design",
+            "type": "boolean"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "tokens_per_param": {
+            "title": "Tokens Per Param",
+            "type": "number"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "layers",
+          "params",
+          "steps",
+          "hours",
+          "tokens_per_param",
+          "same_design",
+          "text"
+        ],
+        "title": "Suggestion",
         "type": "object"
       },
       "SummaryJob": {
@@ -10958,36 +10764,6 @@
         "title": "Tower",
         "type": "object"
       },
-      "TraceRequest": {
-        "properties": {
-          "pos": {
-            "default": -1,
-            "title": "Pos",
-            "type": "integer"
-          },
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "TraceRequest",
-        "type": "object"
-      },
       "Tried": {
         "properties": {
           "choices": {
@@ -11109,43 +10885,6 @@
           "type"
         ],
         "title": "ValidationError",
-        "type": "object"
-      },
-      "ValueMapRequest": {
-        "properties": {
-          "block": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Block",
-            "type": "integer"
-          },
-          "head": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Head",
-            "type": "integer"
-          },
-          "heads": {
-            "minimum": 1.0,
-            "title": "Heads",
-            "type": "integer"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "heads"
-        ],
-        "title": "ValueMapRequest",
         "type": "object"
       },
       "Verdict": {
@@ -11379,233 +11118,6 @@
           }
         },
         "title": "VersionRequest",
-        "type": "object"
-      },
-      "ViewControls": {
-        "description": "Everything the viewer keeps between frames. The first five are web/src/lib/viewer.ts's SceneQuery.",
-        "properties": {
-          "cell": {
-            "items": {
-              "type": "integer"
-            },
-            "maxItems": 2,
-            "minItems": 2,
-            "title": "Cell",
-            "type": "array"
-          },
-          "headStage": {
-            "default": "pattern",
-            "enum": [
-              "scores",
-              "scale",
-              "mask",
-              "pattern",
-              "values"
-            ],
-            "title": "Headstage",
-            "type": "string"
-          },
-          "level": {
-            "default": "Model",
-            "enum": [
-              "Model",
-              "Window",
-              "Head",
-              "Weights"
-            ],
-            "title": "Level",
-            "type": "string"
-          },
-          "mode": {
-            "default": "Build",
-            "enum": [
-              "Build",
-              "Train",
-              "Ride a token"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "note": {
-            "default": "",
-            "title": "Note",
-            "type": "string"
-          },
-          "playing": {
-            "default": false,
-            "title": "Playing",
-            "type": "boolean"
-          },
-          "probing": {
-            "default": false,
-            "title": "Probing",
-            "type": "boolean"
-          },
-          "reduce_motion": {
-            "default": false,
-            "title": "Reduce Motion",
-            "type": "boolean"
-          },
-          "selection": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selection"
-          },
-          "show_numbers": {
-            "default": true,
-            "title": "Show Numbers",
-            "type": "boolean"
-          },
-          "snapshot": {
-            "default": 0,
-            "title": "Snapshot",
-            "type": "integer"
-          },
-          "spec": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spec"
-          },
-          "thermal": {
-            "default": false,
-            "title": "Thermal",
-            "type": "boolean"
-          },
-          "tileKind": {
-            "default": "weight",
-            "enum": [
-              "weight",
-              "gradient",
-              "update"
-            ],
-            "title": "Tilekind",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ViewControls",
-        "type": "object"
-      },
-      "ViewerStatus": {
-        "properties": {
-          "available": {
-            "title": "Available",
-            "type": "boolean"
-          },
-          "connected": {
-            "title": "Connected",
-            "type": "boolean"
-          },
-          "running": {
-            "title": "Running",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "available",
-          "running",
-          "connected"
-        ],
-        "title": "ViewerStatus",
-        "type": "object"
-      },
-      "ViewerSummaryRequest": {
-        "properties": {
-          "version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ViewerSummaryRequest",
-        "type": "object"
-      },
-      "ViewerSummaryStatus": {
-        "properties": {
-          "bins": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Bins"
-          },
-          "n_ctx": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "N Ctx"
-          },
-          "note": {
-            "title": "Note",
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "ready",
-              "stale",
-              "none",
-              "no_checkpoint"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "step": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Step"
-          }
-        },
-        "required": [
-          "state",
-          "note"
-        ],
-        "title": "ViewerSummaryStatus",
         "type": "object"
       },
       "Warm": {
@@ -11973,58 +11485,6 @@
         "title": "PlanRow",
         "type": "object"
       },
-      "studio_api__routers__chat__ReplyRequest": {
-        "properties": {
-          "ablate": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "prefixItems": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "integer"
-                    }
-                  ],
-                  "type": "array"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ablate"
-          },
-          "messages": {
-            "items": {
-              "$ref": "#/components/schemas/Message"
-            },
-            "minItems": 1,
-            "title": "Messages",
-            "type": "array"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "messages"
-        ],
-        "title": "ReplyRequest",
-        "type": "object"
-      },
       "studio_api__routers__cluster__Accepted": {
         "properties": {
           "epoch": {
@@ -12189,58 +11649,6 @@
           "tokens_per_second"
         ],
         "title": "Sample",
-        "type": "object"
-      },
-      "studio_api__routers__inspect__ReplyRequest": {
-        "properties": {
-          "mode": {
-            "default": "mean",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "off": {
-            "items": {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "integer"
-                }
-              ],
-              "type": "array"
-            },
-            "title": "Off",
-            "type": "array"
-          },
-          "prompt": {
-            "minLength": 1,
-            "title": "Prompt",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "off",
-          "prompt"
-        ],
-        "title": "ReplyRequest",
         "type": "object"
       },
       "studio_api__routers__pretraining__GateModel": {
@@ -12770,7 +12178,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/studio_api__routers__chat__ReplyRequest"
+                "$ref": "#/components/schemas/ReplyRequest"
               }
             }
           },
@@ -14059,6 +13467,65 @@
           }
         },
         "summary": "Validation",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/weights": {
+      "get": {
+        "description": "A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left.",
+        "operationId": "weights_collective__run__weights_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Weights",
         "tags": [
           "collective"
         ]
@@ -15787,6 +15254,284 @@
         ]
       }
     },
+    "/distributed/invites": {
+      "get": {
+        "description": "The runs other computers added this one to (no accept step: they join by themselves when this computer is free) and the pause\nrequests other computers sent it. The same words the owner's run page uses for this machine.",
+        "operationId": "list_invites_distributed_invites_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Invites",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/invites/{job_id}/leave": {
+      "post": {
+        "description": "Leave the run: the owner is told to drop this member and keep it out (the same call as Stop on the owner's run page), and the\nmember job leaves this queue, a running one stopping. The owner not answering does not stop this computer from leaving.",
+        "operationId": "leave_run_distributed_invites__job_id__leave_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/invites/{job_id}/pause-and-join": {
+      "post": {
+        "description": "Pause the job running here and put the member job in its place. The paused job goes back to waiting and continues from its own\ncheckpoint when the run ends. 409 when the member job already runs or nothing else runs.",
+        "operationId": "pause_and_join_distributed_invites__job_id__pause_and_join_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause And Join",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/pause-requests": {
+      "post": {
+        "description": "Another computer asks this one to pause its running job. It is shown here as an alert, and nothing happens until a person\nhere accepts it. Asking again from the same computer for the same run refreshes the request.",
+        "operationId": "receive_pause_request_distributed_pause_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskPause"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseRequest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Pause Request",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/pause-requests/{request_id}": {
+      "delete": {
+        "description": "Decline a pause request; the running job carries on.",
+        "operationId": "dismiss_pause_request_distributed_pause_requests__request_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Pause Request",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/pause-requests/{request_id}/accept": {
+      "post": {
+        "description": "Pause the running job and hold it, so a waiting member job runs. The held job is released from the Queue page. 404 for an\nunknown request, 409 when nothing runs here any more.",
+        "operationId": "accept_pause_request_distributed_pause_requests__request_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Pause Request",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/peers/pause-request": {
+      "post": {
+        "description": "Ask another machine to pause the job it is running, so a run can use it. The request shows there as an alert; nothing is\npaused until a person there accepts. 502 with a sentence when the machine does not answer.",
+        "operationId": "ask_peer_to_pause_distributed_peers_pause_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskPeer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseRequest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask Peer To Pause",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
     "/distributed/runs": {
       "get": {
         "description": "Every run in the cluster, newest first, each with its members and rounds and the `origin` that wrote it and its `age_s`. Runs\nthis computer coordinates are read live; the others come from this computer's copy of the observation store, so a node that is\ndown keeps its last runs here with a growing age and `origin_down`. A machine that is offline or refuses is a member row with\na reason; the rest of the run still reads.",
@@ -15813,7 +15558,7 @@
         ]
       },
       "post": {
-        "description": "Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen\nmachines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`\nevery listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,\neach with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the\npretrain job leaves the queue.",
+        "description": "Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen\nmachines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`\nevery listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,\neach with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the\npretrain job leaves the queue. With `coordinator` (one of the invited machines, which must answer on this app version: else 400\nor 409 with the reason) this computer starts the run and hands the coordinator role to that machine once it holds a finished\nround (studio_failover, \"handoff\"); without it this computer coordinates throughout.",
         "operationId": "start_run_distributed_runs_post",
         "requestBody": {
           "content": {
@@ -15895,6 +15640,165 @@
         ]
       }
     },
+    "/distributed/runs/{run_id}/lessons": {
+      "get": {
+        "description": "What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the\nrun is not going. A run another computer coordinates is read by asking that computer.",
+        "operationId": "run_lessons_distributed_runs__run_id__lessons_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "title": "Response Run Lessons Distributed Runs  Run Id  Lessons Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Lessons",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/lessons/{lesson}/drop": {
+      "post": {
+        "description": "Leave a lesson out of the rounds that open from now on; the round in flight keeps it. 404 for an id that is no lesson, 409 when\nthe run is over or not going. Answers the lessons as they stand.",
+        "operationId": "drop_run_lesson_distributed_runs__run_id__lessons__lesson__drop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lesson",
+            "required": true,
+            "schema": {
+              "title": "Lesson",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "title": "Response Drop Run Lesson Distributed Runs  Run Id  Lessons  Lesson  Drop Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Drop Run Lesson",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/lessons/{lesson}/keep": {
+      "post": {
+        "description": "Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop.",
+        "operationId": "keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lesson",
+            "required": true,
+            "schema": {
+              "title": "Lesson",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "title": "Response Keep Run Lesson Distributed Runs  Run Id  Lessons  Lesson  Keep Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep Run Lesson",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
     "/distributed/runs/{run_id}/members/{node}/stop": {
       "post": {
         "description": "Take one member out of a run and keep it out. The others carry on from the next round. 409 for this computer (stop the run)\nand for a node that is not a member. A run another computer coordinates: that computer is asked.",
@@ -15942,6 +15846,135 @@
           }
         },
         "summary": "Stop Member",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/pause": {
+      "post": {
+        "description": "Hold a run: no new round opens until it is resumed. A round in flight finishes, the members wait, and the paused time does not\ncount toward the run's time limit. It stays paused over a restart of the app. 409 when the run is over or not going. A run\nanother computer coordinates is paused by asking that computer.",
+        "operationId": "pause_run_distributed_runs__run_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/restart": {
+      "post": {
+        "description": "Start a new run (a new id) from an ended one: the same design, text, settings and machines, with the weights of the old run's\nbest round (else its last) as the starting point. The outer momentum starts at zero. 409 for a run that is still going, one\nthat saved no weights, or one this computer did not start. A run another computer coordinates is restarted by that computer.",
+        "operationId": "restart_run_distributed_runs__run_id__restart_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restart Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/resume": {
+      "post": {
+        "description": "Undo a pause: the next round opens as soon as the members are in. 409 when the run is over or not going.",
+        "operationId": "resume_run_distributed_runs__run_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Run",
         "tags": [
           "distributed"
         ]
@@ -16006,466 +16039,6 @@
         "summary": "Events",
         "tags": [
           "events"
-        ]
-      }
-    },
-    "/inspect/ablate": {
-      "post": {
-        "description": "{baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.",
-        "operationId": "ablate_inspect_ablate_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AblateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ablate",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/forward": {
-      "post": {
-        "description": "{ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.",
-        "operationId": "forward_inspect_forward_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ForwardRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Forward",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/head-stats": {
-      "post": {
-        "description": "{entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted\npattern, so it answers at once instead of as a job.",
-        "operationId": "head_stats_inspect_head_stats_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HeadStatsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Head Stats",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/heads-off": {
-      "post": {
-        "description": "{before, after}: held-back bits per character with the (block, head) pairs in `off` switched off.",
-        "operationId": "heads_off_inspect_heads_off_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HeadsOffRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Heads Off",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/logit-lens": {
-      "post": {
-        "description": "[{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.",
-        "operationId": "logit_lens_inspect_logit_lens_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LogitLensRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Logit Lens",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/loss": {
-      "post": {
-        "description": "{tokens, pos, probabilities, target, pieces}: how likely each next piece was at `pos`.",
-        "operationId": "loss_inspect_loss_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LossRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Loss",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/prepared": {
-      "post": {
-        "description": "{ids, tokens}: the text the version's pieces are read from.",
-        "operationId": "prepared_inspect_prepared_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Inspect"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Prepared",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/rank-heads": {
-      "post": {
-        "description": "[{block, head, rise}]: how much worse the held-back text gets with each head switched off. Slow.",
-        "operationId": "rank_heads_inspect_rank_heads_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RankRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Rank Heads",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/reply": {
-      "post": {
-        "description": "The greedy answer to `prompt` with the (block, head) pairs in `off` switched off for this reply only. The result is the text.",
-        "operationId": "reply_inspect_reply_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/studio_api__routers__inspect__ReplyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Reply",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/trace": {
-      "post": {
-        "description": "{tokens, pos, rows}: what each stage of the model does to the token at `pos`.",
-        "operationId": "trace_inspect_trace_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TraceRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Trace",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/value-map": {
-      "post": {
-        "description": "{d_model, heads, blocks, singular}: the singular values of one head's value and output weights.",
-        "operationId": "value_map_inspect_value_map_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ValueMapRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Value Map",
-        "tags": [
-          "inspect"
         ]
       }
     },
@@ -16585,476 +16158,6 @@
         "summary": "Node",
         "tags": [
           "node"
-        ]
-      }
-    },
-    "/passive": {
-      "get": {
-        "operationId": "passive_passive_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Passive"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Passive",
-        "tags": [
-          "passive"
-        ]
-      },
-      "post": {
-        "description": "Create a session from the form and start its watchdog. 400 with a sentence for a bad plan or version, 409 while another session is active.",
-        "operationId": "start_passive_passive_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StartPassive"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveStarted"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Passive",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/signin": {
-      "delete": {
-        "operationId": "remove_passive_signin_passive_signin_delete",
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Remove Passive Signin",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}": {
-      "get": {
-        "description": "One session: its row, plan, progress (phase, round, best error, the error of each checkpoint) and a page of the trainer's journal,\nthe newest `limit` events or those before event number `before`. 404 for an unknown session.",
-        "operationId": "passive_detail_passive__session_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "before",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Before"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveDetail"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Passive Detail",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/keep-going": {
-      "post": {
-        "description": "Start the watchdog again for an active session whose watchdog and trainer are gone. 409 when the session has ended.",
-        "operationId": "keep_passive_going_passive__session_id__keep_going_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Keep Passive Going",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/lessons": {
-      "get": {
-        "description": "The lessons the teacher gave this session, oldest first. 404 for an unknown session.",
-        "operationId": "passive_lessons_passive__session_id__lessons_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/PassiveLesson"
-                  },
-                  "title": "Response Passive Lessons Passive  Session Id  Lessons Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Passive Lessons",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/lessons/{lesson_id}": {
-      "patch": {
-        "description": "Drop a lesson (the next round leaves it out of the training) or keep it. 404 for an unknown session or lesson.",
-        "operationId": "change_passive_lesson_passive__session_id__lessons__lesson_id__patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "lesson_id",
-            "required": true,
-            "schema": {
-              "title": "Lesson Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LessonChange"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveLesson"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Change Passive Lesson",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/pause": {
-      "post": {
-        "description": "Ask a session to pause at the trainer's next check. 409 when it has ended or is being stopped.",
-        "operationId": "pause_passive_passive__session_id__pause_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Pause Passive",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/resume": {
-      "post": {
-        "description": "Ask a paused session to carry on; a stopped or failed one goes back in the queue (status \"queued\"), its watchdog starts and the\ntrainer continues from its last checkpoint. 409 when it has finished, is being stopped, or another session is active.",
-        "operationId": "resume_passive_passive__session_id__resume_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Resume Passive",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/save": {
-      "post": {
-        "description": "Save the session's best checkpoint as a trained version. Saving the same checkpoint again answers with the version it made.\n409 when the session has no checkpoint yet.",
-        "operationId": "save_passive_passive__session_id__save_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveSaved"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Save Passive",
-        "tags": [
-          "passive"
-        ]
-      }
-    },
-    "/passive/{session_id}/stop": {
-      "post": {
-        "operationId": "stop_passive_passive__session_id__stop_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PassiveStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Stop Passive",
-        "tags": [
-          "passive"
         ]
       }
     },
@@ -17754,6 +16857,48 @@
         ]
       }
     },
+    "/pretraining/step_rate": {
+      "post": {
+        "description": "Time a few steps of the version's design on the device a run of it would use, as a job. The plan reads the answer\n(`sizing.measured`) for the time a run takes and the design that fits the hours given. 409 while the size of the chosen text is\nstill unknown (the word list size comes from it).",
+        "operationId": "step_rate_pretraining_step_rate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepRateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StepRateJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Step Rate",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
     "/pretraining/text_sets": {
       "get": {
         "description": "The sets of text to choose from, as the Pretraining page's tiles.",
@@ -18098,7 +17243,7 @@
     },
     "/queue/jobs/{job_id}": {
       "delete": {
-        "description": "Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).",
+        "description": "Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop). On a\nfailed job it dismisses it from the list.",
         "operationId": "remove_queue_jobs__job_id__delete",
         "parameters": [
           {
@@ -18538,7 +17683,7 @@
     },
     "/queue/start": {
       "post": {
-        "description": "Services.start_queue: let jobs saved as waiting by an earlier session run.",
+        "description": "Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it\nwaits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`\nwith its sentence, instead of a bare 200 followed by a job that has quietly gone.",
         "operationId": "start_queue_queue_start_post",
         "responses": {
           "200": {
@@ -18927,6 +18072,74 @@
         ]
       }
     },
+    "/storage/leftovers": {
+      "get": {
+        "description": "What training left in runs/ that no result needs, largest first: attempts moved aside by a restart, failed runs, and dataset\nsnapshots no run uses. A running job's folder, the checkpoint a waiting job continues from and a version's runs are never listed.",
+        "operationId": "leftovers_storage_leftovers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Leftover"
+                  },
+                  "title": "Response Leftovers Storage Leftovers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Leftovers",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/leftovers/remove": {
+      "post": {
+        "description": "Delete the listed leftovers. An id that is not listed any more (already gone, or protected since) is ignored.",
+        "operationId": "remove_leftovers_storage_leftovers_remove_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveLeftovers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Leftovers",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
     "/traffic": {
       "get": {
         "description": "Server-sent events: `record` events, each a full record (see the module docstring). The newest `last` records come first, then\nevery new one as it happens; a stream's record is sent again when it closes. A `hello` event first names this node and when its buffer began (ids restart with it).",
@@ -19235,6 +18448,59 @@
           }
         },
         "summary": "Checkpoint Step",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/continue": {
+      "post": {
+        "description": "Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the\nqueued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a\ndesign its weights cannot go into) fails the job with a sentence.",
+        "operationId": "continue_version_versions__number__continue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinueBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__versions__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Continue Version",
         "tags": [
           "versions"
         ]
@@ -19552,711 +18818,6 @@
         "summary": "Version Weights Meta",
         "tags": [
           "versions"
-        ]
-      }
-    },
-    "/viewer/action": {
-      "post": {
-        "description": "Do what a viewer control does (studio_scene_json.apply_action) to the state in the body, and answer with the new state and\nthe scene (the whole one, or the frame against `since`).",
-        "operationId": "action_viewer_action_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ActionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Action",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/binary": {
-      "post": {
-        "description": "The arrays of the scene (or of the frame against `since`) as little-endian float32 bytes. Their offsets are in\nPOST /viewer/manifest, and the payload's {shape, name} entries name them: send both calls the same body.",
-        "operationId": "binary_viewer_binary_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Binary",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/frame": {
-      "post": {
-        "description": "What changed since `since` (studio_scene_json.scene_frame); the whole scene when `since` is empty.",
-        "operationId": "frame_viewer_frame_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Frame",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/landscape": {
-      "post": {
-        "description": "The loss landscape around a version's weights (Li et al. 2018) as a job: the held-back loss on a grid of weights moved along\ntwo directions. Cheap by design (one fixed small batch, a grid capped by model size) and, with `live`, throttled so training\nkeeps its speed. The result is a LandscapeResult.",
-        "operationId": "landscape_viewer_landscape_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/LandscapeRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Landscape",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/manifest": {
-      "post": {
-        "description": "{name: {offset, shape, dtype}} for the bytes of POST /viewer/binary with the same body.",
-        "operationId": "manifest_viewer_manifest_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Manifest",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/poll": {
-      "post": {
-        "description": "The messages the viewer process sent back since the last call. Reading them empties the list.",
-        "operationId": "poll_viewer_poll_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Poll",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/probe": {
-      "post": {
-        "description": "Run one real training step of the current version's checkpoint on a sentence, without touching training. A job: the result\nis {snapshot, note}, the new snapshot's index (see /viewer/snapshots) and the sentence to show.",
-        "operationId": "probe_viewer_probe_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/ProbeRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Probe",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/scene": {
-      "get": {
-        "description": "The whole scene to draw from scratch (studio_scene_json.scene_payload). Query: version, level, mode, headStage, tileKind,\nsnapshot, arrays; web/src/lib/viewer.ts's SceneQuery. A client that keeps more of the controls POSTs /viewer/frame.",
-        "operationId": "scene_viewer_scene_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "arrays",
-            "required": false,
-            "schema": {
-              "default": "inline",
-              "enum": [
-                "inline",
-                "binary"
-              ],
-              "title": "Arrays",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          },
-          {
-            "in": "query",
-            "name": "level",
-            "required": false,
-            "schema": {
-              "default": "Model",
-              "enum": [
-                "Model",
-                "Window",
-                "Head",
-                "Weights"
-              ],
-              "title": "Level",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "mode",
-            "required": false,
-            "schema": {
-              "default": "Build",
-              "enum": [
-                "Build",
-                "Train",
-                "Ride a token"
-              ],
-              "title": "Mode",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "headStage",
-            "required": false,
-            "schema": {
-              "default": "pattern",
-              "enum": [
-                "scores",
-                "scale",
-                "mask",
-                "pattern",
-                "values"
-              ],
-              "title": "Headstage",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tileKind",
-            "required": false,
-            "schema": {
-              "default": "weight",
-              "enum": [
-                "weight",
-                "gradient",
-                "update"
-              ],
-              "title": "Tilekind",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "snapshot",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Snapshot",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "thermal",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Thermal",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Scene",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/send": {
-      "post": {
-        "description": "Queue one message (e.g. {\"type\": \"scene\", \"level\": \"Window\", \"mode\": \"Train\"}) for the running viewer process.",
-        "operationId": "send_viewer_send_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "title": "Message",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Send",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/snapshots": {
-      "get": {
-        "description": "The snapshots a scene can show, oldest first: a scene's `snapshot` is an index into this list.",
-        "operationId": "snapshots_viewer_snapshots_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/SnapshotOut"
-                  },
-                  "title": "Response Snapshots Viewer Snapshots Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Snapshots",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/start": {
-      "post": {
-        "description": "Launch the Panda3D viewer process on the server's computer (no-op if running) with the current version's design.",
-        "operationId": "start_viewer_start_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/StartRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/status": {
-      "get": {
-        "description": "Whether the Panda3D viewer process can be launched on this computer, is running, and is connected.",
-        "operationId": "status_viewer_status_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Status",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/stop": {
-      "post": {
-        "operationId": "stop_viewer_stop_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Stop",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/summary": {
-      "get": {
-        "description": "Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,\nor what is missing. POST /viewer/summary makes it.",
-        "operationId": "summary_viewer_summary_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerSummaryStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Summary",
-        "tags": [
-          "viewer"
-        ]
-      },
-      "post": {
-        "description": "Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text\n(studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from.",
-        "operationId": "make_summary_viewer_summary_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/ViewerSummaryRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Make Summary",
-        "tags": [
-          "viewer"
         ]
       }
     }

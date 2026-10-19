@@ -2,12 +2,27 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { problem } from "@/lib/cluster";
+import { problem, useCluster } from "@/lib/cluster";
+import { JOIN } from "@/lib/copy/join";
+import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
 import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { allReady, readiness, waitForAll } from "./readiness";
+import { Limits } from "./limits";
+import { Roster } from "./roster";
 import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./use-training";
 
 const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
@@ -26,8 +41,10 @@ function Setting({ id, label, help, value, onChange, step, min = "0" }: { id: st
 function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextSet[]; onStarted: (run: Run) => void }) {
   const versions = useVersions().data ?? [];
   const nodes = otherMachines(useMachines().data);
+  const cluster = useCluster().data;
   const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
   const [failure, setFailure] = useState("");
+  const [asking, setAsking] = useState(false);
   const start = useStart((run) => {
     setFailure("");
     onStarted(run);
@@ -37,9 +54,15 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
     setFailure("");
   };
   const body = startBody(form);
+  const chosen = readiness(nodes, form.machines, cluster);
+  const ready = chosen.filter((item) => item.state === "ready");
+  const notReady = chosen.filter((item) => item.state !== "ready");
+  // Start is plain when every chosen machine is ready; otherwise a dialog asks whether to go without the others or wait for them.
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (body) start.mutate(body);
+    if (!body) return;
+    if (allReady(chosen)) start.mutate(body);
+    else setAsking(true);
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-5" aria-label={T.startTitle}>
@@ -73,6 +96,11 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
             </label>
           ))
         )}
+        <label className="mt-1 flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={form.reviewedOnly} onChange={(e) => set({ reviewedOnly: e.target.checked })} />
+          <span>{T.reviewedOnly}</span>
+        </label>
+        <p className="max-w-prose text-xs text-muted-foreground">{T.reviewedOnlyHelp}</p>
       </fieldset>
 
       <fieldset className="flex flex-col gap-1">
@@ -88,6 +116,22 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
           </label>
         ))}
       </fieldset>
+
+      {form.machines.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="training-coordinator" className="text-sm font-medium">{T.coordinator}</label>
+          <select id="training-coordinator" value={form.machines.includes(form.coordinator) ? form.coordinator : ""} onChange={(e) => set({ coordinator: e.target.value })} className={`${FIELD} w-fit max-w-full`}>
+            <option value="">{T.coordinatorHere}</option>
+            {nodes.filter((node) => form.machines.includes(node.address)).map((node) => (
+              <option key={node.address} value={node.address} disabled={!node.online}>{node.hostname || node.address}</option>
+            ))}
+          </select>
+          <p className="max-w-prose text-xs text-muted-foreground">{T.coordinatorHelp}</p>
+        </div>
+      )}
+
+      <Roster items={chosen} />
+      <Limits items={chosen} cluster={cluster} />
 
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">{T.shape}</legend>
@@ -118,6 +162,26 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
         <Button type="submit" disabled={!body || start.isPending}>{start.isPending ? T.starting : T.start}</Button>
         {failure && <p role="alert" className="text-sm text-destructive">{failure}</p>}
       </div>
+
+      <AlertDialog open={asking} onOpenChange={setAsking}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{JOIN.startAnyway}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {fill(JOIN.startAnywayLead, { ready: ready.map((item) => item.name).join(", ") || "none", notReady: notReady.map((item) => item.name).join(", ") })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{JOIN.goBack}</AlertDialogCancel>
+            {notReady.some((item) => item.state === "busy") && (
+              <AlertDialogAction className="border border-border bg-background text-foreground hover:bg-muted" title={JOIN.waitAllHelp} onClick={() => body && start.mutate(waitForAll(body, chosen))}>
+                {JOIN.waitAll}
+              </AlertDialogAction>
+            )}
+            <AlertDialogAction onClick={() => body && start.mutate(body)}>{JOIN.startReady}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   );
 }

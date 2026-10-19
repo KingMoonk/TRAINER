@@ -227,7 +227,7 @@ def data_order(seed=DATA_SEED):
 
 def _peak_mb():
     if sys.platform == "win32":  # no resource module; ponytail: current working set, not the peak
-        from studio_passive import process_memory
+        from studio_memory import process_memory
         return process_memory() / 2 ** 20
     import resource
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS, KiB on Linux

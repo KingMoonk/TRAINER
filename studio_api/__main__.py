@@ -3,14 +3,17 @@
 import argparse
 import ipaddress
 import json
+import logging
 import math
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 import studio_cluster
-from studio_api import accelerator
+import studio_legacy_cleanup
+from studio_api import accelerator, live
 from studio_api.hosts import allow_host
 
 GRACEFUL_SHUTDOWN = 2  # seconds uvicorn waits for open connections (/events streams never end) before closing them on stop or reload
@@ -115,11 +118,79 @@ def build(args):
 
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
-        services.resume_passive_at_start()  # an active passive session without a watchdog gets one again
+        services.runner.cluster.serve_at(args.port, lambda: hosts.tailnet_name)  # where a failover's where-file sends the members
+        studio_legacy_cleanup.start(workspace.root)  # sign-in entries of the removed watchdog
+        services.resume_queue_at_start()  # a queue the last run of the app left going carries on by itself
         tags, users = studio_cluster.allowed_callers(workspace.state)
         return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,
                           token=studio_cluster.funnel_token(workspace.state))
     return create_app(services, open=True, origins=args.allow_origin, hosts=hosts, fake_traffic=True)
+
+
+def local_reason(services):
+    """live.live_reason over this process's own services, without the HTTP round trip: the running queue job, then the runs this
+    computer coordinates (the rows GET /distributed/runs lists first)."""
+    from studio_api.routers import distributed
+
+    job = services.queue().job
+    return live.live_reason({"job": job and {"status": job.status, "label": job.label}}, distributed._live_rows(services))
+
+
+def keep_marker(services, path, every=live.EVERY_S, reason=local_reason, stop=None):
+    """Under --reload: refresh `path` while a run is live and remove it when idle, so the reloader process (which cannot see this
+    process's runs) holds a restart. A failed read leaves the marker alone: it goes stale on its own and a reload is never held for good."""
+    stop = stop or threading.Event()
+    while not stop.is_set():
+        try:
+            live.write_marker(path, reason(services))
+        except Exception as exc:  # noqa: BLE001 - a bad read must not end the thread
+            print(f"studio_api: live-run check failed: {exc!r}", flush=True)
+        stop.wait(every)
+
+
+class DeferredReload:
+    """Mixin for uvicorn's reloader: a source change found while `reason()` says a run is live is held, logged once, and applied on the
+    first check after the run ends. uvicorn's StatReload keeps reporting a changed file until it restarts and watchfiles reports it
+    once, so the held files are remembered here rather than left to the base class."""
+
+    def hold(self, changes, reason):
+        held = getattr(self, "held", [])
+        held = held + [c for c in (changes or []) if c not in held]
+        why = reason()
+        if held and why:
+            if not getattr(self, "told", False):
+                self.told = True
+                logging.getLogger("uvicorn.error").warning("Reload waiting: %s. The API restarts when it ends (%d changed file(s) held).", why, len(held))
+            self.held = held
+            return None
+        self.held, self.told = [], False
+        return held or None
+
+
+def deferred_reloader():
+    """uvicorn's own reloader class (StatReload, or WatchFilesReload with watchfiles installed) that waits out a live run."""
+    from uvicorn.supervisors import ChangeReload
+
+    class Deferring(DeferredReload, ChangeReload):
+        def should_restart(self):
+            return self.hold(super().should_restart(), lambda: live.marker_reason(os.environ[live.MARKER_ENV]))
+
+    return Deferring
+
+
+def run_reloading(argv, args):
+    """`uvicorn.run(..., reload=True)` with the reloader swapped for deferred_reloader(); everything else is uvicorn's own."""
+    import uvicorn
+
+    os.environ[ARGV] = json.dumps(argv)
+    os.environ[live.MARKER_ENV] = str(marker := live.marker_path())
+    config = uvicorn.Config("studio_api.__main__:reloaded", factory=True, reload=True, reload_dirs=[str(ROOT)], host=args.bind,
+                            port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
+    server = uvicorn.Server(config)
+    try:
+        deferred_reloader()(config, target=server.run, sockets=[config.bind_socket()]).run()
+    finally:
+        marker.unlink(missing_ok=True)
 
 
 def make(argv=None):
@@ -129,7 +200,10 @@ def make(argv=None):
 
 def reloaded():
     """The app factory uvicorn calls in each process it starts under --reload."""
-    return build(parse(json.loads(os.environ[ARGV])))
+    app = build(parse(json.loads(os.environ[ARGV])))
+    if live.MARKER_ENV in os.environ:
+        threading.Thread(target=keep_marker, args=(app.state.services, os.environ[live.MARKER_ENV]), name="live-marker", daemon=True).start()
+    return app
 
 
 def main(argv=None):
@@ -144,9 +218,7 @@ def main(argv=None):
     if not args.fake:
         accelerator.check(args.allow_cpu)  # once here, so a refusal is not repeated by every process --reload starts
     if args.reload:
-        os.environ[ARGV] = json.dumps(argv)
-        uvicorn.run("studio_api.__main__:reloaded", factory=True, reload=True, reload_dirs=[str(ROOT)],
-                    host=args.bind, port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
+        run_reloading(argv, args)
     else:
         uvicorn.run(build(args), host=args.bind, port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
 

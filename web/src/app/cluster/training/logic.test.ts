@@ -1,14 +1,15 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, lessonsText, holdButtons, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
+import { TRAINING as T } from "@/lib/copy/training";
 import { member as build, round, run } from "./test-data";
 
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, reviewedOnly: false, coordinator: "", ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -18,7 +19,7 @@ describe("the form", () => {
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {
     expect(startBody(form({ machines: ["gpu-box"] }))).toEqual({
-      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
+      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false, reviewed_only: false,
     });
     expect(startBody(form({ version: "3" }))?.version).toBe(3);
   });
@@ -41,7 +42,15 @@ describe("the form", () => {
     expect(startBody(form({ maxMachines: "2" }))).not.toHaveProperty("min_members");
   });
 
+  test("a coordinator is sent only when it is one of the ticked machines", () => {
+    expect(startBody(form({ machines: ["gpu-box"] }))).not.toHaveProperty("coordinator");
+    expect(startBody(form({ machines: ["gpu-box"], coordinator: "gpu-box" }))).toMatchObject({ coordinator: "gpu-box" });
+    expect(startBody(form({ machines: ["other"], coordinator: "gpu-box" }))).not.toHaveProperty("coordinator");
+  });
+
   test("overlap is sent as ticked", () => expect(startBody(form({ overlap: true }))?.overlap).toBe(true));
+
+  test("reviewed only is sent as ticked", () => expect(startBody(form({ reviewedOnly: true }))?.reviewed_only).toBe(true));
 
   test("momentum may be zero", () => expect(startBody(form({ outerMomentum: "0" }))?.outer_momentum).toBe(0));
 
@@ -90,12 +99,12 @@ describe("a member that is out", () => {
   });
 
   test("a machine that never joined shows its reason but is not a problem; one that left at the finish is not either", () => {
-    for (const state of ["unplaced", "never_joined"] as const) {
-      expect(needsReason(member({ state }))).toBe(true);
-      expect(isProblem(member({ state }))).toBe(false);
-      expect(neverJoined(member({ state }))).toBe(true);
-    }
-    expect(reasonText(member({ state: "unplaced", note: "It was busy." }))).toBe("It was busy.");
+    expect(needsReason(member({ state: "never_joined" }))).toBe(true);
+    expect(isProblem(member({ state: "never_joined" }))).toBe(false);
+    expect(neverJoined(member({ state: "never_joined" }))).toBe(true);
+    expect(reasonText(member({ state: "never_joined", note: "It was busy.", reason: "It was busy." }))).toBe("It was busy.");
+    expect(needsReason(member({ state: "waiting", reason: "Busy with 'Version 1'." }))).toBe(true);
+    expect(neverJoined(member({ state: "waiting" }))).toBe(false);
     expect(reasonText(member({ state: "never_joined" }))).toMatch(/never joined/i);
     expect(needsReason(member({ state: "finished", note: "" }))).toBe(false);
     expect(isProblem(member({ state: "left", note: "Left the run." }))).toBe(true);
@@ -120,5 +129,49 @@ describe("the charts", () => {
     const [up, down] = trafficSeries([round(0)]);
     expect(up.points).toEqual([{ x: 1, y: 1 }]);
     expect(down.points).toEqual([{ x: 1, y: 2 }]);
+  });
+
+  test("the error curve marks the best round and each pivot round, counting rounds from one", () => {
+    const r = run({ best_round: 1, history: [round(0), round(1), round(2, { pivot: "halve_lr" }), round(3, { pivot: "next_dataset" }), round(4, { pivot: "something_new" })] });
+    expect(errorMarks(r).map((m) => [m.id, m.x, m.label])).toEqual([
+      ["pivot-2", 3, "Learning rate halved"], ["pivot-3", 4, "Next text"], ["pivot-4", 5, "Changed course"], ["best", 2, "Best"],
+    ]);
+    expect(errorMarks(run({ history: [round(0)] }))).toEqual([]);
+  });
+
+  test("the error curve marks each polish, kept, not kept or skipped, apart", () => {
+    const r = run({ history: [round(0, { polish: "accepted", val_loss_before_polish: 5 }), round(1, { polish: "rejected", polish_val_loss: 4.4 }), round(2, { polish: "skipped" }), round(3)] });
+    const marks = errorMarks(r);
+    expect(marks.map((m) => [m.id, m.x, m.label])).toEqual([
+      ["polish-0", 1, "Teacher polish kept"], ["polish-1", 2, "Teacher polish not kept"], ["polish-2", 3, "Teacher polish skipped"],
+    ]);
+    expect(new Set(marks.map((m) => m.color)).size).toBe(3);
+  });
+
+  test("the journal and the phase line have words for the teacher's polish and lessons", () => {
+    expect(T.phases.polishing).toBe("Teacher polishing");
+    expect([T.eventKinds.polish, T.eventKinds.polish_off, T.eventKinds.lessons]).toEqual(["Teacher polish", "Polish off", "Lessons"]);
+    expect(T.pivots.drop_lessons).toBe("Lessons left out");
+    expect(T.phases.judging).toBe("Teacher comparing weights");
+    expect([T.eventKinds.judging, T.eventKinds.win_rate, T.eventKinds.win_rate_off]).toEqual(["Comparing weights", "Win rate", "Win rate off"]);
+  });
+
+  test("the run says how many lessons the teacher added, in the singular too", () => {
+    expect(lessonsText(run())).toBe("");
+    expect(lessonsText(run({ lessons: 1 }))).toBe("1 lesson from the teacher in the training text");
+    expect(lessonsText(run({ lessons: 4 }))).toBe("4 lessons from the teacher in the training text");
+    expect(lessonsText(run({ lessons: 4, lessons_left_out: 2 }))).toBe("4 lessons from the teacher in the training text, 2 left out");
+  });
+
+  test("Pause shows while the run can be paused, Resume while it is paused, Restart once it ended", () => {
+    expect(holdButtons(run({ can_pause: true }))).toEqual({ pause: true, resume: false, restart: false });
+    expect(holdButtons(run({ can_pause: true, can_resume: true, paused: true }))).toEqual({ pause: false, resume: true, restart: false });
+    expect(holdButtons(run({ state: "stopped", can_restart: true }))).toEqual({ pause: false, resume: false, restart: true });
+    expect(holdButtons(run())).toEqual({ pause: false, resume: false, restart: false });
+  });
+
+  test("the stop reason is a sentence, or nothing while the run goes", () => {
+    expect(stopReasonText(run({ stop_reason: "The loss stopped improving." }))).toBe("Stopped because: The loss stopped improving.");
+    expect(stopReasonText(run())).toBe("");
   });
 });

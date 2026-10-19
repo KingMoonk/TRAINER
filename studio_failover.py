@@ -7,6 +7,9 @@ studio_remote.Cluster (its observation store, its coordinators, its files).
   the same way (`beats`).
 * The **coordinator is lost** when the failure detector has its node down and the freshest thing it wrote about the run is older than
   the members' lease (`coordinator_lost`): the wait the scheduler takes before it reassigns a job.
+* A **handoff** is a coordinator moving on purpose: the person chose another node to coordinate at the start (`Seen.hands_to`). That
+  node, once it keeps a whole replica no older than the coordinator's last round, claims the next term at once instead of waiting
+  for the coordinator to be lost; the coordinator then steps down like any that sees a claim that beats its own.
 * The **successor** is, among the live replicas that hold the whole run (`ready`), the one with the highest completed round, ties to the
   lowest rank (`successor`). Every node evaluates the rule on its own replica of the store; only the successor acts.
 * A node that coordinates a run and sees a claim that beats its own **steps down**: its rounds are discarded (Coordinator.defer), so
@@ -29,6 +32,7 @@ ENDED = ("finished", "stopped", "failed")  # states of a run nobody takes over
 CLAIM = "claim"  # store kind, key run id: {"term", "round", "rank", "released"}, written by the node that coordinates the run
 HELD = "held"  # store kind, key run id: {"term", "round", "rank", "ready", "held"}, written by a node that keeps a replica of it
 WHERE_PREFIX = "Coordinated on "
+SAVE_TRIES = 3  # polls that ask the successor for a finished run's weights when the owner's own job ended without saving them
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,7 @@ class Seen:
     claim: Claim
     silent_s: float
     state: str = "running"
+    hands_to: str = ""  # the node the person chose to coordinate the run (the run row's `handoff`): this coordinator hands the run to it
 
 
 # ---- the rules ----------------------------------------------------------------------------------------------------------
@@ -151,6 +156,9 @@ class Host:
     def note(self, run, claim):
         """Say on the owner's queue record where `run` is coordinated now."""
 
+    def finished_under_successor(self, run):
+        """`run` finished under a coordinator of term 2 or more (asked at every poll while the store says so)."""
+
 
 class Failover:
     """One decision per run per poll. No threads and no clock of its own: the Host brings both."""
@@ -181,10 +189,15 @@ class Failover:
         host.point(run, best.claim, host.is_down(best.claim.node))
         host.note(run, best.claim)
         if best.state in ENDED:
+            if best.state == "finished" and best.claim.term >= 2:
+                host.finished_under_successor(run)
             return
-        if not coordinator_lost(host.is_down(best.claim.node), best.silent_s, host.lease_s):
+        if best.hands_to == host.name and best.claim.node != host.name:
+            chosen = self._handed(run, best)  # the person chose this node: it takes the run over as soon as it holds the last round
+        elif not coordinator_lost(host.is_down(best.claim.node), best.silent_s, host.lease_s):
             return
-        chosen = successor(host.replicas(run), lambda node: node != best.claim.node and (node == host.name or not host.is_down(node)))
+        else:
+            chosen = successor(host.replicas(run), lambda node: node != best.claim.node and (node == host.name or not host.is_down(node)))
         if chosen is None or chosen.node != host.name:
             return
         claim = Claim(run, host.name, best.claim.term + 1, chosen.round, chosen.rank)
@@ -203,6 +216,13 @@ class Failover:
             host.note(run, claim)
 
 
+    def _handed(self, run, best):
+        """This node's replica of `run` when it is whole and holds every round the coordinator closed (and at least one: before that
+        there is nothing to continue from), else None: the coordinator keeps the run until then."""
+        mine = next((r for r in self.host.replicas(run) if r.node == self.host.name), None)
+        return mine if mine is not None and mine.ready and mine.round >= max(1, best.claim.round) else None
+
+
 # ---- the Host over a Cluster ---------------------------------------------------------------------------------------------
 
 class ClusterHost(Host):
@@ -215,6 +235,7 @@ class ClusterHost(Host):
         self.name = cluster.hostname
         self.lease_s = cluster.lease_s
         self.pointed = {}  # run id -> (node, term) written to the where-file
+        self.saves = {}  # run id -> how many times the successor's weights were asked for after the owner's job had ended
 
     # -- reading the store
     def runs(self):
@@ -238,11 +259,13 @@ class ClusterHost(Host):
             if value is None or int(value.get("term", 0)) == int(held["term"]):
                 ages.append(claim["age"])
             return Seen(Claim(run, origin, int(held["term"]), int(held["round"]), int(held.get("rank", 0))),
-                        0. if origin == self.name else min(ages), (value or {}).get("state", "running"))
+                        0. if origin == self.name else min(ages), (value or {}).get("state", "running"), str((value or {}).get("handoff") or ""))
         if value is None:
             return None
+        if claim is not None and value.get("state", "running") not in ENDED:
+            return None  # it released its claim (stepped down or withdrew): its run row, until the next publish, is not a coordinator to yield to
         return Seen(Claim(run, origin, int(value.get("term", 1)), int(value.get("round", 0)), 0), 0. if origin == self.name else row["age"],
-                    value.get("state", "running"))
+                    value.get("state", "running"), str(value.get("handoff") or ""))
 
     def replicas(self, run):
         out = []
@@ -297,7 +320,8 @@ class ClusterHost(Host):
 
     def claim(self, claim):
         self.claims[claim.run] = claim
-        self.cluster.claims[claim.run] = {"term": claim.term, "round": claim.round, "rank": claim.rank}
+        url = self.cluster.url_for_peers()  # where the others' members find this coordinator (url_of)
+        self.cluster.claims[claim.run] = {"term": claim.term, "round": claim.round, "rank": claim.rank, **({"url": url} if url else {})}
         self.cluster.state.put(CLAIM, claim.run, self.cluster.claims[claim.run])
 
     def withdraw(self, run):
@@ -326,24 +350,33 @@ class ClusterHost(Host):
         return True
 
     def step_down(self, run, claim):
-        coordinator = self.cluster.coordinators.pop(run, None)
+        coordinator = self.cluster.coordinators.get(run)
+        if coordinator is not None:  # the members here learn where the run went before the coordinator leaves the registry, so a call that lands in between finds the new one
+            coordinator.defer(claim.term if claim is not None else coordinator.superseded or coordinator.term)
+            if claim is not None:
+                self.point(run, claim, self.is_down(claim.node))
+        self.cluster.coordinators.pop(run, None)
         self.claims.pop(run, None)
         self.cluster.claims[run] = {"released": True}
         self.cluster.state.put(CLAIM, run, {"released": True})
         if coordinator is not None:
             import studio_distributed
             term = claim.term if claim is not None else coordinator.superseded or coordinator.term
-            coordinator.defer(term)
             studio_distributed.archive(run, coordinator)  # the Training tab keeps what it showed of the term that ended
             self.cluster.runner._emit("cluster", {"job": run, "state": "stepped_down", "node": self.name,
                                                   "detail": f"Term {term} is coordinated on {claim.node if claim else 'another node'}; rounds closed here are discarded."})
 
     # -- telling the others on this node
-    def url_of(self, node):
-        from studio_peer import DEFAULT_PORT
+    def url_of(self, node, run):
+        """Where a member on this node reaches the coordinator of `run` on `node`: this node's API on loopback at the port it listens on,
+        else the url `node` published with its claim, else (an old claim, or one naming a loopback address) the address this node lists
+        `node` at."""
         if node == self.name:
-            return f"http://127.0.0.1:{DEFAULT_PORT}"
-        return self.cluster.address_of(node)
+            return f"http://127.0.0.1:{self.cluster.api_port}"
+        import studio_distributed
+        entry = self.cluster.state.get(node, CLAIM, run)
+        url = str(((entry or {}).get("value") or {}).get("url") or "")
+        return url if url and not studio_distributed.loopback(url) else self.cluster.address_of(node)
 
     def point(self, run, claim, node_down):
         """Write where the members here find the coordinator (studio_diloco.file_locator): only after a failover (term 2 or more), only
@@ -352,7 +385,7 @@ class ClusterHost(Host):
             return
         if run not in self.cluster.members and run not in self.cluster.replicas:
             return  # no member of the run here
-        url = self.url_of(claim.node)
+        url = self.url_of(claim.node, run)
         if not url:
             return
         import studio_diloco
@@ -361,6 +394,24 @@ class ClusterHost(Host):
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(path, {"node": claim.node, "term": claim.term, "url": url})
         self.pointed[run] = (claim.node, claim.term)
+
+    def finished_under_successor(self, run):
+        """The owner's job ended without saving the run's weights (its member stopped or failed while the run went on, #453): replay the
+        job's end, so the services fetch the successor's final weights (WorkspaceServices._record_distributed). A run the person stopped
+        saves nothing; a run already saved is left alone; a fetch that failed is tried again at the next poll, up to SAVE_TRIES times."""
+        import studio_distributed
+        runner = self.cluster.runner
+        with runner.lock:
+            job = next((j for j in runner.jobs if j.id == run and j.kind == "pretrain_distributed" and not j.owner), None)
+            status = job.status if job is not None else ""
+            version = job.params.get("version") if job is not None else None
+        kept = studio_distributed.RUNS.get(run)
+        if status not in ("done", "failed", "stopped") or not version or (kept is not None and (kept.stopped or kept.saved is not None)):
+            return
+        if self.saves.get(run, 0) >= SAVE_TRIES:
+            return
+        self.saves[run] = self.saves.get(run, 0) + 1
+        runner._emit("job", {"job": run, "status": status, "error": ""})
 
     def note(self, run, claim):
         """The owner's queue record says where its run is coordinated now ('' again once it is back here, or never moved)."""

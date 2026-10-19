@@ -73,3 +73,20 @@ class TrainingRunRouterTests(ApiCase):
         page = self.call("GET", "/training-run")
         self.assertEqual((page["curve"]["steps"], page["status"], page["running"]), ([], None, False))
         self.assertEqual(self.services.curve_of, [])
+        self.assertIsNone(page["ended"])
+
+    def test_a_run_that_ended_itself_says_why(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        self.add_versions()
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            self.services._versions[1].runs = [str(run)]
+            self.assertIsNone(self.call("GET", "/training-run")["ended"])  # no run.json yet
+            ended = {"reason": "plateau", "text": "Stopped at step 30 because the loss went flat.", "step": 30, "best": 1.5}
+            (run / "run.json").write_text(json.dumps({"status": "completed", "ended": ended}), encoding="utf-8")
+            page = self.call("GET", "/training-run")
+            self.assertEqual(page["ended"], {"reason": "plateau", "text": ended["text"], "step": 30})
+            self.services.set_queue(QueueState(job=Job("j1", "pretrain", "v2", status="running", params={"output_dir": "out/v3"}), step=1, total=4))
+            self.assertIsNone(self.call("GET", "/training-run")["ended"])  # a run in progress has not ended

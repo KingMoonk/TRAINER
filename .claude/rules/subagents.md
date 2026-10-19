@@ -20,7 +20,7 @@ The same issue rule applies on the main thread (`.claude/rules/github-issues.md`
 2. The subagent checks the assignees again, then claims it: `gh issue edit N --repo KingMoonk/TRAINER --add-assignee @me`, and re-reads it to confirm no one else holds it.
 3. It works on its own branch in its own worktree, off `origin/wedd-compute-cluster` (`.claude/rules/git-workflow.md`). Two subagents never share a worktree or edit the same files.
 4. It commits (Conventional Commits), pushes, and opens a PR with `--base wedd-compute-cluster`.
-5. The PR description is precise and short: what changed and why, how it was tested, known limitations, and `Closes #N` for each issue it finishes (`Part of #N` for a partial step). The `close-issues` workflow closes those issues when the PR merges into `wedd-compute-cluster`.
+5. The PR description follows `.github/pull_request_template.md` and is precise and short: a short summary first (two or three sentences on what changes and why, plus a mermaid diagram when it helps), then the bullet list of changes, how it was tested, known limitations, and `Closes #N` for each issue it finishes (`Part of #N` for a partial step). The `close-issues` workflow closes those issues when the PR merges into `wedd-compute-cluster`.
 
 Read-only work (searches, investigations) needs no branch or PR. If it answers a `discovery` issue, the subagent writes the answer in that issue.
 

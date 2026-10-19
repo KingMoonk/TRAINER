@@ -228,10 +228,35 @@ With one member, `η = 1` and `μ = 0`, a round is exactly `H` steps of ordinary
 
 ### Heterogeneous nodes
 
-An NVIDIA box and a MacBook differ several times in speed. A round has a deadline set from the fastest member's measured step
-time times `H`, plus slack. Slower members send whatever they have done by then. A member that has not sent anything by the
-deadline plus a grace period is dropped from the round, and its contribution would be refused if it arrived later; it rejoins
-at the next round with the new `θ`.
+An NVIDIA box and a MacBook differ several times in speed, so the coordinator deals each member its own number of inner steps
+instead of `H` for everyone, and all of them finish together.
+
+- It keeps each member's seconds per step, smoothed over the rounds the member contributed to. The member measures it from its
+  own timed steps (the training loop's per-step time), so time paused, the first step of every round (cold start) and the syncs are
+  not in it; a round too short to time sends no seconds and leaves the member's speed as it was. Only a finite positive value counts.
+  A restart forgets them, and so does a member leaving: when it returns it is a new member.
+- Each round the measured members share the work an equal-`H` round would give them (`H` steps each) in proportion to their
+  speed, so predicted finish times (steps times seconds per step) match; the rounding remainder is dealt out so the total stays
+  `H` per measured member. A share is kept between `H/10` and `3H`. Equal speeds (all within 5 percent of each other), a run with
+  one member, and a run where nobody is measured get `H` each, as before. With speeds 1, 2 and 4 the members get about `0.43H`,
+  `0.86H` and `1.71H`: the same work in about 40 percent of the time the slowest member alone would need for `H` steps.
+- A member nobody has timed yet (a new one) gets `H/4` steps in a group that has measured members, so it is timed without holding
+  the others up, and a measured share afterwards.
+- The deadline comes from the slowest predicted finish (dealt steps times that member's seconds per step) times
+  `1 + slack_ratio`, plus `slack_seconds`; with no measurement at all, `first_round_seconds`. A member that is slower than
+  predicted sends whatever it has done at the deadline. A member that has not sent anything by the deadline plus a grace period is
+  dropped from the round, and its contribution would be refused if it arrived later; it rejoins at the next round with the new `θ`.
+- The outer average stays weighted by target tokens, which now follows the work each member did. The learning-rate schedule keeps
+  `H` positions per round: a member's steps are spread over the round's positions, so every member is at the same point of the
+  schedule when the round ends, whatever it was dealt. A member's training loop is bounded by `rounds x 3H` steps, so a member
+  dealt more than `H` a round does not run out of steps before the run's last round.
+- With `overlap`, a member starts a round's steps before it has that round's assignment (the exchange that brings it runs during
+  the steps), so it runs the deal of the round before; a stable speed makes that the same number. The deadline covers the larger of a
+  member's two deals, so a share that shrinks does not cut the member that is still running the larger one.
+
+Caveats. When two members differ by more than about 30 times in speed, the `H/10` floor (or the `3H` ceiling) keeps the finish
+times from matching, and the round lasts as long as the slowest clamped member needs. A member from before this change ignores the
+dealt steps and runs `H` against a new coordinator (its deadline then cuts it, as it always did).
 
 ### Elastic membership and rendezvous
 
@@ -339,6 +364,73 @@ job rebuilds the coordinator from `diloco.json`).
 it survives the loss of any `R` of those `R + 1` nodes without the bucket. Only the latest round is kept; runs are
 experiments and there is no round history to restore.
 
+### Stopping on a head-to-head win rate (#511)
+
+`target_win_rate` (a share above 0 and up to 1, with `teacher` naming an Ollama model) ends a run once its best weights beat the weights it
+started from, as an Ollama judge sees it. The settings are in `Settings`; only a coordinator built with them runs the rule, and
+`StartRun` does not carry them (polish's `polish_every` is not reachable from the API or the UI either), so today a test or a script sets them.
+
+- **What is compared.** `start.npz` holds the weights after the first trained round (a restart's is the checkpoint it started from), and
+  `best.npz` the best round so far. `eval_prompts.jsonl` holds up to 12 conversations from the validation split, topped up from the **end** of
+  the training prompts when validation has fewer (the teacher's polish windows start at the front); each line says which split it came from.
+  Prompts the polish turned into lessons (`lessons.jsonl`) are left out when the comparison runs. The number of prompts from each split is
+  logged and journaled in the `judging` event. A run with no validation split is refused: no round would ever be the best.
+- **When.** After a round that made a new best (a polish, if one runs, comes first and its result is what is compared), once per new best.
+  The run holds the next round open while the teacher judges (phase `judging`, event `judging`); a comparison that fails, or takes longer than
+  `versus_seconds` (600 by default, wall clock), is skipped, journaled in a `win_rate` event, and the rounds go on. A stop or step-down
+  discards it. A comparison that timed out leaves its worker behind: it is told to halt, but keeps its two models loaded until its next check
+  of that flag (and an Ollama request already sent ends only by its own timeout). **The final round is never compared**: the run ends there anyway, and its comparison would hold nothing back.
+- **The rule.** Twelve prompts make a noisy reading, so the run stops only after **two comparisons in a row** (two successive new bests) each
+  win the target share (a tie counts half). The prompt set can shrink between two readings as lessons grow (prompts a lesson teaches are
+  dropped), so the two readings need not use identical prompts. A reading under the target, or a comparison that gave no number, starts the count again.
+  `rules.win_rate` and `rules.win_hits` are kept in `diloco.json`.
+- **A coordinator made from a replica** (a failover) has neither the prompts nor the starting weights: it journals `win_rate_off` and goes on
+  without the rule.
+
+### Reviewing the teacher's lessons (#513)
+
+Each polish turns the model's weak answers into one **lesson**, which is one data shard (`lessons.jsonl` holds its rows). Members cache shards
+by id, so the unit you can drop is the shard, not a row. A lesson has a status: `live` (dealt to the members), `dropped` (by you) or
+`left_out` (by a step back to an earlier save, or a failover). The list is kept in `diloco.json`, so it survives an owner restart.
+
+- `GET /distributed/runs/{run}/lessons` lists them, oldest first: `id`, `round`, `rows`, `status`, `keepable`, `items` (up to 50 answers: the
+  prompt, the model's reply and the teacher's answer) and `more` (answers not shown).
+- `POST /distributed/runs/{run}/lessons/{lesson}/drop` and `.../keep` change one and answer with the list. The next round opens without a
+  dropped lesson (or with a kept one); the round already open keeps what it dealt. 404 for an unknown lesson, 409 when the run is not going
+  or is over. `keepable` is false for a lesson that is dealt now and for one whose rows this computer no longer holds (after a failover): Keep
+  would fail, so the web hides it.
+- Only the coordinator can change a lesson. A computer that does not coordinate the run asks the one that does, and passes its 4xx answer
+  through; an unreachable owner or a 5xx is a 502.
+- Journal events `lesson_dropped` and `lesson_kept`. A dropped lesson's prompts stay out of the win-rate judging (see "Stopping on a head-to-head win rate"): dropping a lesson does not put its prompts back into the comparison.
+
+### The owner restarting (#479)
+
+The coordinator runs in the owner's API process, so a restart (a dev `--reload` included) takes it away. Its outer weights and momentum are
+already written at every round boundary (`diloco.json` and the state file it names), so nothing about it lives only in memory. At start
+`Runner._load` hands a `pretrain_distributed` job that was running to `studio_distributed.recover`:
+
+- **resume**: the folder holds the state of round N. The job goes back to `waiting` with `params["resuming"]`, its stale `gang` is dropped,
+  and placement runs again against the machines chosen at launch (`params["machines"]`), after the old members' jobs are taken off those
+  machines' queues (`release_stale`). `studio_diloco.prepare` builds the coordinator from the folder (round N+1 next, same outer state) and
+  invites the members again through the usual path. The tab shows the run as queued with a note until then.
+- **end**: rounds were finished but no outer state reads. The job ends `failed` with "Ended: this machine restarted at round N; outer state
+  for that round was not saved." A run that finished no round starts again. If the folder no longer matches (other data or seed), the job ends
+  saying the run could not be resumed.
+
+A member whose coordinator is gone (no answer for its `patience`, or the coordinator's app answers that it no longer has the run) ends its
+job with a sentence saying so; invited again, it joins the resumed coordinator like a new member.
+
+### The driver stopping (#479)
+
+Without a restart, the run's driver can still die: the owner job's worker is killed, or its training thread crashes. The driver is this
+computer's own member, and every call it makes to the coordinator (join, progress report, waiting for a round, delta) is its heartbeat
+(`Coordinator.heard_ago`). `studio_cluster_watch.check` runs on the cluster tick and ends a run when its owner job failed or stopped while
+the coordinator still goes, or when the job says `running` and the driver has been silent for `DRIVER_TIMEOUT` (900 s, meant to outlast a
+slow round's validation and upload on BEAST). Ending means: the coordinator finishes with "Ended: the driver stopped responding at round N"
+(the members leave at their next call), a worker still holding the job is stopped and the job ends `failed` with that sentence
+(`params["ended_reason"]`), and the machines' member jobs are taken off their queues. The run is not resumed in process: the rounds
+finished stay on disk, and starting it again (or restarting the app) goes through the restart path above.
+
 ### Terms and coordinator failover (#359, #360, #361, #362)
 
 A run has a **term**, starting at 1, that orders its coordinators the way the lease epoch orders a job's runners. A
@@ -382,10 +474,27 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
 - A coordinator steps down when a call carries a higher term or the store holds a claim that outranks its own: it drops
   its `theta`, archives its folder and publishes `{"released": true}`. A returning coordinator does this on its first poll.
 - Members run in worker processes. The app writes `data/diloco_where/<run>.json` (node and URL of the coordinator) when
-  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL assumes the
-  peers' default port.
-- Not done: a failed takeover is not retried on another node except by the same rule on the next poll; a run that
-  finishes under a successor is not saved as a Version by the owner.
+  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL is the one the
+  coordinator's node published with its claim (`url`: `TRAINER_NODE_ADDRESS`, else `https://<its tailnet name>`), or the
+  address this node lists it at when the claim has none; for a coordinator on this node, loopback at the port the API
+  listens on (`Cluster.serve_at`, from `--port`) (#451).
+- A run that finishes under a successor is saved as the owner's Version too: when the owner's job ends `done` and its own
+  `run.json` is not `completed`, the owner fetches the final `last.npz` from the coordinator its where-file names
+  (`GET /collective/{run}/weights`, 409 until the run finished and for a stopped run) into its run folder as
+  `last_term<N>.npz` and records it as above (#451). The owner's job need not end `done` (#453): when it ended `failed` or
+  `stopped` (its member stopped while the run went on) and the store later shows the run `finished` under a term of 2 or more,
+  `Failover` tells the host (`finished_under_successor`) at each poll and `ClusterHost` ends the job again for the services, which
+  fetch the weights the same way (at most `SAVE_TRIES` polls). A run the person stopped saves nothing.
+- Not done: a failed takeover is not retried on another node except by the same rule on the next poll.
+- Choosing the coordinator (#335): `StartRun.coordinator` names one of the ticked machines (an address from the Machines list;
+  default, empty: this computer). The API checks it at start: it must be among the machines chosen, answer, and run this app's
+  version, or the start fails (400 / 409). It is a planned handoff over the failover path, not a second mechanism: the owner builds
+  the coordinator at term 1 as usual (the data and tokenization live on the owner), invites the chosen machine as a member and
+  ranks it first among the replica holders (`Coordinator.prefer`), and the run row publishes `handoff` (the chosen node). Once the
+  chosen node holds a whole replica at the coordinator's round or later, `Failover` claims term+1 at once, without the
+  "coordinator lost" wait (`Failover._handed`); the owner then steps down and members follow through the where-file as in any
+  takeover. The round in flight at the handoff is lost. If the chosen machine never becomes a ready replica, the owner keeps
+  coordinating.
 
 ## Failures
 

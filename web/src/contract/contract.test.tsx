@@ -5,7 +5,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import TrainingPage from "@/app/cluster/training/page";
 import StoragePage from "@/app/storage/page";
-import PassivePage from "@/app/passive/page";
 import QueuePage from "@/app/queue/page";
 import { fetchJson } from "@/lib/api";
 import { json, mockApi } from "@/test/network";
@@ -71,33 +70,6 @@ describe("pages on recorded responses", () => {
     expect(screen.queryByText("Version 1 pretraining")).toBeNull();
   });
 
-  test("Passive training reads an empty session list", async () => {
-    replay(["passive", "queue-empty"]);
-    renderPage(<PassivePage />);
-    expect(await screen.findByRole("heading", { level: 1, name: "Passive training" })).toBeVisible();
-  });
-
-  test("Passive training lists the session the API started, and Resume puts a stopped one back in the queue", async () => {
-    const started = fixtures["passive-started"].body as { sessions: { id: string; status: string }[] };
-    expect(fixtures["passive-start"].body).toEqual({ id: started.sessions[0].id, status: "queued" });
-    expect(fixtures["passive-resume"].body).toEqual({ status: "queued" });
-    replay(["passive-started", "queue-empty"]);
-    renderPage(<PassivePage />);
-    const row = await screen.findByTestId(`session-${started.sessions[0].id}`);
-    expect(row).toHaveTextContent("Starting · started");
-  });
-
-  test("Passive training opens the detail the API recorded for a session", async () => {
-    const started = fixtures["passive-started"].body as { sessions: { id: string }[] };
-    const id = started.sessions[0].id;
-    replay(["passive-started", "queue-empty", "passive-detail", "passive-lessons"]);
-    renderPage(<PassivePage />);
-    await userEvent.setup().click(within(await screen.findByTestId(`session-${id}`)).getByRole("button", { name: "Details" }));
-    expect(await screen.findByTestId("passive-facts")).toBeVisible();
-    expect(screen.getByText("Nothing has been written yet.")).toBeVisible();
-    expect(await screen.findByText("The teacher has not given this session any lessons.")).toBeVisible();
-  });
-
   test("the traffic console lists the alert rules the API shipped, each with a switch", async () => {
     replay(["traffic-rules"]);
     renderPage(<main />, { shell: true });
@@ -158,7 +130,7 @@ describe("the Training tab's live view on the recorded demo run", () => {
     expect(await screen.findByTestId("round-title")).toHaveTextContent(`Round ${run.round + 1} of ${run.rounds}`);
     expect(screen.getByTestId("timeline-round-1")).toHaveAttribute("data-open", "false");
     expect(screen.getByTestId("timeline-round-2")).toHaveAttribute("data-open", "true");
-    const kinds = within(screen.getByRole("region", { name: "Events" })).getAllByRole("listitem").map((li) => li.getAttribute("data-kind"));
+    const kinds = within(screen.getByRole("region", { name: "Journal" })).getAllByRole("listitem").map((li) => li.getAttribute("data-kind"));
     expect(kinds).toEqual(run.events.map((e) => e.kind).reverse());
     expect(kinds.slice(0, 2)).toEqual(["checkpoint", "outer_step"]);
   });

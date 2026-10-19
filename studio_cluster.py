@@ -200,7 +200,7 @@ def own_info(busy=False, version="", status=None, memory=None):
     kind = status.get("kind") if status.get("available") else "cpu"
     if memory is None and kind != "cuda":
         try:
-            from studio_passive import total_memory
+            from studio_memory import total_memory
             memory = total_memory()
         except Exception:
             memory = 0
@@ -287,7 +287,6 @@ DEFAULTS = {
     "pretrain_distributed": Requirements(device="cuda"),  # the owner: the coordinator plus one local member (studio_diloco)
     "diloco_member": ANY,
     "lora": ANY,
-    "passive": ANY,
     "eval": ANY,
     "score": ANY,
     "benchmark": ANY,

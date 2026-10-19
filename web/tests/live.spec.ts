@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 
 test("Make data loads real rules, previews without saving, and stores checked problems", async ({ page, request }) => {
   const before = await (await request.get("/data/problems/rows?limit=1000")).json();
-  await page.goto("/make-data/");
+  await page.goto("/your-data/?kind=problems");
+  await page.getByText("Make extra data", { exact: true }).click();
   await page.getByLabel("Rule", { exact: true }).selectOption("reverse");
   await page.getByRole("button", { name: "Try 5 first" }).click();
   await expect(page.getByText("Preview, nothing saved")).toBeVisible();
@@ -41,48 +42,6 @@ test("the API serves the schema the client types come from", async ({ request })
   expect(schema.paths).toHaveProperty("/jobs/{job_id}");
 });
 
-test("Loss renders trained and random predictions from the real fake API", async ({ page, request }) => {
-  const saved = await request.post("/versions", { data: { spec: {}, change: "Loss live smoke" } });
-  expect(saved.status()).toBe(201);
-  const version = await saved.json();
-  // Plain --fake starts empty and never trains a checkpoint. Only make this real saved
-  // version selectable in the browser; /versions/best, /inspect/loss, /jobs and /events
-  // remain real server calls. FakeServices.inspect_loss does not require a checkpoint.
-  await page.route("**/versions", async (route) => {
-    const response = await route.fetch();
-    const versions = await response.json();
-    await route.fulfill({ response, json: versions.map((item: { number: number }) => item.number === version.number
-      ? { ...item, best_checkpoint: "fake-live-checkpoint", status: "trained" } : item) });
-  });
-  const trainedResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === "/inspect/loss" && response.request().method() === "POST");
-  await page.goto("/loss/");
-  const trained = await trainedResponse;
-  expect(trained.status()).toBe(202);
-  expect(trained.request().postDataJSON()).toEqual({
-    version: version.number, text: "The largest planet in our solar system is Jupiter", pos: -1, trained: true,
-  });
-  const submitted = await trained.json();
-  expect(submitted.kind).toBe("inspect.loss");
-  await expect(page.getByTestId("loss-nats")).toHaveText("0.25 nats");
-  await expect(page.getByTestId("loss-bpc")).toHaveText("0.18 bits per character");
-  const completed = await request.get(`/jobs/${submitted.id}`);
-  expect(completed.ok()).toBe(true);
-  const record = await completed.json();
-  expect(record.status).toBe("done");
-  expect(record.result.target).toBe(3);
-  expect(record.result.probabilities[3]).toBeCloseTo(0.78);
-
-  const randomResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === "/inspect/loss" && response.request().postDataJSON()?.trained === false);
-  await page.getByRole("button", { name: "Step 0 (random weights)", exact: true }).click();
-  const random = await randomResponse;
-  expect(random.status()).toBe(202);
-  expect(random.request().postDataJSON()).toMatchObject({ version: version.number, trained: false, pos: -1 });
-  await expect(page.getByTestId("loss-nats")).toHaveText("2.48 nats");
-  await expect(page.getByTestId("loss-bpc")).toHaveText("1.79 bits per character");
-});
-
 test("the Builder edits a part and saves a version against the API", async ({ page, request }) => {
   // The live specs share one workspace, so other specs may already have saved versions: the new one is the next number.
   const existing: { number: number }[] = await (await request.get("/versions")).json();
@@ -93,6 +52,7 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
   await expect(tray).toContainText(existing.length ? "No changes" : "Not saved yet");
 
   // Pick a different position module: the picker's menu comes from /design/part-options.
+  await page.getByRole("button", { name: "Advanced modules", exact: true }).click();
   const picker = page.getByTestId("picker-position");
   const before = await picker.textContent();
   await picker.click();
@@ -103,6 +63,7 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
 
   await page.getByTestId("save").click();
   if (existing.length) await page.getByTestId("guess-skip").click(); // a version after the first asks for a guess first
+  await page.locator("summary").filter({ hasText: "Version history & results" }).click();
   await expect(page.getByTestId(`version-${next}`)).toBeVisible();
   await expect(tray).toContainText("No changes");
 });

@@ -1,6 +1,7 @@
 """The rules of coordinator failover (studio_failover, docs/distributed.md "Terms and coordinator failover"), without a network, a store or a
 coordinator: claim ordering, who the successor is, when the coordinator counts as lost, and the driver over a fake host with a fake clock."""
 import unittest
+from types import SimpleNamespace
 
 import studio_failover as failover
 from studio_failover import Claim, Held, Seen
@@ -126,6 +127,9 @@ class FakeHost(failover.Host):
     def note(self, run, claim):
         self.log.append(("note", claim.node, claim.term))
 
+    def finished_under_successor(self, run):
+        self.log.append(("finished_under_successor", run))
+
     def did(self, what):
         return [entry for entry in self.log if entry[0] == what]
 
@@ -152,6 +156,63 @@ class Driver(unittest.TestCase):
         self.assertEqual(len(self.host.did("take_over")), 1)
         self.assertEqual(self.host.did("withdraw"), [])
         self.assertIn(("point", "b", 2, False), self.host.log)
+
+    def chosen(self, round=5, ready=True, hands_to="b", silent=0., down=()):
+        """a is up and coordinating at term 1 round `round`; the person chose `hands_to` to coordinate the run."""
+        self.host.seen["r"] = [Seen(Claim("r", "a", 1, round), silent, "running", hands_to)]
+        self.host.held["r"] = [Held("b", round, 1, ready), Held("a", round, 0)]
+        self.host.down = set(down)
+
+    def test_the_chosen_node_takes_over_from_a_coordinator_that_is_up_once_it_holds_the_last_round(self):
+        self.chosen()
+        self.step()
+        self.assertEqual(self.host.did("claim"), [("claim", Claim("r", "b", 2, 5, 1))])
+        self.assertEqual(len(self.host.did("take_over")), 1)
+
+    def test_the_chosen_node_waits_until_its_replica_is_whole_and_current(self):
+        for round, ready in ((5, False), (0, True)):
+            self.chosen(round=round, ready=ready)
+            self.step()
+        self.chosen()
+        self.host.held["r"] = [Held("b", 4, 1), Held("a", 5, 0)]  # a round behind the coordinator's last
+        self.step()
+        self.chosen(round=0)  # nothing to continue from before a round has closed
+        self.host.held["r"] = [Held("b", 0, 1)]
+        self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_only_the_chosen_node_hands_over_and_a_run_with_no_choice_waits_for_a_loss(self):
+        self.chosen(hands_to="c")
+        self.step()
+        self.chosen(hands_to="")
+        self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_a_run_that_ended_is_not_handed_over(self):
+        for state in failover.ENDED:
+            self.chosen()
+            self.host.seen["r"] = [Seen(Claim("r", "a", 1, 5), 0., state, "b")]
+            self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_the_chosen_node_that_already_coordinates_does_not_claim_again(self):
+        self.chosen()
+        self.host.mine = Claim("r", "b", 2, 5, 1)
+        self.host.seen["r"] = [Seen(Claim("r", "a", 1, 5), 0., "running", "b"), Seen(Claim("r", "b", 2, 5, 1), 0.)]
+        self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_a_run_that_finished_under_a_successor_is_reported_at_every_poll(self):
+        self.host.seen["r"] = [Seen(Claim("r", "a", 2, 5), 0., "finished")]
+        self.step()
+        self.assertEqual(self.host.did("finished_under_successor"), [("finished_under_successor", "r")])
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_a_run_that_ended_otherwise_or_at_term_one_is_not_reported(self):
+        for claim, state in ((Claim("r", "a", 1, 5), "finished"), (Claim("r", "a", 2, 5), "stopped"), (Claim("r", "a", 2, 5), "failed")):
+            self.host.seen["r"] = [Seen(claim, 0., state)]
+            self.step()
+        self.assertEqual(self.host.did("finished_under_successor"), [])
 
     def test_another_replica_that_is_not_the_successor_does_nothing(self):
         self.host.name = "c"
@@ -239,6 +300,65 @@ class Driver(unittest.TestCase):
         with self.assertLogs("studio_failover", "WARNING"):
             self.step()
         self.assertEqual(len(self.host.did("claim")), 1)
+
+
+class WhereFileAddress(unittest.TestCase):
+    """ClusterHost.url_of: the address the where-file gives a member here for the coordinator on `node`."""
+
+    def host(self, published):
+        claims = {node: {"value": {"term": 2, "round": 3, "rank": 0, **({"url": url} if url else {})}} for node, url in published.items()}
+        cluster = SimpleNamespace(hostname="here", lease_s=LEASE, api_port=9123, address_of=lambda node: f"{node}-as-listed",
+                                  state=SimpleNamespace(get=lambda origin, kind, key: claims.get(origin) if kind == failover.CLAIM else None))
+        return failover.ClusterHost(cluster)
+
+    def test_this_node_is_reached_on_loopback_at_the_port_its_api_listens_on(self):
+        self.assertEqual(self.host({}).url_of("here", "r"), "http://127.0.0.1:9123")
+
+    def test_a_peer_is_reached_at_the_url_it_published_with_its_claim(self):
+        self.assertEqual(self.host({"box": "https://box.tail.ts.net"}).url_of("box", "r"), "https://box.tail.ts.net")
+
+    def test_without_a_usable_published_url_a_peer_is_reached_at_its_listed_address(self):
+        host = self.host({"old": None, "lone": "http://127.0.0.1:8787"})
+        self.assertEqual(host.url_of("old", "r"), "old-as-listed")  # a claim from before urls were published
+        self.assertEqual(host.url_of("lone", "r"), "lone-as-listed")  # a loopback url is of no use from another machine
+        self.assertEqual(host.url_of("unknown", "r"), "unknown-as-listed")
+
+
+class FinishedUnderSuccessor(unittest.TestCase):
+    """ClusterHost.finished_under_successor: replays the end of the owner's job so the services fetch the successor's weights."""
+
+    def host(self, status="failed", version=3, owner=""):
+        import studio_distributed
+        from threading import RLock
+        self.addCleanup(studio_distributed.RUNS.clear)
+        studio_distributed.RUNS["r"] = studio_distributed.Run("r", "", version, 0., {}, "here")
+        self.run = studio_distributed.RUNS["r"]
+        self.events = []
+        job = SimpleNamespace(id="r", kind="pretrain_distributed", owner=owner, status=status, params={"version": version})
+        runner = SimpleNamespace(lock=RLock(), jobs=[job], _emit=lambda kind, payload: self.events.append((kind, payload)))
+        return failover.ClusterHost(SimpleNamespace(hostname="here", lease_s=LEASE, runner=runner))
+
+    def test_an_owner_job_that_failed_or_stopped_is_ended_again_for_the_services(self):
+        for status in ("failed", "stopped"):
+            self.host(status).finished_under_successor("r")
+            self.assertEqual(self.events, [("job", {"job": "r", "status": status, "error": ""})])
+
+    def test_nothing_happens_for_a_running_job_a_stopped_run_a_saved_run_a_job_of_another_owner_or_no_version(self):
+        self.host("running").finished_under_successor("r")
+        self.host(owner="there").finished_under_successor("r")
+        self.host(version=None).finished_under_successor("r")
+        host = self.host()
+        self.run.stopped = True
+        host.finished_under_successor("r")
+        self.run.stopped, self.run.saved = False, 3
+        host.finished_under_successor("r")
+        self.assertEqual(self.events, [])
+
+    def test_a_fetch_that_keeps_failing_is_asked_for_a_few_times_only(self):
+        host = self.host()
+        for _ in range(failover.SAVE_TRIES + 4):
+            host.finished_under_successor("r")
+        self.assertEqual(len(self.events), failover.SAVE_TRIES)
 
 
 if __name__ == "__main__":
