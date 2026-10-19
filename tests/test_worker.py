@@ -260,6 +260,7 @@ class ReapTests(unittest.TestCase):
         self.addCleanup(stray.kill)
         spec.write_text(json.dumps({"pid": stray.pid}))
         runner = Runner(self.folder.parent / "queue.json", {}, tick=.05)
+        runner.reap_grace = 0  # this one never leaves by itself (a worker of a gone app does, see test_queue_survives_restart)
         self.addCleanup(runner.shutdown)
         runner.start()
         self.assertTrue(wait(lambda: stray.poll() is not None))

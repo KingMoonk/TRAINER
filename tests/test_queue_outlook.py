@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime
 
 from studio_ia.services import FakeServices, Job, QueueState
-from studio_queue import PASSIVE, Gate
+from studio_queue import Gate
 
 NOON = datetime(2026, 1, 1, 12)
 
@@ -28,7 +28,6 @@ class Outlook(unittest.TestCase):
     def test_waiting_on_the_gate(self):
         self.assertEqual(outlook(gate=Gate("on battery")), "Waiting: on battery")
         self.assertEqual(outlook(gate=Gate("computer in use")), "Waiting: computer in use")
-        self.assertEqual(outlook(gate=Gate(PASSIVE)), "Waiting: passive training is running")
 
     def test_outside_hours_names_the_next_start_and_the_plan(self):
         gate = Gate("outside hours", datetime(2026, 1, 1, 22))

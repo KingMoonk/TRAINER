@@ -132,12 +132,12 @@ describe("Training tab: the live view", () => {
   test("the event log lists the newest first, and the charts are drawn", async () => {
     server([midRound()]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
-    const log = within(await screen.findByRole("region", { name: "Events" }));
+    const log = within(await screen.findByRole("region", { name: "Journal" }));
     const items = log.getAllByRole("listitem");
     expect(items.map((li) => li.getAttribute("data-kind"))).toEqual(["stale", "checkpoint", "outer_step", "joined"]);
     expect(items[0]).toHaveTextContent("gpu-box sent a change for an old round; refused.");
     expect(items[0]).toHaveTextContent("2 s ago");
-    for (const name of ["Loss over the rounds", "Loss inside the open round", "Tokens per second", "Bytes moved per round"]) {
+    for (const name of ["Error curve", "Loss inside the open round", "Tokens per second", "Bytes moved per round"]) {
       expect(screen.getByRole("region", { name })).toBeInTheDocument();
     }
   });
@@ -217,12 +217,12 @@ describe("Training tab: polling", () => {
     await waitFor(() => expect(calls.runs).toBeGreaterThanOrEqual(3), { timeout: 4000 });
   });
 
-  test("a finished run names the version it saved and links to it; a stopped one says nothing", async () => {
+  test("a finished run names the version it saved; a stopped one says nothing", async () => {
     server([run({ state: "finished", can_stop: false, saved_version: 3 })]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     const saved = await screen.findByTestId("run-saved-r1");
     expect(saved).toHaveTextContent("Weights saved as Version 3.");
-    expect(within(saved).getByRole("link", { name: /Version 3/ })).toHaveAttribute("href", "/head-lab?version=3");
+    expect(within(saved).queryByRole("link")).toBeNull();
   });
 
   test("a run that saved nothing shows no saved version", async () => {

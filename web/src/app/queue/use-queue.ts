@@ -106,7 +106,7 @@ export function useQueueActions() {
       const version = typeof waiting.params?.version === "number" ? waiting.params.version : null;
       return unwrap(api.POST("/distributed/runs", {
         body: { replaces: waiting.id, all_machines: true, machines: [], version, dataset_ids: datasets, rounds: defaults.rounds, inner_steps: defaults.inner_steps,
-                outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: false },
+                outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: false, reviewed_only: false },
       }));
     },
     onSuccess: (run) => {

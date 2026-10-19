@@ -195,7 +195,7 @@ class Defaults(unittest.TestCase):
             self.assertEqual(sc.defaults_for(kind).device, "cuda", kind)
 
     def test_everything_else_takes_any_free_node(self):
-        for kind in ("eval", "score", "benchmark", "datagen", "lora", "passive", "quicktest", "compare", "import_pretrained", "checkpoint_now"):
+        for kind in ("eval", "score", "benchmark", "datagen", "lora", "quicktest", "compare", "import_pretrained", "checkpoint_now"):
             self.assertEqual(sc.defaults_for(kind), Requirements(), kind)
 
     def test_inspect_prefers_the_node_with_the_most_memory(self):

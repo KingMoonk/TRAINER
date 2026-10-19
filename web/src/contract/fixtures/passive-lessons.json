@@ -1,9 +1,0 @@
-{
-  "body": [],
-  "request": {
-    "body": null,
-    "method": "GET",
-    "path": "/passive/passive_1/lessons"
-  },
-  "status": 200
-}

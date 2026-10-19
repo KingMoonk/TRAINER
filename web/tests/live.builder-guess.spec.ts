@@ -36,6 +36,7 @@ test("guess before saving: the guess is stored with the version and checked next
   const saved = await lastVersion(request);
   expect(saved.number).toBe(base + 1);
   expect(saved.prediction).toEqual({ error: "lower" });
+  await expect(page.getByTestId("guess-check")).toBeVisible();
   await expect(page.getByTestId("guess-check")).toContainText("You expected lower error.");
 });
 

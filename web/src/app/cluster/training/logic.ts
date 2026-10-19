@@ -1,7 +1,7 @@
 // The Training tab's rules, apart from the page so a test can check them without a browser.
 import type { components } from "@/lib/api-schema";
 import { TRAINING as T } from "@/lib/copy/training";
-import type { Series } from "@/components/series-chart";
+import type { Mark, Series } from "@/components/series-chart";
 
 export type Run = components["schemas"]["Run"];
 export type Member = components["schemas"]["Member"];
@@ -10,9 +10,20 @@ export type Defaults = components["schemas"]["Defaults"];
 export type StartRun = components["schemas"]["StartRun"];
 export type TextSet = components["schemas"]["TextSet"];
 export type ClusterNode = components["schemas"]["ClusterNode"];
+export type Lesson = components["schemas"]["Lesson"];
+
+/** The button a lesson offers: a lesson in use can be dropped, any other is kept again. */
+export function lessonAction(lesson: Lesson): { verb: "drop" | "keep"; label: string } {
+  return lesson.status === "live" ? { verb: "drop", label: T.lessonDrop } : { verb: "keep", label: T.lessonKeep };
+}
+
+/** "After round 2 · 3 answers": where a lesson came from and how much it holds (rounds are counted from 1 on the page). */
+export function lessonFrom(lesson: Lesson): string {
+  return T.lessonFrom.replace("{round}", String(lesson.round + 1)).replace("{rows}", String(lesson.rows)).replace("{answers}", lesson.rows === 1 ? T.lessonAnswer : T.lessonAnswers);
+}
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -32,6 +43,8 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     minMachines: "",
     maxMachines: "",
     overlap: false,
+    reviewedOnly: false,
+    coordinator: "",
   };
 }
 
@@ -71,6 +84,7 @@ export function startBody(form: Form): StartRun | null {
     version: form.version === "" ? null : Number(form.version),
     dataset_ids: form.datasets,
     machines: form.machines,
+    ...(form.coordinator !== "" && form.machines.includes(form.coordinator) ? { coordinator: form.coordinator } : {}),
     rounds,
     inner_steps: innerSteps,
     outer_lr: outerLr,
@@ -78,6 +92,7 @@ export function startBody(form: Form): StartRun | null {
     ...(least !== undefined ? { min_members: least } : {}),
     ...(most !== undefined ? { max_members: most } : {}),
     overlap: form.overlap,
+    reviewed_only: form.reviewedOnly,
   };
 }
 
@@ -122,9 +137,9 @@ export function memberDevice(member: Member): string {
   return member.device_name ? `${member.device_name} (${member.device})` : member.device;
 }
 
-/** Whether a member never took part in the run: it got no slot, or was invited and never joined. */
+/** Whether a member never took part in the run, which has ended: it got no slot, or was invited and never joined. */
 export function neverJoined(member: Member): boolean {
-  return member.state === "unplaced" || member.state === "never_joined";
+  return member.state === "never_joined";
 }
 
 /** Whether a member's row shows a problem (red): it is out of the run or late. A machine that never joined is no problem; it only says why. */
@@ -132,14 +147,14 @@ export function isProblem(member: Member): boolean {
   return member.state === "unreachable" || member.state === "dropped" || member.state === "behind" || ((member.state === "left" || member.state === "stopped") && member.note !== "");
 }
 
-/** Whether a member's row needs a reason shown under it. */
+/** Whether a member's row needs a reason shown under it. A waiting machine says what it waits for. */
 export function needsReason(member: Member): boolean {
-  return neverJoined(member) || isProblem(member);
+  return neverJoined(member) || isProblem(member) || member.state === "waiting";
 }
 
 /** One sentence on why a member is not training, from what the server said, else a plain fallback. */
 export function reasonText(member: Member): string {
-  if (member.note) return member.note;
+  if (member.reason || member.note) return member.reason || member.note;
   if (neverJoined(member)) return T.neverJoinedFallback;
   if (member.state === "dropped") return T.droppedFallback;
   if (member.state === "behind") return T.behindFallback;
@@ -159,6 +174,29 @@ export function lossSeries(history: Round[]): Series[] {
   return [line("loss", T.trainLoss, (row) => row.loss), line("val_loss", T.validationLoss, (row) => row.val_loss)].filter((s) => s.points.length > 0);
 }
 
+/** The marks on the error curve: the best round (lowest validation loss so far) and each round after which the stop rules changed course. */
+export function errorMarks(run: Run): Mark[] {
+  const marks: Mark[] = run.history.flatMap((row) =>
+    row.pivot ? [{ id: `pivot-${row.round}`, x: row.round + 1, label: T.pivots[row.pivot] ?? T.pivotFallback, dash: "4 3" }] : [],
+  );
+  const polishColor: Record<string, string> = { accepted: "var(--chart-3)", rejected: "var(--chart-4)", skipped: "var(--muted-foreground)" };
+  for (const row of run.history) {
+    if (row.polish) marks.push({ id: `polish-${row.round}`, x: row.round + 1, label: T.polishKinds[row.polish], color: polishColor[row.polish], dash: "1 3" });
+  }
+  if (run.best_round != null) marks.push({ id: "best", x: run.best_round + 1, label: T.bestRound, color: "var(--chart-2)" });
+  return marks;
+}
+
+/** Which of Pause, Resume and Restart the run offers right now: only the ones the server says it can do. */
+export function holdButtons(run: Run): { pause: boolean; resume: boolean; restart: boolean } {
+  return { pause: run.can_pause && !run.paused, resume: run.can_resume && run.paused, restart: run.can_restart };
+}
+
+/** Why the run ended, in a sentence, or "" while it goes. */
+export function stopReasonText(run: Run): string {
+  return run.stop_reason ? T.stopReason.replace("{why}", run.stop_reason) : "";
+}
+
 /** Bytes moved each round, up to the coordinator and back down, in megabytes so the axis reads as small numbers. */
 export function trafficSeries(history: Round[]): Series[] {
   const mb = (bytes: number) => Math.round((bytes / 2 ** 20) * 100) / 100;
@@ -166,4 +204,11 @@ export function trafficSeries(history: Round[]): Series[] {
     { id: "up", label: T.up, points: history.map((row) => ({ x: row.round + 1, y: mb(row.bytes_up) })) },
     { id: "down", label: T.down, points: history.map((row) => ({ x: row.round + 1, y: mb(row.bytes_down) })) },
   ];
+}
+
+/** What the teacher added to the training text, or nothing when it added none. */
+export function lessonsText(run: Run): string {
+  if (!run.lessons && !run.lessons_left_out) return "";
+  const live = T.lessonsLine.replace("{live}", String(run.lessons)).replace("{lessons}", run.lessons === 1 ? T.lesson : T.lessonsPlural);
+  return run.lessons_left_out ? `${live}, ${T.lessonsLeftOut.replace("{out}", String(run.lessons_left_out))}` : live;
 }

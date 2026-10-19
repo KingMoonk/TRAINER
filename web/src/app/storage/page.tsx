@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, apiFetch, ApiError, subscribe, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
-import { EXPORT, STORAGE as T } from "./copy";
+import { EXPORT, LEFTOVERS, STORAGE as T } from "./copy";
 import { AGES, ALL, DEFAULT_CHOICE, choiceDays, dataApplies, downloadName, errorText, fill, sizeText } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
@@ -33,6 +33,7 @@ export default function Page() {
     <main className={PAGE_MAIN}>
       <PageHeader title={route.title} lead={route.lead} />
       <StorageCard />
+      <LeftoversCard />
       <ExportCard />
     </main>
   );
@@ -141,6 +142,93 @@ function StorageCard() {
               {T.delete}
             </Button>
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LeftoversCard() {
+  const queryClient = useQueryClient();
+  const [picked, setPicked] = useState<string[]>([]);
+  const [confirming, setConfirming] = useState(false);
+  const rows = useQuery({ queryKey: ["storage", "leftovers"], queryFn: () => unwrap(api.GET("/storage/leftovers")) });
+  const remove = useMutation({
+    mutationFn: (ids: string[]) => unwrap(api.POST("/storage/leftovers/remove", { body: { ids } })),
+    onSuccess: (done) => {
+      toast.success(fill(LEFTOVERS.removed, { size: sizeText(done.bytes) }));
+      setPicked([]);
+      queryClient.invalidateQueries({ queryKey: ["storage"] });
+    },
+    onError: (error) => toast.error(errorText(error)),
+    onSettled: () => setConfirming(false),
+  });
+
+  // Only what is still listed counts: a row another refresh dropped can no longer be sent.
+  const listed = rows.data ?? [];
+  const chosen = listed.filter((row) => picked.includes(row.id));
+  const bytes = chosen.reduce((sum, row) => sum + row.bytes, 0);
+
+  return (
+    <Card>
+      <Kicker desc={LEFTOVERS.desc}>{LEFTOVERS.kicker}</Kicker>
+      <CardContent className="flex flex-col gap-3">
+        {rows.isPending ? (
+          <Skeleton className="h-9 w-full max-w-md" aria-label="Loading leftovers" />
+        ) : rows.isError ? (
+          <p className="text-sm text-destructive">{LEFTOVERS.loadFailed}</p>
+        ) : listed.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{LEFTOVERS.none}</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {listed.map((row) => (
+              <li key={row.id}>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    aria-label={fill(LEFTOVERS.select, { name: row.name })}
+                    checked={picked.includes(row.id)}
+                    disabled={remove.isPending}
+                    onChange={(e) => {
+                      setPicked(e.target.checked ? [...picked, row.id] : picked.filter((id) => id !== row.id));
+                      setConfirming(false);
+                    }}
+                    className="mt-0.5 size-4 accent-primary"
+                  />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">
+                      {LEFTOVERS.kinds[row.kind]}: {row.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {row.belongs_to} · {sizeText(row.bytes)}
+                      {row.shared > 0 && ` · ${fill(LEFTOVERS.shared, { size: sizeText(row.shared) })}`}
+                    </span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+        {confirming ? (
+          <div role="alertdialog" aria-label="Confirm removing leftovers" className="flex flex-col gap-2 rounded-md border p-3">
+            <p className="text-sm">{fill(chosen.length === 1 ? LEFTOVERS.confirmOne : LEFTOVERS.confirm, { n: chosen.length, size: sizeText(bytes) })}</p>
+            <div className="flex gap-2">
+              <Button variant="destructive" onClick={() => remove.mutate(chosen.map((row) => row.id))} disabled={remove.isPending}>
+                {remove.isPending ? LEFTOVERS.removing : T.confirmYes}
+              </Button>
+              <Button variant="outline" onClick={() => setConfirming(false)} disabled={remove.isPending}>
+                {T.confirmNo}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          listed.length > 0 && (
+            <div>
+              <Button variant="outline" disabled={chosen.length === 0} onClick={() => setConfirming(true)}>
+                {LEFTOVERS.remove}
+              </Button>
+            </div>
+          )
         )}
       </CardContent>
     </Card>

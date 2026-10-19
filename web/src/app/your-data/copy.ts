@@ -3,17 +3,11 @@
 
 export type Kind = "text" | "conversations" | "problems";
 export const KINDS: Kind[] = ["text", "conversations", "problems"];
-export const MAKE_LABELS: Record<Kind, string> = {
-  text: "Generate prose",
-  conversations: "Make extra conversations",
-  problems: "Generate problems a rule can check",
-};
 
 export const T = {
   h1: "Your data",
   lead: "Three kinds, because each one trains a different stage.",
   storageLink: "Storage: free up disk space ›",
-  passiveLink: "Passive training: see or stop it ›",
   backPretraining: "Back to Pretraining",
   backPost: "Back to Post-training",
   noSets: "No sets yet",

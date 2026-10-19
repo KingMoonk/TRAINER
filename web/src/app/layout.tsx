@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { InlineScript } from "@/components/inline-script";
+import { InviteBanner } from "@/components/invite-banner";
+import { MemberToasts } from "@/components/member-toasts";
 import { Providers } from "@/components/providers";
 import { Sidebar } from "@/components/sidebar";
 import { StatusStrip } from "@/components/status-strip";
@@ -31,6 +33,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Sidebar />
               <div id="studio-content" tabIndex={-1} className="flex min-w-0 flex-1 flex-col outline-none">
                 <StatusStrip />
+                <InviteBanner />
+                <MemberToasts />
                 {children}
               </div>
               <TrafficConsole />

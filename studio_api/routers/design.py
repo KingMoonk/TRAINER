@@ -550,19 +550,12 @@ class ExplainBody(BaseModel):
     sentence: str | None = None
 
 
-class PartLink(BaseModel):
-    route: str
-    label: str
-    block: int
-
-
 class Explained(BaseModel):
     title: str
     what: str
     module: str
     module_text: str
     example: str
-    links: list[PartLink]
 
 
 @router.post("/explain")
@@ -570,8 +563,7 @@ def explain(body: ExplainBody) -> Explained:
     """explain: what the side panel says about one part of the draft, with the example sentence worked through it."""
     choices = choices_in(body.choices)
     block = None if body.block is None else min(body.block, choices["L"] - 1)
-    said = maths(design.explain_for, body.part, choices, block, body.pieces, body.sentence)
-    return Explained(**{**said, "links": [PartLink(route=route, label=label, block=at) for route, label, at in said["links"]]})
+    return Explained(**maths(design.explain_for, body.part, choices, block, body.pieces, body.sentence))
 
 
 class ExperimentBody(BaseModel):

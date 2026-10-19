@@ -20,6 +20,7 @@ function server(use: (days: number | null, data: boolean) => Use, exportsList: E
     },
     "GET /storage/free": { body: { bytes: 120e9 } },
     "GET /storage/exports": { body: exportsList },
+    "GET /storage/leftovers": { body: [] },
     "POST /storage/clean": ({ body }) => {
       state.cleaned.push(body);
       if (state.refuse) return { status: 409, body: { detail: state.refuse } };
@@ -137,5 +138,43 @@ describe("Storage page", () => {
     await user.click(within(rows[1]).getByRole("button", { name: "Hugging Face" }));
     expect(await screen.findByText("Version 2 has no checkpoint yet.")).toBeVisible();
     expect(downloads).toHaveLength(1);
+  });
+
+  test("leftovers are listed with their sizes and only the ticked ones are removed, after asking", async () => {
+    const rows = [
+      { id: "runs/queue_a-before-restart", kind: "interrupted", name: "queue_a-before-restart", belongs_to: "Version 1 from scratch", bytes: 5e8, shared: 2e9 },
+      { id: "runs/.snapshots/abc.jsonl", kind: "snapshot", name: "abc", belongs_to: "No run uses this training data", bytes: 2e9, shared: 0 },
+    ];
+    const removed: unknown[] = [];
+    server(() => ({ items: 0, bytes: 0 }), [], {
+      "GET /storage/leftovers": { body: rows },
+      "POST /storage/leftovers/remove": ({ body }) => {
+        removed.push(body);
+        return { body: { items: 1, bytes: 5e8 } };
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<StoragePage />, { route: "/storage/" });
+    expect(await screen.findByText(/Interrupted attempt: queue_a-before-restart/)).toBeVisible();
+    expect(screen.getByText(/Version 1 from scratch · 500.0 MB · 2.0 GB is shared with other runs and stays/)).toBeVisible();
+    expect(screen.getByText(/Unused training data: abc/)).toBeVisible();
+    const button = screen.getByRole("button", { name: "Remove selected…" });
+    expect(button).toBeDisabled();
+    await user.click(screen.getByLabelText("Select queue_a-before-restart"));
+    await user.click(button);
+    expect(await screen.findByText("Remove 1 item and free 500.0 MB? This cannot be undone.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(removed).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Remove selected…" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(removed).toEqual([{ ids: ["runs/queue_a-before-restart"] }]));
+    expect(await screen.findByText("Freed 500.0 MB")).toBeVisible();
+  });
+
+  test("nothing left over says so and offers nothing to remove", async () => {
+    server(bySize);
+    renderPage(<StoragePage />, { route: "/storage/" });
+    expect(await screen.findByText("Nothing left over.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Remove selected…" })).toBeNull();
   });
 });
