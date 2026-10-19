@@ -249,19 +249,25 @@ class Optimizer:
         if not getattr(model, "accept_gradients", lambda: True)():
             return 0.
         grads = {key: as_tensor(value) for key, value in model.g.items()}
-        squared = torch.stack([(grad.float() * grad.float()).sum() for grad in grads.values()]).sum()
-        norm = math.sqrt(float(squared))
+        if not grads:
+            return 0.
+        norm = float(torch.linalg.vector_norm(torch.stack(torch._foreach_norm([grad.float() for grad in grads.values()]))))
         if not math.isfinite(norm):
             raise ValueError("Non-finite gradient. Lower the learning rate.")
         multiplier = min(1., clip / (norm + 1e-12))
         self.steps += 1
+        rates = {key: learning_rate * self.lr_scale[key] if key in self.lr_scale else learning_rate for key in model.p}
+        if self.home is None and self.apply_all is not None:
+            self.apply_all(model.p, grads, multiplier, rates)
+            return norm
         for key, parameter in model.p.items():
-            rate = learning_rate * self.lr_scale[key] if key in self.lr_scale else learning_rate
             with self._resident(key, parameter.device):
-                self.apply(key, parameter, grads[key] * multiplier, rate)
-        if self.home is not None and grads:
+                self.apply(key, parameter, grads[key] * multiplier, rates[key])
+        if self.home is not None:
             self.home.synchronize(next(iter(grads.values())).device)
         return norm
+
+    apply_all = None  # optional: apply_all(parameters, gradients, multiplier, rates) steps every parameter at once (foreach kernels); not used when the state is offloaded
 
     def apply(self, key, parameter, gradient, lr):
         """Update `parameter` in place from its (already clipped) gradient."""
