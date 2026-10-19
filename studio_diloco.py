@@ -72,6 +72,13 @@ TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished roun
 SAMPLES_KEPT = 240  # progress samples kept per member for the open round
 EVAL_PROMPTS = 12  # prompts of the head-to-head against the starting weights (target_win_rate)
 PROMPTS_PER_POLISH = 500  # the teacher is given this many training prompts per polish, a new window each time
+LESSON_ITEMS_SHOWN = 50  # how many of a lesson's answers lesson_list shows (the rest are counted)
+
+
+def _prompt_of(messages):
+    """The question a lesson row answers: its last user message (else its last message), as text."""
+    asked = [m for m in messages if m.get("role") == "user"] or list(messages)
+    return str(asked[-1].get("content", "")) if asked else ""
 
 
 class Background:
@@ -632,6 +639,8 @@ class Coordinator:
         coordinator.polish_on = False  # the replica holds no training examples to make prompts from, nor the teacher's rows
         coordinator.versus_on = False  # ... nor the prompts of the head-to-head or the weights the run started from
         for entry in coordinator.lessons:
+            if entry["status"] == "dropped":
+                continue  # the owner's choice carries over: not dealt, and the list says who left it out
             entry["status"] = "left_out"  # the replica holds no lesson shards, so the lessons the old coordinator dealt are not dealt any more
         if coordinator.history:  # only the latest round's weights came over: they are the best this coordinator can keep
             last, rules = coordinator.history[-1], coordinator.rules
@@ -747,9 +756,9 @@ class Coordinator:
         path = self.directory / "lessons.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.is_file() else []
         for entry in self.lessons:
-            if entry["status"] != "live":
-                continue
-            mine = [row for row in rows if row.get("shard") == entry["shard"]]
+            if entry["status"] not in ("live", "dropped"):
+                continue  # a dropped lesson keeps its windows, so Keep can deal it again
+            mine =[row for row in rows if row.get("shard") == entry["shard"]]
             windows = self._lesson_windows(mine) if mine else []
             if len(windows):
                 self.lesson_windows[entry["shard"]] = windows
@@ -760,6 +769,83 @@ class Coordinator:
         """The lessons being dealt; with `since`, only those written after round `since` closed or later (they were first trained on in
         a round after that round's weights)."""
         return [entry for entry in self.lessons if entry["status"] == "live" and (since is None or entry["round"] >= since)]
+
+    def lesson_list(self):
+        """Every lesson, oldest first, with what the teacher gave (the question, the model's reply, the better answer) as lessons.jsonl
+        holds it: [{id, round, rows, status, items, more}]. A lesson is one polish's rewrites (one shard); `items` shows the first
+        LESSON_ITEMS_SHOWN of them and `more` counts the rest. A coordinator made from a replica has no rows to show."""
+        with self.lock:
+            entries = [dict(entry) for entry in self.lessons]
+            shown = {}
+            path = self.directory / "lessons.jsonl"
+            for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                shown.setdefault(row.get("shard"), []).append(row)
+        out = []
+        for entry in entries:
+            rows = shown.get(entry["shard"], [])
+            items = [{"prompt": _prompt_of(row["messages"]), "reply": str(row.get("rejected") or ""), "answer": str(row["chosen"])}
+                     for row in rows[:LESSON_ITEMS_SHOWN]]
+            out.append({"id": entry["shard"], "round": entry["round"], "rows": entry["rows"], "status": entry["status"],
+                        "items": items, "more": max(0, len(rows) - len(items))})
+        return out
+
+    def drop_lesson(self, shard):
+        """Leave a lesson out of every round that opens from now on (the round in flight keeps its deal). It stays in lessons.jsonl and
+        in memory, so keep_lesson can put it back, and the choice goes to diloco.json: a restart and a successor coordinator keep it.
+        KeyError for an id that is no lesson; Stale once the run is over; a lesson that is not being dealt changes nothing. The win-rate
+        comparison still never judges on a dropped lesson's prompt: the weights may have trained on it in the rounds before, and
+        judging on a prompt the model has seen would flatter it."""
+        with self.cond:
+            self._touch()
+            entry = self._lesson(shard)
+            if entry["status"] != "live":
+                return
+            entry["status"] = "dropped"
+            self._lesson_changed("lesson_dropped", f"Lesson {shard} (round {entry['round']}, {entry['rows']} answers) was dropped by you: "
+                                                   f"the next rounds leave it out.")
+
+    def keep_lesson(self, shard):
+        """Undo drop_lesson, or put back a lesson a step back left out: the next rounds deal it again. Stale once the run is over, or when
+        this coordinator no longer holds the lesson's rows (one made from a replica); a lesson already dealt changes nothing."""
+        with self.cond:
+            self._touch()
+            entry = self._lesson(shard)
+            if entry["status"] == "live":
+                return
+            if shard not in self.lesson_windows:
+                path = self.directory / "lessons.jsonl"
+                rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.is_file() else []
+                mine = [row for row in rows if row.get("shard") == shard]
+                windows = self._lesson_windows(mine) if mine else []
+                if not len(windows):
+                    raise Stale(f"This node no longer holds the answers of lesson {shard}, so it cannot be put back.")
+                self.lesson_windows[shard] = windows
+            entry["status"] = "live"
+            self._lesson_changed("lesson_kept", f"Lesson {shard} (round {entry['round']}, {entry['rows']} answers) was kept by you: "
+                                                f"the next rounds deal it again.")
+
+    def _lesson(self, shard):
+        if self.finished:
+            raise Stale("The run is over; its lessons can no longer change.")
+        entry = next((entry for entry in self.lessons if entry["shard"] == shard), None)
+        if entry is None:
+            raise KeyError(shard)
+        return entry
+
+    def _lesson_changed(self, kind, text):
+        """Journal a lesson's new status and write the lessons to diloco.json (lock held)."""
+        from studio_core import atomic_json
+        self._event(kind, "", self.next_round, text)
+        self._state = (None, b"")  # a replica that fetched the state before this change must fetch it again
+        path = self.directory / "diloco.json"
+        if path.is_file():
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            atomic_json(path, {**saved, "lessons": [dict(item) for item in self.lessons]})
+        self._remember()
+        self.cond.notify_all()
 
     @staticmethod
     def _read_state(directory, cfg, settings, digest):
