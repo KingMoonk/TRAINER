@@ -139,7 +139,7 @@ describe("Pretraining page", () => {
   test("Pretraining opens prose generation", async () => {
     server();
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
-    expect(await screen.findByRole("link", { name: /Make extra data/ })).toHaveAttribute("href", expect.stringMatching(/^\/make-data\/?\?kind=text$/));
+    expect(await screen.findByRole("link", { name: /Make extra data/ })).toHaveAttribute("href", expect.stringMatching(/^\/your-data\/?\?kind=text#make-extra-data$/));
   });
 
   test("the choices give the plan the server works out, and a held-out set starts unticked", async () => {

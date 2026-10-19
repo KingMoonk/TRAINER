@@ -113,7 +113,7 @@ export default function PretrainingPage() {
   return (
     <main className={PAGE_MAIN}>
       <PageHeader title={T.h1} lead={T.lead}>
-        <Link href="/make-data/?kind=text" className="w-fit text-sm text-highlight hover:underline">{T.makeData} ›</Link>
+        <Link href="/your-data/?kind=text#make-extra-data" className="w-fit text-sm text-highlight hover:underline">{T.makeData} ›</Link>
       </PageHeader>
 
       <div>

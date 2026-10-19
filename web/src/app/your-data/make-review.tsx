@@ -7,8 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
-import { errorText } from "../your-data/logic";
-import { MAKE as T } from "./copy";
+import { errorText } from "./logic";
+import { MAKE as T } from "./make-copy";
 
 export function refreshData(cache: QueryClient) {
   return cache.invalidateQueries({ predicate: (query) => query.queryKey[0] === "data" &&
