@@ -3732,8 +3732,6 @@ export interface components {
         Explained: {
             /** Example */
             example: string;
-            /** Links */
-            links: components["schemas"]["PartLink"][];
             /** Module */
             module: string;
             /** Module Text */
@@ -4750,15 +4748,6 @@ export interface components {
             record?: {
                 [key: string]: unknown;
             } | null;
-        };
-        /** PartLink */
-        PartLink: {
-            /** Block */
-            block: number;
-            /** Label */
-            label: string;
-            /** Route */
-            route: string;
         };
         /** Parts */
         Parts: {
