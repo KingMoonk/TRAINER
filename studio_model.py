@@ -987,6 +987,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     with (directory / "samples.jsonl").open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps({"step": step, "text": text, "prompt": cfg["sample_prompt"]}) + "\n")
                     emit({"type": "sample", "step": step, "text": text, "prompt": cfg["sample_prompt"]})
+            if distributed is not None and getattr(distributed, "stepped", None):
+                distributed.stepped(time.monotonic() - tick)  # the step's own time: the pause wait is before `tick`
             if distributed is not None and distributed.due(step, trained_tokens):
                 prefetcher.discard()  # a batch drawn ahead (CUDA) came from this round's windows; sync swaps them and reseeds the sampler
                 distributed.sync(step, trained_tokens, model)
