@@ -4,15 +4,18 @@ import {
   CHARTS,
   SHOTS,
   againstChance,
+  bandText,
   chartFor,
   designs,
   fewShotNote,
   fewShotRows,
+  gainText,
   hasItems,
   pending,
   shotsText,
   statusText,
   tokensText,
+  trendTables,
   valueText,
   versionName,
   type BenchmarkOut,
@@ -246,4 +249,71 @@ describe("chartFor", () => {
     expect(out.chance).toBeNull();
   });
   it("is empty without rows", () => expect(chartFor({ suite: "s" }, "bpc")).toEqual({ series: [], chance: null, unplaced: [] }));
+});
+
+describe("bandText", () => {
+  it("adds the range when there is one", () => expect(bandText("bpc", 2.2, [2.15, 2.25])).toBe("2.20 (2.15 to 2.25)"));
+  it("shows a share as a percentage with its range", () => expect(bandText("few_shot", 0.35, [0.21, 0.49])).toBe("35% (21% to 49%)"));
+  it("leaves the range out when it is missing or not a number, and a dash without a value", () => {
+    expect(bandText("bpc", 2.2, null)).toBe("2.20");
+    expect(bandText("few_shot", 0.5, [Number.NaN, Number.NaN])).toBe("50%");
+    expect(bandText("bpc", null, [1, 2])).toBe("–");
+  });
+});
+
+describe("gainText", () => {
+  it("is a dash for the first version of a lineage", () => {
+    expect(gainText("bpc", null)).toBe("–");
+    expect(gainText("bpc", undefined)).toBe("–");
+  });
+  it("calls it better only when the paired test says so", () => {
+    expect(gainText("bpc", { diff: -0.4, better: true, docs: 30 })).toBe(BENCH.gainBetter("-0.40"));
+    expect(gainText("bpc", { diff: -0.01, better: false, docs: 30 })).toBe(BENCH.gainUnsure("-0.01"));
+  });
+  it("writes an accuracy change in points", () => expect(gainText("few_shot", { diff: 0.05, better: false, items: 40 })).toBe(BENCH.gainUnsure("+5 points")));
+  it("says when there are too few items to tell", () =>
+    expect(gainText("few_shot", { diff: 0.2, better: false, items: 8, reason: "few_items" })).toBe(BENCH.gainFew("+20 points", 8)));
+  it("says when it could not be measured", () => expect(gainText("bpc", { diff: Number.NaN, better: false })).toBe(BENCH.gainNone));
+});
+
+describe("trendTables", () => {
+  const state: BenchmarkOut = {
+    suite: "s",
+    rows: [row(1, { lineage: "chain-1" }), row(2, { lineage: "chain-1" })],
+    lineages: [
+      {
+        lineage: "chain-1",
+        versions: [1, 2],
+        points: [
+          { number: 1, tokens: 200_000, bpc: 2.6, bpc_band: [2.5, 2.7], few_shot: 0.3, few_shot_band: [0.2, 0.4], dropped: { docs: 1, choice: 2 }, gain: null },
+          {
+            number: 2,
+            tokens: 800_000,
+            bpc: 2.2,
+            bpc_band: [2.1, 2.3],
+            few_shot: 0.35,
+            few_shot_band: [0.25, 0.45],
+            dropped: {},
+            gain: { bpc: { diff: -0.4, better: true, docs: 24 }, few_shot: { diff: 0.05, better: false, items: 40 } },
+          },
+        ],
+      },
+    ],
+  };
+  it("is a row per version, with ranges, what the tests say and what was left out", () => {
+    const [table] = trendTables(state);
+    expect(table.title).toBe(BENCH.design("A", [1, 2]));
+    expect(table.rows).toEqual([
+      ["1", "200K", "2.60 (2.50 to 2.70)", "–", "30% (20% to 40%)", "–", "3"],
+      ["2", "800K", "2.20 (2.10 to 2.30)", BENCH.gainBetter("-0.40"), "35% (25% to 45%)", BENCH.gainUnsure("+5 points"), "0"],
+    ]);
+  });
+  it("is empty before any version is checked", () => expect(trendTables({ suite: "s" })).toEqual([]));
+});
+
+describe("statusText with versions checked under an older method", () => {
+  it("says they will be checked again", () => {
+    const state: BenchmarkOut = { suite: "s", sizes: withSizes, rows: [row(1, { result: null, stale: true }), row(2, { result: null }), row(3)] };
+    expect(statusText(state)).toBe(BENCH.waiting(2, 3) + BENCH.waitingStale(1));
+  });
 });
