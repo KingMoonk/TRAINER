@@ -364,8 +364,11 @@ export function Builder() {
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-      <p className="text-sm text-muted-foreground">{route.lead}</p>
+      <header className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{BUILDER.workspace}</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
+        <p className="max-w-2xl text-sm text-muted-foreground">{BUILDER.lead}</p>
+      </header>
       {failed ? (
         <p role="alert" className="rounded-md border border-destructive/40 p-2 text-sm text-destructive">
           {BUILDER.loading_failed} {detailOf(failed)}
@@ -445,8 +448,8 @@ export function Builder() {
           <BuilderDisclosure title={BUILDER.history_section} hint={BUILDER.history_hint}>
             <VersionList versions={versionsQ.data} current={base} />
             <Answers versions={versionsQ.data} current={base} />
-            {current && <GuessCheck before={checkBefore} version={current} />}
           </BuilderDisclosure>
+          {current && <GuessCheck before={checkBefore} version={current} />}
         </>
       )}
       {/* Outside the ready branch: a save moves the current version and the page reads its design again; the notebook keeps its rows. */}

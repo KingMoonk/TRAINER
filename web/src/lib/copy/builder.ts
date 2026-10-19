@@ -4,7 +4,8 @@
 
 export const BUILDER = {
   h1: "Build your model",
-  lead: "Change the picture. See what it costs and what it does.",
+  workspace: "Model studio",
+  lead: "Configure architecture, review resource estimates, and compare trained versions.",
   next_word: "Next word",
   next_word_desc: "Scores every piece in the word list, then picks one.",
   blocks: "Blocks",
