@@ -85,7 +85,7 @@ def clean(workspace, days=None, data=False, now=None):
 # What runs/ keeps that no longer serves anything --------------------------------------------------------------------------
 
 ASIDE = re.compile(r"^queue_(?P<job>.+?)-before-restart(?:-\d+)?$")  # studio_jobs.continue_here moves an interrupted attempt here
-ACTIVE = ("waiting", "held", "running")
+ACTIVE = ("waiting", "held", "running", "stopped")  # a stopped job can still be continued from its checkpoint
 JOB_PATHS = ("output_dir", "resume", "init_from", "previous_best")  # folders a job that has yet to finish reads or writes
 UNFINISHED = 3600  # seconds: a half-written snapshot older than this is a crashed write
 

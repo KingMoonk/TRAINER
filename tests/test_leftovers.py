@@ -79,6 +79,11 @@ class Leftovers(unittest.TestCase):
                 job("later", "held", init_from=str(self.runs / "queue_init-before-restart" / "best.npz"))]
         self.assertEqual(sorted(self.ids(jobs)), ["runs/queue_gone-before-restart", "runs/queue_wait-before-restart-2"])
 
+    def test_the_checkpoint_a_stopped_job_can_continue_from_is_never_listed(self):
+        aside = self.folder("queue_stop-before-restart")
+        self.folder("queue_stop")
+        self.assertEqual(self.ids([job("stop", "stopped", resume=str(aside / "last.npz"))]), {})
+
     def test_a_relative_path_and_a_failed_job_a_version_keeps_are_protected(self):
         self.folder("queue_kept")
         self.folder("queue_dropped")
