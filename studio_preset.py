@@ -72,3 +72,31 @@ def modern_spec(name="My network", dims=None, device="auto"):
             break
     spec["block"]["channel"] = {"id": "swiglu", "config": {"d_ff": best[1]}}
     return validate_spec(spec), note
+
+
+GATED = ("swiglu",)   # channel modules with three matrices, so the same room costs 2/3 of the width of a plain MLP
+
+
+def room_ratio(channel, d_model):
+    """The thinking room of a channel entry as a multiple of d_model, counted as a plain two-matrix MLP would (a gated
+    channel of width f holds 1.5 f of them). 4 is the usual room; a gated channel, sized to match parameters rather than
+    exactly 8/3, reads as the nearest of 2, 4 and 8, so a design is not called wide for a few extra units."""
+    if channel["id"] in GATED:
+        return (2, 4, 8)[room_choice(channel, d_model)]
+    return (channel["config"].get("d_ff") or 4 * d_model) / d_model
+
+
+def room_choice(channel, d_model):
+    """0 narrow, 1 normal, 2 wide. A plain MLP is normal at exactly 4 d_model; a gated channel is the nearest of 2, 4 and 8."""
+    if channel["id"] in GATED:
+        ratio = 1.5 * (channel["config"].get("d_ff") or ((8 * d_model + 47) // 48) * 16) / d_model
+        return 0 if ratio < 2.83 else 2 if ratio > 5.66 else 1
+    ratio = (channel["config"].get("d_ff") or 4 * d_model) / d_model
+    return 0 if ratio < 4 else 1 if ratio == 4 else 2
+
+
+def room_width(channel_id, multiple, d_model):
+    """d_ff that gives `multiple` times d_model of thinking room in this channel module."""
+    if channel_id in GATED:
+        return max(8, round(multiple * d_model / 1.5 / 8) * 8)
+    return multiple * d_model

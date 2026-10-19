@@ -63,7 +63,7 @@ class WriteSpec(unittest.TestCase):
         spec = D.write_spec(base(), s)
         self.assertEqual(spec["block"]["mixer"]["config"]["heads"], 8)
         spec = D.write_spec(base(), D.choose(choices(W=2), "channel", "swiglu"))
-        self.assertEqual(spec["block"]["channel"]["config"]["d_ff"], 8 * 64)
+        self.assertEqual(spec["block"]["channel"]["config"]["d_ff"], 344)  # 8 * 64 / 1.5: a gated channel holds 1.5 f of MLP room
         entry = D.entry_for("channel", "moe", {"id": "mlp_gelu", "config": {"d_ff": 128, "bias": True}}, choices())
         self.assertEqual(entry, {"id": "moe", "config": {"d_ff": 128}})
 

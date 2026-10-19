@@ -133,6 +133,30 @@ class OlderSpecs(unittest.TestCase):
                 self.assertEqual(a["model"][key].tolist(), b["model"][key].tolist(), key)
 
 
+class Distributed(unittest.TestCase):
+    def test_a_member_trains_the_modern_preset_in_a_diloco_run(self):
+        import threading
+
+        from fastapi.testclient import TestClient
+
+        import studio_diloco
+        from tests import diloco_support as support
+        spec = default_spec(device="cpu")
+        spec["dims"].update(d_model=16, n_layer=1, n_ctx=32, dropout=0.)
+        spec["block"]["mixer"]["config"].update(heads=2, kv_heads=1)
+        config = {**support.CONFIG, **config_from_spec(validate_spec(spec)), "device": "cpu", "batch_size": 2}
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            coordinator = studio_diloco.Coordinator.build("modern", root / "diloco", config, support.EXAMPLES, support.settings(inner_steps=2, rounds=2))
+            studio_diloco.COORDINATORS["modern"] = coordinator
+            self.addCleanup(studio_diloco.COORDINATORS.pop, "modern", None)
+            with TestClient(support.app()) as client:
+                studio_diloco.run_member(support.Peer(client), "modern", "solo", 0, root, root / "member", lambda event: None, threading.Event(), wait=.2)
+            self.assertTrue(coordinator.finished)
+            self.assertTrue(all(np.isfinite(value).all() for value in coordinator.theta.values()))
+            self.assertIn("gqa.q.w", " ".join(coordinator.theta))
+
+
 class Api(unittest.TestCase):
     def test_start_and_presets_lead_with_modern_and_keep_classic(self):
         from fastapi.testclient import TestClient
