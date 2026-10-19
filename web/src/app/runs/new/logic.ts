@@ -1,5 +1,6 @@
 // The New run form's rules, apart from the page so a test can check them without a browser.
 import type { components } from "@/lib/api-schema";
+import type { QueueRow } from "@/lib/cluster";
 import { nodeName } from "@/lib/node-name";
 import type { Plan } from "../../pretraining/logic";
 import { fill, NEW_RUN as T } from "./copy";
@@ -32,6 +33,25 @@ export function localForced(stage: Stage, picked: string[], nodes: Node[]): bool
 /** The peers of W: the addresses `machines` and `params.pinned` take. This computer is never listed there. */
 export function peersOf(workers: string[], nodes: Node[]): string[] {
   return workers.filter((address) => nodes.find((n) => n.address === address)?.local === false);
+}
+
+/** The peers among `workers` that are busy: the scheduler gives a busy machine no slot, so the run starts without it and it joins a later round if it frees up. */
+export function busyPeers(workers: string[], nodes: Node[]): Node[] {
+  return peersOf(workers, nodes).flatMap((address) => nodes.filter((n) => n.address === address && n.online && n.busy));
+}
+
+/** "A", "A and B", "A, B and C". */
+export function nameList(names: string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/** What a busy machine is running, from the merged queue's rows: "Version 3 post-training · about 4.7 days left"; "" when no row says. */
+export function runningText(address: string, rows: QueueRow[]): string {
+  const row = rows.find((r) => r.status === "running" && r.node === address);
+  if (!row) return "";
+  const s = row.eta_s;
+  const left = s == null ? "" : s < 5400 ? `${Math.max(1, Math.round(s / 60))} min` : s < 172_800 ? `${Math.round(s / 3600)} hours` : `${(s / 86_400).toFixed(1)} days`;
+  return [row.label || row.kind, left && fill(T.etaLeft, { time: left })].filter(Boolean).join(" · ");
 }
 
 /** The topology chip: its word and the sentence in its tooltip. */

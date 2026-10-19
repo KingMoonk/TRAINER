@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { TRAINING as T } from "@/lib/copy/training";
 import { cn } from "@/lib/utils";
-import { isActive, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
+import { isActive, isProblem, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
 import { T as V } from "./copy";
 import {
   deviceBadge, edges, liveLossText, liveSpeedText, progressFraction, reportedText, shardsText, stateColor, stepsText, type Edge,
@@ -37,7 +37,8 @@ function EdgeView({ edge, node }: { edge: Edge; node: string }) {
 }
 
 function MemberNode({ run, member, action }: { run: Run; member: Member; action: ReactNode }) {
-  const bad = needsReason(member);
+  const bad = isProblem(member);
+  const why = needsReason(member);
   const fraction = progressFraction(member, run);
   const facts = [liveSpeedText(member), liveLossText(member), shardsText(member), reportedText(member)].filter(Boolean);
   const round = run.phase === "training" || run.phase === "collecting";
@@ -76,7 +77,7 @@ function MemberNode({ run, member, action }: { run: Run; member: Member; action:
       {round && member.state === "training" && (
         <p className="text-xs text-muted-foreground" data-testid={`sent-${member.node}`}>{member.sent ? V.deltaIn : V.deltaPending}</p>
       )}
-      {bad && <p className="text-sm text-muted-foreground" data-testid={`reason-${member.node}`}>{reasonText(member)}</p>}
+      {why && <p className="text-sm text-muted-foreground" data-testid={`reason-${member.node}`}>{reasonText(member)}</p>}
     </div>
   );
 }

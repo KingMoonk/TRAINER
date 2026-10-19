@@ -160,7 +160,7 @@ class Cache(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_fake(self, version, suite, tokens):
+    def run_fake(self, version, suite, tokens, **kw):
         self.calls.append(suite["id"])
         return {"suite": suite["id"], "version": version[0], "tokens": tokens, "bpc": 2.0}
 
@@ -193,7 +193,7 @@ class Cache(unittest.TestCase):
     def test_the_stamp_is_taken_before_the_run_so_a_rewrite_mid_run_is_checked_again(self):
         suite = studio_bench.build_suite(**pieces())
 
-        def rewrites(version, suite, tokens):
+        def rewrites(version, suite, tokens, **kw):
             self.calls.append(suite["id"])
             self.checkpoint.write_bytes(b"weights that arrived while the suite was running")
             return {"suite": suite["id"], "bpc": 2.0}
@@ -213,7 +213,7 @@ class Cache(unittest.TestCase):
         suite = studio_bench.build_suite(**pieces())
         started, release = threading.Event(), threading.Event()
 
-        def slow(version, suite, tokens):
+        def slow(version, suite, tokens, **kw):
             self.calls.append(1)
             started.set()
             release.wait(5)

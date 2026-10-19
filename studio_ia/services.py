@@ -671,6 +671,21 @@ class Services:
         """Rows for a post_round job: conversations | problems | pairs | heldout_docs | heldout_problems."""
         raise NotImplementedError
 
+    def post_loops(self) -> list:
+        """The automated RLHF loops (studio_loop.summary dicts), newest first: id, version, status, stop_reason, config, anchor, current,
+        kept, rounds [the journal's records], and so on."""
+        raise NotImplementedError
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None) -> dict:
+        """Queue an `rlhf_loop` job for `version` (None = the current one): {"job", "loop_id", "label"}. `judge_model` is the Ollama model
+        that grades (None = the workspace's teacher, or no judge: checked problems only). `resume` is the id of an earlier
+        loop to carry on, from its last kept round. Raises ValueError with a sentence when it cannot start."""
+        raise NotImplementedError
+
+    def adopt_loop(self, loop_id) -> dict:
+        """Check a loop's best on all the held-back data and, if the gate passes, make it the version's checkpoint: the gate result."""
+        raise NotImplementedError
+
     # 3D viewer (S11): a separate Panda3D process; Services only starts, stops and talks to it -------------------
     def viewer_status(self) -> dict:
         """{'available': bool, 'running': bool, 'connected': bool}. available False = the viewer cannot be launched here."""
@@ -1317,13 +1332,17 @@ class FakeServices(Services):
                          {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
 
     def benchmark(self):
+        import studio_bench
+
         def result(n, bpc, accuracy, rate):
-            return {"suite": "fake", "version": n, "bpc": bpc, "problems": {"passed": round(30 * rate), "total": 30, "rate": rate},
-                    "few_shot": {"items": 40, "chance": .3, "accuracy": accuracy, "rows": []}}
-        return {"suite": "fake", "sizes": {"docs": 24, "choice": 40, "problems": 30}, "dropped": {},
-                "rows": [{"number": 1, "name": "Version 1", "lineage": "a", "tokens": 200_000, "result": result(1, 2.6, .30, .1)},
-                         {"number": 2, "name": "Version 2", "lineage": "a", "tokens": 800_000, "result": result(2, 2.2, .35, .2)},
-                         {"number": 3, "name": "Version 3", "lineage": "b", "tokens": 500_000, "result": None}]}
+            return {"suite": "fake", "version": n, "bpc": bpc, "bpc_band": [bpc - .05, bpc + .05], "dropped": {"docs": 0, "choice": 2, "problems": 0},
+                    "decontam": "checked", "problems": {"passed": round(30 * rate), "total": 30, "rate": rate},
+                    "few_shot": {"items": 40, "chance": .3, "accuracy": accuracy, "band": [accuracy - .14, accuracy + .14], "rows": []}}
+        rows = [{"number": 1, "name": "Version 1", "lineage": "a", "continues": None, "tokens": 200_000, "stale": False, "result": result(1, 2.6, .30, .1)},
+                {"number": 2, "name": "Version 2", "lineage": "a", "continues": 1, "tokens": 800_000, "stale": False, "result": result(2, 2.2, .35, .2)},
+                {"number": 3, "name": "Version 3", "lineage": "b", "continues": None, "tokens": 500_000, "stale": False, "result": None}]
+        return {"suite": "fake", "sizes": {"docs": 24, "choice": 40, "problems": 30}, "dropped": {}, "sources": [], "rows": rows,
+                "lineages": studio_bench.trend(rows)}
 
     def run_benchmark(self, number):
         return next(r["result"] for r in self.benchmark()["rows"] if r["number"] == number) or {}
@@ -1333,6 +1352,31 @@ class FakeServices(Services):
 
     def post_rows(self, kind):
         return []
+
+    def post_loops(self):
+        return list(getattr(self, "_loops", []))
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None):
+        loops = self.__dict__.setdefault("_loops", [])
+        v = next((x for x in self._versions if x.number == version), None) if version else (self._versions[-1] if self._versions else None)
+        if v is None or not v.best_checkpoint:
+            raise NoCheckpoint(getattr(v, "number", None))
+        loop_id = resume or uuid.uuid4().hex[:8]
+        if any(j.kind == "rlhf_loop" and j.params.get("loop_id") == loop_id for j in [self._queue.job, *self._queue.up_next] if j):
+            raise ValueError("This loop is already queued or running.")
+        if not resume:
+            loops.insert(0, {"id": loop_id, "version": v.number, "status": "running", "stop_reason": "", "config": dict(config or {}),
+                             "anchor": v.best_checkpoint, "current": v.best_checkpoint, "kept": 0, "failed_streak": 0, "audit_flagged": 0,
+                             "elapsed_s": 0., "created": "", "updated": "", "phase": "", "note": "", "anchor_eval": None,
+                             "current_eval": None, "rounds": [], "round": 1})
+        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds",
+                  params={"version": v.number, "checkpoint": v.best_checkpoint, "config": dict(config or {}), "loop_id": loop_id,
+                          "judge_model": judge_model})
+        self.enqueue(job)
+        return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def adopt_loop(self, loop_id):
+        return {"round": 5, "ok": False, "checks": [], "verdict": "Nothing to adopt: the fake services run no loops.", "checkpoint": ""}
 
     # inspect stubs: small synthetic arrays, 2 blocks x 4 heads, 9 pieces, vocab 12 ---------------------------------
     def inspect_forward(self, version, text, hooks=True):
@@ -1509,6 +1553,8 @@ class _Pending(Exception):
 class WorkspaceServices(Services):
     """Every Services method over the real modules. Queue events fire on the runner thread and hop to Tk via emit."""
 
+    auto_bench = True  # a version that gets weights is scored on the frozen suite by itself (_bench_later); a test may turn it off
+
     def __init__(self, workspace):
         import studio_jobs
         import studio_queue
@@ -1543,6 +1589,7 @@ class WorkspaceServices(Services):
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
         self._to_score, self._scorer, self._unscorable = {}, False, set()  # held-back scores the Tk thread asked for (_held_scores)
         self._score_lock = threading.Lock()
+        self._bench_lock, self._bench_wait, self._bench_busy = threading.Lock(), [], False  # versions waiting for the frozen suite (_bench_later)
 
     @classmethod
     def reader(cls, root):
@@ -1563,6 +1610,9 @@ class WorkspaceServices(Services):
         studio_distributed.unload(self.root)
         if self._schema is not None:  # its connection holds records.sqlite open, and Windows cannot delete an open file
             self._schema.join()
+        bench = getattr(self, "_bench_thread", None)
+        if bench is not None:  # it writes under data/bench, which a caller removing the workspace must not race
+            bench.join(60)
 
     # 3D viewer --------------------------------------------------------------
     _viz = None
@@ -2520,6 +2570,8 @@ class WorkspaceServices(Services):
             self._note_devices(number, ckpt, scores is not None)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
         self.emit("versions", None)
+        if ckpt and payload["status"] == "done":
+            self._bench_later(number)
 
     def _record_distributed(self, job, number, status, out):
         """A distributed run ends: only a run that finished all its rounds gives its coordinator's final weights (`last.npz` in the
@@ -2543,6 +2595,8 @@ class WorkspaceServices(Services):
             studio_distributed.note_saved(job.id, number)
         self._to(number, "trained" if done else "saved")
         self.emit("versions", None)
+        if done:
+            self._bench_later(number)
 
     def _note_devices(self, number, ckpt, scored=False):
         """Record on the version the device kind that trained `ckpt` and, when the caller just scored it, the one that scored it."""
@@ -2586,6 +2640,8 @@ class WorkspaceServices(Services):
             self.store.set_scorecard(v.number, card)
             self._note_devices(v.number, self._abs(result["checkpoint"]))
         self.emit("versions", None)
+        if result.get("ok"):
+            self._bench_later(v.number)  # the weights changed: score the new file
 
     def _human_pairs(self):
         from studio_rlhf import PreferenceStore
@@ -2658,6 +2714,46 @@ class WorkspaceServices(Services):
             self._note_overlap("problems", report)
         return out
 
+    def post_loops(self):
+        import studio_loop
+        return studio_loop.list_loops(self.workspace.run_dir)
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None):
+        import studio_loop
+        from studio_core import uid
+        v = self._as_version(version) if version else self.current_version()
+        if v is None:
+            raise ValueError("There is no version yet. Build one first.")
+        if not v.best_checkpoint:
+            raise NoCheckpoint(v.number)
+        loop_id = resume or uid("loop")
+        folder = Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}"
+        if resume:
+            if studio_loop.load_state(folder) is None:
+                raise ValueError(f"There is no loop {resume} to carry on.")
+        else:
+            studio_loop.clean_config(config)  # a refused setting is told now, not when the job starts
+        with self.runner.lock:
+            busy = [j for j in self.runner.jobs if j.kind == "rlhf_loop" and j.status in ("waiting", "held", "running")
+                    and (j.params.get("loop_id") == loop_id or (not resume and j.params.get("version") == v.number))]
+        if busy:
+            raise ValueError("A loop is already queued or running for this version. Stop it first.")
+        params = {"version": v.number, "checkpoint": str(v.best_checkpoint), "config": dict(config or {}), "loop_id": loop_id,
+                  "output_dir": str(folder), "budget_token": uid("budget") if resume else None, "judge_model": judge_model}
+        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds", params=params)
+        self.enqueue(job)
+        return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def adopt_loop(self, loop_id):
+        import studio_loop
+        state = studio_loop.load_state(Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}")
+        if state is None:
+            raise ValueError(f"There is no loop {loop_id}.")
+        result = studio_loop.adoption(state, {kind: self.post_rows(kind) for kind in ("heldout_docs", "heldout_problems")})
+        if result["ok"]:
+            self.record_round(result["round"], state["version"], result)
+        return result
+
     def teach_correction(self, version, messages, correction, whole_answer=False):
         """A whole new answer becomes a conversation for round 1 (dataset "From Chat"); anything else is a correction the
         round-3 teacher sees in front of the conversation (the student never does)."""
@@ -2712,11 +2808,22 @@ class WorkspaceServices(Services):
             pool = [i for i in map(studio_eval.choice_item, self.post_rows("problems")) if i]
             asked = held or pool  # ponytail: no held-back choice problem yet, so training ones are asked (flagged held_back False)
             asked = random.Random(0).sample(asked, min(FEW_SHOT_ITEMS, len(asked)))
-            return {**studio_eval.few_shot(ckpt, asked, pool=held + pool), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
+            return {**studio_eval.few_shot(ckpt, asked, pool=held + pool, norm="char"), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
         return self._cached(("few_shot", ckpt, Path(ckpt).stat().st_mtime_ns, self.workspace.revision), make)
 
-    def _bench_suite(self):
-        """The fixed benchmark items (studio_bench.build_suite), rebuilt only when the held-back data or the stored data changes."""
+    def _bench_sources(self, held):
+        """{held-back document: name of the dataset it came from}, so the suite spreads its passages over the data sources."""
+        import studio_data_kinds as dk
+        held, out = set(held), {}
+        for d in self.workspace.state["datasets"]:
+            for e in self.workspace.iter_examples(d["id"]):
+                if e.get("text") in held and dk.classify(e) == "text":
+                    out.setdefault(e["text"], d.get("name") or d["id"])
+        return out
+
+    def _bench_build(self):
+        """The suite as the stored data would make it now (studio_bench.build_suite). Read only when the frozen suite is missing or
+        lacks a kind of item; items that share a 13-gram with the workspace's training text are left out, and counted."""
         import studio_bench
 
         def make():
@@ -2726,9 +2833,21 @@ class WorkspaceServices(Services):
 
             def decontaminated(kind, items):  # an item sharing a 13-gram with training text (studio_decontam) is left out
                 return items if kind == "pool" else studio_decontam.exclude_overlap(items, index, text[kind])[0]  # worked examples are training problems
-            return studio_bench.suite_from_rows(self._heldout(), self.post_rows("heldout_problems"), self.post_rows("problems"),
-                                                filter_items=decontaminated)
+            docs = self._heldout()
+            return studio_bench.suite_from_rows(docs, self.post_rows("heldout_problems"), self.post_rows("problems"),
+                                                filter_items=decontaminated, sources=self._bench_sources(docs))
         return self._cached(("bench_suite", self._heldout_stamp(), self.workspace.revision), make)
+
+    def _bench_suite(self):
+        """The workspace's frozen eval suite (studio_bench.frozen): chosen from the held-back data the first time it is asked for,
+        then kept in data/bench/suite.json, so every version is scored on the same items."""
+        import studio_bench
+        return studio_bench.frozen(self.root, self._bench_build)
+
+    def bench_suite(self):
+        """The frozen suite, for a caller that must keep its own prompts away from it: {id, docs, choice, pool, problems, ...}.
+        studio_bench.suite_index(suite).overlaps(text) says whether a prompt is, or contains a run of 13 words of, one of its items."""
+        return self._bench_suite()
 
     def _bench_tokens(self, v, checkpoint):
         """Tokens seen by a version's checkpoint over every run it descends from (studio_bench.tokens_seen), or None."""
@@ -2738,28 +2857,151 @@ class WorkspaceServices(Services):
             return next(([self._abs(r) for r in w.runs] for w in self.versions() if w.best_checkpoint and Path(w.best_checkpoint) == Path(path)), None)
         return studio_bench.tokens_seen([self._abs(r) for r in v.runs], checkpoint, owner)
 
-    def benchmark(self):
+    def _continues(self, v, versions):
+        """The number of the version whose weights `v` was started from (run.json initialized_from), or None."""
+        from studio_core import read_json
+        if not v.runs:
+            return None
+        try:
+            start = read_json(Path(self._abs(v.runs[-1])) / "run.json").get("initialized_from")
+        except (OSError, ValueError, AttributeError):
+            return None
+        if not start:
+            return None
+        start = Path(start)
+        for w in versions:
+            if w.number == v.number:
+                continue
+            if (w.best_checkpoint and Path(w.best_checkpoint) == start) or any(Path(self._abs(r)) == start.parent for r in w.runs):
+                return w.number
+        return None
+
+    def _lineages(self, versions):
+        """{version number: (lineage id, number it continues)}. Versions that continue one another share a lineage; one that
+        does not is grouped with the others of its design (same structure, trained differently), as before."""
         import hashlib
-        import studio_bench
         from studio_spec import structure_key
-        suite = self._bench_suite()
-        rows = []
-        for v in self.versions():
-            if not v.best_checkpoint or not Path(v.best_checkpoint).exists() or v.status == "training":
+        continues = {v.number: self._continues(v, versions) for v in versions}
+        children = {n for n in continues.values() if n}
+
+        def root(n):
+            seen = {n}
+            while continues.get(n) and continues[n] not in seen:
+                n = continues[n]
+                seen.add(n)
+            return n
+        out = {}
+        for v in versions:
+            if continues[v.number] or v.number in children:
+                out[v.number] = (f"chain-{root(v.number)}", continues[v.number])
                 continue
             try:
-                lineage = hashlib.sha1(structure_key(v.spec).encode()).hexdigest()[:8]  # one design, trained differently, is one line
+                design = hashlib.sha1(structure_key(v.spec).encode()).hexdigest()[:8]  # one design, trained differently, is one line
             except (ValueError, KeyError, TypeError):
-                lineage = f"v{v.number}"
-            rows.append({"number": v.number, "name": v.name, "lineage": lineage, "tokens": self._bench_tokens(v, v.best_checkpoint),
-                         "result": studio_bench.cached(self.root, v, suite)})
+                design = f"v{v.number}"
+            out[v.number] = (design, None)
+        return out
+
+    def _bench_skip(self, v, versions):
+        """(suite items this version's training text contains, studio_bench.contaminated) or None when its training text is not on this
+        computer (a pulled or imported version): then nothing is dropped and the result says "unknown". The text is every run
+        dataset.jsonl the weights descend from."""
+        import studio_decontam
+        runs, seen, current = [], set(), v
+        while current is not None and current.number not in seen:
+            seen.add(current.number)
+            runs += [Path(self._abs(r)) for r in current.runs]
+            parent = self._continues(current, versions)
+            current = next((w for w in versions if w.number == parent), None)
+        runs = [r for r in runs if (r / "dataset.jsonl").is_file()]
+        if not runs:
+            return None
+        return studio_decontam.index_of_runs(runs)
+
+    def _bench_run(self, v, checkpoint, suite, number=None):
+        import studio_bench
+        versions = self.versions()
+        index = self._bench_skip(v, versions)
+        skip = studio_bench.contaminated(suite, index) if index is not None else None
+        result = studio_bench.benchmark(self.root, (v.number if number is None else number, checkpoint), suite,
+                                        self._bench_tokens(v, checkpoint), skip=skip)
+        return result
+
+    def benchmark(self):
+        import studio_bench
+        suite = self._bench_suite()
+        versions = [v for v in self.versions() if v.best_checkpoint and Path(v.best_checkpoint).exists() and v.status != "training"]
+        lineage = self._lineages(self.versions())
+        rows = []
+        for v in versions:
+            result = studio_bench.cached(self.root, v, suite)
+            rows.append({"number": v.number, "name": v.name, "lineage": lineage[v.number][0], "continues": lineage[v.number][1],
+                         "tokens": self._bench_tokens(v, v.best_checkpoint), "result": result,
+                         "stale": result is None and studio_bench.stale(self.root, v, suite)})
         return {"suite": suite["id"], "sizes": {k: len(suite[k]) for k in ("docs", "choice", "problems")}, "dropped": suite["dropped"],
-                "rows": rows}
+                "sources": sorted({s for s in suite.get("sources", []) if s}), "rows": rows, "lineages": studio_bench.trend(rows)}
 
     def run_benchmark(self, number):
-        import studio_bench
         v, checkpoint = self._as_version(number), self._checkpoint(number)
-        return studio_bench.benchmark(self.root, (v.number, checkpoint), self._bench_suite(), self._bench_tokens(v, checkpoint))
+        return self._bench_run(v, checkpoint, self._bench_suite())
+
+    def _bench_later(self, number):
+        """Score version `number` on the frozen suite on a worker, after any already waiting, then emit "versions" so the Benchmark
+        page reads it. Called when a version gets weights. Cheap on CPU (a fixed small suite, a single worker, threads capped as
+        in _score_later), and resumable (studio_bench.benchmark keeps each finished stage). A failure is logged and the page's
+        "Check the rest" still scores it."""
+        if not self.auto_bench or not hasattr(self, "_bench_lock"):
+            return
+        with self._bench_lock:
+            if number in self._bench_wait:
+                return
+            self._bench_wait.append(number)
+            if self._bench_busy:
+                return
+            self._bench_busy = True
+
+        def run():
+            from studio_backend import cap_threads
+            cap_threads()
+            while True:
+                with self._bench_lock:
+                    if not self._bench_wait:
+                        self._bench_busy = False
+                        break
+                    todo = self._bench_wait[0]
+                try:
+                    suite = self._bench_suite()
+                    if any(suite[k] for k in ("docs", "choice", "problems")):
+                        self.run_benchmark(todo)
+                except Exception:
+                    logging.getLogger(__name__).exception("scoring version %s on the frozen suite failed", todo)
+                with self._bench_lock:
+                    self._bench_wait.remove(todo)
+            self.emit("versions", None)
+        self._bench_thread = start_thread(run)
+
+    def gate_eval(self, checkpoint, baseline=None):
+        """For an automated loop (the RLHF gate): `checkpoint`'s scores on the frozen suite, and when `baseline` (a checkpoint path or a
+        version number) is given, studio_bench.gate_verdict of it against the baseline. Returns {scores, baseline, verdict}.
+
+        The suite is the same one every version is scored on, so the numbers sit on the Benchmark page's trend. Any checkpoint file
+        works, a round's candidate included; its result is kept by file (path, size, time) so asking again is free. The items are
+        held-back text and problems the judge never sees: keep your own prompts away from them with bench_suite() and
+        studio_bench.suite_index. Slow (a minute or so on CPU the first time): call it from a worker."""
+        import hashlib
+        import studio_bench
+        suite = self._bench_suite()
+
+        def scores(target):
+            if isinstance(target, int):
+                v = self._as_version(target)
+                return self._bench_run(v, self._checkpoint(target), suite)
+            path = self._abs(str(target))
+            key = "gate-" + hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:12]
+            return studio_bench.benchmark(self.root, (key, path), suite, None)  # a file that is no version: its training text is unknown
+        got = scores(checkpoint)
+        base = None if baseline is None else scores(baseline)
+        return {"scores": got, "baseline": base, "verdict": None if base is None else studio_bench.gate_verdict(base, got)}
 
     # data / evaluation ------------------------------------------------------
     def data(self, kind, query=""):
