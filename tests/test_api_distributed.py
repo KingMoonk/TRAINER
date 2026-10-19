@@ -205,6 +205,32 @@ class ReadModel(unittest.TestCase):
         self.assertEqual(view["history"][0]["bytes_up"], 2000)
         self.assertEqual((view["history"][0]["bytes_down"], view["history"][0]["val_loss"]), (4000, 3.5))
 
+    def test_the_view_marks_the_best_and_pivot_rounds_and_says_why_a_run_ended(self):
+        snap = self.snap(state="finished", round=4, rules={"best_round": 0, "best_loss": 3.5, "stop_rule": "patience", "stop_text": "No better loss for 3 rounds."})
+        snap["history"][0].update({"best": True, "pivot": "halve_lr"})
+        view = runs.view(self.run, self.coordinator(snap), None)
+        self.assertEqual((view["history"][0]["best"], view["history"][0]["pivot"]), (True, "halve_lr"))
+        self.assertEqual((view["best_round"], view["best_val_loss"], view["stop_rule"], view["stop_reason"]), (0, 3.5, "patience", "No better loss for 3 rounds."))
+        going = runs.view(self.run, self.coordinator(self.snap()), self.job)
+        self.assertEqual((going["best_round"], going["stop_reason"], going["history"][0]["best"], going["history"][0]["pivot"]), (None, "", False, ""))
+
+    def test_pause_and_restart_are_offered_only_where_they_work(self):
+        going = runs.view(self.run, self.coordinator(self.snap()), self.job)
+        self.assertEqual((going["can_pause"], going["can_resume"], going["can_restart"]), (True, False, False))
+        paused = runs.view(self.run, self.coordinator(self.snap(paused=True, phase="paused")), self.job)
+        self.assertEqual((paused["paused"], paused["can_pause"], paused["can_resume"], paused["phase"]), (True, False, True, "paused"))
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            self.run.folder = folder
+            ended = self.coordinator(self.snap(state="stopped", round=1))
+            self.assertFalse(runs.view(self.run, ended, None)["can_restart"])  # nothing saved yet
+            (Path(folder) / "last.npz").write_bytes(b"x")
+            self.assertEqual(runs.checkpoint_of(self.run), Path(folder) / "last.npz")
+            self.assertTrue(runs.view(self.run, ended, None)["can_restart"])
+            (Path(folder) / "best.npz").write_bytes(b"x")
+            self.assertEqual(runs.checkpoint_of(self.run), Path(folder) / "best.npz")  # the best is preferred
+            self.assertEqual(runs.restart_params(self.run)["restart_from"], str(Path(folder) / "best.npz"))
+            self.assertFalse(runs.view(self.run, self.coordinator(self.snap()), self.job)["can_restart"])  # not while it goes
+
     def test_a_run_that_has_not_started_is_queued_or_starting_and_its_machines_are_invited(self):
         self.job.status = "waiting"
         view = runs.view(self.run, None, self.job)
@@ -360,6 +386,85 @@ class Routes(unittest.TestCase):
         self.assertEqual((stopped.status_code, stopped.json()["state"], stopped.json()["can_stop"]), (200, "stopped", False))
         stopped_run = self.wait_state(run_id, "stopped")
         self.assertEqual((stopped_run["members"][0]["state"], stopped_run["saved_version"]), ("stopped", None))
+
+    def test_a_run_can_be_paused_and_resumed_and_says_so(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        before = self.client.get(f"/distributed/runs/{run_id}").json()
+        self.assertEqual((before["paused"], before["can_pause"], before["can_resume"], before["can_restart"]), (False, True, False, False))
+        paused = self.client.post(f"/distributed/runs/{run_id}/pause")
+        self.assertEqual(paused.status_code, 200, paused.text)
+        body = paused.json()
+        self.assertEqual((body["paused"], body["phase"], body["can_pause"], body["can_resume"], body["can_stop"]), (True, "paused", False, True, True))
+        self.assertIn("paused", [e["kind"] for e in body["events"]])
+        self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/pause").status_code, 200)  # a second pause changes nothing
+        held = self.client.get(f"/distributed/runs/{run_id}").json()["round"]
+        time.sleep(.2)
+        self.assertEqual(self.client.get(f"/distributed/runs/{run_id}").json()["round"], held)
+        resumed = self.client.post(f"/distributed/runs/{run_id}/resume").json()
+        self.assertEqual((resumed["paused"], resumed["can_pause"], resumed["can_resume"]), (False, True, False))
+        self.assertIn("resumed", [e["kind"] for e in resumed["events"]])
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+
+    def test_pausing_a_run_that_is_not_going_is_a_409_with_a_sentence(self):
+        self.assertEqual(self.client.post("/distributed/runs/nope/pause").status_code, 404)
+        self.assertEqual(self.client.post("/distributed/runs/nope/resume").status_code, 404)
+        self.services.pause()
+        queued = self.start().json()
+        self.assertEqual((queued["can_pause"], queued["can_resume"]), (False, False))
+        self.assertEqual(self.client.post(f"/distributed/runs/{queued['id']}/pause").json()["detail"], "The run is not going.")
+        self.client.post(f"/distributed/runs/{queued['id']}/stop")
+        run_id = self.start(rounds=2000).json()["id"]
+        self.services.resume()
+        self.wait_state(run_id, "running")
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        over = self.client.post(f"/distributed/runs/{run_id}/pause")
+        self.assertEqual((over.status_code, over.json()["detail"]), (409, "The run is over; there is nothing to pause."))
+        self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/resume").status_code, 409)
+
+    def test_a_finished_run_is_restarted_as_a_new_run_from_its_best_weights(self):
+        first = self.wait_state(self.start().json()["id"], "finished")
+        self.assertEqual((first["can_restart"], first["best_round"], first["stop_reason"]), (True, 2, "All 3 rounds are done."))
+        self.assertEqual([r["best"] for r in first["history"]], [True, True, True])
+        queued = []
+        enqueue = self.services.enqueue
+        self.services.enqueue = lambda job: (queued.append(job), enqueue(job))[1]
+        restarted = self.client.post(f"/distributed/runs/{first['id']}/restart")
+        self.assertEqual(restarted.status_code, 201, restarted.text)
+        fresh = restarted.json()
+        self.assertNotEqual(fresh["id"], first["id"])
+        self.assertEqual((fresh["rounds"], fresh["inner_steps"], fresh["version"]), (3, 2, 1))
+        self.assertEqual(fresh["label"], f"{first['label']}, restarted")
+        self.assertEqual([j.id for j in queued], [fresh["id"]])
+        params = queued[0].params
+        self.assertTrue(params["restart_from"].endswith("best.npz"), params["restart_from"])
+        self.assertEqual((params["rounds"], params["datasets"]), (3, ["Your files"]))
+        self.assertEqual(self.wait_state(fresh["id"], "finished")["round"], 3)
+
+    def test_a_run_that_is_going_or_saved_nothing_cannot_be_restarted(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        going = self.client.post(f"/distributed/runs/{run_id}/restart")
+        self.assertEqual((going.status_code, going.json()["detail"]), (409, "The run is still going. Stop it first."))
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        self.assertEqual(self.client.post("/distributed/runs/nope/restart").status_code, 404)
+        self.services.pause()
+        queued = self.start().json()["id"]
+        self.client.post(f"/distributed/runs/{queued}/stop")
+        none = self.client.get(f"/distributed/runs/{queued}").json()
+        self.assertFalse(none["can_restart"])
+        refused = self.client.post(f"/distributed/runs/{queued}/restart")
+        self.assertEqual(refused.status_code, 409)
+        self.assertIn("saved no weights", refused.json()["detail"])
+
+    def test_a_run_this_computer_did_not_start_cannot_be_restarted(self):
+        run = runs.Run(id="adopted", label="x", version=1, started_at=1., settings={"rounds": 3}, owner="other",
+                       final={**{"state": "finished", "round": 3, "rounds": 3, "history": [], "settings": {"rounds": 3}}})
+        runs.RUNS[run.id] = run
+        self.assertFalse(self.client.get("/distributed/runs/adopted").json()["can_restart"])
+        refused = self.client.post("/distributed/runs/adopted/restart")
+        self.assertEqual(refused.status_code, 409)
+        self.assertIn("did not start this run", refused.json()["detail"])
 
     def test_a_run_waiting_in_the_queue_can_be_stopped_before_it_runs(self):
         self.services.pause()

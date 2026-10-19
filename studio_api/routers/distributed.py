@@ -114,6 +114,8 @@ class Round(BaseModel):
     members: int
     contributed: int
     dropped: list[str]
+    best: bool = False  # the lowest validation loss so far: best.npz holds this round's weights while it stays the best
+    pivot: str = ""  # the pivot the stop rules applied after this round ("halve_lr", "next_dataset"), else ""
 
 
 class Lane(BaseModel):
@@ -142,7 +144,8 @@ class RoundTimeline(BaseModel):
 class RunEvent(BaseModel):
     seq: int
     t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
-    kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished"]
+    kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished", "pivot", "paused", "resumed", "took_over",
+                  "stepped_down"]
     node: str  # "" for the run
     round: int
     text: str
@@ -172,7 +175,15 @@ class Run(BaseModel):
     members: list[Member]
     history: list[Round]
     can_stop: bool
-    phase: Literal["waiting", "next_round", "training", "collecting", "outer_step", "validating", "finished", "stopped"]
+    paused: bool = False  # the owner paused it: no new round opens until it is resumed (a round in flight finishes)
+    can_pause: bool = False
+    can_resume: bool = False
+    can_restart: bool = False  # it ended and saved weights to start a new run from (best.npz, else last.npz)
+    best_round: int | None = None  # the round whose weights are the best so far
+    best_val_loss: float | None = None
+    stop_rule: str = ""  # which stop rule ended the run, "" when none did
+    stop_reason: str = ""  # why the run ended, in a sentence; "" while it goes
+    phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "finished", "stopped"]
     deadline_s: float | None  # seconds left to the open round's deadline
     grace_s: float  # the wait after the deadline for a member's download and upload
     window_s: float | None  # the open round's deadline length
@@ -420,6 +431,59 @@ def stop_run(run_id: str, services: Services) -> Run:
     if job is not None and job.status in ("waiting", "held", "running"):
         services.remove(run.id)
     return Run.model_validate(_read(run, job)[0])
+
+
+def _hold(services, run_id, verb):
+    """Pause or resume a run: this computer's coordinator does it, else the computer that coordinates the run is asked."""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/{verb}")
+    run, job = _find(services, run_id)
+    coordinator = studio_diloco.COORDINATORS.get(run.id)
+    if coordinator is None:
+        raise HTTPException(409, "The run is not going.")
+    try:
+        getattr(coordinator, verb)()
+    except studio_diloco.Stale as exc:
+        raise HTTPException(409, str(exc)) from None
+    return Run.model_validate(_read(run, job)[0])
+
+
+@router.post("/runs/{run_id}/pause")
+def pause_run(run_id: str, services: Services) -> Run:
+    """Hold a run: no new round opens until it is resumed. A round in flight finishes, the members wait, and the paused time does not
+    count toward the run's time limit. It stays paused over a restart of the app. 409 when the run is over or not going. A run
+    another computer coordinates is paused by asking that computer."""
+    return _hold(services, run_id, "pause")
+
+
+@router.post("/runs/{run_id}/resume")
+def resume_run(run_id: str, services: Services) -> Run:
+    """Undo a pause: the next round opens as soon as the members are in. 409 when the run is over or not going."""
+    return _hold(services, run_id, "resume")
+
+
+@router.post("/runs/{run_id}/restart", status_code=201)
+def restart_run(run_id: str, services: Services) -> Run:
+    """Start a new run (a new id) from an ended one: the same design, text, settings and machines, with the weights of the old run's
+    best round (else its last) as the starting point. The outer momentum starts at zero. 409 for a run that is still going, one
+    that saved no weights, or one this computer did not start. A run another computer coordinates is restarted by that computer."""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/restart")
+    run, job = _find(services, run_id)
+    row = _read(run, job)[0]
+    if row["state"] in runs.ACTIVE:
+        raise HTTPException(409, "The run is still going. Stop it first.")
+    try:
+        params = runs.restart_params(run)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    fresh = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=f"{run.label}, restarted", params=params)
+    runs.open_run(fresh)
+    services.enqueue(fresh)
+    services.start_queue()
+    return Run.model_validate(_found(services, fresh.id))
 
 
 @router.post("/runs/{run_id}/members/{node}/stop")
