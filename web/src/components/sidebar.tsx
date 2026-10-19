@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Boxes, ChevronRight, Database, Layers3, MessageSquare, Network, Server, Settings, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,29 +22,10 @@ function PageLink({ route, pathname }: { route: Route; pathname: string }) {
   );
 }
 
-function LookInsidePages({ pages, pathname }: { pages: Route[]; pathname: string }) {
-  const [open, setOpen] = useState(() => pages.some((route) => route.href === pathname));
-  const panelId = useId();
-  return (
-    <div className="flex shrink-0 gap-1 md:mt-3 md:flex-col md:border-t md:border-surface-border md:pt-3">
-      <button type="button" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(!open)}
-        className={cn("flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-overlay hover:text-foreground", focusClass)}>
-        <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
-        Look inside
-      </button>
-      <div id={panelId} hidden={!open} className={cn(open && "flex", "gap-1 md:flex-col md:gap-0.5 md:border-l md:border-surface-border md:ml-4 md:pl-1")}>
-        {pages.map((route) => <PageLink key={route.route} route={route} pathname={pathname} />)}
-      </div>
-    </div>
-  );
-}
-
 export function Sidebar() {
   const pathname = usePathname().replace(/\/$/, "");
   const current = ROUTES.find((route) => route.href === pathname);
   const pages = ROUTES.filter((route) => route.area === current?.area && !route.hidden);
-  const primaryPages = pages.filter((route) => !route.lookInside);
-  const diagnosticPages = pages.filter((route) => route.lookInside);
   const settingsActive = pathname === "/settings";
   const settingsGear = (className?: string) => (
     <Tooltip>
@@ -93,8 +73,7 @@ export function Sidebar() {
       {pages.length > 1 && (
         <div role="group" aria-label="Pages in this area" className="flex gap-1 overflow-x-auto border-t border-surface-border px-3 py-2 md:mx-3 md:mt-3 md:flex-col md:gap-0.5 md:overflow-y-auto md:px-0 md:pt-4">
           <p className="hidden px-3 pb-2 text-[11px] font-medium tracking-widest text-muted-foreground uppercase md:block">Explore</p>
-          {primaryPages.map((route) => <PageLink key={route.route} route={route} pathname={pathname} />)}
-          {diagnosticPages.length > 0 && <LookInsidePages key={pathname} pages={diagnosticPages} pathname={pathname} />}
+          {pages.map((route) => <PageLink key={route.route} route={route} pathname={pathname} />)}
         </div>
       )}
       {/* Pinned to the foot of the nav (margin-top: auto): the gear and the API traffic console button (#341). */}
