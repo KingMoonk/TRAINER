@@ -15,8 +15,18 @@
 
 BASE=wedd-compute-cluster
 
+# Prints why a run is live ("queue job x is running") when the local API reports one; prints nothing when idle, down or unreadable
+# (studio_api.live exits 0 live, 1 idle, 2 API not answering). Always returns 0, so the caller pulls as before when unsure.
+live_run() {
+  local top out
+  top=$(git rev-parse --show-toplevel) || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  out=$(cd "$top" && python3 -m studio_api.live 2>/dev/null) && printf '%s\n' "$out"
+  return 0
+}
+
 main() {
-  local mode="${1:-session}" common gitdir state wtstate now last cur old n behind path branch out rc files fork
+  local live mode="${1:-session}" common gitdir state wtstate now last cur old n behind path branch out rc files fork
   local -a fetch
   common=$(git rev-parse --path-format=absolute --git-common-dir) || return 0
   gitdir=$(git rev-parse --path-format=absolute --git-dir) || return 0
@@ -48,9 +58,12 @@ main() {
   fi
   printf '%s\n' "$cur" > "$wtstate/last-base"
 
-  # Fast-forward the base branch in the checkout that has it, if that checkout is clean.
+  # Fast-forward the base branch in the checkout that has it, if that checkout is clean and no run is live: the pull reloads the
+  # live API (make dev), which ends a queue job or distributed run living in its process.
   behind=$(git rev-list --count "refs/heads/$BASE..origin/$BASE" 2>/dev/null) || behind=0
-  if [ "$behind" -gt 0 ]; then
+  if [ "$behind" -gt 0 ] && live=$(live_run) && [ -n "$live" ]; then
+    echo "$BASE not updated: $live; it is fast-forwarded on a later prompt once the run ends"
+  elif [ "$behind" -gt 0 ]; then
     path=$(git worktree list --porcelain | awk -v ref="refs/heads/$BASE" '/^worktree /{p=substr($0,10)} $0 == "branch " ref {print p; exit}')
     if [ -z "$path" ]; then
       git merge-base --is-ancestor "refs/heads/$BASE" "origin/$BASE" 2>/dev/null \
