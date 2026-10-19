@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: macos-latest, name: macos}
-          - {os: windows-latest, name: windows}
+          - {os: macos-latest, name: macos, sep: ":"}  # sep: PyInstaller's --add-data separator, os.pathsep
+          - {os: windows-latest, name: windows, sep: ";"}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -25,9 +25,40 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements.txt pyinstaller  # PyInstaller is build-only, so it stays out of requirements.txt
-      - run: python -m unittest tests.test_module_packaging -v
-      # studio_brain3d is only ever launched by name (the 3D viewer), so the import scan cannot see it
-      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_worker
+      - run: python -m unittest tests.test_module_packaging tests.test_release_workflow -v
+      # the API serves web/out, so the frozen app needs it: built here, bundled below
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0; the pnpm version comes from web/package.json
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: pnpm build
+        working-directory: web
+      # studio_brain3d is only ever launched by name (the 3D viewer), and studio_api.app imports its routers by an f-string name and skips one it cannot find, so the import scan sees neither
+      # --add-data puts web/out at <bundle>/web/out, where studio_api.app.WEB_OUT resolves in a frozen app (its __file__ lies under sys._MEIPASS)
+      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_worker --collect-submodules studio_api.routers --add-data "web/out${{ matrix.sep }}web/out"
+      # Launches the frozen build with no window: it must import the hidden imports and every studio_modules submodule, serve FakeServices on a free port and answer /node.
+      # The report file is the only output of a --windowed build, so it is printed here; a missing module or a timeout fails the build before anything is zipped.
+      - name: Smoke test the frozen app
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          exe = {"macos": "dist/Groundwork.app/Contents/MacOS/Groundwork", "windows": "dist/Groundwork/Groundwork.exe"}["${{ matrix.name }}"]
+          report = pathlib.Path("smoke-report.txt")
+          report.unlink(missing_ok=True)
+          try:
+              code = subprocess.run([exe, "--smoke", str(report)], timeout=180).returncode
+          except subprocess.TimeoutExpired:
+              code = "timed out after 180s"
+          text = report.read_text(encoding="utf-8") if report.exists() else "(no report written: the app crashed before it could)"
+          print(text)
+          if code != 0 or not text.endswith("OK\n"):
+              sys.exit(f"smoke test failed (exit {code})")
       - name: Zip (macOS)
         if: matrix.name == 'macos'
         run: ditto -c -k --keepParent dist/Groundwork.app Groundwork-macos.zip

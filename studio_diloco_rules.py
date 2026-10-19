@@ -14,7 +14,8 @@ from dataclasses import dataclass, field, fields
 
 import studio_plateau
 
-PIVOTS = ("halve_lr", "next_dataset", "drop_lessons")  # target_win_rate arrives with the head-to-head stop rule (#511)
+WIN_READINGS = 2  # head-to-head comparisons in a row that must each reach target_win_rate: a dozen prompts make a noisy reading
+PIVOTS = ("halve_lr", "next_dataset", "drop_lessons")
 PIVOT_TEXT = {"halve_lr": "halved the learning rate", "next_dataset": "switched to the next data source",
               "drop_lessons": "left out the teacher's lessons written since"}
 
@@ -35,8 +36,10 @@ def check(s):
     _number(s.max_seconds, "max_seconds", 0, allow_none=True, strict_low=True)
     _number(s.patience_rounds, "patience_rounds", 0, integer=True)
     _number(s.target_val_loss, "target_val_loss", 0, allow_none=True, strict_low=True)
-    if s.target_win_rate is not None:
-        raise ValueError("target_win_rate is not available yet: it arrives with the head-to-head stop rule in #511.")
+    _number(s.target_win_rate, "target_win_rate", 0, allow_none=True, strict_low=True)
+    if s.target_win_rate is not None and s.target_win_rate > 1:
+        raise ValueError("target_win_rate must be at most 1: it is the share of head-to-head replies the best weights win.")
+    _number(s.versus_seconds, "versus_seconds", 0, strict_low=True)
     _number(s.plateau_checks, "plateau_checks", 0, integer=True)
     if s.plateau_checks == 1:
         raise ValueError("plateau_checks must be 0 (off) or at least 2.")
@@ -45,6 +48,8 @@ def check(s):
     _number(s.keep_checkpoints, "keep_checkpoints", 0, integer=True)
     if not isinstance(s.teacher, str):
         raise ValueError("teacher must be a model name.")
+    if s.target_win_rate is not None and not s.teacher:
+        raise ValueError("target_win_rate needs a teacher: set teacher to the name of an Ollama model that judges the head-to-head.")
     _number(s.polish_every, "polish_every", 0, integer=True)
     if not isinstance(s.polish, bool) or not isinstance(s.lessons, bool):
         raise ValueError("polish and lessons must each be true or false.")
@@ -70,6 +75,10 @@ class State:
     active_seconds: float = 0.
     best_round: int | None = None
     best_loss: float | None = None
+    win_rate: float | None = None                        # the best weights' share of head-to-head wins against the run's starting weights, as last judged
+    win_hits: int = 0                                    # head-to-head comparisons in a row (one per new best) that reached target_win_rate
+    win_round: int | None = None                         # the best round that comparison was made for (or tried for): one comparison per new best
+    start_round: int | None = None                       # the round whose weights start.npz holds when the run made it itself; None for a restart's own start
     rounds_since_best: int = 0
     worse_streak: int = 0
     pivot_index: int = 0
@@ -123,6 +132,17 @@ def next_pivot(state, s, sources=1, lessons=0):
     return None
 
 
+def record_win(state, s, rate):
+    """Fold one head-to-head reading into `state`: `rate` is the best weights' share of wins against the starting weights, or None when
+    the comparison gave no number (skipped, failed or timed out), which ends the streak. The win_rate rule needs WIN_READINGS readings
+    in a row at or over target_win_rate, one per new best. The final round is never compared, so a new best made there cannot count."""
+    if rate is None or not math.isfinite(rate):
+        state.win_hits = 0
+        return
+    state.win_rate = float(rate)
+    state.win_hits = state.win_hits + 1 if s.target_win_rate is not None and rate >= s.target_win_rate else 0
+
+
 def stop_reason(state, s):
     """(rule, sentence) for the first stop rule that holds, or None. The rules are the ones the person set; none set means None."""
     if s.max_seconds is not None and state.active_seconds >= s.max_seconds:
@@ -131,6 +151,9 @@ def stop_reason(state, s):
         return "patience", f"Stopped: {state.rounds_since_best} rounds in a row without a better validation loss."
     if s.target_val_loss is not None and state.best_loss is not None and state.best_loss <= s.target_val_loss:
         return "target_val_loss", f"Stopped: the validation loss reached {state.best_loss:.4g}, at or under the target {s.target_val_loss:.4g}."
+    if s.target_win_rate is not None and state.win_rate is not None and state.win_hits >= WIN_READINGS:
+        return "win_rate", (f"Stopped: the best weights won {state.win_rate:.0%} of head-to-head replies against the starting weights, "
+                            f"at or over the target {s.target_win_rate:.0%}, in {WIN_READINGS} comparisons in a row (two successive new bests).")
     return None
 
 
