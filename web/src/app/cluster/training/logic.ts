@@ -12,7 +12,7 @@ export type TextSet = components["schemas"]["TextSet"];
 export type ClusterNode = components["schemas"]["ClusterNode"];
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -34,6 +34,9 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     overlap: false,
     reviewedOnly: false,
     coordinator: "",
+    teacher: "",
+    polishEvery: "",
+    targetWinRate: "",
   };
 }
 
@@ -56,6 +59,19 @@ function positive(text: string): number | null {
   return text.trim() !== "" && Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** The teacher's part of the request: nothing while blank, `null` when it is not usable (a polish that never runs, a target out of range, no teacher). */
+function teaching(form: Form, rounds: number): Pick<StartRun, "teacher" | "polish_every" | "target_win_rate"> | null | undefined {
+  const polishBlank = form.polishEvery.trim() === "";
+  const winBlank = form.targetWinRate.trim() === "";
+  if (polishBlank && winBlank) return undefined;
+  const polish = polishBlank ? undefined : whole(form.polishEvery);
+  const percent = winBlank ? undefined : Number(form.targetWinRate);
+  if (polish === null || (polish !== undefined && polish >= rounds)) return null;
+  if (percent !== undefined && !(percent > 0 && percent <= 100)) return null;
+  if (form.teacher === "") return null;
+  return { teacher: form.teacher, ...(polish !== undefined ? { polish_every: polish } : {}), ...(percent !== undefined ? { target_win_rate: percent / 100 } : {}) };
+}
+
 /** The request the form makes, or null while it is not complete (a setting is not a number, or no text is ticked). */
 export function startBody(form: Form): StartRun | null {
   const rounds = whole(form.rounds);
@@ -69,6 +85,8 @@ export function startBody(form: Form): StartRun | null {
   const most = limit(form.maxMachines);
   if (least === null || most === null) return null;
   if (least !== undefined && most !== undefined && least > most) return null;
+  const teacher = teaching(form, rounds);
+  if (teacher === null) return null;
   return {
     version: form.version === "" ? null : Number(form.version),
     dataset_ids: form.datasets,
@@ -82,6 +100,7 @@ export function startBody(form: Form): StartRun | null {
     ...(most !== undefined ? { max_members: most } : {}),
     overlap: form.overlap,
     reviewed_only: form.reviewedOnly,
+    ...teacher,
   };
 }
 

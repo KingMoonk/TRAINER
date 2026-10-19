@@ -23,7 +23,7 @@ import { initialForm, otherMachines, startBody, toggled, type Defaults, type For
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
-import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./use-training";
+import { useDefaults, useMachines, useStart, useTeachers, useTextSets, useVersions } from "./use-training";
 
 const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
 
@@ -42,6 +42,7 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
   const versions = useVersions().data ?? [];
   const nodes = otherMachines(useMachines().data);
   const cluster = useCluster().data;
+  const teachers = useTeachers();
   const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
   const [failure, setFailure] = useState("");
   const [asking, setAsking] = useState(false);
@@ -157,6 +158,30 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
         </label>
         <p className="max-w-prose text-xs text-muted-foreground">{T.overlapHelp}</p>
       </fieldset>
+
+      <details className="flex flex-col gap-2">
+        <summary className="cursor-pointer text-sm font-medium">{T.teacherTitle}</summary>
+        <div className="mt-2 flex flex-col gap-3">
+          <p className="max-w-prose text-xs text-muted-foreground">{T.teacherLead}</p>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="training-teacher" className="text-sm font-medium">{T.teacher}</label>
+            <select id="training-teacher" value={form.teacher} onChange={(e) => set({ teacher: e.target.value })} className={`${FIELD} w-fit max-w-full`}>
+              <option value="">{T.teacherNone}</option>
+              {(teachers.data?.models ?? []).map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+            {(teachers.isError || teachers.data?.error) && (
+              <p className="max-w-prose text-xs text-muted-foreground">{T.teacherUnread.replace("{why}", teachers.isError ? problem(teachers.error) : teachers.data?.error ?? "")}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-3">
+            <Setting id="training-polish-every" label={T.polishEvery} help={T.polishEveryHelp} value={form.polishEvery} onChange={(polishEvery) => set({ polishEvery })} step="1" min="1" />
+            <Setting id="training-win-rate" label={T.targetWinRate} help={T.targetWinRateHelp} value={form.targetWinRate} onChange={(targetWinRate) => set({ targetWinRate })} step="1" min="1" />
+          </div>
+          {!body && form.teacher === "" && (form.polishEvery.trim() !== "" || form.targetWinRate.trim() !== "") && <p className="text-xs text-destructive">{T.teacherNeeded}</p>}
+        </div>
+      </details>
 
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" disabled={!body || start.isPending}>{start.isPending ? T.starting : T.start}</Button>

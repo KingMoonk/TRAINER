@@ -6727,6 +6727,8 @@ export interface components {
              * @default false
              */
             overlap: boolean;
+            /** Polish Every */
+            polish_every?: number | null;
             /** Replaces */
             replaces?: string | null;
             /**
@@ -6739,6 +6741,10 @@ export interface components {
              * @default 10
              */
             rounds: number;
+            /** Target Win Rate */
+            target_win_rate?: number | null;
+            /** Teacher */
+            teacher?: string | null;
             /** Version */
             version?: number | null;
         };

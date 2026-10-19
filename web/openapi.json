@@ -8831,6 +8831,19 @@
             "title": "Overlap",
             "type": "boolean"
           },
+          "polish_every": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polish Every"
+          },
           "replaces": {
             "anyOf": [
               {
@@ -8853,6 +8866,31 @@
             "minimum": 1.0,
             "title": "Rounds",
             "type": "integer"
+          },
+          "target_win_rate": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Win Rate"
+          },
+          "teacher": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Teacher"
           },
           "version": {
             "anyOf": [

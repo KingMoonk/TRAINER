@@ -59,6 +59,9 @@ class StartRun(BaseModel):
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool = False  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs
+    teacher: str | None = Field(None, max_length=200)  # an Ollama model that polishes the weights and judges the win-rate; needed by polish_every and target_win_rate
+    polish_every: int | None = Field(None, ge=0, le=100_000)  # rounds between teacher polishes (below rounds); None or 0: no polish
+    target_win_rate: float | None = Field(None, gt=0, le=1)  # stop once the best weights win this share of the teacher's head-to-head against the starting weights
 
 
 class Sample(BaseModel):
@@ -356,6 +359,25 @@ def _answering(peers, own):
     return joining, left_out
 
 
+def _teacher_options(body, services, dataset_ids):
+    """(Settings fields, job params) for the teacher options of a start: nothing when none is set. 400 with a sentence when a teacher is
+    named without a use for it, or a polish or win-rate target is set without a teacher or without conversations in the chosen sets (the
+    coordinator takes its prompts from them, so the run would end at its start). The job then carries the conversations with the text."""
+    teacher = (body.teacher or "").strip()
+    if not body.polish_every and body.target_win_rate is None:
+        if teacher:
+            raise HTTPException(400, "A teacher does nothing on its own: set how often it polishes, a win-rate target, or both, or leave the teacher out.")
+        return {}, {}
+    if not teacher:
+        raise HTTPException(400, "Teacher polish and the win-rate target need a teacher: choose one of the models Ollama has.")
+    if not services.has_conversations(dataset_ids, body.reviewed_only):
+        raise HTTPException(400, "The teacher answers conversations from the chosen data, and "
+                                 + ("none of them is marked Good" if body.reviewed_only else "it holds none")
+                                 + ". Choose data with conversations in it, or leave the teacher out.")
+    fields = {"teacher": teacher, "polish_every": body.polish_every or 0, **({"target_win_rate": body.target_win_rate} if body.target_win_rate is not None else {})}
+    return fields, {**fields, "conversations": True}
+
+
 def _check_coordinator(address, chosen, peers, own):
     """The machine chosen to coordinate a run must be one the run invites that answers on this app version; anything else is a 400 (not
     chosen) or 409 (not usable) with the reason, so a run never starts on a coordinator it cannot hand the run to. "" is this computer."""
@@ -393,8 +415,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     if body.reviewed_only and not services.has_reviewed_text(dataset_ids):
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
+    teaching, teaching_params = _teacher_options(body, services, dataset_ids)
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum, **shape)  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, **shape, **teaching)  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -417,7 +440,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **teaching_params, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)

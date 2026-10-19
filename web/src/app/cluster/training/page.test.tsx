@@ -21,7 +21,7 @@ const node = (address: string, over: Record<string, unknown> = {}) => ({
 });
 const NODES = [node("local", { local: true, hostname: "mac-mini", device: "mps", device_name: "Apple M2" }), node("gpu-box"), node("old-laptop", { online: false, error: "old-laptop did not answer within 2 seconds." })];
 
-type Setup = { runs?: Run[]; start?: (body: StartRun) => Run | { status: number; detail: string }; sets?: typeof SETS; versions?: typeof VERSIONS };
+type Setup = { runs?: Run[]; start?: (body: StartRun) => Run | { status: number; detail: string }; sets?: typeof SETS; versions?: typeof VERSIONS; judges?: { url: string; models: string[]; selected: string; error: string | null } };
 function server(opts: Setup = {}) {
   const state = { runs: opts.runs ?? [], started: [] as StartRun[], stopped: [] as string[], membersStopped: [] as string[] };
   mockApi({
@@ -49,6 +49,7 @@ function server(opts: Setup = {}) {
     "GET /pretraining/text_sets": { body: opts.sets ?? SETS },
     "GET /versions": { body: opts.versions ?? VERSIONS },
     "GET /cluster/nodes": { body: NODES },
+    "GET /post-training/judges": () => ({ body: opts.judges ?? { url: "http://localhost:11434", models: ["judge:1b", "big:8b"], selected: "", error: null } }),
   });
   return state;
 }
@@ -93,6 +94,41 @@ describe("Training tab: the start form", () => {
     });
     expect(await screen.findByTestId("run-r1")).toHaveTextContent("Version 2 across machines");
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");
+  });
+
+  test("starts a run with a teacher, a polish cadence and a win-rate target", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    expect(screen.getByLabelText("Teacher")).toHaveValue("");
+    expect(await screen.findByRole("option", { name: "judge:1b" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Polish every"), "3");
+    expect(screen.getByRole("button", { name: "Start run" })).toBeDisabled(); // no teacher chosen yet
+    expect(screen.getByText(/Choose a teacher for the polish/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Teacher"), "judge:1b");
+    await user.type(screen.getByLabelText("Win-rate target (%)"), "60");
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0]).toMatchObject({ teacher: "judge:1b", polish_every: 3, target_win_rate: 0.6 });
+  });
+
+  test("leaves the teacher out of the request when the section is not used", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    for (const key of ["teacher", "polish_every", "target_win_rate"]) expect(state.started[0]).not.toHaveProperty(key);
+  });
+
+  test("says why when Ollama cannot be read", async () => {
+    server({ judges: { url: "http://localhost:11434", models: [], selected: "", error: "connection refused" } });
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    expect(await screen.findByText(/Ollama could not be read, so no teacher can be chosen: connection refused/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "No teacher" })).toBeInTheDocument();
   });
 
   test("offers the ticked machines as coordinator and sends the choice", async () => {
