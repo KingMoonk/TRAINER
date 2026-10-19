@@ -150,6 +150,8 @@ describe("the charts", () => {
     expect(T.phases.polishing).toBe("Teacher polishing");
     expect([T.eventKinds.polish, T.eventKinds.polish_off, T.eventKinds.lessons]).toEqual(["Teacher polish", "Polish off", "Lessons"]);
     expect(T.pivots.drop_lessons).toBe("Lessons left out");
+    expect(T.phases.judging).toBe("Teacher comparing weights");
+    expect([T.eventKinds.judging, T.eventKinds.win_rate, T.eventKinds.win_rate_off]).toEqual(["Comparing weights", "Win rate", "Win rate off"]);
   });
 
   test("the run says how many lessons the teacher added, in the singular too", () => {

@@ -149,7 +149,7 @@ class RunEvent(BaseModel):
     seq: int
     t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
     kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished", "pivot", "paused", "resumed", "took_over",
-                  "stepped_down", "polish", "polish_off", "lessons"]
+                  "stepped_down", "polish", "polish_off", "lessons", "win_rate", "win_rate_off", "judging"]
     node: str  # "" for the run
     round: int
     text: str
@@ -185,11 +185,12 @@ class Run(BaseModel):
     can_restart: bool = False  # it ended and saved weights to start a new run from (best.npz, else last.npz)
     best_round: int | None = None  # the round whose weights are the best so far
     best_val_loss: float | None = None
+    win_rate: float | None = None  # the best weights' share of head-to-head wins against the weights the run started from (target_win_rate), as last judged
     stop_rule: str = ""  # which stop rule ended the run, "" when none did
     stop_reason: str = ""  # why the run ended, in a sentence; "" while it goes
     lessons: int = 0  # the teacher's answers the run trains on as extra shards now
     lessons_left_out: int = 0  # ... and those a drop_lessons pivot, or a successor coordinator, left out
-    phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "polishing", "finished", "stopped"]
+    phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "polishing", "judging", "finished", "stopped"]
     deadline_s: float | None  # seconds left to the open round's deadline
     grace_s: float  # the wait after the deadline for a member's download and upload
     window_s: float | None  # the open round's deadline length
