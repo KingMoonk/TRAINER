@@ -35,7 +35,7 @@ def say(x, y, more, less):
     return T["about_multiplier"].format(mult=f"{r if r > 1 else 1 / r:.1f}") + " " + (more if r > 1 else less)
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
-TOKENIZERS = ("byte", "bpe_custom", "bpe_gpt2", "word")
+TOKENIZERS = ("byte", "bpe_fast", "bpe_gpt2", "word")  # the small word list is the fast learned one; bpe_custom stays for designs saved with it
 VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large / whole words (the cap; less on little data)
 WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
 WIDTHS = ("Narrow", "Normal", "Wide")
@@ -188,8 +188,17 @@ def write_spec(base, s, was=None):
                 if override["index"] == index:
                     override.pop(slot, None)
     if s["V"] != was["V"]:
-        spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": {}}
+        spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": tokenizer_config(TOKENIZERS[s["V"]], spec)}
     return validate_spec(spec)
+
+
+def tokenizer_config(short, spec):
+    """The settings a newly picked word list starts with: the learned one gets a vocabulary sized to the model, so the word table
+    does not dominate a small design."""
+    if short != "bpe_fast":
+        return {}
+    from studio_modules.tokenizer.bpe_fast import suggest_vocab
+    return {"vocab_size": suggest_vocab(spec["dims"]["d_model"], spec["dims"]["n_layer"])}
 
 
 def why_not(base, s, was, slot, short, block=None):

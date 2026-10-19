@@ -187,7 +187,7 @@ def vocabulary_guess(cfg, vocab=263):
         fixed = module.vocab(config)
         if fixed:
             return fixed
-        if module.short in ("bpe_custom", "word"):
+        if module.short in ("bpe_custom", "bpe_fast", "word"):
             return config.vocab_size
     return vocab
 
