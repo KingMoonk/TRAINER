@@ -189,10 +189,10 @@ describe("Cluster page", () => {
     const user = userEvent.setup();
     server({ addresses: [] });
     renderPage(<MachinesPage />, { route: "/cluster/machines" });
-    expect(await screen.findByTestId("tailnet-name")).toHaveTextContent(/^mac-mini\.tail1234\.ts\.net$/);
+    expect(await screen.findByTestId("tailnet-name")).toHaveTextContent(/^https:\/\/mac-mini\.tail1234\.ts\.net$/);
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(await screen.findByText("Copied this computer's name.")).toBeInTheDocument();
-    expect(await navigator.clipboard.readText()).toBe("mac-mini.tail1234.ts.net");
+    expect(await navigator.clipboard.readText()).toBe("https://mac-mini.tail1234.ts.net");
   });
 
   test("says so when Tailscale has not named this computer", async () => {
