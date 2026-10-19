@@ -49,7 +49,7 @@ describe("the five sidebar areas", () => {
 
   test("group the routes as the design does", () => {
     const pagesIn = (area: string) => ROUTES.filter((r) => r.area === area).map((r) => r.route);
-    expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare", "trace", "head_zoom", "value_map", "loss", "landscape", "head_lab", "inside3d"]);
+    expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare"]);
     expect(pagesIn("data").sort()).toEqual(["pretraining", "storage", "your_data"]);
     expect(pagesIn("runs")).toEqual(["runs", "new_run", "run_view", "training_run", "post_training", "queue", "passive", "cluster_training"]);
     expect(pagesIn("eval")).toEqual(["chat", "benchmark"]);
@@ -72,14 +72,10 @@ describe("the five sidebar areas", () => {
 
 describe("routeFor", () => {
   test("finds a route by its Tk name", () => {
-    expect(routeFor("head_zoom")).toMatchObject({ href: "/head-zoom", area: "models", title: "Inside a head" });
+    expect(routeFor("compare")).toMatchObject({ href: "/compare", area: "models", title: "Compare runs" });
   });
 
   test("returns every listed route", () => {
     for (const r of ROUTES) expect(routeFor(r.route)).toBe(r);
-  });
-
-  test("looks-inside pages are all in the models area", () => {
-    expect(ROUTES.filter((r) => r.lookInside).every((r) => r.area === "models")).toBe(true);
   });
 });

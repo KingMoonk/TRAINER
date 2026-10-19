@@ -102,9 +102,6 @@ export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMemb
         {run.saved_version != null && (
           <p className="flex flex-wrap items-center gap-x-2 text-sm" data-testid={`run-saved-${run.id}`}>
             <span>{T.savedAs.replace("{number}", String(run.saved_version))}</span>
-            <Link href={`/head-lab/?version=${run.saved_version}`} className="text-highlight underline-offset-4 hover:underline">
-              {T.openSaved.replace("{number}", String(run.saved_version))}
-            </Link>
           </p>
         )}
         <Link href={runViewHref(run.id)} className="w-fit text-sm text-highlight underline-offset-4 hover:underline" data-testid={`open-run-view-${run.id}`}>{V.openRunView}</Link>

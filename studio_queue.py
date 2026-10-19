@@ -206,6 +206,7 @@ class Runner:
         self.lock = threading.RLock()
         self.subscribers = []
         self.jobs, self.plan = [], Plan()
+        self.ended_on_load = []        # jobs the restart ended (a distributed run that cannot resume), for whoever keeps records of them
         self.user_paused = False       # a user intent: restored from queue.json, so a pause survives a restart
         self.stopping_job = ""         # the id of a running job the person stopped: persisted, so a restart does not run it again
         self.reap_grace = 35.          # seconds a worker an earlier app left gets to leave by itself (studio_worker.EXIT_GRACE and a margin)
@@ -244,6 +245,12 @@ class Runner:
                 job.status, job.error = "stopped", ""  # the person stopped it; the app went before it ended
             elif job.owner and job.status in ("running", "waiting", "held"):  # another node's job cannot renew its lease now: its owner places it again
                 job.status, job.error = "stopped", "This machine restarted while it ran the job for another machine, which will place it again."
+            elif job.status == "running" and job.kind == "pretrain_distributed":  # its coordinator went with this process
+                import studio_distributed
+                job.error = studio_distributed.recover(job)
+                job.status = "failed" if job.error else "waiting"  # resumes from its last completed round, or ends saying why
+                if job.error:
+                    self.ended_on_load.append(job)
             elif job.status == "running" and job.node:  # running on a peer: placed again, at the next epoch, so the peer's copy is fenced
                 import studio_scheduler
                 studio_scheduler.interrupt(job)  # from its last checkpoint, with the steps left and the offset that go with it
