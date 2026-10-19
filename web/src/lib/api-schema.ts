@@ -2497,7 +2497,8 @@ export interface paths {
         post?: never;
         /**
          * Remove
-         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).
+         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop). On a
+         *     failed job it dismisses it from the list.
          */
         delete: operations["remove_queue_jobs__job_id__delete"];
         options?: never;
@@ -2722,7 +2723,9 @@ export interface paths {
         put?: never;
         /**
          * Start Queue
-         * @description Services.start_queue: let jobs saved as waiting by an earlier session run.
+         * @description Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it
+         *     waits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`
+         *     with its sentence, instead of a bare 200 followed by a job that has quietly gone.
          */
         post: operations["start_queue_queue_start_post"];
         delete?: never;
@@ -4690,6 +4693,11 @@ export interface components {
              */
             created_at: number;
             /**
+             * Details
+             * @default
+             */
+            details: string;
+            /**
              * Epoch
              * @default 0
              */
@@ -6500,6 +6508,11 @@ export interface components {
             blocked?: string | null;
             /** Eta S */
             eta_s?: number | null;
+            /**
+             * Failed
+             * @default []
+             */
+            failed: components["schemas"]["JobModel"][];
             /**
              * @default {
              *       "supported": true
