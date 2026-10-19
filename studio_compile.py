@@ -54,13 +54,18 @@ class CompiledModel:
     """A ModelSpec made runnable. `p` and `g` map full parameter names to the layers' own tensors."""
 
     @slow("build a model")
-    def __init__(self, spec, vocabulary, seed=42, device="auto", batch_size=4):
+    def __init__(self, spec, vocabulary, seed=42, device="auto", batch_size=4, probe=False):
         self.spec = spec = validate_spec(spec)
         problems = errors(spec, vocabulary)
         if problems:
             raise ValueError(problems[0])
         d = spec["dims"]
-        self.backend = get_backend(device, work=batch_size * d["n_ctx"] * d["d_model"] * max(1, d["n_layer"]))
+        measure = None
+        if probe and device == "auto":  # training only: time real steps on each device (studio_probe), instead of the size rule
+            from studio_backend import gpu_status
+            import studio_probe
+            measure = lambda: studio_probe.measure(spec, vocabulary, batch_size, gpu_status())
+        self.backend = get_backend(device, work=batch_size * d["n_ctx"] * d["d_model"] * max(1, d["n_layer"]), measure=measure)
         precision, precision_cfg = module_of("precision", spec["train"]["precision"])
         self._precision = precision
         dtype = precision.build(precision_cfg, None, None)

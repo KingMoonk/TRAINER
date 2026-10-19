@@ -529,6 +529,10 @@ class Services:
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
 
+    def text_sets(self):
+        """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
+        return list(self.data("text").sets or [])
+
     def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
         reached; cursor None = the first page, a next cursor of None = nothing follows. Rows are shaped like DataSummary.rows."""
@@ -3135,6 +3139,21 @@ class WorkspaceServices(Services):
         return {"scores": got, "baseline": base, "verdict": None if base is None else studio_bench.gate_verdict(base, got)}
 
     # data / evaluation ------------------------------------------------------
+    def text_sets(self):
+        """The text sets from the counts storage keeps exact (Workspace.kind_stats), not from the summary: answering needs no scan
+        of the rows, so it takes milliseconds on a workspace of a million of them."""
+        import studio_data_kinds as dk
+        out = []
+        for dataset in list(self.workspace.state["datasets"]):
+            if dataset.get("storage") == "sqlite":
+                stats = self.workspace.kind_stats(dataset["id"])
+                count = stats.get("text", (0,))[0] if stats is not None else sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+            else:
+                count = sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+            if count:
+                out.append({"id": dataset["id"], "name": dataset["name"], "count": count})
+        return out
+
     def data(self, kind, query=""):
         summaries = self._summaries()
         full = summaries[kind]

@@ -236,7 +236,7 @@ class PretrainPlan(BaseModel):
 
 
 def _sets(services):
-    return plan.sets_of(services.data("text"))
+    return services.text_sets()
 
 
 def _parent(services, v):
