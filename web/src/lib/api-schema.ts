@@ -6186,6 +6186,11 @@ export interface components {
             /** State */
             state: string;
             /**
+             * Steps
+             * @default 0
+             */
+            steps: number;
+            /**
              * Term
              * @default 1
              */

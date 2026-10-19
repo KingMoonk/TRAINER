@@ -7484,6 +7484,11 @@
             "title": "State",
             "type": "string"
           },
+          "steps": {
+            "default": 0,
+            "title": "Steps",
+            "type": "integer"
+          },
           "term": {
             "default": 1,
             "title": "Term",
