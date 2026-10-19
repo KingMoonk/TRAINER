@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Controls, Costs, Expect, StartFrom, Tray, TryIt, VersionList } from "@/components/builder/side";
+import { BuilderDisclosure, Controls, Costs, Expect, StartFrom, Tray, TryIt, VersionList } from "@/components/builder/side";
 import { Experiments } from "@/components/builder/experiments";
 import { Answers } from "@/components/builder/answers";
 import { Explain } from "@/components/builder/explain";
@@ -363,7 +363,7 @@ export function Builder() {
   const failed = registryQ.error ?? currentQ.error ?? curQ.error;
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-3 p-8">
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:p-8">
       <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
       <p className="text-sm text-muted-foreground">{route.lead}</p>
       {failed ? (
@@ -374,38 +374,7 @@ export function Builder() {
         <Loading />
       ) : (
         <>
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <Tower
-              registry={registry}
-              cur={cur}
-              draft={draft}
-              curTower={curTowerQ.data}
-              draftTower={draftTowerQ.data}
-              writeBase={writeBase}
-              was={was}
-              onPick={pick}
-              onResize={resize}
-              onWords={setWords}
-              explaining={explaining}
-              onExplain={(part, block) => setExplaining({ part, block })}
-            />
-            <div className="flex flex-col gap-3">
-              <Explain draft={draft} explaining={explaining} onClose={() => setExplaining(null)} />
-              <StartFrom
-                presets={presetsQ.data ?? []}
-                versions={versionsQ.data ?? []}
-                onLoad={loadSpec}
-                onGpt2={importGpt2}
-                note={note}
-              />
-              <Experiments cur={cur} asking={heldQuestion} busy={save.isPending || saveSplit.isPending} onTry={tryQuestion} />
-              <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
-              <Costs now={sizesNowQ.data} next={draftSpec ? sizesNewQ.data : sizesNowQ.data} warm={warm} lines={lines} />
-              <LrCard version={lrSpec ? JSON.stringify(lrSpec) : null} spec={lrSpec} />
-              <Expect expectations={expectQ.data} />
-              <VersionList versions={versionsQ.data} current={base} />
-            </div>
-          </div>
+          <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
           {asking ? (
             <GuessPanel
               steps={guessSteps}
@@ -437,12 +406,55 @@ export function Builder() {
               {fill(BUILDER.text_sets_failed, { reason: detailOf(textSetsQ.error) })}
             </p>
           )}
-          <Answers versions={versionsQ.data} current={base} />
-          {current && <GuessCheck before={checkBefore} version={current} />}
+          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+            <Tower
+              registry={registry}
+              cur={cur}
+              draft={draft}
+              curTower={curTowerQ.data}
+              draftTower={draftTowerQ.data}
+              writeBase={writeBase}
+              was={was}
+              onPick={pick}
+              onResize={resize}
+              onWords={setWords}
+              explaining={explaining}
+              onExplain={(part, block) => setExplaining({ part, block })}
+            />
+            <div className="flex flex-col gap-3">
+              <Costs now={sizesNowQ.data} next={draftSpec ? sizesNewQ.data : sizesNowQ.data} warm={warm} lines={lines} />
+              <BuilderDisclosure title={BUILDER.start_from} hint={BUILDER.design_start_hint}>
+                <StartFrom
+                  presets={presetsQ.data ?? []}
+                  versions={versionsQ.data ?? []}
+                  onLoad={loadSpec}
+                  onGpt2={importGpt2}
+                  note={note}
+                />
+              </BuilderDisclosure>
+              <BuilderDisclosure title={BUILDER.explain} hint={BUILDER.explanation_hint} reveal={explaining}>
+                <Explain draft={draft} explaining={explaining} onClose={() => setExplaining(null)} />
+              </BuilderDisclosure>
+              <BuilderDisclosure title={BUILDER.experiments_section} hint={BUILDER.experiments_hint}>
+                <Experiments cur={cur} asking={heldQuestion} busy={save.isPending || saveSplit.isPending} onTry={tryQuestion} />
+                <LrCard version={lrSpec ? JSON.stringify(lrSpec) : null} spec={lrSpec} />
+                <Expect expectations={expectQ.data} />
+              </BuilderDisclosure>
+            </div>
+          </div>
+          <BuilderDisclosure title={BUILDER.history_section} hint={BUILDER.history_hint}>
+            <VersionList versions={versionsQ.data} current={base} />
+            <Answers versions={versionsQ.data} current={base} />
+            {current && <GuessCheck before={checkBefore} version={current} />}
+          </BuilderDisclosure>
         </>
       )}
       {/* Outside the ready branch: a save moves the current version and the page reads its design again; the notebook keeps its rows. */}
-      {!failed && <LabNotebook versions={versionsQ.data} />}
+      {!failed && (
+        <BuilderDisclosure title={BUILDER.notebook} hint={BUILDER.notebook_hint}>
+          <LabNotebook versions={versionsQ.data} />
+        </BuilderDisclosure>
+      )}
       {!failed && <TryIt />}
       <VersionTray />
     </main>
