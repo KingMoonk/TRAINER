@@ -406,7 +406,10 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
 - A run that finishes under a successor is saved as the owner's Version too: when the owner's job ends `done` and its own
   `run.json` is not `completed`, the owner fetches the final `last.npz` from the coordinator its where-file names
   (`GET /collective/{run}/weights`, 409 until the run finished and for a stopped run) into its run folder as
-  `last_term<N>.npz` and records it as above (#451).
+  `last_term<N>.npz` and records it as above (#451). The owner's job need not end `done` (#453): when it ended `failed` or
+  `stopped` (its member stopped while the run went on) and the store later shows the run `finished` under a term of 2 or more,
+  `Failover` tells the host (`finished_under_successor`) at each poll and `ClusterHost` ends the job again for the services, which
+  fetch the weights the same way (at most `SAVE_TRIES` polls). A run the person stopped saves nothing.
 - Not done: a failed takeover is not retried on another node except by the same rule on the next poll.
 
 ## Failures

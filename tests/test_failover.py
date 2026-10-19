@@ -127,6 +127,9 @@ class FakeHost(failover.Host):
     def note(self, run, claim):
         self.log.append(("note", claim.node, claim.term))
 
+    def finished_under_successor(self, run):
+        self.log.append(("finished_under_successor", run))
+
     def did(self, what):
         return [entry for entry in self.log if entry[0] == what]
 
@@ -153,6 +156,18 @@ class Driver(unittest.TestCase):
         self.assertEqual(len(self.host.did("take_over")), 1)
         self.assertEqual(self.host.did("withdraw"), [])
         self.assertIn(("point", "b", 2, False), self.host.log)
+
+    def test_a_run_that_finished_under_a_successor_is_reported_at_every_poll(self):
+        self.host.seen["r"] = [Seen(Claim("r", "a", 2, 5), 0., "finished")]
+        self.step()
+        self.assertEqual(self.host.did("finished_under_successor"), [("finished_under_successor", "r")])
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_a_run_that_ended_otherwise_or_at_term_one_is_not_reported(self):
+        for claim, state in ((Claim("r", "a", 1, 5), "finished"), (Claim("r", "a", 2, 5), "stopped"), (Claim("r", "a", 2, 5), "failed")):
+            self.host.seen["r"] = [Seen(claim, 0., state)]
+            self.step()
+        self.assertEqual(self.host.did("finished_under_successor"), [])
 
     def test_another_replica_that_is_not_the_successor_does_nothing(self):
         self.host.name = "c"
@@ -262,6 +277,43 @@ class WhereFileAddress(unittest.TestCase):
         self.assertEqual(host.url_of("old", "r"), "old-as-listed")  # a claim from before urls were published
         self.assertEqual(host.url_of("lone", "r"), "lone-as-listed")  # a loopback url is of no use from another machine
         self.assertEqual(host.url_of("unknown", "r"), "unknown-as-listed")
+
+
+class FinishedUnderSuccessor(unittest.TestCase):
+    """ClusterHost.finished_under_successor: replays the end of the owner's job so the services fetch the successor's weights."""
+
+    def host(self, status="failed", version=3, owner=""):
+        import studio_distributed
+        from threading import RLock
+        self.addCleanup(studio_distributed.RUNS.clear)
+        studio_distributed.RUNS["r"] = studio_distributed.Run("r", "", version, 0., {}, "here")
+        self.run = studio_distributed.RUNS["r"]
+        self.events = []
+        job = SimpleNamespace(id="r", kind="pretrain_distributed", owner=owner, status=status, params={"version": version})
+        runner = SimpleNamespace(lock=RLock(), jobs=[job], _emit=lambda kind, payload: self.events.append((kind, payload)))
+        return failover.ClusterHost(SimpleNamespace(hostname="here", lease_s=LEASE, runner=runner))
+
+    def test_an_owner_job_that_failed_or_stopped_is_ended_again_for_the_services(self):
+        for status in ("failed", "stopped"):
+            self.host(status).finished_under_successor("r")
+            self.assertEqual(self.events, [("job", {"job": "r", "status": status, "error": ""})])
+
+    def test_nothing_happens_for_a_running_job_a_stopped_run_a_saved_run_a_job_of_another_owner_or_no_version(self):
+        self.host("running").finished_under_successor("r")
+        self.host(owner="there").finished_under_successor("r")
+        self.host(version=None).finished_under_successor("r")
+        host = self.host()
+        self.run.stopped = True
+        host.finished_under_successor("r")
+        self.run.stopped, self.run.saved = False, 3
+        host.finished_under_successor("r")
+        self.assertEqual(self.events, [])
+
+    def test_a_fetch_that_keeps_failing_is_asked_for_a_few_times_only(self):
+        host = self.host()
+        for _ in range(failover.SAVE_TRIES + 4):
+            host.finished_under_successor("r")
+        self.assertEqual(len(self.events), failover.SAVE_TRIES)
 
 
 if __name__ == "__main__":

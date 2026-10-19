@@ -29,6 +29,7 @@ ENDED = ("finished", "stopped", "failed")  # states of a run nobody takes over
 CLAIM = "claim"  # store kind, key run id: {"term", "round", "rank", "released"}, written by the node that coordinates the run
 HELD = "held"  # store kind, key run id: {"term", "round", "rank", "ready", "held"}, written by a node that keeps a replica of it
 WHERE_PREFIX = "Coordinated on "
+SAVE_TRIES = 3  # polls that ask the successor for a finished run's weights when the owner's own job ended without saving them
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,9 @@ class Host:
     def note(self, run, claim):
         """Say on the owner's queue record where `run` is coordinated now."""
 
+    def finished_under_successor(self, run):
+        """`run` finished under a coordinator of term 2 or more (asked at every poll while the store says so)."""
+
 
 class Failover:
     """One decision per run per poll. No threads and no clock of its own: the Host brings both."""
@@ -181,6 +185,8 @@ class Failover:
         host.point(run, best.claim, host.is_down(best.claim.node))
         host.note(run, best.claim)
         if best.state in ENDED:
+            if best.state == "finished" and best.claim.term >= 2:
+                host.finished_under_successor(run)
             return
         if not coordinator_lost(host.is_down(best.claim.node), best.silent_s, host.lease_s):
             return
@@ -215,6 +221,7 @@ class ClusterHost(Host):
         self.name = cluster.hostname
         self.lease_s = cluster.lease_s
         self.pointed = {}  # run id -> (node, term) written to the where-file
+        self.saves = {}  # run id -> how many times the successor's weights were asked for after the owner's job had ended
 
     # -- reading the store
     def runs(self):
@@ -367,6 +374,24 @@ class ClusterHost(Host):
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(path, {"node": claim.node, "term": claim.term, "url": url})
         self.pointed[run] = (claim.node, claim.term)
+
+    def finished_under_successor(self, run):
+        """The owner's job ended without saving the run's weights (its member stopped or failed while the run went on, #453): replay the
+        job's end, so the services fetch the successor's final weights (WorkspaceServices._record_distributed). A run the person stopped
+        saves nothing; a run already saved is left alone; a fetch that failed is tried again at the next poll, up to SAVE_TRIES times."""
+        import studio_distributed
+        runner = self.cluster.runner
+        with runner.lock:
+            job = next((j for j in runner.jobs if j.id == run and j.kind == "pretrain_distributed" and not j.owner), None)
+            status = job.status if job is not None else ""
+            version = job.params.get("version") if job is not None else None
+        kept = studio_distributed.RUNS.get(run)
+        if status not in ("done", "failed", "stopped") or not version or (kept is not None and (kept.stopped or kept.saved is not None)):
+            return
+        if self.saves.get(run, 0) >= SAVE_TRIES:
+            return
+        self.saves[run] = self.saves.get(run, 0) + 1
+        runner._emit("job", {"job": run, "status": status, "error": ""})
 
     def note(self, run, claim):
         """The owner's queue record says where its run is coordinated now ('' again once it is back here, or never moved)."""
