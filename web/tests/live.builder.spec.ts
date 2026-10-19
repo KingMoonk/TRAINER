@@ -11,7 +11,6 @@ test("Builder follows a saved version into the queue and training without a relo
   expect(saved.ok()).toBeTruthy();
   const version = await saved.json();
   await page.goto("/builder/");
-  await page.locator("summary").filter({ hasText: "Version history & results" }).click();
   const row = page.getByRole("list", { name: "Saved versions" }).getByRole("button", { name: new RegExp(`^Version ${version.number}\\b`) });
   await expect(row).toContainText("Saved");
   await row.evaluate((element) => element.setAttribute("data-original-row", "yes"));
