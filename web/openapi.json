@@ -8279,6 +8279,226 @@
         "title": "RunRequest",
         "type": "object"
       },
+      "SelfTestDigest": {
+        "properties": {
+          "round": {
+            "minimum": 0.0,
+            "title": "Round",
+            "type": "integer"
+          },
+          "run": {
+            "title": "Run",
+            "type": "string"
+          },
+          "term": {
+            "minimum": 0.0,
+            "title": "Term",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "run",
+          "round",
+          "term"
+        ],
+        "title": "SelfTestDigest",
+        "type": "object"
+      },
+      "SelfTestDigestAnswer": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha256",
+          "bytes",
+          "seconds"
+        ],
+        "title": "SelfTestDigestAnswer",
+        "type": "object"
+      },
+      "SelfTestPing": {
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "SelfTestPing",
+        "type": "object"
+      },
+      "SelfTestPingAnswer": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ok",
+          "error",
+          "seconds"
+        ],
+        "title": "SelfTestPingAnswer",
+        "type": "object"
+      },
+      "SelfTestRun": {
+        "properties": {
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "machines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Machines",
+            "type": "array"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "never",
+              "running",
+              "passed",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/SelfTestStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "machines",
+          "started_at",
+          "finished_at",
+          "state",
+          "steps"
+        ],
+        "title": "SelfTestRun",
+        "type": "object"
+      },
+      "SelfTestStart": {
+        "properties": {
+          "machines": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Machines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "machines"
+        ],
+        "title": "SelfTestStart",
+        "type": "object"
+      },
+      "SelfTestStep": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "fix": {
+            "title": "Fix",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "machine": {
+            "title": "Machine",
+            "type": "string"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "pass",
+              "fail",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "machine",
+          "status",
+          "detail",
+          "fix",
+          "seconds"
+        ],
+        "title": "SelfTestStep",
+        "type": "object"
+      },
       "SharedVersion": {
         "description": "What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights.",
         "properties": {
@@ -11317,6 +11537,152 @@
           }
         },
         "summary": "Stop Remote",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/selftest": {
+      "get": {
+        "description": "The cluster self-test as it stands: its steps while it runs, else the last one's (kept across restarts), else state `never`.",
+        "operationId": "selftest_cluster_selftest_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfTestRun"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Selftest",
+        "tags": [
+          "cluster"
+        ]
+      },
+      "post": {
+        "description": "Start the self-test with the listed machines: the checks per machine, then a tiny real DiLoCo run through the queue, invite and\njoin path, each step with its verdict. 409 with a sentence when it cannot start (one is running, this computer is busy, an address is\nnot on the Machines list).",
+        "operationId": "start_selftest_cluster_selftest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfTestStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfTestRun"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Selftest",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/selftest/digest": {
+      "post": {
+        "description": "Download the weights of an open round from the coordinator at `url`, as a member does, and answer their checksum. 409 when the\nround has closed or the coordinator refused.",
+        "operationId": "selftest_digest_cluster_selftest_digest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfTestDigest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfTestDigestAnswer"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Selftest Digest",
+        "tags": [
+          "cluster"
+        ]
+      }
+    },
+    "/cluster/selftest/ping": {
+      "post": {
+        "description": "Asked by the machine running the self-test: can this one reach `url` (that machine, by the address it gave its members)?",
+        "operationId": "selftest_ping_cluster_selftest_ping_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfTestPing"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelfTestPingAnswer"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Selftest Ping",
         "tags": [
           "cluster"
         ]

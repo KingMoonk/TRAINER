@@ -477,6 +477,15 @@ class Services:
         """True when a run that trains on reviewed examples only would have text to train on in these sets."""
         raise NotImplementedError
 
+    def cluster_selftest_start(self, addresses, peer_url, api_port):
+        """Start the cluster self-test (studio_selftest) on the listed machines, this one included; ValueError (with a sentence) when it
+        cannot start: one is already running, this computer is busy, or an address is not on the Machines list."""
+        raise NotImplementedError
+
+    def cluster_selftest(self):
+        """The running self-test's steps as they stand, else the last one's (kept across restarts), else {"state": "never", ...}."""
+        raise NotImplementedError
+
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
@@ -815,6 +824,19 @@ class FakeServices(Services):
 
     def has_reviewed_text(self, dataset_ids):
         return self.reviewed_text
+
+    def cluster_selftest_start(self, addresses, peer_url, api_port):
+        """A self-test whose every step passes at once (nothing is on the network); `studio_api --fake` shows the card with it."""
+        import studio_selftest
+        test = studio_selftest.SelfTest(None, list(addresses), peer_url, "this computer")
+        for step in test.result.steps:
+            step.status, step.detail, step.seconds = studio_selftest.PASS, "Simulated: this is the fake app.", 0.1
+        test.result.state, test.result.finished_at = "passed", test.now()
+        self._selftest = test.result.view()
+        return self._selftest
+
+    def cluster_selftest(self):
+        return getattr(self, "_selftest", {"state": "never", "id": "", "machines": [], "started_at": 0., "finished_at": None, "steps": []})
 
     def versions(self):
         return list(self._versions)
@@ -2107,6 +2129,46 @@ class WorkspaceServices(Services):
         """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held
         back for scoring does not count."""
         return bool(self.examples({"datasets": list(dataset_ids), "reviewed_only": True}))
+
+    def cluster_selftest_start(self, addresses, peer_url, api_port):
+        """Queue the self-test's tiny run across `addresses` (this computer joins it) and watch it on a thread (studio_selftest)."""
+        import studio_cluster
+        import studio_selftest
+        from studio_api.version import app_version
+        listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": self.setting("nodes", [])}})
+        unknown = [a for a in addresses if a not in listed]
+        if not addresses or unknown:
+            raise ValueError(f"{', '.join(unknown)} is not on the Machines tab." if unknown else "Choose at least one other machine to test with.")
+        if self.queue().job is not None:
+            raise ValueError("This computer is training something. Test the cluster when it is free.")
+        manager = self.__dict__.setdefault("_selftest", studio_selftest.Manager(self.root / "data" / "cluster_selftest.json"))
+        if manager.running():
+            raise ValueError("A cluster self-test is already running.")
+        own = studio_cluster.own_info(version=app_version())
+
+        def make_job(infos):
+            machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
+                        *({"node": i.hostname or i.address, "address": i.address, "device": i.device, "device_name": i.device_name} for i in infos)]
+            return Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed",
+                       label=f"{studio_selftest.LABEL} across {len(machines)} machines",
+                       params=studio_selftest.job_params(machines, peer_url, api_port, own.hostname))
+
+        def enqueue(job):
+            self.enqueue(job)
+            self.start_queue()
+
+        def status(job_id):
+            failed = next((j for j in self.queue().failed if j.id == job_id), None)
+            return ("failed", failed.error) if failed is not None else ("", "")
+
+        probe = studio_selftest.AppProbe(make_job, enqueue, status, self.remove, app_version())
+        manager.start(studio_selftest.SelfTest(probe, addresses, peer_url, own.hostname))
+        return manager.state()
+
+    def cluster_selftest(self):
+        import studio_selftest
+        manager = self.__dict__.setdefault("_selftest", studio_selftest.Manager(self.root / "data" / "cluster_selftest.json"))
+        return manager.state()
 
     def _once(self, key):
         """The lock held while one cache entry is made: other entries are not held up, and an entry both shell lanes ask for is made once."""

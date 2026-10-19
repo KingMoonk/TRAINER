@@ -512,6 +512,15 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
 | a slow link | a member that misses the deadline counts for nothing that round and rejoins next round |
 | a stale or forged contribution | refused: wrong generation, round or epoch is `409`; an unauthenticated caller is `401` |
 
+## Self-test (#481)
+
+Cluster page › Machines › Test the cluster (`POST /cluster/selftest`, `GET /cluster/selftest`, `studio_selftest.py`) answers "can these machines train together?" in about a minute, with a verdict per step. The last result is kept in `data/cluster_selftest.json`.
+
+- **Before the run, made directly:** each machine answers, runs this app version, lets this computer in (node-to-node auth), is not busy, and can reach this computer at the address it would be told to join at (the peer's `POST /cluster/selftest/ping`). A failure names the machine and the plain fix, and nothing else runs.
+- **The run itself is the real thing:** a `pretrain_distributed` job (3 rounds of 20 steps on a built-in text, a tiny design, every machine required, no Version saved) goes through the queue, invite, member job, join, shard and weights delivery, rounds and averaging. Each later step is read from what that run did: member job taken, joined (with the machine's own note if its plan holds it), shards and weights delivered, every round's contributions and bytes, and the loss on the held-back text falling.
+- **The checksum:** while a round after the first outer step is open, each peer downloads that round's weights from the coordinator (`POST /cluster/selftest/digest`, the same call a member makes) and answers their SHA-256, which must equal the coordinator's. A run whose rounds are too short for that window reports the step as not reached rather than passed.
+- **The multi-process test** (`tests/e2e_cluster.py`, in `test:ci`, about 25 s): two `python -m studio_api` processes on free loopback ports with their own workspaces run a real 2-member run over HTTP and then the self-test. It asserts the run finishes, every member contributed every round, the version is saved and every self-test step passes.
+
 ## Testing
 
 - Pure state machines (lease table, membership, round accounting, outer optimizer, shard deal) tested directly in
