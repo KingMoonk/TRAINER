@@ -438,6 +438,76 @@ class AllMachines(unittest.TestCase):
         self.assertEqual(run["version"], 1)
 
 
+class CoordinatorChoice(unittest.TestCase):
+    """Choosing which machine coordinates a run: validated at the start, kept on the job, and nothing changes without it."""
+
+    PEERS = {"box": studio_cluster.NodeInfo(address="box", hostname="box", version="1.0.0", device="cuda", device_name="RTX"),
+             "off": studio_cluster.offline("off", "off did not answer within 2 seconds."),
+             "new": studio_cluster.NodeInfo(address="new", hostname="newpc", version="2.0.0", device="cuda"),
+             "spare": studio_cluster.NodeInfo(address="spare", hostname="spare", version="1.0.0", device="mps")}
+
+    def setUp(self):
+        self.services = FakeServices(step_seconds=.005)
+        self.services.save_version(default_spec(), "first")
+        self.services.pause()
+        with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
+            self.client = self.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
+        self.addCleanup(runs.RUNS.clear)
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+        self.services.set_setting("nodes", list(self.PEERS))
+        self.enterContext(mock.patch("studio_api.routers.distributed.app_version", return_value="1.0.0"))
+        self.enterContext(mock.patch.object(studio_cluster, "survey", lambda state, own, *a, **k: [own, *(self.PEERS[x] for x in state["studioConfig"]["nodes"])]))
+
+    def start(self, **body):
+        return self.client.post("/distributed/runs", json={"dataset_ids": ["Your files"], "rounds": 3, "inner_steps": 2, **body})
+
+    def job(self, run):
+        return next(j for j in self.services.queue().up_next if j.id == run["id"])
+
+    def test_a_chosen_machine_that_is_invited_and_answers_is_kept_on_the_job_and_named_on_the_run(self):
+        started = self.start(machines=["box", "spare"], coordinator="box")
+        self.assertEqual(started.status_code, 201, started.text)
+        self.assertEqual(self.job(started.json()).params["coordinator"], "box")
+        self.assertEqual(started.json()["handoff"], "box")
+        self.assertEqual(self.client.get(f"/distributed/runs/{started.json()['id']}").json()["handoff"], "box")
+
+    def test_all_machines_lets_any_listed_machine_that_answers_coordinate(self):
+        started = self.start(all_machines=True, coordinator="spare")
+        self.assertEqual((started.status_code, started.json()["handoff"]), (201, "spare"))
+
+    def test_without_a_choice_this_computer_coordinates_as_before(self):
+        started = self.start(machines=["box"])
+        self.assertEqual(started.status_code, 201, started.text)
+        self.assertNotIn("coordinator", self.job(started.json()).params)
+        self.assertEqual(started.json()["handoff"], "")
+        self.assertEqual(self.start(machines=["box"], coordinator="").json()["handoff"], "")
+
+    def test_a_machine_that_is_not_invited_cannot_coordinate(self):
+        refused = self.start(machines=["box"], coordinator="spare")
+        self.assertEqual((refused.status_code, refused.json()["detail"]),
+                         (400, "spare cannot coordinate the run: it is not one of the machines chosen for it."))
+        self.assertEqual(self.start(machines=["box"], coordinator="ghost").status_code, 400)
+        self.assertEqual(self.services.queue().up_next, [])  # nothing was queued
+
+    def test_a_machine_that_does_not_answer_or_runs_another_version_cannot_coordinate(self):
+        down = self.start(machines=["box", "off"], coordinator="off")
+        self.assertEqual((down.status_code, down.json()["detail"]), (409, "off cannot coordinate the run: off did not answer within 2 seconds."))
+        old = self.start(machines=["box", "new"], coordinator="new")
+        self.assertEqual((old.status_code, old.json()["detail"]),
+                         (409, "newpc cannot coordinate the run: it runs app version 2.0.0; this computer runs 1.0.0."))
+        every = self.start(all_machines=True, coordinator="off")
+        self.assertEqual(every.status_code, 409)  # also when the rest of the machines would have been enough
+        self.assertEqual(self.services.queue().up_next, [])
+
+    def test_the_run_remembers_the_node_the_chosen_machine_joins_under(self):
+        job = Job(id="run9", created_at=1., kind="pretrain_distributed", label="x", params={
+            "machines": [MACHINES[0], {"node": "peer", "address": "box"}], "coordinator": "box", "owner": "me"})
+        self.addCleanup(runs.RUNS.clear)
+        self.assertEqual(runs.run_of(job).handoff, "peer")
+        plain = Job(id="run8", created_at=1., kind="pretrain_distributed", label="x", params={"machines": [MACHINES[0]], "owner": "me"})
+        self.assertEqual(runs.run_of(plain).handoff, "")
+
+
 class Invited(unittest.TestCase):
     """The invitation over real HTTP: a second app (a FakeServices) takes the member job on its own queue."""
 

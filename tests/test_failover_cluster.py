@@ -139,21 +139,22 @@ class Node:
 class Fleet:
     """Three nodes whose coordinator, n0, runs the run until its cable is pulled."""
 
-    def __init__(self, case, **settings):
+    def __init__(self, case, handoff="", **settings):
         self.case, self.clock = case, Clock()
         self.handlers, self.nets = {}, {name: Net() for name in NAMES}
         for net in self.nets.values():
             net.handlers = self.handlers  # one set of handlers, one `down` set per caller: a partition can be between two nodes only
         self.nodes = {name: Node(self, name) for name in NAMES}
         self.cut = threading.Event()
-        self.line = Cable(self.nodes["n0"].client, self.cut, lambda: self.first.next_round >= CUT_AT and self.ready("n1", "n2"))
+        self.line = Cable(self.nodes["n0"].client, self.cut, lambda: not handoff and self.first.next_round >= CUT_AT and self.ready("n1", "n2"))
         self.urls = {url(name): name for name in NAMES for url in (peer_url, local_url)}
         case.enterContext(mock.patch("studio_peer.PeerClient", self.client_for))  # the worker's PeerClient, in studio_jobs and file_locator
         studio_distributed.RUNS.clear()
         case.addCleanup(studio_distributed.RUNS.clear)
-        studio_distributed.RUNS[RUN] = studio_distributed.Run(RUN, "Version 1 across 3 machines", 1, 100., {"rounds": ROUNDS}, "n0")
+        studio_distributed.RUNS[RUN] = studio_distributed.Run(RUN, "Version 1 across 3 machines", 1, 100., {"rounds": ROUNDS}, "n0", handoff=handoff)
         self.first = support.build(self.nodes["n0"].root / "run", RUN, inner_steps=2, rounds=ROUNDS, outer_lr=.7, outer_momentum=.9,
                                    min_members=1, max_members=3, replicas=3, delta_dtype="float32", **settings)
+        self.first.prefer = (handoff,) if handoff else ()  # (studio_diloco.prepare)
         self.nodes["n0"].registry[RUN] = self.first
         case.addCleanup(self.stop)
 
@@ -276,6 +277,35 @@ class Failover(unittest.TestCase):
         self.assertEqual(list(fleet.live()), [winner])  # one coordinator of the run, one theta
         row = fleet.nodes["n0"].cluster.state.get(winner, "run", RUN)["value"]
         self.assertEqual(row["term"], 2)
+
+
+class Handoff(unittest.TestCase):
+    """A run started with another machine chosen to coordinate it: n0 starts it, n1 is chosen, and n0 stays up throughout."""
+
+    def setUp(self):
+        self.fleet = Fleet(self, handoff="n1")
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+
+    def test_the_chosen_node_takes_the_run_over_while_the_starter_is_up_and_the_members_follow_it(self):
+        fleet = self.fleet
+        fleet.start_members()
+        self.assertEqual(studio_diloco.replica_nodes(["n0", "n1", "n2"], 1, fleet.first.prefer), ["n1"])
+        fleet.wait_for("n1 to coordinate at term 2", lambda: RUN in fleet.nodes["n1"].registry and fleet.nodes["n1"].registry[RUN].term == 2)
+        self.assertEqual(fleet.nodes["n1"].cluster.claims[RUN]["term"], 2)
+        self.assertGreaterEqual(fleet.nodes["n1"].cluster.claims[RUN]["round"], 1)  # from a round it held, never from nothing
+        self.assertFalse(fleet.first.finished)  # n0 was up: nobody waited for it to be lost
+        fleet.wait_for("n0 to step down", lambda: RUN not in fleet.nodes["n0"].registry)
+        self.assertGreaterEqual(fleet.first.superseded, 2)
+        self.assertEqual(fleet.nodes["n0"].cluster.claims[RUN], {"released": True})
+        fleet.wait_for("n0's where-file", lambda: fleet.nodes["n0"].where() is not None)
+        self.assertEqual(fleet.nodes["n0"].where(), {"node": "n1", "term": 2, "url": peer_url("n1")})  # the starter's member finds the chosen node
+        self.assertEqual(fleet.nodes["n1"].where(), {"node": "n1", "term": 2, "url": local_url("n1")})
+        coordinator = fleet.nodes["n1"].registry[RUN]
+        fleet.wait_for("the run to finish under n1", lambda: coordinator.finished and not any(n.thread.is_alive() for n in fleet.nodes.values()))
+        self.assertEqual([n.error for n in fleet.nodes.values()], [None, None, None])
+        self.assertEqual([row["round"] for row in coordinator.history], list(range(ROUNDS)))
+        self.assertEqual(list(fleet.live()), ["n1"])  # one coordinator, and the starter's member trained in it to the end
+        self.assertIn("n0", {node for row in coordinator.history[-3:] for node in row["contributed"]})
 
 
 class Conflict(unittest.TestCase):

@@ -7,6 +7,9 @@ studio_remote.Cluster (its observation store, its coordinators, its files).
   the same way (`beats`).
 * The **coordinator is lost** when the failure detector has its node down and the freshest thing it wrote about the run is older than
   the members' lease (`coordinator_lost`): the wait the scheduler takes before it reassigns a job.
+* A **handoff** is a coordinator moving on purpose: the person chose another node to coordinate at the start (`Seen.hands_to`). That
+  node, once it keeps a whole replica no older than the coordinator's last round, claims the next term at once instead of waiting
+  for the coordinator to be lost; the coordinator then steps down like any that sees a claim that beats its own.
 * The **successor** is, among the live replicas that hold the whole run (`ready`), the one with the highest completed round, ties to the
   lowest rank (`successor`). Every node evaluates the rule on its own replica of the store; only the successor acts.
 * A node that coordinates a run and sees a claim that beats its own **steps down**: its rounds are discarded (Coordinator.defer), so
@@ -57,6 +60,7 @@ class Seen:
     claim: Claim
     silent_s: float
     state: str = "running"
+    hands_to: str = ""  # the node the person chose to coordinate the run (the run row's `handoff`): this coordinator hands the run to it
 
 
 # ---- the rules ----------------------------------------------------------------------------------------------------------
@@ -188,9 +192,12 @@ class Failover:
             if best.state == "finished" and best.claim.term >= 2:
                 host.finished_under_successor(run)
             return
-        if not coordinator_lost(host.is_down(best.claim.node), best.silent_s, host.lease_s):
+        if best.hands_to == host.name and best.claim.node != host.name:
+            chosen = self._handed(run, best)  # the person chose this node: it takes the run over as soon as it holds the last round
+        elif not coordinator_lost(host.is_down(best.claim.node), best.silent_s, host.lease_s):
             return
-        chosen = successor(host.replicas(run), lambda node: node != best.claim.node and (node == host.name or not host.is_down(node)))
+        else:
+            chosen = successor(host.replicas(run), lambda node: node != best.claim.node and (node == host.name or not host.is_down(node)))
         if chosen is None or chosen.node != host.name:
             return
         claim = Claim(run, host.name, best.claim.term + 1, chosen.round, chosen.rank)
@@ -207,6 +214,13 @@ class Failover:
         else:
             host.point(run, claim, False)
             host.note(run, claim)
+
+
+    def _handed(self, run, best):
+        """This node's replica of `run` when it is whole and holds every round the coordinator closed (and at least one: before that
+        there is nothing to continue from), else None: the coordinator keeps the run until then."""
+        mine = next((r for r in self.host.replicas(run) if r.node == self.host.name), None)
+        return mine if mine is not None and mine.ready and mine.round >= max(1, best.claim.round) else None
 
 
 # ---- the Host over a Cluster ---------------------------------------------------------------------------------------------
@@ -245,13 +259,13 @@ class ClusterHost(Host):
             if value is None or int(value.get("term", 0)) == int(held["term"]):
                 ages.append(claim["age"])
             return Seen(Claim(run, origin, int(held["term"]), int(held["round"]), int(held.get("rank", 0))),
-                        0. if origin == self.name else min(ages), (value or {}).get("state", "running"))
+                        0. if origin == self.name else min(ages), (value or {}).get("state", "running"), str((value or {}).get("handoff") or ""))
         if value is None:
             return None
         if claim is not None and value.get("state", "running") not in ENDED:
             return None  # it released its claim (stepped down or withdrew): its run row, until the next publish, is not a coordinator to yield to
         return Seen(Claim(run, origin, int(value.get("term", 1)), int(value.get("round", 0)), 0), 0. if origin == self.name else row["age"],
-                    value.get("state", "running"))
+                    value.get("state", "running"), str(value.get("handoff") or ""))
 
     def replicas(self, run):
         out = []
