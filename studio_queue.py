@@ -679,6 +679,7 @@ class Runner:
             if handle:
                 job.params.update(handle.params)
                 error, details = handle.error, handle.details
+            error = error or job.params.pop("ended_reason", "")  # a watchdog ended the job (studio_cluster_watch): its sentence is the error
             job.status = "failed" if error else "stopped" if self.stop_event.is_set() else "done"
             if self.yielding and self.yielding[0] == job.id and job.status == "stopped":
                 job.status = self.yielding[1]  # stepped aside for another job: back in the queue, not in the history

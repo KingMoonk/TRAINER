@@ -108,6 +108,14 @@ class QueueTests(unittest.TestCase):
         again = Runner(self.path, self.handlers)
         self.assertEqual([j.status for j in again.jobs], ["done"] * 3)
 
+    def test_a_reason_a_watchdog_left_on_the_job_becomes_its_error(self):
+        r = self.runner()
+        r.enqueue(self.job("ended", ended_reason="Ended: the driver stopped responding at round 2, so the run was stopped."))
+        r.start()
+        self.assertTrue(wait(lambda: r.jobs[0].status == "failed"))
+        self.assertEqual(r.jobs[0].error, "Ended: the driver stopped responding at round 2, so the run was stopped.")
+        self.assertNotIn("ended_reason", r.jobs[0].params)
+
     def test_persistence_across_restart_requeues_interrupted_job(self):
         r = self.runner()
         r.enqueue(self.job("long", "pretrain"))

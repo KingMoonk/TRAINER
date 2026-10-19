@@ -397,6 +397,7 @@ class Coordinator:
         self.next_round, self.generation, self.history, self.step_time = 0, 0, [], None
         self.members, self.pending, self.leaving, self.last_members, self.sequence = {}, {}, set(), [], 0
         self.current, self.finished, self.touched, self.deal = None, False, time.monotonic(), {}
+        self.beats = {}  # node -> the clock time of its last call: the heartbeat studio_cluster_watch reads
         self.stopped, self.banned, self.gone = False, set(), {}  # stopped by the owner; nodes the owner removed; node -> (state, sentence) of those out
         self.split, self.split_hash, self.state_file, self.record = {"strategy": "lineage-v1"}, "", None, {}
         self.shard_count = max(1, min(settings.shards, len(train)))
@@ -590,7 +591,7 @@ class Coordinator:
 
     def join(self, node, epoch=0, term=None):
         with self.cond:
-            self._touch()
+            self._touch(node)
             self._advance()
             if self.finished:
                 raise Stale("The run is finished.")
@@ -616,7 +617,7 @@ class Coordinator:
 
     def leave(self, node, generation, epoch, term=None):
         with self.cond:
-            self._touch()
+            self._touch(node)
             entry = self.members.get(node) or self.pending.get(node)
             if entry is None or (entry["term"], entry["epoch"]) != self._lease(term, epoch):
                 raise Stale(f"{node} is not a member at lease epoch {epoch}.")
@@ -789,7 +790,7 @@ class Coordinator:
         round is held until that changes, or for at most LONG_POLL seconds; any other state is answered at once."""
         end = time.monotonic() + min(max(wait, 0.), LONG_POLL)
         with self.cond:
-            self._touch()
+            self._touch(node)
             self._advance()
             first = self._view(number, node)
             while first["state"] == "pending":
@@ -854,6 +855,7 @@ class Coordinator:
         report is never worth holding a request for."""
         if phase not in PHASES:
             raise ValueError(f"phase must be one of {', '.join(PHASES)}.")
+        self.beats[node] = self.clock()  # a report refused for a closing round is still a sign of life
         if not self.lock.acquire(timeout=PROGRESS_WAIT):
             return False
         try:
@@ -896,7 +898,7 @@ class Coordinator:
         """Take a member's pseudo-gradient for the open round. Stale is raised (409) for any other round or generation, a
         member that is not in the round, a lease epoch that is not the member's, or a second contribution."""
         with self.cond:
-            self._touch()
+            self._touch(node)
             self._advance()
             current = self.current
             try:
@@ -1024,7 +1026,7 @@ class Coordinator:
             self._advance()
             self.cond.notify_all()
 
-    def stop(self):
+    def stop(self, reason="The run was stopped by you."):
         """End the run now: every member is told it is finished at its next call. The weights of the last finished round stay on disk."""
         with self.cond:
             self._touch()
@@ -1032,7 +1034,7 @@ class Coordinator:
                 return
             from studio_core import atomic_json
             self.stopped = self.finished = True
-            self._event("finished", "", self.next_round, "The run was stopped by you.")
+            self._event("finished", "", self.next_round, reason)
             if self.record:
                 self.record["status"] = "stopped"
                 atomic_json(self.directory / "run.json", self.record)
@@ -1040,8 +1042,15 @@ class Coordinator:
             self.cond.notify_all()
 
     # -- durability
-    def _touch(self):
+    def _touch(self, node=""):
         self.touched = time.monotonic()
+        if node:
+            self.beats[node] = self.clock()
+
+    def heard_ago(self, node):
+        """Seconds since `node` last called this coordinator (it joined, reported, waited for a round or sent a delta); since the
+        coordinator was made when it has not called yet."""
+        return self.clock() - self.beats.get(node, self.started)
 
     def _remember(self):
         """Have the Training tab's record of this run (studio_distributed) kept with its account as it stands now. It takes the snapshot on

@@ -125,14 +125,16 @@ class Training(unittest.TestCase):
             return mock.patch.object(ScratchTransformer, "forward", forward), seen
 
         with failing()[0]:
-            plain, plain_checkpoint, _, _ = run(config={"steps": 6, "eval_every": 6})
+            _, plain_checkpoint, _, plain_events = run(config={"steps": 6, "eval_every": 6})
         patch, seen = failing()
         with patch:
-            ahead, ahead_checkpoint, record, _ = run(prefetch=True, config={"steps": 6, "eval_every": 6})
+            _, ahead_checkpoint, record, ahead_events = run(prefetch=True, config={"steps": 6, "eval_every": 6})
         self.assertEqual(record["status"], "completed")
         self.assertEqual(seen[:4], [4, 4, 4, 4])
         self.assertEqual(set(seen[4:]), {2})  # nothing of the old size survives the shrink
-        self.assertEqual(plain, ahead)
+        # a metric row is also written when a second has passed since the last, so a slow machine adds rows: compare the steps always reported
+        always = lambda events: {e["step"]: e["loss"] for e in events if e["type"] == "metric" and (e["step"] in (1, 6) or e["step"] % 5 == 0)}
+        self.assertEqual(always(plain_events), always(ahead_events))
         self.assertEqual(plain_checkpoint["sampler_state"], ahead_checkpoint["sampler_state"])
 
     def test_resume_continues_from_the_consumed_batches_not_the_prefetched_one(self):
