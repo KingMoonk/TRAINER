@@ -39,6 +39,7 @@ import torch
 
 from studio_ui_guard import slow
 import studio_shards
+import studio_dataset_snapshot
 from studio_arch import parameter_breakdown, validate_spec
 from studio_backend import DEVICES
 from studio_memory import StateHome
@@ -656,7 +657,7 @@ def _initialize_from(model, tokenizer, path):
 @slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
-          schedule_window=None, offload_optimizer=False, distributed=None, rebase=False):
+          schedule_window=None, offload_optimizer=False, distributed=None, rebase=False, snapshot_dir=None):
     """Train a model. schedule_window=(steps_before, plan_total) makes this run one slice of a longer learning-rate schedule:
     step n of this run is step steps_before + n of plan_total, so a staged plan keeps one warmup and one decay.
     Left None (the default) the schedule spans this run alone.
@@ -666,6 +667,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     rebase=True (with resume) continues a checkpoint on different data: the weights, tokenizer, optimizer state and step carry over,
     and cfg["steps"] is the number of steps to add. The dataset, split, seed, learning rate and batch size may differ from the
     checkpoint's; the sampler, the best score and its best.npz start fresh. Passive training's rounds use it (studio_passive.py).
+
+    The run folder keeps the deduplicated examples as dataset.jsonl, which a resume rebuilds the split from. The bytes are stored
+    once under their hash in snapshot_dir (default: .snapshots in the `runs` folder holding the run; elsewhere none) and the folder holds a hard link to them,
+    so a retry, a restart or a resume of the same data writes nothing again (studio_dataset_snapshot.py).
 
     distributed is the hook studio_diloco's members train through (DiLoCo, docs/distributed.md); every other caller leaves it None.
     It is any object with: `tokenizer`; `train` and `val`, window sequences read at every batch, so it may swap what they
@@ -700,19 +705,24 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         examples, training, validation, digest, split_hash = [], [], [], "", ""
         split, streamed, reused = {"strategy": "federated", "note": ""}, False, False
     else:
-        unique = {}
+        unique, copied = {}, set()
         for example in examples:
             if stop.is_set():
                 raise InterruptedError("Training preparation cancelled.")
             content_hash = fingerprint(example)
             if content_hash in unique:
+                if content_hash not in copied:  # the caller's row is copied only when a duplicate's lineage is merged into it
+                    unique[content_hash] = dict(unique[content_hash])
+                    copied.add(content_hash)
                 merge_duplicate_lineage(unique[content_hash], example)
             else:
-                unique[content_hash] = dict(example)
+                unique[content_hash] = example
         examples = list(unique.values())
         if not examples:
             raise ValueError("The dataset is empty.")
-        digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
+        fingerprints = {id(e): h for h, e in unique.items()}  # each row is fingerprinted once, here
+        digest = hashlib.sha256("".join(unique).encode()).hexdigest()
+        del unique, copied
         sampler = random.Random(cfg["seed"])
         checkpoint = load_checkpoint(resume) if resume else None
         if checkpoint and checkpoint["config"].get("lora"):  # a LoRA run resumes from the frozen base plus its adapters, not the merged weights
@@ -720,8 +730,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         # Older checkpoints must resume with their original row-based partition.
         grouped = not checkpoint or rebase or checkpoint.get("split_strategy") == "lineage-v1"
         training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
-        split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" +
-                                     "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
+        split_hash = hashlib.sha256(("".join(fingerprints[id(e)] for e in training) + "|" +
+                                     "".join(fingerprints[id(e)] for e in validation)).encode()).hexdigest()
+        del fingerprints
         if checkpoint:
             if not rebase and checkpoint["data_hash"] != digest:
                 raise ValueError("Resume requires the original dataset snapshot.")
@@ -796,7 +807,15 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     atomic_json(directory / "config.json", cfg)
     atomic_json(directory / "spec.json", model.spec)
     atomic_json(directory / "tokenizer.json", tokenizer.serialize())
-    (directory / "dataset.jsonl").write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in examples) + "\n", encoding="utf-8")
+    if distributed is None:
+        shared = snapshot_dir if snapshot_dir is not None else studio_dataset_snapshot.folder_for(directory)
+        emit({"type": "info", "text": "Saving the dataset snapshot"})
+        snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
+        if shared is not None:
+            emit({"type": "info", "text": f"Dataset snapshot {snapshot.stem[:12]} ({snapshot.stat().st_size / 1024 ** 2:,.0f} MB): "
+                                          + ("written" if created else "already stored, linked")})
+    else:
+        (directory / "dataset.jsonl").write_text("\n", encoding="utf-8")
     metrics_file = directory / "metrics.jsonl"
     metrics_file.write_text("".join(json.dumps(row) + "\n" for row in history), encoding="utf-8")
     atomic_json(directory / "run.json", record)
