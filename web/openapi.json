@@ -7860,6 +7860,7 @@
               "outer_step",
               "validating",
               "polishing",
+              "judging",
               "finished",
               "stopped"
             ],
@@ -8013,7 +8014,10 @@
               "stepped_down",
               "polish",
               "polish_off",
-              "lessons"
+              "lessons",
+              "win_rate",
+              "win_rate_off",
+              "judging"
             ],
             "title": "Kind",
             "type": "string"

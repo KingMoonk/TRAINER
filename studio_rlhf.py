@@ -13,6 +13,7 @@ A new checkpoint is only kept if it beats the previous one head-to-head.
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import math
@@ -896,6 +897,16 @@ def compare_checkpoints(a, b, prompts, judge, samples=2, max_tokens=120, tempera
     emit = emit or (lambda event: None)
     rng = rng or random.Random(17)
     model_a, model_b = LocalModel(a, seed=21, device=device), LocalModel(b, seed=22, device=device)
+    try:
+        return _compare(model_a, model_b, a, b, prompts, judge, samples, max_tokens, temperature, both_orders, tie_eps, stop, emit, rng, examples)
+    finally:  # both models are big: hand their memory back before the next thing (a round) needs it
+        where = str(model_a.device).split(":")[0]
+        del model_a, model_b
+        gc.collect()
+        empty_cache(where)
+
+
+def _compare(model_a, model_b, a, b, prompts, judge, samples, max_tokens, temperature, both_orders, tie_eps, stop, emit, rng, examples):
     wins = ties = losses = errors = 0
     shown, total, done = [], len(prompts) * max(1, int(samples)), 0
     failures = 0

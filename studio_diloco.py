@@ -28,6 +28,7 @@ import gc
 import hashlib
 import io
 import json
+import logging
 import math
 import random
 import re
@@ -164,6 +165,7 @@ class Settings:
     patience_rounds: int = 0           # rounds without a better val_loss
     target_val_loss: float | None = None
     target_win_rate: float | None = None  # stop once the best weights win this share of head-to-head replies against the starting weights (judged by the teacher)
+    versus_seconds: float = 600.       # wall-clock limit of one head-to-head against the starting weights; past it the comparison is skipped and rounds go on
     teacher: str = ""                  # the teacher model's name (an Ollama model); needed by polish_every and target_win_rate
     plateau_checks: int = 0            # rounds the val_loss must have improved within, else it is a plateau (0: off)
     plateau_min_improvement: float = .01
@@ -438,6 +440,7 @@ class Coordinator:
         self.paused = False  # the owner paused the run: no round opens until resume (a round in flight finishes)
         self.polishing = False  # the teacher is polishing theta, on a thread off the lock: like paused, no round opens meanwhile
         self.polisher, self.teacher_settings, self.polish_on = default_polish, {}, True  # polish_on: off on a coordinator made from a replica
+        self.judging = False  # with polishing: the held phase is the head-to-head of target_win_rate, not a polish (the phase says so)
         self.versus, self.versus_on = default_versus, True  # the head-to-head of target_win_rate; off on a coordinator made from a replica (no prompts, no start.npz)
         self._polish_stop = threading.Event()  # set by stop, step-down and release: the polish in flight is discarded
         self.lessons, self.lesson_windows = [], {}  # [{shard, round, rows, status}] in shard-id order; shard id -> its windows
@@ -497,6 +500,9 @@ class Coordinator:
             train, val = sm.samples_from(training, tokenizer, cfg), sm.samples_from(validation, tokenizer, cfg)
         if not train:
             raise ValueError("No trainable target tokens were found.")
+        if settings.target_win_rate is not None and not val:
+            raise ValueError("target_win_rate needs a validation split: without one no round has a validation loss, so no round is ever the best "
+                             "to compare. Hold some of the text out (validation above 0), or leave target_win_rate unset.")
         model = sm.ScratchTransformer(cfg, tokenizer.vocab_size)
         theta = {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         state = cls._read_state(directory, cfg, settings, digest)
@@ -663,13 +669,15 @@ class Coordinator:
 
     def _write_eval_prompts(self, validation, training):
         """eval_prompts.jsonl: EVAL_PROMPTS conversations for the head-to-head against the starting weights, from the validation split
-        (topped up from the training split when it has fewer), once per run."""
+        (topped up from the END of the training split when it has fewer: the teacher's polish windows start at its front), once per run.
+        Each line says where its prompt came from. The prompts the polish turned into lessons are left out when the comparison runs."""
         path = self.directory / "eval_prompts.jsonl"
         if path.is_file():
             return
         from studio_rlhf import prompts_from
-        prompts = prompts_from(validation)[:EVAL_PROMPTS]
-        prompts += prompts_from(training)[:EVAL_PROMPTS - len(prompts)]
+        prompts = [{**p, "from": "validation"} for p in prompts_from(validation)[:EVAL_PROMPTS]]
+        spare = EVAL_PROMPTS - len(prompts)
+        prompts += [{**p, "from": "training"} for p in (prompts_from(training)[::-1][:spare] if spare > 0 else [])]
         if not prompts:
             raise ValueError("target_win_rate is set, but the text has no conversations for the teacher to compare the weights on: "
                              "use a chat dataset, or leave target_win_rate unset.")
@@ -1231,6 +1239,8 @@ class Coordinator:
             return "stopped" if self.stopped else "finished"
         if self.stage:
             return self.stage
+        if self.judging:
+            return "judging"
         if self.polishing:
             return "polishing"
         if current is None:
@@ -1435,9 +1445,11 @@ class Coordinator:
             try:
                 self._polish_done(context, outcome, stop)
                 job = self._versus_job(stop)  # the polish may have made a new best
+                if job is not None:
+                    self._begin_judging(job, context["number"])
             finally:
                 if job is None:
-                    self.polishing = False
+                    self.polishing = self.judging = False
                     self._advance()
                     self.cond.notify_all()
         if job is not None:
@@ -1504,7 +1516,7 @@ class Coordinator:
     def _save_start(self, number):
         """start.npz, once: the weights after the first trained round, which the best weights are compared with (a restart's is its
         restart_from checkpoint, copied in by build). Called with the lock held, the round folded in and before any rule restores weights."""
-        if self.settings.target_win_rate is None or (self.directory / "start.npz").is_file():
+        if self.settings.target_win_rate is None or not self.versus_on or (self.directory / "start.npz").is_file():
             return
         self._write_npz(self.directory / "start.npz", self._checkpoint_arrays(self.next_round * self.settings.inner_steps))
         self.rules.start_round = number
@@ -1521,9 +1533,29 @@ class Coordinator:
         if not (self.directory / "start.npz").is_file() or not (self.directory / "best.npz").is_file() or not prompts_file.is_file():
             return None
         prompts = [json.loads(line) for line in prompts_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        taught = self._lesson_prompts()  # never judge on a conversation the lessons teach
+        prompts = [p for p in prompts if json.dumps(p["messages"], sort_keys=True) not in taught]
         if not prompts:
             return None
         return {"round": rules.best_round, "new": str(self.directory / "best.npz"), "old": str(self.directory / "start.npz"), "prompts": prompts}
+
+    def _lesson_prompts(self):
+        """The conversations lessons.jsonl answers, as strings to compare the head-to-head's prompts with."""
+        path = self.directory / "lessons.jsonl"
+        if not path.is_file():
+            return set()
+        return {json.dumps(json.loads(line)["messages"], sort_keys=True)
+                for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+    def _begin_judging(self, job, number):
+        """The held phase is now the head-to-head (lock held): the phase and the journal say so, with where the prompts came from."""
+        self.judging = True
+        sources = [p.get("from") for p in job["prompts"]]
+        said = f"{sources.count('validation')} from the validation split, {sources.count('training')} from the training split"
+        logging.getLogger(__name__).info("head-to-head of round %d: %d prompts (%s)", job["round"], len(sources), said)
+        self._event("judging", "", number, f"Round {number}: the teacher ({self.settings.teacher}) is comparing round {job['round']}'s weights with "
+                                           f"the starting weights on {len(sources)} prompts ({said}). No round opens until it is done "
+                                           f"(at most {self.settings.versus_seconds:,.0f} seconds).")
 
     def _start_versus(self, current):
         """After a round that did not start a polish (called with the lock held, the round saved): when it made a new best, compare it with
@@ -1534,26 +1566,40 @@ class Coordinator:
             return
         self._polish_stop = stop
         self.polishing = True
+        self._begin_judging(job, current.number)
         try:
             threading.Thread(target=self._versus_run, args=(job, stop), daemon=True, name="diloco-versus").start()
         except Exception as exc:  # no thread to be had: the gate must not stay shut
-            self.polishing = False
+            self.polishing = self.judging = False
             self.rules.win_round = job["round"]
+            drules.record_win(self.rules, self.settings, None)
             self._event("win_rate", "", current.number, f"Round {current.number}: the head-to-head with the starting weights could not start ({exc}).")
 
     def _versus_run(self, job, stop):
         """The head-to-head thread: ask self.versus for the share of replies where the best weights beat the starting ones, then hand the
         outcome to _versus_done under the lock. Nothing here touches the run's state; no round is open to change it."""
-        outcome = {"rate": None, "error": ""}
-        try:
-            outcome["rate"] = self.versus(self.teacher_settings, job["new"], job["old"], job["prompts"], self.cfg.get("device", "auto"), stop)
-        except Exception as exc:  # the teacher is optional: a failed comparison is skipped and the run goes on
-            outcome["error"] = (str(exc) or type(exc).__name__)[:300]
+        outcome, halt = {"rate": None, "error": ""}, threading.Event()  # halt: told to the comparison when the run stops or the time is up
+
+        def compare():
+            try:
+                outcome["rate"] = self.versus(self.teacher_settings, job["new"], job["old"], job["prompts"], self.cfg.get("device", "auto"), halt)
+            except Exception as exc:  # the teacher is optional: a failed comparison is skipped and the run goes on
+                outcome["error"] = (str(exc) or type(exc).__name__)[:300]
+
+        worker = threading.Thread(target=compare, daemon=True, name="diloco-versus-call")
+        worker.start()
+        end = time.monotonic() + self.settings.versus_seconds  # real time: the coordinator's clock is injectable
+        while worker.is_alive() and time.monotonic() < end and not stop.is_set():
+            worker.join(.05)
+        if worker.is_alive():
+            halt.set()  # a call that does not return is left behind: it ends at its next check of halt
+            if not stop.is_set():
+                outcome["rate"], outcome["error"] = None, f"it took longer than the {self.settings.versus_seconds:,.0f} seconds allowed"
         with self.cond:
             try:
                 self._versus_done(job, outcome, stop)
             finally:
-                self.polishing = False
+                self.polishing = self.judging = False
                 self._advance()
                 self.cond.notify_all()
 
@@ -1566,13 +1612,14 @@ class Coordinator:
         rules, number, rate = self.rules, self.history[-1]["round"], outcome["rate"]
         drules.accrue(rules, self.clock(), self._counting())  # the time the teacher took counts toward max_seconds
         rules.win_round = job["round"]  # tried: the next comparison is for the next best, whether or not this one gave a number
+        drules.record_win(rules, self.settings, None if outcome["error"] else rate)
         if outcome["error"] or rate is None or not math.isfinite(rate):
             self._event("win_rate", "", number, f"Round {number}: the head-to-head of round {job['round']}'s weights with the starting weights "
                                                 f"was skipped ({outcome['error'] or 'the teacher judged no replies'}).")
         else:
-            rules.win_rate = float(rate)
             self._event("win_rate", "", number, f"Round {number}: round {job['round']}'s weights win {rate:.0%} of head-to-head replies against "
-                                                f"the starting weights (target {self.settings.target_win_rate:.0%}).")
+                                                f"the starting weights (target {self.settings.target_win_rate:.0%}, reached "
+                                                f"{rules.win_hits} of {drules.WIN_READINGS} times in a row).")
         found = drules.stop_reason(rules, self.settings)  # the target, or max_seconds used up by the teacher
         if found:
             rules.stop_rule, rules.stop_text = found
@@ -1756,9 +1803,10 @@ def teacher_settings(settings, root=None):
     return {**(load_settings(root) if root else json.loads(json.dumps(SETTINGS_DEFAULTS))), "teacher_model": settings.teacher}
 
 
-def _teacher(found):
+def _teacher(found, stop=None):
+    """The Ollama teacher for `found`; with `stop`, it asks nothing more once that is set (a request already sent ends by its timeout)."""
     from studio_rlhf import OllamaTeacher
-    return OllamaTeacher(found["url"], found["teacher_model"], rubric=found.get("rubric"), judge_model=found.get("judge_model") or None)
+    return OllamaTeacher(found["url"], found["teacher_model"], rubric=found.get("rubric"), judge_model=found.get("judge_model") or None, stop=stop)
 
 
 PREFLIGHT_TIMEOUT = 10  # seconds the start-up check waits for Ollama
@@ -1780,7 +1828,7 @@ def default_polish(directory, found, checkpoint, prompts, device, stop, emit):
     keep the result only if it wins the head-to-head gate. Returns {"checkpoint", "win_rate", "lessons": [{"messages", "chosen", "rejected"}]};
     "checkpoint" is the given one when the gate did not pass. Raises when the teacher cannot be reached."""
     from studio_rlhf import PreferenceStore, auto_rlhf
-    teacher = _teacher(found)
+    teacher = _teacher(found, stop)
     teacher.models()  # RuntimeError when Ollama is not reachable
     Path(directory).mkdir(parents=True, exist_ok=True)
     store = PreferenceStore(directory)
@@ -1796,7 +1844,7 @@ def default_versus(settings, new, old, prompts, device, stop):
     """The share of head-to-head replies where checkpoint `new` beats checkpoint `old`, as graded by the teacher (a tie counts half);
     None when no reply was judged. Raises when the teacher cannot be reached."""
     from studio_rlhf import compare_checkpoints
-    teacher = _teacher(settings)
+    teacher = _teacher(settings, stop)
     teacher.models()  # RuntimeError when Ollama is not reachable
     return compare_checkpoints(new, old, prompts, teacher.judge_teacher(), device=device, stop=stop)["win_rate"]
 
