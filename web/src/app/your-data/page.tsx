@@ -190,7 +190,6 @@ function YourData() {
           <Link href="/storage" className="text-highlight hover:underline">
             {T.storageLink}
           </Link>
-          <Link href="/passive/" className="text-highlight hover:underline">{T.passiveLink}</Link>
         </div>
       </PageHeader>
       <Link href={back.href} className="w-fit text-sm text-highlight hover:underline">

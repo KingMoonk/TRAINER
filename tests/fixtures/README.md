@@ -1,6 +1,6 @@
 # sample.jsonl
 
-The first 200 records of the GSM8K training split, used by `tests/e2e_train.py` and `tests/e2e_passive.py`.
+The first 200 records of the GSM8K training split, used by `tests/e2e_train.py`.
 
 - Source: https://github.com/openai/grade-school-math (`grade_school_math/data/train.jsonl`)
 - Revision: `3101c7d5072418e28b9008a6636bde82a006892c` (file sha256 `17f347dc51477c50d4efb83959dbb7c56297aba886e5544ee2aaed3024813465`)

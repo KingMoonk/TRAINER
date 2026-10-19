@@ -138,7 +138,7 @@ class VersionStore:
             return copy.deepcopy(version)
 
     def add_trained(self, spec, change, checkpoint, run_dir, source):
-        """A version trained outside the queue (a passive session or a distributed run): its design, `checkpoint` as its weights and `run_dir` as its run. `source`
+        """A version trained outside the queue (a distributed run): its design, `checkpoint` as its weights and `run_dir` as its run. `source`
         says where the weights came from, as a dict kept on the row. Its scorecard starts empty; the caller scores it. Returns the new row."""
         spec = validate_spec(spec)
         with self._lock:

@@ -1653,7 +1653,7 @@ def check_teacher(found):
 
 
 def default_polish(directory, found, checkpoint, prompts, device, stop, emit):
-    """One preference round of the teacher from `checkpoint` (the port of studio_passive.default_teacher_round): sample, grade, train, and
+    """One preference round of the teacher from `checkpoint`: sample, grade, train, and
     keep the result only if it wins the head-to-head gate. Returns {"checkpoint", "win_rate", "lessons": [{"messages", "chosen", "rejected"}]};
     "checkpoint" is the given one when the gate did not pass. Raises when the teacher cannot be reached."""
     from studio_rlhf import PreferenceStore, auto_rlhf

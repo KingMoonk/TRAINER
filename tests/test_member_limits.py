@@ -152,10 +152,9 @@ class Reasons(unittest.TestCase):
 
     def test_every_gate_reason_and_a_paused_queue_has_its_own_text(self):
         said = {why: studio_distributed.limit_reason("laptop", {"blocked": why, "paused": False})
-                for why in ("on battery", "outside hours", "computer in use", "passive training is running (session ab)", "something new")}
-        self.assertEqual(len(set(said.values())), 5)
+                for why in ("on battery", "outside hours", "computer in use", "something new")}
+        self.assertEqual(len(set(said.values())), 4)
         self.assertIn("outside the hours", said["outside hours"])
-        self.assertIn("passive training", said["passive training is running (session ab)"])
         self.assertIn("something new", said["something new"])
         self.assertIn("paused", studio_distributed.limit_reason("laptop", {"blocked": None, "paused": True}))
 

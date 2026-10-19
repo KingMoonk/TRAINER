@@ -118,7 +118,6 @@ def build(args):
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
         services.runner.cluster.serve_at(args.port, lambda: hosts.tailnet_name)  # where a failover's where-file sends the members
-        services.resume_passive_at_start()  # an active passive session without a watchdog gets one again
         services.resume_queue_at_start()  # a queue the last run of the app left going carries on by itself
         tags, users = studio_cluster.allowed_callers(workspace.state)
         return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,

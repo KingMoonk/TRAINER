@@ -27,7 +27,6 @@ export const ROUTES: Route[] = [
   { route: "training_run", href: "/training-run", area: "runs", title: "Training run", lead: "Step k of n, the schedule phase and the error so far." },
   { route: "post_training", href: "/post-training", area: "runs", title: "Post-training", lead: "Four rounds, always in this order. Same design throughout; only the weights shift." },
   { route: "queue", href: "/queue", area: "runs", title: "Queue", lead: "What it's training now, what's waiting, and when it's allowed to work." },
-  { route: "passive", href: "/passive", area: "runs", title: "Passive training", lead: "Training that keeps going on its own, outside the queue." },
   { route: "cluster_training", href: "/cluster/training", area: "runs", title: "Training", lead: "Start a training run that spreads over several machines, and watch each one: its round, its speed, and why one fell behind." },
   { route: "chat", href: "/chat", area: "eval", title: "Chat", lead: "Talk to any trained version. Compare two to see what a change really did." },
   { route: "benchmark", href: "/benchmark", area: "eval", title: "Benchmark", lead: "Score a version on a fixed set of questions." },

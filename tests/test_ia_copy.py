@@ -47,7 +47,6 @@ class TestIACopy(unittest.TestCase):
             copy.FEEDBACK,
             copy.YOURDATA,
             copy.STORAGE,
-            copy.PASSIVE,
         ]
 
         for page_dict in page_dicts:
@@ -105,7 +104,6 @@ class TestIACopy(unittest.TestCase):
             copy.FEEDBACK,
             copy.YOURDATA,
             copy.STORAGE,
-            copy.PASSIVE,
             copy.NAV,
             copy.MACHINE_STRIP,
         ]

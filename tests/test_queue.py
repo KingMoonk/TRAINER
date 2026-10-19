@@ -7,8 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import studio_queue
-from studio_passive import PassiveStore
-from studio_queue import PASSIVE, Job, Plan, Runner
+from studio_queue import Job, Plan, Runner
 
 ANY = Plan(hours="any", idle_only=False, pause_on_battery=False)
 
@@ -207,41 +206,6 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(r.state().blocked, "outside hours")
         r.clock = lambda: datetime(2026, 1, 1, 23)
         self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
-
-    def test_queue_waits_while_a_passive_session_is_active(self):
-        root = self.path.parent.parent
-        self.assertFalse(studio_queue.passive_running(root))
-        self.assertIsNone(studio_queue.passive_session(root))
-        self.assertFalse((root / "data" / "passive.sqlite").exists())  # asking never creates the record
-        store = PassiveStore(root)
-        session = store.create({})
-        r = self.runner()
-        r.enqueue(self.job("a"))
-        r.start()
-        self.assertTrue(wait(lambda: r.state().gate.reason == f"{PASSIVE} (session {session})"))
-        for status in ("running", "paused"):  # a paused trainer still holds its model in memory
-            store.update(session, status=status)
-            time.sleep(.1)
-            self.assertEqual((self.fake.ran, r.state().blocked), ([], f"{PASSIVE} (session {session})"))
-        store.update(session, status="stopped")
-        self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
-        self.assertIsNone(r.state().gate.reason)
-
-    def test_a_passive_session_pauses_the_running_job_until_it_ends(self):
-        r = self.runner()
-        r.enqueue(self.job("long", "pretrain"))
-        r.start()
-        self.assertTrue(wait(lambda: self.fake.steps > 3))
-        store = PassiveStore(self.path.parent.parent)
-        session = store.create({})
-        self.assertTrue(wait(lambda: r.state().blocked == f"{PASSIVE} (session {session})"))
-        time.sleep(.05)
-        frozen = self.fake.steps
-        time.sleep(.1)
-        self.assertEqual(self.fake.steps, frozen)
-        store.update(session, status="finished")
-        self.assertTrue(wait(lambda: self.fake.steps > frozen + 3))
-        self.fake.gate.set()
 
     def test_gate_carries_the_next_start(self):
         plan = Plan(hours="nights", idle_only=False, pause_on_battery=False)

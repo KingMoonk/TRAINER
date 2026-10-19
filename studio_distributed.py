@@ -467,8 +467,6 @@ def limit_reason(node, held):
         return f"It is outside the hours {node}'s plan allows. It continues when they start."
     if blocked == "computer in use":
         return f"{node} is in use and its plan trains only while it is idle. It continues when it is idle again."
-    if blocked.startswith("passive training"):
-        return f"{node} is running passive training, which holds its queue. It continues when that ends."
     if blocked:
         return f"{node}'s queue plan holds it: {blocked}. It continues when that ends."
     return f"The queue on {node} is paused. It continues when someone resumes it there."

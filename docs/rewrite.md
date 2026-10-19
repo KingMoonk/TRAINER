@@ -56,7 +56,7 @@ Done: `python tasks.py web:build` passes in CI; `pnpm dev` shows an empty shell 
 
 ### Phase 1 — API server (#93)
 
-- [ ] `studio_api/`: FastAPI + uvicorn. One router per `Services` scope: `versions`, `queue`, `storage`, `passive`, `data`,
+- [ ] `studio_api/`: FastAPI + uvicorn. One router per `Services` scope: `versions`, `queue`, `storage`, `data`,
       `pretraining`, `post_training`, `chat`, `inspect`, `benchmark`, `viewer`, `node`. One route per public `Services`
       method; Pydantic models derived from the dataclasses (`Version`, `Job`, `QueueState`, `Plan`, `Gate`).
 - [x] Events: `GET /events` is an SSE stream of every `Services.emit(kind, payload)`; broadcast to every subscriber.
@@ -104,7 +104,7 @@ Verified by `web/tests/live.phase2.spec.ts` against the real `--fake` API and SS
       queued, training), charts, look-inside links, and the #83/#85 learning loop (guess-before-saving, one change per
       version, lab notebook, explain panel, parameter bar, experiments). Draft design is browser state.
 - [ ] Post-training (LoRA options from #79), Chat (streamed tokens over SSE; KV cache from #86), Training run, Loss, Trace,
-      Value map, Head lab / Head zoom, Compare, Benchmark, Quick test, Passive, Make data.
+      Value map, Head lab / Head zoom, Compare, Benchmark, Quick test, Make data.
 - [ ] Charts: one chart component (recharts or visx) for loss/BPC/compare; no page draws its own.
 
 Done: every route in the Tk shell has a web page with the same capabilities; the route check test lists both.
@@ -136,7 +136,7 @@ Done: no `tkinter` import anywhere; CI is faster than today.
       config, and each polls the others' `/node` for capabilities and load. A node alone is a cluster of one.
 - [ ] Jobs carry requirements (device preference, minimum memory, dtype); placement picks the best free node, or the one
       the user pinned. Defaults: pretraining and RLHF prefer CUDA; eval, scoring, benchmarks, data generation and LoRA
-      take any free node (passive training does not: it runs only on the machine that started it); memory-bound inspect jobs prefer the node with the most memory.
+      take any free node; memory-bound inspect jobs prefer the node with the most memory.
 - [ ] Transient nodes: a job whose node disappears is marked interrupted at its last checkpoint and resumes when the node
       returns or on another node (`checkpoint_now`/`resume` already exist; the optimizer restarts on a different node).
 - [ ] Version store interface: local folder (always) plus an S3-compatible bucket (Cloudflare R2 or Backblaze B2 free
