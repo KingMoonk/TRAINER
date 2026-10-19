@@ -44,10 +44,13 @@ class FakeWeb:
             if url.startswith(prefix):
                 if callable(body):
                     status, body = body(url, headers)
-                start = 0
+                start, total, extra = 0, len(body), dict(extra)
                 if "Range" in headers and status == 200:
-                    start = int(headers["Range"].split("=")[1].split("-")[0])
-                    body, status = body[start:], 206
+                    first, last = headers["Range"].split("=")[1].split("-")
+                    start = int(first)
+                    end = int(last) if last else total - 1
+                    body, status = body[start:end + 1], 206
+                    extra["Content-Range"] = f"bytes {start}-{start + len(body) - 1}/{total}"
                 return Reply(status, {"Content-Length": str(len(body)), **extra}, self._chunks(body))
         return Reply(404, {}, iter(()))
 

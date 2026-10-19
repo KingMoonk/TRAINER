@@ -39,7 +39,7 @@ DEFAULTS = {
     "idle": {"only_when_idle": True, "only_on_mains": True, "unmetered_confirmed": False, "cpu_percent": 50},
     "approved": [],             # dataset ids the person approved although the plan asked first
     "blocked": [],              # dataset ids the person does not want
-    "stackexchange": {"sites": ["math.stackexchange.com"], "min_score": 3, "dump_url": "https://archive.org/download/stackexchange"},
+    "stackexchange": {"sites": ["cs.stackexchange.com", "history.stackexchange.com"], "min_score": 3, "dump_url": "https://archive.org/download/stackexchange"},
     "github": {"queries": [], "max_repos": 25},
     "web": {"sites": []},       # [{"host": "...", "seeds": ["https://..."], "licence": "cc-by-sa-4.0", "pages": 200}]
 }

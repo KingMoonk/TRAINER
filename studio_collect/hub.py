@@ -150,14 +150,16 @@ def tree(http, dataset_id, sha):
 
 def build_plan(http, config, stop=lambda: None, note=lambda text: None):
     """Search every chosen topic, screen, rank and list the files: [Item as dict], best first. Nothing large is fetched here."""
-    seen, items = {}, []
+    seen, items, searches, failed = {}, [], 0, 0
     for topic, label, terms in topic_list(config):
         for term in terms[:3]:
             stop()
+            searches += 1
             try:
                 results = search(http, term)
             except OSError as error:
                 note(f"Search for {term} failed: {error}")
+                failed += 1
                 continue
             for raw in results:
                 if not isinstance(raw, dict) or "id" not in raw or raw["id"] in seen:
@@ -175,6 +177,8 @@ def build_plan(http, config, stop=lambda: None, note=lambda text: None):
                     items.append((item, raw, terms))
                     continue
                 items.append((item, raw, terms))
+    if searches and failed == searches:
+        raise OSError("The Hugging Face Hub could not be reached.")      # not an empty plan: try again later
     # files are listed only for the best candidates per topic (one request each), so the plan stays cheap
     ranked = sorted((x for x in items if x[0].status != "skipped"), key=lambda x: -(x[0].fit * 0.6 + min(1, math.log10(x[0].downloads + 1) / 5) * 0.4))
     per_topic, kept = {}, []
@@ -351,20 +355,26 @@ class Adapter:
     def __init__(self, ctx):
         self.ctx = ctx
 
+    @staticmethod
+    def plan_inputs(config):
+        return {"topics": config["topics"], "custom": config["custom_topics"], "licences": config["licences"],
+                "limits": {k: config["limits"][k] for k in ("max_dataset_mb", "max_file_mb", "auto_approve_mb")}}
+
     def plan(self):
         ctx = self.ctx
         ctx.journal.append("plan", source="hub", note="Searching the Hugging Face Hub")
         items = build_plan(ctx.http, ctx.config, ctx.stop, lambda text: ctx.journal.append("note", text=text))
         for item in items:
             item["group"] = f"topic-{slug(item['topic'])}"
-        ctx.state.save(plan=items, planned_at=ctx.clock())
+            item["source"] = "hub"
+        ctx.set_plan("hub", items)
         ctx.journal.append("plan", source="hub", count=len([i for i in items if i["status"] != "skipped"]))
         return items
 
     def pending(self):
         ctx = self.ctx
-        for item in ctx.state.data["plan"]:
-            if item.get("source", "hub") != "hub" or item["id"] in ctx.config["blocked"]:
+        for item in ctx.plan_items("hub"):
+            if item["id"] in ctx.config["blocked"]:
                 continue
             if item["status"] == "needs_approval" and item["id"] not in ctx.config["approved"]:
                 continue
