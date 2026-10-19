@@ -124,7 +124,7 @@ describe("Cluster page", () => {
     expect(gpu.getByTestId("seen-gpu-box")).toHaveTextContent("Last answered");
     const down = text("machine-old-laptop");
     expect(down).toHaveAttribute("data-online", "false");
-    expect(down).toHaveTextContent("Not answering");
+    expect(down).toHaveTextContent("Unreachable");
     expect(text("machine-error-old-laptop")).toHaveTextContent(/^old-laptop did not answer within 2 seconds\.$/);
     expect(within(down).getByTestId("seen-old-laptop")).toHaveTextContent(/^Has not answered yet$/);
     expect(screen.queryByTestId("machine-refused")).toBeNull();
@@ -189,10 +189,10 @@ describe("Cluster page", () => {
     const user = userEvent.setup();
     server({ addresses: [] });
     renderPage(<MachinesPage />, { route: "/cluster/machines" });
-    expect(await screen.findByTestId("tailnet-name")).toHaveTextContent(/^mac-mini\.tail1234\.ts\.net$/);
+    expect(await screen.findByTestId("tailnet-name")).toHaveTextContent(/^https:\/\/mac-mini\.tail1234\.ts\.net$/);
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(await screen.findByText("Copied this computer's name.")).toBeInTheDocument();
-    expect(await navigator.clipboard.readText()).toBe("mac-mini.tail1234.ts.net");
+    expect(await navigator.clipboard.readText()).toBe("https://mac-mini.tail1234.ts.net");
   });
 
   test("says so when Tailscale has not named this computer", async () => {

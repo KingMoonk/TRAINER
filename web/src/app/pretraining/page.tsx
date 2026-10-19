@@ -12,8 +12,9 @@ import { useApiEvents } from "../your-data/events";
 import { runJob, type JobLike } from "../your-data/jobs";
 import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
-import { HOLD, PREVIEW_ROWS, ROWS, chosenIds, errorText, planBody, type Length, type Preview } from "./logic";
+import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate, type StopWhenFlat } from "./logic";
 import { LrCard } from "./lr-card";
+import { SizingCard } from "./sizing-card";
 import { TrainCard } from "./train-card";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
@@ -25,12 +26,15 @@ export default function PretrainingPage() {
   const [rows, setRows] = useState<(typeof ROWS)[number]>("16");
   const [hold, setHold] = useState<(typeof HOLD)[number]>("5%");
   const [length, setLength] = useState<Length>("Medium");
+  const [hours, setHours] = useState<Hours>(DEFAULT_HOURS);
+  const [stopWhenFlat, setStopWhenFlat] = useState<StopWhenFlat>("Auto");
+  const [chosenSteps, setChosenSteps] = useState<number | null>(null); // from the sizing suggestion; a length chosen afterwards clears it
 
   const versions = useQuery({ queryKey: ["versions"], queryFn: () => unwrap(api.GET("/versions")) });
   const sets = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: () => unwrap(api.GET("/pretraining/text_sets")) });
   const ids = useMemo(() => chosenIds(sets.data, use), [sets.data, use]);
 
-  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length });
+  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps, stopWhenFlat });
   const plan = useQuery({
     queryKey: ["pretraining", "plan", body],
     queryFn: () => unwrap(api.POST("/pretraining/plan", { body })),
@@ -67,6 +71,26 @@ export default function PretrainingPage() {
   }, [previewJob.error]);
   const estimating = ids.length > 0 && (plan.data?.estimating ?? true);
 
+  // How long a step takes on this computer: a few timed steps of the design, as a job, once the size of the text is known.
+  const needsRate = plan.data?.sizing != null && !plan.data.sizing.measured && version !== null;
+  const rateJob = useQuery({
+    queryKey: ["pretraining", "step-rate", version, rows],
+    queryFn: async ({ signal }) => {
+      const found = await runJob<StepRate>(
+        () => unwrap(api.POST("/pretraining/step_rate", { body: { version, dataset_ids: ids, rows: Number(rows), preview_rows: PREVIEW_ROWS } })) as Promise<JobLike>,
+        signal,
+      );
+      queryClient.invalidateQueries({ queryKey: ["pretraining", "plan"] });
+      return found;
+    },
+    enabled: needsRate,
+    staleTime: Infinity,
+    retry: false,
+  });
+  useEffect(() => {
+    if (rateJob.error) toast.error(errorText(rateJob.error));
+  }, [rateJob.error]);
+
   const onEvent = useCallback(
     (event: ApiEvent) => {
       if (event.kind === "data" || event.kind === "downloads_finished") {
@@ -89,7 +113,7 @@ export default function PretrainingPage() {
   return (
     <main className={PAGE_MAIN}>
       <PageHeader title={T.h1} lead={T.lead}>
-        <Link href="/make-data/?kind=text" className="w-fit text-sm text-highlight hover:underline">{T.makeData} ›</Link>
+        <Link href="/your-data/?kind=text#make-extra-data" className="w-fit text-sm text-highlight hover:underline">{T.makeData} ›</Link>
       </PageHeader>
 
       <div>
@@ -107,7 +131,20 @@ export default function PretrainingPage() {
       <CollectionCard kind="text" description={T.collectionDesc} />
       <EnoughCard plan={plan.data} estimating={estimating} />
       <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} hold={hold} onRows={setRows} onHold={setHold} />
-      <TrainCard plan={plan.data} estimating={estimating} mode={mode} onMode={setMode} length={length} onLength={setLength} />
+      <SizingCard plan={plan.data} estimating={estimating} hours={hours} onHours={setHours} chosenSteps={chosenSteps} onUseSteps={setChosenSteps} />
+      <TrainCard
+        plan={plan.data}
+        estimating={estimating}
+        mode={mode}
+        onMode={setMode}
+        length={length}
+        stopWhenFlat={stopWhenFlat}
+        onStopWhenFlat={setStopWhenFlat}
+        onLength={(next) => {
+          setChosenSteps(null);
+          setLength(next);
+        }}
+      />
       <LrCard version={version} spec={current?.spec ?? null} />
     </main>
   );

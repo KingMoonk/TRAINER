@@ -200,7 +200,7 @@ def own_info(busy=False, version="", status=None, memory=None):
     kind = status.get("kind") if status.get("available") else "cpu"
     if memory is None and kind != "cuda":
         try:
-            from studio_passive import total_memory
+            from studio_memory import total_memory
             memory = total_memory()
         except Exception:
             memory = 0
@@ -283,10 +283,10 @@ DEFAULTS = {
     "pretrain": Requirements(device="cuda"),
     "post_round": Requirements(device="cuda"),  # RLHF
     "restore_answers": Requirements(device="cuda"),  # RLHF
+    "rlhf_loop": Requirements(device="cuda"),  # the loop (studio_loop); never moved whole: its folder is on its owner
     "pretrain_distributed": Requirements(device="cuda"),  # the owner: the coordinator plus one local member (studio_diloco)
     "diloco_member": ANY,
     "lora": ANY,
-    "passive": ANY,
     "eval": ANY,
     "score": ANY,
     "benchmark": ANY,

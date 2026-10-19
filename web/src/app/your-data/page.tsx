@@ -5,14 +5,16 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap, type ApiEvent } from "@/lib/api";
 import { CollectionCard } from "./collection-card";
-import { KIND, KINDS, MAKE_LABELS, T, fill, type Kind } from "./copy";
+import { KIND, KINDS, T, fill, type Kind } from "./copy";
 import { useApiEvents } from "./events";
 import { ItemForm } from "./forms";
+import { MAKE } from "./make-copy";
+import { MakeExtraData } from "./make-extra";
 import { ImportCard } from "./import-card";
 import { runJob, type JobLike } from "./jobs";
 import { backLink, collectionShown, dupLabel, errorText, kindOf, setsLine, type DataRow, type Summary } from "./logic";
@@ -188,7 +190,6 @@ function YourData() {
           <Link href="/storage" className="text-highlight hover:underline">
             {T.storageLink}
           </Link>
-          <Link href="/passive/" className="text-highlight hover:underline">{T.passiveLink}</Link>
         </div>
       </PageHeader>
       <Link href={back.href} className="w-fit text-sm text-highlight hover:underline">
@@ -243,7 +244,6 @@ function YourData() {
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => setPanel(panel === "add" ? null : "add")}>{KIND[kind].add}</Button>
-        <Link href={`/make-data/?kind=${kind}`} className={buttonVariants({ variant: "outline" })}>{MAKE_LABELS[kind]}</Link>
         <Button variant="outline" onClick={() => setPanel(panel === "import" ? null : "import")}>
           {T.importFiles}
         </Button>
@@ -268,6 +268,11 @@ function YourData() {
       {panel === "import" && <ImportCard key={`import-${kind}`} kind={kind} onClose={() => setPanel(null)} />}
 
       {collectionShown(summary) && <CollectionCard kind={kind} description={KIND[kind].collectionDesc} />}
+      <details id="make-extra-data" className="rounded-lg border bg-background/30 p-4">
+        <summary className="cursor-pointer font-medium">{MAKE.title}</summary>
+        <p className="mt-2 text-sm text-muted-foreground">{MAKE.lead}</p>
+        <div className="mt-4"><MakeExtraData key={kind} initialKind={kind} /></div>
+      </details>
     </main>
   );
 }

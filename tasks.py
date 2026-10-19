@@ -309,13 +309,31 @@ class SourceWatcher:
         return True
 
 
-def dev_step(api_alive, web_alive, changed, watching):
+def training_busy(folder=None, alive=None, command_line=None):
+    """True while a queue job's worker process runs: restarting the API now would kill it (on Windows `stop` ends the whole tree) and
+    cost the steps since its last checkpoint. The workers are the specs in <workspace>/data/workers, each naming a live studio_worker."""
+    import studio_platform as procs
+    import studio_worker
+    if folder is None:
+        from studio_core import ROOT
+        folder = Path(ROOT) / "data" / "workers"
+    alive, command_line = alive or procs.alive, command_line or procs.command_line
+    for spec, pid in studio_worker.strays(folder):
+        if pid and alive(pid):
+            line = command_line(pid) or ""
+            if "studio_worker" in line and str(spec) in line:
+                return True
+    return False
+
+
+def dev_step(api_alive, web_alive, changed, watching, busy=False):
     """What the dev loop does next: "stop" (the web server ended, or the API did and nothing watches), "restart" (sources changed
-    and the API is ours to restart), "wait" (the API ended and stays down until the next change) or "keep"."""
+    and the API is ours to restart), "defer" (they changed but a training job runs under the API: wait for it to end),
+    "wait" (the API ended and stays down until the next change) or "keep". `changed` stays true until acted on."""
     if not web_alive or (not api_alive and not watching):
         return "stop"
     if watching and changed:
-        return "restart"
+        return "defer" if busy and api_alive else "restart"
     return "wait" if watching and not api_alive else "keep"
 
 
@@ -336,19 +354,24 @@ def dev():
     tailnet(DEV_SERVE)
     procs = [spawn(api), spawn(web, cwd=WEB, env={**os.environ, **env})]
     threading.Thread(target=announce, name="device-notice", daemon=True).start()
-    code, told = 0, False
+    code, told, pending, deferred = 0, False, False, False
     try:
         while True:
-            step = dev_step(procs[0].poll() is None, procs[1].poll() is None, bool(watcher and watcher.poll()), watcher is not None)
+            pending = pending or bool(watcher and watcher.poll())
+            api_up = procs[0].poll() is None
+            step = dev_step(api_up, procs[1].poll() is None, pending, watcher is not None, bool(pending and api_up and training_busy()))
             if step == "stop":
                 code = next(p.returncode for p in procs if p.returncode is not None) or 1  # one stopped by itself: say so
                 print(f"+ a dev process exited with {code}; stopping the other", flush=True)
                 break
+            if step == "defer" and not deferred:
+                deferred = True
+                print("+ a .py file changed, but a training job is running: the API restarts when it ends (Ctrl+C stops everything)", flush=True)
             if step == "restart":
                 print("+ a .py file changed; restarting the API", flush=True)
                 stop(procs[0])
                 procs[0].wait()
-                procs[0], told = spawn(api), False
+                procs[0], told, pending, deferred = spawn(api), False, False, False
                 threading.Thread(target=announce, name="device-notice", daemon=True).start()
             elif step == "wait" and not told:
                 told = True

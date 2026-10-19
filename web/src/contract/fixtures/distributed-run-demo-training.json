@@ -1,6 +1,11 @@
 {
   "body": {
     "age_s": 0.0,
+    "best_round": null,
+    "best_val_loss": null,
+    "can_pause": true,
+    "can_restart": false,
+    "can_resume": false,
     "can_stop": true,
     "contributed": 0,
     "coordinator": "mac-mini",
@@ -26,13 +31,17 @@
     ],
     "expected": 2,
     "grace_s": 2.0,
+    "handoff": "",
     "history": [],
     "id": "demo-run",
     "inner_steps": 100,
     "label": "Demo run on a Mac mini and a GPU box",
+    "lessons": 0,
+    "lessons_left_out": 0,
     "members": [
       {
         "address": "local",
+        "blocking_job": null,
         "can_stop": false,
         "device": "mps",
         "device_name": "Apple M2",
@@ -45,6 +54,7 @@
         "node": "mac-mini",
         "note": "",
         "phase": "training",
+        "reason": "",
         "reported_ago": 0.0,
         "round_steps": 100,
         "rounds_done": 0,
@@ -95,6 +105,7 @@
       },
       {
         "address": "gpu-box:8787",
+        "blocking_job": null,
         "can_stop": true,
         "device": "cuda",
         "device_name": "NVIDIA GeForce RTX 4090",
@@ -107,6 +118,7 @@
         "node": "gpu-box",
         "note": "",
         "phase": "training",
+        "reason": "",
         "reported_ago": 0.0,
         "round_steps": 100,
         "rounds_done": 0,
@@ -193,12 +205,16 @@
     "outer_lr": 0.7,
     "outer_momentum": 0.9,
     "owner": "mac-mini",
+    "paused": false,
     "phase": "training",
+    "reviewed_only": false,
     "round": 0,
     "rounds": 400,
     "saved_version": null,
     "started_at": 1700000000.0,
     "state": "running",
+    "stop_reason": "",
+    "stop_rule": "",
     "term": 1,
     "theta_bytes": 4000000,
     "timeline": [
@@ -235,6 +251,7 @@
       }
     ],
     "version": 1,
+    "win_rate": null,
     "window_s": 6.25
   },
   "request": {

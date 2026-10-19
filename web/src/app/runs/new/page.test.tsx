@@ -15,8 +15,14 @@ const MORE = [...NODES.slice(0, 2), node("lab")];
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
 const job = { kind: "pretrain", label: "Version 2 from scratch", params: { version: 2, datasets: ["stories"], mode: "from_scratch" } };
 
-function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false } = {}) {
+const row = (over: Record<string, unknown>) => ({
+  id: "j1", kind: "post_training", label: "Post-training round 2", status: "running", node: "beast", hostname: "beast", queued_on: "beast", queued_here: false, queued_address: "beast",
+  pinned: "", waiting_reason: "", stale: false, note: "", step: 10, total: 100, eta_s: 4.7 * 86_400, ...over,
+});
+
+function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[] } = {}) {
   const calls = mockApi({
+    "GET /cluster/merged": { body: { nodes: [], jobs } },
     "GET /cluster/nodes": { body: nodes },
     "GET /distributed/defaults": { body: { delta_dtype: "fp16", inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, rounds: 40 } },
     "GET /pretraining/text_sets": {
@@ -87,7 +93,7 @@ describe("New run", () => {
     server();
     renderPage(<NewRunPage />, { route: "/runs/new/" });
     expect(await screen.findByTestId("worker-lab")).toBeDisabled();
-    expect(screen.getByTestId("worker-lab")).toHaveTextContent("Not answering");
+    expect(screen.getByTestId("worker-lab")).toHaveTextContent("Unreachable");
   });
 
   test("a peer alone is pinned with params.pinned", async () => {
@@ -124,8 +130,48 @@ describe("New run", () => {
     await user.click(await cta());
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
     expect(sent("POST", "/distributed/runs")?.body).toEqual({
-      version: null, dataset_ids: ["stories"], machines: ["beast"], rounds: 12, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
+      version: null, dataset_ids: ["stories"], machines: ["beast"], rounds: 12, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false, reviewed_only: false,
     });
+  });
+
+  test("a busy machine shows what it runs, and launching asks first: cancel sends nothing, launch anyway starts the run", async () => {
+    const busy = [...NODES.slice(0, 1), node("beast", { busy: true })];
+    const { sent } = server({ nodes: busy, jobs: [row({})] });
+    const user = userEvent.setup();
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await user.click(await screen.findByTestId("worker-beast"));
+    await waitFor(() => expect(screen.getByTestId("busy-beast")).toHaveTextContent("Running Post-training round 2 · about 4.7 days left"));
+    await user.click(await cta());
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("beast will not take part yet");
+    expect(dialog).toHaveTextContent("beast is busy with another job, so the run starts without it. It will join a later round if it frees up.");
+    expect(sent("POST", "/distributed/runs")).toBeUndefined();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sent("POST", "/distributed/runs")).toBeUndefined();
+
+    await user.click(await cta());
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Launch anyway" }));
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
+    expect(sent("POST", "/distributed/runs")?.body).toMatchObject({ machines: ["beast"] });
+  });
+
+  test("a busy machine with no job row says it runs another job", async () => {
+    server({ nodes: [...NODES.slice(0, 1), node("beast", { busy: true })] });
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    expect(await screen.findByTestId("busy-beast")).toHaveTextContent("Running another job");
+  });
+
+  test("free machines launch without a question", async () => {
+    const { sent } = server({ nodes: MORE });
+    const user = userEvent.setup();
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await user.click(await screen.findByTestId("worker-beast"));
+    expect(screen.queryByTestId("busy-beast")).toBeNull();
+    await user.click(await cta());
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sent("POST", "/distributed/runs")).toBeDefined();
   });
 
   test("the server's sentence for a refused run is shown and the page stays", async () => {

@@ -55,6 +55,7 @@ test("Quick test and Compare runs are one click from the tray and the page", asy
 test("the learning-rate finder reads a suggestion off the draft", async ({ page, request }) => {
   await seed(page, request);
   await page.goto("/builder/");
+  await page.locator("summary").filter({ hasText: "Experiments & diagnostics" }).click();
   await page.getByRole("button", { name: "Find a learning rate" }).click();
   await expect(page.getByTestId("lr-text")).toContainText("learning rate");
 });

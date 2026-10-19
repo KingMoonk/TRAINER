@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { ROUNDS, STATUS_TEXT, T } from "./copy";
 import { GateCard } from "./gate-card";
 import { count, errorText, firstOpenRound, roundBlocker, type Gate, type JobOut, type Status } from "./logic";
+import { LoopCard } from "./loop-card";
 import { RoundCard, type Choices, type Live } from "./round-card";
 import { ImportCard, RowsCard, VersionsCard } from "./side-cards";
 import { useEventStream, useJob } from "./use-events";
@@ -222,6 +223,8 @@ export default function PostTrainingPage() {
           />
         </>
       )}
+
+      <LoopCard version={version?.number} hasCheckpoint={!!version?.best_checkpoint} />
 
       <VersionsCard versions={versions} startsFrom={version?.number} loading={versionsQuery.isLoading} />
       <ImportCard ranks={options?.lora_ranks ?? []} onImported={() => setPicked(null)} />

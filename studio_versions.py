@@ -137,18 +137,6 @@ class VersionStore:
             self._write(versions + [version])
             return copy.deepcopy(version)
 
-    def add_trained(self, spec, change, checkpoint, run_dir, source):
-        """A version trained outside the queue (a passive session): its design, `checkpoint` as its weights and `run_dir` as its run. `source`
-        says where the weights came from, as a dict kept on the row. Its scorecard starts empty; the caller scores it. Returns the new row."""
-        spec = validate_spec(spec)
-        with self._lock:
-            versions = self.versions()
-            version = dict(number=len(versions) + 1, name=f"Version {len(versions) + 1}", change=change, parent=None, spec=spec,
-                           created_at=time.strftime("%Y-%m-%dT%H:%M:%S"), runs=[str(run_dir)], best_checkpoint=str(checkpoint),
-                           status="trained", scorecard={}, verdict=None, prediction={}, passive=dict(source))
-            self._write(versions + [version])
-            return copy.deepcopy(version)
-
     def add_published(self, number, key):
         """Remember that version `number` is in the version store under `key`."""
         with self._lock:
@@ -197,6 +185,10 @@ class VersionStore:
 
     def set_best_checkpoint(self, number, path):
         return self._update(number, best_checkpoint=str(path))
+
+    def set_source(self, number, source):
+        """Say where version `number`'s weights came from: a dict kept on the row as `source`."""
+        return self._update(number, source=dict(source))
 
     def set_devices(self, number, train=None, score=None):
         """Record the device kind that trained the version's checkpoint and/or the one that scored it; None leaves that one as it was."""

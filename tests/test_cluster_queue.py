@@ -146,7 +146,7 @@ class Merge(unittest.TestCase):
         net = Net(gpu=DOWN)
         clock = [100.]
         peers = cq.Peers(clock=lambda: clock[0])
-        for now, calls in ((100., 3), (105., 0), (110., 1), (120., 0), (130., 1), (170., 1), (230., 1), (260., 0)):
+        for now, calls in ((100., 3), (102., 0), (105., 1), (110., 0), (115., 1), (125., 1), (130., 0)):
             clock[0], before = now, len(net.calls)
             [peer_] = peers.survey(["gpu"], net, 1)
             self.assertEqual(len(net.calls) - before, calls, now)
@@ -221,6 +221,20 @@ class QueueRoute(ApiCase):
                          [("local", "here-box", "here-box", True, True), ("gpu", "gpu-box", "gpu", False, True)])
         self.assertEqual([(r["id"], r["status"], r["hostname"], r["queued_on"], r["queued_here"], r["stale"]) for r in body["jobs"]],
                          [(mine["id"], "waiting", "", "here-box", True, False), ("p1", "running", "gpu-box", "gpu-box", False, False)])
+
+    def test_each_node_carries_the_limits_of_its_queue_plan_and_what_holds_it(self):
+        self.net.peers["gpu"]["queue"] = {"job": None, "plan": {"memory": "half", "keep_awake": True, "pause_on_battery": True},
+                                          "blocked": "on battery", "paused": False}
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        here, gpu = self.call("GET", "/cluster/merged")["nodes"]
+        self.assertEqual((gpu["limits"]["plan"]["memory"], gpu["limits"]["plan"]["keep_awake"], gpu["limits"]["blocked"], gpu["limits"]["paused"]),
+                         ("half", True, "on battery", False))
+        self.assertIsNone(here["limits"]["blocked"])  # this machine's own plan, from its own queue
+        self.assertIn("pause_on_battery", here["limits"]["plan"])
+
+    def test_a_peer_that_does_not_say_its_plan_has_no_limits(self):
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        self.assertIsNone(self.call("GET", "/cluster/merged")["nodes"][1]["limits"])
 
     def test_a_note_on_a_job_running_on_a_peer_is_in_its_row(self):
         self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})

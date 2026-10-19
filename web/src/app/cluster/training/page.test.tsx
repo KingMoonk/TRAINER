@@ -66,7 +66,7 @@ describe("Training tab: the start form", () => {
     expect(screen.getByRole("checkbox", { name: /Notes/ })).not.toBeChecked();
     expect(await screen.findByRole("checkbox", { name: /gpu-box/ })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /old-laptop/ })).toBeInTheDocument();
-    expect(screen.getByText("Not answering")).toBeInTheDocument();
+    expect(screen.getByText("Unreachable")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /Version 2 · Wider/ })).toBeInTheDocument();
     expect(screen.getByText("No run has been started. Start one above.")).toBeInTheDocument();
   });
@@ -82,15 +82,31 @@ describe("Training tab: the start form", () => {
     await user.selectOptions(screen.getByLabelText("Design"), "2");
     expect(screen.getByRole("checkbox", { name: /Overlap communication/ })).not.toBeChecked();
     await user.click(screen.getByRole("checkbox", { name: /Overlap communication/ }));
+    expect(screen.getByRole("checkbox", { name: /Reviewed examples only/ })).not.toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: /Reviewed examples only/ }));
     await user.type(screen.getByLabelText("At least"), "2");
     await user.type(screen.getByLabelText("At most"), "3");
     await user.click(screen.getByRole("button", { name: "Start run" }));
     await waitFor(() => expect(state.started).toHaveLength(1));
     expect(state.started[0]).toEqual({
-      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: true,
+      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: true, reviewed_only: true,
     });
     expect(await screen.findByTestId("run-r1")).toHaveTextContent("Version 2 across machines");
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");
+  });
+
+  test("offers the ticked machines as coordinator and sends the choice", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    expect(screen.queryByLabelText("Coordinator")).not.toBeInTheDocument(); // nothing ticked: this computer coordinates
+    await user.click(await screen.findByRole("checkbox", { name: /gpu-box/ }));
+    const pick = screen.getByLabelText("Coordinator");
+    expect(pick).toHaveValue("");
+    await user.selectOptions(pick, "gpu-box");
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0]).toMatchObject({ machines: ["gpu-box"], coordinator: "gpu-box" });
   });
 
   test("cannot start with no text ticked", async () => {
@@ -157,7 +173,7 @@ describe("Training tab: a run", () => {
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     expect(await screen.findByTestId("reason-old-laptop")).toHaveTextContent(/^old-laptop did not answer within 2 seconds\.$/);
     expect(screen.getByTestId("reason-brother-pc")).toHaveTextContent("refused this computer (401)");
-    expect(within(screen.getByTestId("member-old-laptop")).getByText("Could not be reached")).toBeInTheDocument();
+    expect(within(screen.getByTestId("member-old-laptop")).getByText("Unreachable")).toBeInTheDocument();
     expect(screen.getByTestId("member-gpu-box")).toHaveTextContent("Training");
     expect(screen.queryByTestId("reason-gpu-box")).toBeNull();
   });

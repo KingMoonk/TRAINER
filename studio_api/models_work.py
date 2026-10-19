@@ -1,4 +1,4 @@
-"""What the post-training, chat, inspect, benchmark and viewer routers share: the answer to starting a job, the plain-data
+"""What the post-training, chat and benchmark routers share: the answer to starting a job, the plain-data
 conversion for job results, and the response model for a Version."""
 
 import dataclasses

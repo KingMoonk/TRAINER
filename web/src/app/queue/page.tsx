@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { isCluster, useCluster } from "@/lib/cluster";
 import { T } from "./copy";
+import { FailedCard } from "./failed-card";
 import { OtherMachinesCard, isElsewhere } from "./nodes";
 import { NowCard } from "./now-card";
 import { PlanCard } from "./plan-card";
@@ -33,6 +34,7 @@ export default function QueuePage() {
         )}
       </PageHeader>
       <NowCard queue={queue.data} actions={actions} cluster={cluster} />
+      <FailedCard queue={queue.data} actions={actions} />
       <UpNextCard queue={queue.data} actions={actions} cluster={cluster} />
       {others && <OtherMachinesCard cluster={others} />}
       <PlanCard queue={queue.data} actions={actions} />

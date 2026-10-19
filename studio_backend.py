@@ -69,6 +69,7 @@ class Backend:
     device: str
     name: str
     reason: str = ""
+    probe: dict = None  # the measurement that picked this device on "auto" (studio_probe.probe), else None
 
     def to_cpu(self, value):
         """A NumPy copy of `value` (a tensor on any device, or anything array-like); never a view of a live tensor."""
@@ -89,17 +90,33 @@ class Backend:
 AUTO_GPU_MIN_WORK = 3_000_000
 
 
-def get_backend(device="auto", work=None):
+def get_backend(device="auto", work=None, measure=None):
+    """The backend for `device`. On "auto" with a GPU present, `measure()` (a studio_probe result, or None) picks the faster device
+    from timed steps of the real design; without it, or when it fails, the size rule decides (AUTO_GPU_MIN_WORK)."""
     if device not in DEVICES:
         raise ValueError("Device must be auto, cpu, cuda, or mps.")
     if device == "cpu":
         return Backend(torch, "cpu", "PyTorch / CPU")
+    status = None
+    measured, note = None, ""
+    if device == "auto" and measure is not None:
+        status = gpu_status()
+        if status["available"]:
+            try:
+                measured = measure()
+            except Exception as exc:
+                note = f"the device probe failed ({type(exc).__name__}: {exc}); chose by model size"
+    if measured:
+        kind = status["kind"]
+        if measured["device"] == "cpu":
+            return Backend(torch, "cpu", "PyTorch / CPU", "auto chose CPU: " + measured["reason"], probe=measured)
+        return Backend(torch, kind, f"PyTorch / GPU · {status['name']} ({measured['reason'].rstrip('.')})", probe=measured)
     if device == "auto" and work is not None and work < AUTO_GPU_MIN_WORK:
-        return Backend(torch, "cpu", "PyTorch / CPU", f"auto chose CPU: model is small ({work:,} values per step)")
-    status = gpu_status()
+        return Backend(torch, "cpu", "PyTorch / CPU", f"auto chose CPU: model is small ({work:,} values per step)" + (f"; {note}" if note else ""))
+    status = status or gpu_status()
     kind = status.get("kind") or "cuda"
     if status["available"] and (device == "auto" or device == kind):
-        return Backend(torch, kind, f"PyTorch / GPU · {status['name']}")
+        return Backend(torch, kind, f"PyTorch / GPU · {status['name']}" + (f" ({note})" if note else ""))
     reason = "GPU unavailable: " + (status["reason"] or f"no {device} device is present")
     if device != "auto":
         raise RuntimeError(reason + "\nInstall a PyTorch build for this device, or select CPU.")

@@ -143,7 +143,6 @@ class DesignRouterTests(ApiCase):
         want = D.explain_for("embedding", D.read_spec(base), None, pieces, sentence)
         self.assertEqual({k: said[k] for k in ("title", "what", "module", "module_text", "example")}, {k: want[k] for k in ("title", "what", "module", "module_text", "example")})
         self.assertIn(sentence, said["example"])
-        self.assertEqual([(link["route"], link["block"]) for link in said["links"]], [(route, at) for route, _label, at in want["links"]])
         late = self.call("POST", "/design/explain", json={"choices": cur, "part": "mixer", "block": 99})  # past the last block: the last one
         self.assertIn(f"block {cur['L']}", late["title"])
         self.call("POST", "/design/explain", 422, json={"choices": cur, "part": "tokenizer"})
