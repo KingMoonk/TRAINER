@@ -4,8 +4,37 @@ import { BENCH } from "./copy";
 
 // The jobs' results are not in the OpenAPI schema (a job answers with its id, and the result is `Any`), so the shapes of
 // studio_api/routers/benchmark.py's BenchmarkOut and FewShotOut are written out here.
-export type BenchmarkRow = { number: number; name?: string; lineage?: string; tokens?: number | null; result?: Record<string, unknown> | null };
-export type BenchmarkOut = { suite: string; sizes?: Record<string, number>; dropped?: Record<string, number>; rows?: BenchmarkRow[] };
+export type BenchmarkRow = {
+  number: number;
+  name?: string;
+  lineage?: string;
+  continues?: number | null;
+  tokens?: number | null;
+  stale?: boolean;
+  result?: Record<string, unknown> | null;
+};
+/** A paired test of a version against the one before it (studio_eval.paired_gain / paired_hits): a gain counts only where `better` is true. */
+export type Gain = { diff: number; better: boolean; docs?: number; items?: number; reason?: string } | null;
+export type TrendPoint = {
+  number: number;
+  tokens?: number | null;
+  bpc?: number | null;
+  bpc_band?: number[] | null;
+  few_shot?: number | null;
+  few_shot_band?: number[] | null;
+  problems?: number | null;
+  dropped?: Record<string, number>;
+  gain?: { bpc?: Gain; few_shot?: Gain; problems?: Gain } | null;
+};
+export type Lineage = { lineage: string; versions?: number[]; points?: TrendPoint[] };
+export type BenchmarkOut = {
+  suite: string;
+  sizes?: Record<string, number>;
+  dropped?: Record<string, number>;
+  sources?: string[];
+  rows?: BenchmarkRow[];
+  lineages?: Lineage[];
+};
 export type FewShotOut = {
   items: number;
   tasks?: number;
@@ -72,13 +101,59 @@ export function hasItems(state: BenchmarkOut, metric: Metric): boolean {
   return Boolean(sizes[metric === "bpc" ? "docs" : metric === "few_shot" ? "choice" : "problems"]);
 }
 
-/** One line under the header: how many trained versions still need checking, or that none do. */
+/** One line under the header: how many trained versions still need checking (and how many of those were checked under an older method), or that none do. */
 export function statusText(state: BenchmarkOut): string {
   const rows = state.rows ?? [];
   if (!rows.length) return BENCH.noVersions;
   if (!Object.values(state.sizes ?? {}).some(Boolean)) return BENCH.noData;
   const left = rows.filter((r) => r.result == null).length;
-  return left ? BENCH.waiting(left, rows.length) : BENCH.allDone;
+  const old = rows.filter((r) => r.result == null && r.stale).length;
+  return left ? BENCH.waiting(left, rows.length) + (old ? BENCH.waitingStale(old) : "") : BENCH.allDone;
+}
+
+/** A value with the range it could be given the items asked: "2.20 (2.15 to 2.25)", or just the value without a range. */
+export function bandText(metric: Metric, value: number | null | undefined, band: number[] | null | undefined): string {
+  if (typeof value !== "number") return "–";
+  const range = band && band.length === 2 && band.every((b) => Number.isFinite(b)) ? ` (${valueText(metric, band[0])} to ${valueText(metric, band[1])})` : "";
+  return valueText(metric, value) + range;
+}
+
+/** What the paired test says about a version against the one before it: a real gain, or not sure. "–" for the first of a lineage. */
+export function gainText(metric: Metric, gain: Gain | undefined): string {
+  if (gain === undefined || gain === null) return "–";
+  if (Number.isNaN(gain.diff)) return BENCH.gainNone;
+  const items = gain.docs ?? gain.items ?? 0;
+  const sign = gain.diff > 0 ? "+" : "";
+  const change = metric === "bpc" ? `${sign}${gain.diff.toFixed(2)}` : `${sign}${Math.round(gain.diff * 100)} points`;
+  if (gain.reason) return BENCH.gainFew(change, items);
+  return gain.better ? BENCH.gainBetter(change) : BENCH.gainUnsure(change);
+}
+
+/** How many items were left out of one version's score for sharing a 13-word run with its training text. */
+export function leftOut(dropped: Record<string, number> | undefined): string {
+  return String(Object.values(dropped ?? {}).reduce((a, b) => a + b, 0));
+}
+
+/** The trend tables, one per lineage: a row per version with its numbers, their ranges, what the paired tests say against the version before, and what was left out. */
+export function trendTables(state: BenchmarkOut): { lineage: string; title: string; rows: string[][] }[] {
+  const names = designs(state.rows ?? []);
+  const lineages = state.lineages ?? [];
+  return lineages.map((line, index) => {
+    const points = line.points ?? [];
+    return {
+      lineage: line.lineage,
+      title: BENCH.design(names.get(line.lineage)?.letter ?? String.fromCharCode(65 + index), line.versions ?? points.map((p) => p.number)),
+      rows: points.map((p) => [
+        String(p.number),
+        p.tokens == null ? "–" : tokensText(p.tokens),
+        bandText("bpc", p.bpc, p.bpc_band),
+        gainText("bpc", p.gain?.bpc),
+        bandText("few_shot", p.few_shot, p.few_shot_band),
+        gainText("few_shot", p.gain?.few_shot),
+        leftOut(p.dropped),
+      ]),
+    };
+  });
 }
 
 function metricValue(row: BenchmarkRow, metric: Metric): number | null {

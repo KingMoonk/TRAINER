@@ -573,6 +573,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/weights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Weights
+         * @description A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left.
+         */
+        get: operations["weights_collective__run__weights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -1467,227 +1487,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/inspect/ablate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ablate
-         * @description {baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.
-         */
-        post: operations["ablate_inspect_ablate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/forward": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Forward
-         * @description {ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.
-         */
-        post: operations["forward_inspect_forward_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/head-stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Head Stats
-         * @description {entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted
-         *     pattern, so it answers at once instead of as a job.
-         */
-        post: operations["head_stats_inspect_head_stats_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/heads-off": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Heads Off
-         * @description {before, after}: held-back bits per character with the (block, head) pairs in `off` switched off.
-         */
-        post: operations["heads_off_inspect_heads_off_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/logit-lens": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Logit Lens
-         * @description [{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.
-         */
-        post: operations["logit_lens_inspect_logit_lens_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/loss": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Loss
-         * @description {tokens, pos, probabilities, target, pieces}: how likely each next piece was at `pos`.
-         */
-        post: operations["loss_inspect_loss_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/prepared": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Prepared
-         * @description {ids, tokens}: the text the version's pieces are read from.
-         */
-        post: operations["prepared_inspect_prepared_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/rank-heads": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Rank Heads
-         * @description [{block, head, rise}]: how much worse the held-back text gets with each head switched off. Slow.
-         */
-        post: operations["rank_heads_inspect_rank_heads_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/reply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reply
-         * @description The greedy answer to `prompt` with the (block, head) pairs in `off` switched off for this reply only. The result is the text.
-         */
-        post: operations["reply_inspect_reply_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/trace": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Trace
-         * @description {tokens, pos, rows}: what each stage of the model does to the token at `pos`.
-         */
-        post: operations["trace_inspect_trace_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/inspect/value-map": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Value Map
-         * @description {d_model, heads, blocks, singular}: the singular values of one head's value and output weights.
-         */
-        post: operations["value_map_inspect_value_map_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/jobs": {
         parameters: {
             query?: never;
@@ -1977,6 +1776,92 @@ export interface paths {
          *     download it. `lora` fine-tunes small adapters instead of every weight.
          */
         post: operations["import_pretrained_post_training_imports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/judges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Judges
+         * @description The Ollama models that could grade a loop, read from the server the workspace's settings name.
+         */
+        get: operations["judges_post_training_judges_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/loops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Loops
+         * @description Every automated loop, newest first, with each round's evidence.
+         */
+        get: operations["loops_post_training_loops_get"];
+        put?: never;
+        /**
+         * Start Loop
+         * @description Queue the automated loop for a version, or carry on an earlier one from its last kept round. The loop is a long queue job:
+         *     stop it from here and Start again to carry on; it also carries on by itself after an app restart.
+         */
+        post: operations["start_loop_post_training_loops_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/loops/{loop_id}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt Loop
+         * @description Make a loop's best the version's checkpoint if it holds up on ALL the held-back data. A job: it measures both models. The
+         *     result is the gate result (ok, checks, verdict).
+         */
+        post: operations["adopt_loop_post_training_loops__loop_id__adopt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/loops/{loop_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Loop
+         * @description Stop a loop that is queued or running. It keeps its folder and its last kept round, and Start carries on from there.
+         */
+        post: operations["stop_loop_post_training_loops__loop_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2391,7 +2276,8 @@ export interface paths {
         post?: never;
         /**
          * Remove
-         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).
+         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop). On a
+         *     failed job it dismisses it from the list.
          */
         delete: operations["remove_queue_jobs__job_id__delete"];
         options?: never;
@@ -2616,7 +2502,9 @@ export interface paths {
         put?: never;
         /**
          * Start Queue
-         * @description Services.start_queue: let jobs saved as waiting by an earlier session run.
+         * @description Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it
+         *     waits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`
+         *     with its sentence, instead of a bare 200 followed by a job that has quietly gone.
          */
         post: operations["start_queue_queue_start_post"];
         delete?: never;
@@ -2823,6 +2711,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storage/leftovers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Leftovers
+         * @description What training left in runs/ that no result needs, largest first: attempts moved aside by a restart, failed runs, and dataset
+         *     snapshots no run uses. A running job's folder, the checkpoint a waiting job continues from and a version's runs are never listed.
+         */
+        get: operations["leftovers_storage_leftovers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/leftovers/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove Leftovers
+         * @description Delete the listed leftovers. An id that is not listed any more (already gone, or protected since) is ignored.
+         */
+        post: operations["remove_leftovers_storage_leftovers_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/traffic": {
         parameters: {
             query?: never;
@@ -2981,6 +2910,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/versions/{number}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Version
+         * @description Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the
+         *     queued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a
+         *     design its weights cannot go into) fails the job with a sentence.
+         */
+        post: operations["continue_version_versions__number__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/versions/{number}/export": {
         parameters: {
             query?: never;
@@ -3125,317 +3076,10 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/viewer/action": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Action
-         * @description Do what a viewer control does (studio_scene_json.apply_action) to the state in the body, and answer with the new state and
-         *     the scene (the whole one, or the frame against `since`).
-         */
-        post: operations["action_viewer_action_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/binary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Binary
-         * @description The arrays of the scene (or of the frame against `since`) as little-endian float32 bytes. Their offsets are in
-         *     POST /viewer/manifest, and the payload's {shape, name} entries name them: send both calls the same body.
-         */
-        post: operations["binary_viewer_binary_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/frame": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Frame
-         * @description What changed since `since` (studio_scene_json.scene_frame); the whole scene when `since` is empty.
-         */
-        post: operations["frame_viewer_frame_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/landscape": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Landscape
-         * @description The loss landscape around a version's weights (Li et al. 2018) as a job: the held-back loss on a grid of weights moved along
-         *     two directions. Cheap by design (one fixed small batch, a grid capped by model size) and, with `live`, throttled so training
-         *     keeps its speed. The result is a LandscapeResult.
-         */
-        post: operations["landscape_viewer_landscape_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/manifest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Manifest
-         * @description {name: {offset, shape, dtype}} for the bytes of POST /viewer/binary with the same body.
-         */
-        post: operations["manifest_viewer_manifest_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/poll": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Poll
-         * @description The messages the viewer process sent back since the last call. Reading them empties the list.
-         */
-        post: operations["poll_viewer_poll_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/probe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Probe
-         * @description Run one real training step of the current version's checkpoint on a sentence, without touching training. A job: the result
-         *     is {snapshot, note}, the new snapshot's index (see /viewer/snapshots) and the sentence to show.
-         */
-        post: operations["probe_viewer_probe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/scene": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Scene
-         * @description The whole scene to draw from scratch (studio_scene_json.scene_payload). Query: version, level, mode, headStage, tileKind,
-         *     snapshot, arrays; web/src/lib/viewer.ts's SceneQuery. A client that keeps more of the controls POSTs /viewer/frame.
-         */
-        get: operations["scene_viewer_scene_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/send": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Send
-         * @description Queue one message (e.g. {"type": "scene", "level": "Window", "mode": "Train"}) for the running viewer process.
-         */
-        post: operations["send_viewer_send_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/snapshots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Snapshots
-         * @description The snapshots a scene can show, oldest first: a scene's `snapshot` is an index into this list.
-         */
-        get: operations["snapshots_viewer_snapshots_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start
-         * @description Launch the Panda3D viewer process on the server's computer (no-op if running) with the current version's design.
-         */
-        post: operations["start_viewer_start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Status
-         * @description Whether the Panda3D viewer process can be launched on this computer, is running, and is connected.
-         */
-        get: operations["status_viewer_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/stop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Stop */
-        post: operations["stop_viewer_stop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/viewer/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Summary
-         * @description Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,
-         *     or what is missing. POST /viewer/summary makes it.
-         */
-        get: operations["summary_viewer_summary_get"];
-        put?: never;
-        /**
-         * Make Summary
-         * @description Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text
-         *     (studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from.
-         */
-        post: operations["make_summary_viewer_summary_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** AblateRequest */
-        AblateRequest: {
-            /** Heads */
-            heads?: [
-                number,
-                number
-            ][] | null;
-            /**
-             * Mode
-             * @default zero
-             * @enum {string}
-             */
-            mode: "mean" | "zero";
-            /** Text */
-            text: string;
-            /** Version */
-            version?: number | null;
-        };
         /**
          * Access
          * @description Who may call this node's API straight over the tailnet (studioConfig.cluster, docs/cluster.md, "ACL").
@@ -3457,104 +3101,6 @@ export interface components {
             allow_tags: string[];
             /** Allow Users */
             allow_users: string[];
-        };
-        /** ActionOut */
-        ActionOut: {
-            /** Answer */
-            answer?: unknown;
-            /** Scene */
-            scene: {
-                [key: string]: unknown;
-            };
-            state: components["schemas"]["ViewControls"];
-        };
-        /** ActionRequest */
-        ActionRequest: {
-            /** Action */
-            action: {
-                [key: string]: unknown;
-            };
-            /**
-             * Arrays
-             * @default inline
-             * @enum {string}
-             */
-            arrays: "inline" | "binary";
-            /** Cell */
-            cell?: number[];
-            /**
-             * Headstage
-             * @default pattern
-             * @enum {string}
-             */
-            headStage: "scores" | "scale" | "mask" | "pattern" | "values";
-            /**
-             * Level
-             * @default Model
-             * @enum {string}
-             */
-            level: "Model" | "Window" | "Head" | "Weights";
-            /**
-             * Mode
-             * @default Build
-             * @enum {string}
-             */
-            mode: "Build" | "Train" | "Ride a token";
-            /**
-             * Note
-             * @default
-             */
-            note: string;
-            /**
-             * Playing
-             * @default false
-             */
-            playing: boolean;
-            /**
-             * Probing
-             * @default false
-             */
-            probing: boolean;
-            /**
-             * Reduce Motion
-             * @default false
-             */
-            reduce_motion: boolean;
-            /** Selection */
-            selection?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Show Numbers
-             * @default true
-             */
-            show_numbers: boolean;
-            /** Since */
-            since?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Snapshot
-             * @default 0
-             */
-            snapshot: number;
-            /** Spec */
-            spec?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Thermal
-             * @default false
-             */
-            thermal: boolean;
-            /**
-             * Tilekind
-             * @default weight
-             * @enum {string}
-             */
-            tileKind: "weight" | "gradient" | "update";
-            /** Version */
-            version?: number | null;
         };
         /** AddRequest */
         AddRequest: {
@@ -3885,6 +3431,52 @@ export interface components {
             /** V */
             v: number;
         };
+        /** ContinueBody */
+        ContinueBody: {
+            /**
+             * Dataset Ids
+             * @description the text to continue on (new_data; grow, default the run's own)
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @description grow: fraction of the text held back
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Kind
+             * @description same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights
+             * @enum {string}
+             */
+            kind: "same" | "new_data" | "grow";
+            /** Layers */
+            layers?: number | null;
+            /**
+             * Rows
+             * @description grow: rows per step
+             * @default 16
+             */
+            rows: number;
+            /**
+             * Spec
+             * @description grow: the bigger design itself
+             */
+            spec?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Steps
+             * @description steps to add (same, new_data), or to train the grown design for (grow)
+             */
+            steps: number;
+            /**
+             * Width
+             * @description grow: the design's width (with layers), when no spec is given
+             */
+            width?: number | null;
+        };
         /** CorrectionRequest */
         CorrectionRequest: {
             /** Correction */
@@ -4057,6 +3649,18 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * Ended
+         * @description Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).
+         */
+        Ended: {
+            /** Reason */
+            reason: string;
+            /** Step */
+            step?: number | null;
+            /** Text */
+            text: string;
+        };
         /** EnoughText */
         EnoughText: {
             /** Headline */
@@ -4222,106 +3826,6 @@ export interface components {
              */
             step: number;
         };
-        /** ForwardRequest */
-        ForwardRequest: {
-            /**
-             * Hooks
-             * @default true
-             */
-            hooks: boolean;
-            /** Ids */
-            ids?: number[] | null;
-            /** Names */
-            names?: string[] | null;
-            /** Text */
-            text?: string | null;
-            /** Version */
-            version?: number | null;
-        };
-        /** FrameRequest */
-        FrameRequest: {
-            /**
-             * Arrays
-             * @default inline
-             * @enum {string}
-             */
-            arrays: "inline" | "binary";
-            /** Cell */
-            cell?: number[];
-            /**
-             * Headstage
-             * @default pattern
-             * @enum {string}
-             */
-            headStage: "scores" | "scale" | "mask" | "pattern" | "values";
-            /**
-             * Level
-             * @default Model
-             * @enum {string}
-             */
-            level: "Model" | "Window" | "Head" | "Weights";
-            /**
-             * Mode
-             * @default Build
-             * @enum {string}
-             */
-            mode: "Build" | "Train" | "Ride a token";
-            /**
-             * Note
-             * @default
-             */
-            note: string;
-            /**
-             * Playing
-             * @default false
-             */
-            playing: boolean;
-            /**
-             * Probing
-             * @default false
-             */
-            probing: boolean;
-            /**
-             * Reduce Motion
-             * @default false
-             */
-            reduce_motion: boolean;
-            /** Selection */
-            selection?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Show Numbers
-             * @default true
-             */
-            show_numbers: boolean;
-            /** Since */
-            since?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Snapshot
-             * @default 0
-             */
-            snapshot: number;
-            /** Spec */
-            spec?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Thermal
-             * @default false
-             */
-            thermal: boolean;
-            /**
-             * Tilekind
-             * @default weight
-             * @enum {string}
-             */
-            tileKind: "weight" | "gradient" | "update";
-            /** Version */
-            version?: number | null;
-        };
         /** FreeSpace */
         FreeSpace: {
             /** Bytes */
@@ -4388,27 +3892,6 @@ export interface components {
             /** Has Text */
             has_text: boolean;
         };
-        /** HeadStatsRequest */
-        HeadStatsRequest: {
-            /** Pattern */
-            pattern: unknown[];
-        };
-        /** HeadsOffRequest */
-        HeadsOffRequest: {
-            /**
-             * Mode
-             * @default mean
-             * @enum {string}
-             */
-            mode: "mean" | "zero";
-            /** Off */
-            off: [
-                number,
-                number
-            ][];
-            /** Version */
-            version?: number | null;
-        };
         /** Hold */
         Hold: {
             /**
@@ -4455,11 +3938,6 @@ export interface components {
             /** Size */
             size: number;
         };
-        /** Inspect */
-        Inspect: {
-            /** Version */
-            version?: number | null;
-        };
         /** Job */
         Job: {
             /**
@@ -4503,6 +3981,11 @@ export interface components {
              * @default 0
              */
             created_at: number;
+            /**
+             * Details
+             * @default
+             */
+            details: string;
             /**
              * Epoch
              * @default 0
@@ -4632,53 +4115,23 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** JudgesOut */
+        JudgesOut: {
+            /** Error */
+            error?: string | null;
+            /** Models */
+            models: string[];
+            /** Selected */
+            selected: string;
+            /** Url */
+            url: string;
+        };
         /** Knobs */
         Knobs: {
             /** H */
             H: boolean;
             /** W */
             W: boolean;
-        };
-        /**
-         * LandscapeRequest
-         * @description What to draw: the loss over a plane of weights. `live` asks for the cheap frame a training run can afford between steps.
-         */
-        LandscapeRequest: {
-            /**
-             * Grid
-             * @default 21
-             */
-            grid: number;
-            /**
-             * Live
-             * @default false
-             */
-            live: boolean;
-            /**
-             * Mode
-             * @default random
-             * @enum {string}
-             */
-            mode: "random" | "pca";
-            /**
-             * New Anchor
-             * @default false
-             */
-            new_anchor: boolean;
-            /**
-             * Seed
-             * @default 0
-             */
-            seed: number;
-            /** Snapshot */
-            snapshot?: number | null;
-            /**
-             * Span
-             * @default 1
-             */
-            span: number;
-            /** Version */
-            version?: number | null;
         };
         /**
          * Lane
@@ -4756,6 +4209,36 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** Leftover */
+        Leftover: {
+            /**
+             * Belongs To
+             * @description the job it came from, or why nothing needs it
+             */
+            belongs_to: string;
+            /**
+             * Bytes
+             * @description what removing it frees
+             */
+            bytes: number;
+            /**
+             * Id
+             * @description what to send back to remove it; a path under the workspace
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "interrupted" | "failed" | "snapshot";
+            /** Name */
+            name: string;
+            /**
+             * Shared
+             * @description bytes it holds that other runs still link to (not freed)
+             */
+            shared: number;
+        };
         /** LessonChange */
         LessonChange: {
             /**
@@ -4780,32 +4263,223 @@ export interface components {
             /** Path */
             path?: string | null;
         };
-        /** LogitLensRequest */
-        LogitLensRequest: {
-            /** Text */
-            text: string;
+        /** LoopCheckOut */
+        LoopCheckOut: {
             /**
-             * Top K
-             * @default 5
+             * Detail
+             * @default
              */
-            top_k: number;
+            detail: string;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok?: boolean | null;
+        };
+        /**
+         * LoopConfigIn
+         * @description The loop's settings (studio_loop.DEFAULTS); a field left out keeps the default. The first four are the stop rules.
+         */
+        LoopConfigIn: {
+            /** Audit Flags */
+            audit_flags?: number | null;
+            /** Beta */
+            beta?: number | null;
+            /** Candidates */
+            candidates?: number | null;
+            /** Dpo Steps */
+            dpo_steps?: number | null;
+            /** Loss Type */
+            loss_type?: ("dpo" | "ipo") | null;
+            /** Max Hours */
+            max_hours?: number | null;
+            /** Max Length Ratio */
+            max_length_ratio?: number | null;
+            /** Max Rounds */
+            max_rounds?: number | null;
+            /** Patience */
+            patience?: number | null;
+            /** Prompts Per Round */
+            prompts_per_round?: number | null;
+        };
+        /**
+         * LoopOut
+         * @description studio_loop.summary: one loop, on disk and live.
+         */
+        LoopOut: {
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /**
+             * Anchor
+             * @default
+             */
+            anchor: string;
+            /** Anchor Eval */
+            anchor_eval?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Audit Flagged
+             * @default 0
+             */
+            audit_flagged: number;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Created */
+            created?: string | null;
+            /**
+             * Current
+             * @default
+             */
+            current: string;
+            /** Current Eval */
+            current_eval?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Elapsed S
+             * @default 0
+             */
+            elapsed_s: number;
+            /**
+             * Failed Streak
+             * @default 0
+             */
+            failed_streak: number;
+            /** Id */
+            id: string;
+            /**
+             * Kept
+             * @default 0
+             */
+            kept: number;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            /**
+             * Round
+             * @default 1
+             */
+            round: number;
+            /** Rounds */
+            rounds?: components["schemas"]["LoopRoundOut"][];
+            /**
+             * Status
+             * @default running
+             */
+            status: string;
+            /**
+             * Stop Reason
+             * @default
+             */
+            stop_reason: string;
+            /** Updated */
+            updated?: string | null;
             /** Version */
             version?: number | null;
+        } & {
+            [key: string]: unknown;
         };
-        /** LossRequest */
-        LossRequest: {
+        /** LoopQueued */
+        LoopQueued: {
+            /** Job */
+            job: string;
+            /** Label */
+            label: string;
+            /** Loop Id */
+            loop_id: string;
+        };
+        /**
+         * LoopRoundOut
+         * @description One finished round of a loop: the journal line, with all the evidence.
+         */
+        LoopRoundOut: {
+            /** After */
+            after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Audit */
+            audit?: {
+                [key: string]: unknown;
+            } | null;
             /**
-             * Pos
-             * @default -1
+             * Audit Flag
+             * @default false
              */
-            pos: number;
-            /** Text */
-            text: string;
+            audit_flag: boolean;
+            /** Before */
+            before?: {
+                [key: string]: unknown;
+            } | null;
+            /** Checkpoint */
+            checkpoint?: string | null;
+            /** Checks */
+            checks?: components["schemas"]["LoopCheckOut"][];
+            /** Dpo */
+            dpo?: {
+                [key: string]: unknown;
+            } | null;
             /**
-             * Trained
-             * @default true
+             * Finished
+             * @default
              */
-            trained: boolean;
+            finished: string;
+            /** Judge */
+            judge?: {
+                [key: string]: unknown;
+            } | null;
+            /** Length Ratio */
+            length_ratio?: number | null;
+            /**
+             * Node
+             * @default
+             */
+            node: string;
+            /** Pairs */
+            pairs?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Round */
+            round: number;
+            /**
+             * Seconds
+             * @default 0
+             */
+            seconds: number;
+            /**
+             * Started
+             * @default
+             */
+            started: string;
+            /** Status */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** LoopStart */
+        LoopStart: {
+            /** @default {} */
+            config: components["schemas"]["LoopConfigIn"];
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Resume */
+            resume?: string | null;
             /** Version */
             version?: number | null;
         };
@@ -4873,7 +4547,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "finished";
+            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "unplaced" | "never_joined" | "finished";
             /** Step In Round */
             step_in_round: number;
             /** Steps */
@@ -5538,6 +5212,8 @@ export interface components {
              * @default 2
              */
             passes: number;
+            /** Plateau */
+            plateau?: boolean | null;
             /**
              * Preview Rows
              * @default 6
@@ -5576,6 +5252,23 @@ export interface components {
             steps?: number | null;
             /** Variant */
             variant: number;
+        };
+        /**
+         * PlateauRule
+         * @description studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.
+         */
+        PlateauRule: {
+            /** Min Gain */
+            min_gain: number;
+            /**
+             * Min Steps
+             * @default 0
+             */
+            min_steps: number;
+            /** Window Seconds */
+            window_seconds?: number | null;
+            /** Window Steps */
+            window_steps?: number | null;
         };
         /** PostTrainingJobOut */
         PostTrainingJobOut: {
@@ -5723,6 +5416,12 @@ export interface components {
             pieces?: number | null;
             /** Pieces Per Step */
             pieces_per_step: number;
+            plateau?: components["schemas"]["PlateauRule"] | null;
+            /**
+             * Plateau Line
+             * @default
+             */
+            plateau_line: string;
             /**
              * Reason
              * @default
@@ -5800,16 +5499,6 @@ export interface components {
              * @default 16
              */
             rows: number;
-        };
-        /** ProbeRequest */
-        ProbeRequest: {
-            /**
-             * Text
-             * @default The cat sat on the mat because it was tired.
-             */
-            text: string;
-            /** Version */
-            version?: number | null;
         };
         /** ProblemRule */
         ProblemRule: {
@@ -6058,6 +5747,11 @@ export interface components {
             blocked?: string | null;
             /** Eta S */
             eta_s?: number | null;
+            /**
+             * Failed
+             * @default []
+             */
+            failed: components["schemas"]["JobModel"][];
             /**
              * @default {
              *       "supported": true
@@ -6348,17 +6042,6 @@ export interface components {
             /** Suggestion */
             suggestion?: number | null;
         };
-        /** RankRequest */
-        RankRequest: {
-            /**
-             * Mode
-             * @default mean
-             * @enum {string}
-             */
-            mode: "mean" | "zero";
-            /** Version */
-            version?: number | null;
-        };
         /** RebuiltJob */
         RebuiltJob: {
             /** Created At */
@@ -6420,6 +6103,11 @@ export interface components {
             /** Address */
             address: string;
         };
+        /** RemoveLeftovers */
+        RemoveLeftovers: {
+            /** Ids */
+            ids: string[];
+        };
         /** Renewal */
         Renewal: {
             checkpoint?: components["schemas"]["Checkpoint"] | null;
@@ -6469,6 +6157,18 @@ export interface components {
         Reply: {
             /** Reply */
             reply: string;
+            /** Version */
+            version?: number | null;
+        };
+        /** ReplyRequest */
+        ReplyRequest: {
+            /** Ablate */
+            ablate?: [
+                number,
+                number
+            ][] | null;
+            /** Messages */
+            messages: components["schemas"]["Message"][];
             /** Version */
             version?: number | null;
         };
@@ -6791,6 +6491,7 @@ export interface components {
             /** Chat Version */
             chat_version?: number | null;
             curve: components["schemas"]["CurveModel"];
+            ended?: components["schemas"]["Ended"] | null;
             /** Gate Vs */
             gate_vs?: number | null;
             /** Job Id */
@@ -6967,13 +6668,6 @@ export interface components {
             /** Tip */
             tip: string;
         };
-        /** SnapshotOut */
-        SnapshotOut: {
-            /** Index */
-            index: number;
-            /** Name */
-            name: string;
-        };
         /**
          * Source
          * @description One recommended download.
@@ -7098,13 +6792,6 @@ export interface components {
             unit: "minutes" | "hours" | "days";
             /** Version */
             version?: number | null;
-        };
-        /** StartRequest */
-        StartRequest: {
-            /** Level */
-            level?: string | null;
-            /** Mode */
-            mode?: string | null;
         };
         /**
          * StartRun
@@ -7464,18 +7151,6 @@ export interface components {
             blocks: components["schemas"]["Block"][];
             knobs: components["schemas"]["Knobs"];
         };
-        /** TraceRequest */
-        TraceRequest: {
-            /**
-             * Pos
-             * @default -1
-             */
-            pos: number;
-            /** Text */
-            text: string;
-            /** Version */
-            version?: number | null;
-        };
         /** Tried */
         Tried: {
             /** @description the current version's choices with that one change; null when it cannot be tried */
@@ -7521,23 +7196,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-        };
-        /** ValueMapRequest */
-        ValueMapRequest: {
-            /**
-             * Block
-             * @default 0
-             */
-            block: number;
-            /**
-             * Head
-             * @default 0
-             */
-            head: number;
-            /** Heads */
-            heads: number;
-            /** Version */
-            version?: number | null;
         };
         /** Verdict */
         Verdict: {
@@ -7654,113 +7312,6 @@ export interface components {
             /** Version */
             version?: number | null;
         };
-        /**
-         * ViewControls
-         * @description Everything the viewer keeps between frames. The first five are web/src/lib/viewer.ts's SceneQuery.
-         */
-        ViewControls: {
-            /** Cell */
-            cell?: number[];
-            /**
-             * Headstage
-             * @default pattern
-             * @enum {string}
-             */
-            headStage: "scores" | "scale" | "mask" | "pattern" | "values";
-            /**
-             * Level
-             * @default Model
-             * @enum {string}
-             */
-            level: "Model" | "Window" | "Head" | "Weights";
-            /**
-             * Mode
-             * @default Build
-             * @enum {string}
-             */
-            mode: "Build" | "Train" | "Ride a token";
-            /**
-             * Note
-             * @default
-             */
-            note: string;
-            /**
-             * Playing
-             * @default false
-             */
-            playing: boolean;
-            /**
-             * Probing
-             * @default false
-             */
-            probing: boolean;
-            /**
-             * Reduce Motion
-             * @default false
-             */
-            reduce_motion: boolean;
-            /** Selection */
-            selection?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Show Numbers
-             * @default true
-             */
-            show_numbers: boolean;
-            /**
-             * Snapshot
-             * @default 0
-             */
-            snapshot: number;
-            /** Spec */
-            spec?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Thermal
-             * @default false
-             */
-            thermal: boolean;
-            /**
-             * Tilekind
-             * @default weight
-             * @enum {string}
-             */
-            tileKind: "weight" | "gradient" | "update";
-            /** Version */
-            version?: number | null;
-        };
-        /** ViewerStatus */
-        ViewerStatus: {
-            /** Available */
-            available: boolean;
-            /** Connected */
-            connected: boolean;
-            /** Running */
-            running: boolean;
-        };
-        /** ViewerSummaryRequest */
-        ViewerSummaryRequest: {
-            /** Version */
-            version?: number | null;
-        };
-        /** ViewerSummaryStatus */
-        ViewerSummaryStatus: {
-            /** Bins */
-            bins?: number | null;
-            /** N Ctx */
-            n_ctx?: number | null;
-            /** Note */
-            note: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "ready" | "stale" | "none" | "no_checkpoint";
-            /** Step */
-            step?: number | null;
-        };
         /** Warm */
         Warm: {
             /** Carries */
@@ -7867,18 +7418,6 @@ export interface components {
             /** Status */
             status: string;
         };
-        /** ReplyRequest */
-        studio_api__routers__chat__ReplyRequest: {
-            /** Ablate */
-            ablate?: [
-                number,
-                number
-            ][] | null;
-            /** Messages */
-            messages: components["schemas"]["Message"][];
-            /** Version */
-            version?: number | null;
-        };
         /** Accepted */
         studio_api__routers__cluster__Accepted: {
             /** Epoch */
@@ -7917,24 +7456,6 @@ export interface components {
             t: number;
             /** Tokens Per Second */
             tokens_per_second: number | null;
-        };
-        /** ReplyRequest */
-        studio_api__routers__inspect__ReplyRequest: {
-            /**
-             * Mode
-             * @default mean
-             * @enum {string}
-             */
-            mode: "mean" | "zero";
-            /** Off */
-            off: [
-                number,
-                number
-            ][];
-            /** Prompt */
-            prompt: string;
-            /** Version */
-            version?: number | null;
         };
         /**
          * GateModel
@@ -8295,7 +7816,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["studio_api__routers__chat__ReplyRequest"];
+                "application/json": components["schemas"]["ReplyRequest"];
             };
         };
         responses: {
@@ -8942,6 +8463,41 @@ export interface operations {
         };
     };
     validation_collective__run__validation_get: {
+        parameters: {
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    weights_collective__run__weights_get: {
         parameters: {
             query: {
                 /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
@@ -10370,369 +9926,6 @@ export interface operations {
             };
         };
     };
-    ablate_inspect_ablate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AblateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    forward_inspect_forward_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ForwardRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    head_stats_inspect_head_stats_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HeadStatsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    heads_off_inspect_heads_off_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HeadsOffRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    logit_lens_inspect_logit_lens_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LogitLensRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    loss_inspect_loss_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LossRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    prepared_inspect_prepared_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Inspect"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    rank_heads_inspect_rank_heads_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RankRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reply_inspect_reply_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["studio_api__routers__inspect__ReplyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trace_inspect_trace_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TraceRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    value_map_inspect_value_map_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ValueMapRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_jobs_jobs_get: {
         parameters: {
             query?: never;
@@ -11202,6 +10395,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    judges_post_training_judges_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgesOut"];
+                };
+            };
+        };
+    };
+    loops_post_training_loops_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopOut"][];
+                };
+            };
+        };
+    };
+    start_loop_post_training_loops_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopQueued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adopt_loop_post_training_loops__loop_id__adopt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loop_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_loop_post_training_loops__loop_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loop_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -12470,6 +11798,59 @@ export interface operations {
             };
         };
     };
+    leftovers_storage_leftovers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Leftover"][];
+                };
+            };
+        };
+    };
+    remove_leftovers_storage_leftovers_remove_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveLeftovers"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageUse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     traffic_traffic_get: {
         parameters: {
             query?: {
@@ -12719,6 +12100,41 @@ export interface operations {
             };
         };
     };
+    continue_version_versions__number__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_version_versions__number__export_get: {
         parameters: {
             query: {
@@ -12923,463 +12339,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SharedVersion"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    action_viewer_action_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ActionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ActionOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    binary_viewer_binary_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FrameRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    frame_viewer_frame_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FrameRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    landscape_viewer_landscape_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["LandscapeRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    manifest_viewer_manifest_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FrameRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    poll_viewer_poll_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    probe_viewer_probe_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["ProbeRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    scene_viewer_scene_get: {
-        parameters: {
-            query?: {
-                arrays?: "inline" | "binary";
-                version?: number | null;
-                level?: "Model" | "Window" | "Head" | "Weights";
-                mode?: "Build" | "Train" | "Ride a token";
-                headStage?: "scores" | "scale" | "mask" | "pattern" | "values";
-                tileKind?: "weight" | "gradient" | "update";
-                snapshot?: number;
-                thermal?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    send_viewer_send_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    snapshots_viewer_snapshots_get: {
-        parameters: {
-            query?: {
-                version?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SnapshotOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_viewer_start_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["StartRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewerStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    status_viewer_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewerStatus"];
-                };
-            };
-        };
-    };
-    stop_viewer_stop_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewerStatus"];
-                };
-            };
-        };
-    };
-    summary_viewer_summary_get: {
-        parameters: {
-            query?: {
-                version?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewerSummaryStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    make_summary_viewer_summary_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["ViewerSummaryRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
                 };
             };
             /** @description Validation Error */

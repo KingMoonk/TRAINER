@@ -7,6 +7,7 @@ from there. This module keeps who was invited and what came of it, and merges th
 """
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
@@ -18,6 +19,7 @@ from studio_peer import PeerClient, PeerError
 
 KEPT = 20  # runs remembered, newest last
 RESTARTED = "The app restarted while this run was going, so it was stopped."
+LOST = "Ended: this machine restarted at round {round}; outer state for that round was not saved."
 INVITE_TIMEOUT = 5.  # seconds a peer has to take its member job
 ACTIVE = ("queued", "starting", "waiting", "running")
 UNPLACED = "It was busy when the run was placed. It joins a later round if it is free by then."
@@ -41,6 +43,7 @@ class Machine:
     state: str = "invited"  # invited | unplaced (the scheduler did not give it a slot: busy, or past max_members) | unreachable
     reason: str = ""
     peer_job: str = ""  # the member job's id on that machine's queue
+    stale_job: str = ""  # a member job of the coordinator from before a restart, on that machine's queue until release_stale takes it off
 
     @property
     def local(self):
@@ -207,6 +210,77 @@ def load(root):
             del RUNS[key]
 
 
+# ---- a restart --------------------------------------------------------------------------------------------------------
+
+def saved_round(directory):
+    """How many rounds the run's folder holds the outer weights and momentum of (diloco.json and the state file it names), or None when
+    it holds none that read."""
+    if not directory:
+        return None
+    try:
+        folder = Path(directory)
+        record = json.loads((folder / "diloco.json").read_text(encoding="utf-8"))
+        if not (folder / record["state_file"]).is_file():
+            return None
+        return int(record["round"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def recover(job):
+    """What a restart does to a distributed run this node owns that was going (studio_queue.Runner._load): "" when it is to resume, else
+    the sentence it ends with. A run resumes from the last round it completed (`prepare` builds its coordinator from the outer state in
+    its folder); it is placed again against the machines chosen at launch, not the gang it held, and every member is invited again. A run
+    that had finished rounds but kept no outer state cannot resume; one that had finished none just starts again."""
+    p = job.params
+    run = RUNS.get(job.id)
+    reached = int(((run.final if run is not None else None) or {}).get("round") or 0)
+    saved = saved_round(p.get("output_dir"))
+    if saved is None and reached:
+        return LOST.format(round=reached)
+    p.pop("gang", None)
+    p["resuming"] = {"round": saved or 0}
+    if run is not None:
+        old = {m.node: m.peer_job for m in run.machines if not m.local and m.peer_job}
+        run.machines = machines_of(p.get("machines", []))
+        for machine in run.machines:
+            machine.stale_job = old.get(machine.node, "")
+        persist()
+    return ""
+
+
+def resume_note(job):
+    """What the tab says of a run waiting to resume after a restart."""
+    resuming = job.params.get("resuming")
+    if not resuming:
+        return ""
+    where = f"Resuming from round {resuming['round']}" if resuming["round"] else "Starting again"
+    return f"{where} after this machine restarted. It continues once the machines it was started on are free."
+
+
+def resumed(job):
+    """The coordinator of a resuming run is built: something drives it again."""
+    job.params.pop("resuming", None)
+    run = RUNS.get(job.id)
+    if run is not None:
+        run.restarted = False
+
+
+def release_stale(job, client_for=PeerClient):
+    """Take the member jobs of a run's old coordinator off the machines' queues, so those machines can be placed again. Best effort: a
+    machine that cannot be reached ends its member by itself when the coordinator does not answer."""
+    run = RUNS.get(job.id)
+    stale = [m for m in run.machines if m.stale_job] if run is not None else []
+    for machine in stale:
+        peer_job, machine.stale_job = machine.stale_job, ""
+        try:
+            client_for(machine.address, timeout=INVITE_TIMEOUT, retries=0).delete_json(f"/queue/jobs/{peer_job}")
+        except Exception:  # noqa: BLE001 - it may be gone already
+            pass
+    if stale:
+        persist()
+
+
 # ---- inviting ---------------------------------------------------------------------------------------------------------
 
 def refusal(machine, exc):
@@ -222,6 +296,11 @@ def loopback(address):
     from urllib.parse import urlsplit
     host = urlsplit(address if "://" in address else f"//{address}").hostname or ""
     return host in ("localhost", "127.0.0.1", "::1")
+
+
+def across_label(version, count):
+    """The run's name: "Version 3 across 2 machines"."""
+    return f"Version {version} across {count} machine{'s' if count != 1 else ''}"
 
 
 def invite(job, client_for=PeerClient, only=None):
@@ -256,6 +335,10 @@ def invite(job, client_for=PeerClient, only=None):
     if todo:
         with ThreadPoolExecutor(max_workers=len(todo)) as pool:
             list(pool.map(ask, todo))
+        if gang is not None and run.version is not None:  # the name counts the machines that took a slot, not the ones chosen
+            taking = sum(1 for m in run.machines if m.local or m.state == "invited")
+            if taking != len(run.machines):
+                run.label = job.label = across_label(run.version, taking)
         persist()  # who answered
 
 
@@ -302,6 +385,17 @@ def member_stats(history, node):
     return out
 
 
+def left_after_finish(snap, node):
+    """Whether `node` left the run only after the run had finished (the coordinator's own member does, once the last round is done):
+    its `left` event comes after the run's `finished` event."""
+    events = (snap or {}).get("events", [])
+    finished = [e["seq"] for e in events if e["kind"] == "finished"]
+    return bool(finished) and any(e["kind"] == "left" and e["node"] == node and e["seq"] > finished[0] for e in events)
+
+
+NEVER_JOINED = "It was invited but never joined the run."
+
+
 def member_rows(run, snap, ended):
     """One row per machine chosen, then any other node the coordinator knows. A machine the coordinator has not heard from yet is
     `invited` (or, for this computer, starting) until it joins."""
@@ -310,9 +404,9 @@ def member_rows(run, snap, ended):
     rows = []
     for machine in run.machines:
         known = nodes.get(machine.node)
-        rows.append(_member(machine.node, machine, known, history, ended))
+        rows.append(_member(machine.node, machine, known, history, ended, snap))
     chosen = {m.node for m in run.machines}
-    rows.extend(_member(node, None, known, history, ended) for node, known in nodes.items() if node not in chosen)
+    rows.extend(_member(node, None, known, history, ended, snap) for node, known in nodes.items() if node not in chosen)
     return rows
 
 
@@ -338,7 +432,7 @@ def phase_of(snap, state):
     return (snap or {}).get("phase") or "waiting"
 
 
-def _member(node, machine, known, history, ended):
+def _member(node, machine, known, history, ended, snap=None):
     local = machine is not None and machine.local
     row = {"node": node, "address": machine.address if machine else "", "local": local, "device": machine.device if machine else "",
            "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, **member_stats(history, node),
@@ -349,6 +443,11 @@ def _member(node, machine, known, history, ended):
         state, note, row["missed"], row["sent"] = known["state"], known["note"], known["missed"], known["sent"]
         if ended and state in ("training", "behind", "joining"):
             state = "finished" if ended == "finished" else "stopped"
+        elif ended == "finished" and state == "left" and left_after_finish(snap, node):
+            state, note = "finished", ""  # it left because the run was over, not because anything went wrong
+    elif ended and machine is not None and not local:
+        # never heard from, so it never joined: keep why (no slot, or invited and silent) instead of calling it finished
+        state, note = ("unplaced", machine.reason) if machine.state == "unplaced" else ("never_joined", NEVER_JOINED)
     elif ended:
         state, note = ("finished" if ended == "finished" else "stopped"), ""
     elif machine is not None and machine.state == "unplaced":
@@ -371,7 +470,7 @@ def view(run, coordinator, job):
         if state in ("running", "waiting") and coordinator is None:
             state = "stopped"  # a snapshot of a coordinator that was let go while it still ran
             if run.restarted:  # or one that went with the app: stopped, unless the queue still holds the job and resumes it
-                state, note = ("queued", "") if job is not None and job.status in ("waiting", "held") else ("stopped", RESTARTED)
+                state, note = ("queued", resume_note(job)) if job is not None and job.status in ("waiting", "held") else ("stopped", RESTARTED)
     elif run.stopped or job is None or job.status in ("stopped", "done"):
         state = "stopped"
         note = "" if run.stopped else "The app no longer holds this run."

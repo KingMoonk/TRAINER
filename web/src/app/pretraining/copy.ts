@@ -56,6 +56,8 @@ export const T = {
   scheduleNote: "· a short cool-down makes each checkpoint",
   scheduleDesc:
     "A steady schedule means training can keep going for as long as you like, and runs of different lengths stay comparable at any point.",
+  stopFlat: "Stop when it stops improving",
+  stopFlatHint: "Auto turns this on for runs over an hour. The run keeps its best checkpoint and says why it ended.",
   sizingTitle: "Is it worth the time?",
   sizingDesc: "Whether this model suits this much text, what the run costs on this computer, and what would fit the time you can give.",
   hoursLabel: "Time you can give",

@@ -113,7 +113,7 @@ export default function Page() {
     try {
       await postStream(
         "/chat/reply",
-        { version, messages } satisfies components["schemas"]["studio_api__routers__chat__ReplyRequest"],
+        { version, messages } satisfies components["schemas"]["ReplyRequest"],
         (event) => {
           if (controllers.current[i] !== ctl) return;
           const payload = (event.payload ?? {}) as { text?: string; message?: string };

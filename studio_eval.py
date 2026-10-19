@@ -317,25 +317,34 @@ def few_shot_prompt(item, examples=()):
     return "\n\n".join(parts + [f"{item['question']}\nAnswer:"])
 
 
-def few_shot_table(items, encode, context, logprob, shots=SHOTS, seed=0, pool=None):
+NORMS = ("piece", "char")  # per piece (GPT-3's per-token), or per character of the option text (HellaSwag's acc_norm: comparable across tokenizers)
+
+
+def few_shot_table(items, encode, context, logprob, shots=SHOTS, seed=0, pool=None, norm="piece"):
     """Multiple-choice accuracy with 0, 1 and k worked examples in the prompt and no training (GPT-3, Brown et al. 2020).
 
     encode(text) -> token ids; logprob([(prompt_ids, continuation_ids)]) -> summed log-probability of each continuation.
     Worked examples come from `pool` (default: items) with the same task, never the question itself; one seeded draw per
     item, so the k-shot prompt extends the 1-shot one. The oldest examples drop out until prompt and answer fit `context`.
-    The pick is the choice with the highest log-probability per piece; chance is what guessing scores (mean 1 / choices).
-    Returns {"items", "chance", "rows": [{"shots", "used" (mean examples that fitted), "correct", "accuracy"}]}.
+    The pick is the choice with the highest log-probability per piece (norm "piece") or per character of the option ("char":
+    the length is the option text, so the pick does not depend on how the tokenizer cuts it, and two tokenizers are
+    comparable); chance is what guessing scores (mean 1 / choices). Summed log-probability would favour the shortest option.
+    Returns {"items", "chance", "rows": [{"shots", "used" (mean examples that fitted), "correct", "accuracy",
+    "hits" (1 or 0 per item, in order, for paired_hits)}]}.
     """
+    if norm not in NORMS:
+        raise ValueError(f"norm is one of {NORMS}.")
     items = list(items)
     if not items:
         return {"items": 0, "chance": None, "rows": []}
     by_task = {}
     for p in items if pool is None else pool:
         by_task.setdefault(p["task"], []).append(p)
-    rng, most = random.Random(seed), max(shots)
+    most = max(shots)
     pairs, plan = [], []  # plan: (shot column, item, examples that fitted, index of its first choice in pairs)
     for item in items:
         others = [p for p in by_task.get(item["task"], []) if p["question"] != item["question"]]
+        rng = random.Random(f"{seed}:{item['question']}")  # one draw per question, so leaving another question out never changes it
         drawn = rng.sample(others, min(most, len(others)))
         answers = [encode(" " + c) for c in item["choices"]]
         for column, n in enumerate(shots):
@@ -347,13 +356,16 @@ def few_shot_table(items, encode, context, logprob, shots=SHOTS, seed=0, pool=No
             plan.append((column, item, len(examples), len(pairs)))
             pairs += [(prompt, a) for a in answers]
     scores = logprob(pairs)
-    correct, used = [0] * len(shots), [0] * len(shots)
+    correct, used, hits = [0] * len(shots), [0] * len(shots), [[] for _ in shots]
     for column, item, n, first in plan:
-        per_piece = [scores[first + i] / max(1, len(pairs[first + i][1])) for i in range(len(item["choices"]))]
-        correct[column] += per_piece.index(max(per_piece)) == item["answer"]
+        length = (lambda i: max(1, len(item["choices"][i]))) if norm == "char" else (lambda i: max(1, len(pairs[first + i][1])))
+        per_unit = [scores[first + i] / length(i) for i in range(len(item["choices"]))]
+        hit = per_unit.index(max(per_unit)) == item["answer"]
+        correct[column] += hit
+        hits[column].append(int(hit))
         used[column] += n
     return {"items": len(items), "chance": sum(1 / len(i["choices"]) for i in items) / len(items),
-            "rows": [{"shots": n, "used": used[c] / len(items), "correct": correct[c], "accuracy": correct[c] / len(items)}
+            "rows": [{"shots": n, "used": used[c] / len(items), "correct": correct[c], "accuracy": correct[c] / len(items), "hits": hits[c]}
                      for c, n in enumerate(shots)]}
 
 
@@ -379,9 +391,54 @@ def _continuation_logprobs(local, pairs):
 
 
 @slow("run few-shot checks")
-def few_shot(model, items, shots=SHOTS, seed=0, pool=None):
+def few_shot(model, items, shots=SHOTS, seed=0, pool=None, norm="piece"):
     """few_shot_table scored by a checkpoint path or LocalModel."""
     from studio_model import LocalModel
     local = model if isinstance(model, LocalModel) else LocalModel(model, device="cpu")
     return few_shot_table(items, lambda text: _ids(local.tokenizer, text).tolist(), local.config["context"],
-                          lambda pairs: _continuation_logprobs(local, pairs), shots, seed, pool)
+                          lambda pairs: _continuation_logprobs(local, pairs), shots, seed, pool, norm)
+
+
+def accuracy_band(hits, confidence=.95):
+    """(lo, hi) Wilson interval of the share of 1s in `hits` (a count of right answers over items). It is wide for few items on
+    purpose: 40 questions cannot tell 45% from 55%. (nan, nan) without items."""
+    n = len(hits)
+    if not n:
+        return float("nan"), float("nan")
+    z = float(np.sqrt(2) * _erfinv(confidence))
+    p = sum(hits) / n
+    centre, spread = (p + z * z / (2 * n)) / (1 + z * z / n), z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return max(0., centre - spread), min(1., centre + spread)
+
+
+def _erfinv(p):
+    """erf^-1(p) by Newton steps on math.erf (accurate enough for an interval's width)."""
+    x = 0.
+    for _ in range(40):
+        x -= (math.erf(x) - p) / (2 / math.sqrt(math.pi) * math.exp(-x * x))
+    return x
+
+
+def paired_hits(parent, candidate, resamples=1000, seed=0, confidence=.95):
+    """Is the candidate answering more of the same items right than the parent? {diff, lower, better, items} (plus reason).
+
+    parent and candidate are 1/0 per item for the same items in the same order. Items are resampled with the same indices for
+    both, so how hard each item is cancels. diff is candidate minus parent in accuracy; lower is the lower end of a one-sided
+    `confidence` interval of it, and the candidate is better only when lower is above 0. Fewer than MIN_DOCS items is never better
+    (reason "few_items"). The same caveat as paired_gain: one look per pair; it covers the choice of items, not seed variance."""
+    p, c = np.asarray(parent, dtype=np.float64), np.asarray(candidate, dtype=np.float64)
+    if p.shape != c.shape or p.ndim != 1:
+        raise ValueError("Both versions must be scored on the same items.")
+    n = len(p)
+    if not n:
+        return {"diff": float("nan"), "lower": float("nan"), "better": False, "items": 0}
+    delta = c - p
+    if n < MIN_DOCS:
+        return {"diff": float(delta.mean()), "lower": float("nan"), "better": False, "items": n, "reason": "few_items"}
+    rng = np.random.default_rng(seed)
+    diffs, step = np.empty(resamples), max(1, BOOTSTRAP_ELEMENTS // n)
+    for first in range(0, resamples, step):
+        picks = rng.integers(0, n, (min(step, resamples - first), n))
+        diffs[first:first + len(picks)] = delta[picks].mean(1)
+    lower = float(np.percentile(diffs, 100 * (1 - confidence)))
+    return {"diff": float(delta.mean()), "lower": lower, "better": lower > 0, "items": n}

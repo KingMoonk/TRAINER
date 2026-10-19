@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, initialForm, isActive, lossSeries, memberDevice, needsReason, reasonText, speedText, startBody, toggled, trafficSeries, trouble,
+  bytesText, deltaText, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { member as build, round, run } from "./test-data";
@@ -87,6 +87,18 @@ describe("a member that is out", () => {
     expect(reasonText(member({ state: "dropped" }))).toMatch(/Dropped/);
     expect(reasonText(member({ state: "behind" }))).toMatch(/Late/);
     expect(reasonText(member({ state: "unreachable" }))).toMatch(/could not be reached/i);
+  });
+
+  test("a machine that never joined shows its reason but is not a problem; one that left at the finish is not either", () => {
+    for (const state of ["unplaced", "never_joined"] as const) {
+      expect(needsReason(member({ state }))).toBe(true);
+      expect(isProblem(member({ state }))).toBe(false);
+      expect(neverJoined(member({ state }))).toBe(true);
+    }
+    expect(reasonText(member({ state: "unplaced", note: "It was busy." }))).toBe("It was busy.");
+    expect(reasonText(member({ state: "never_joined" }))).toMatch(/never joined/i);
+    expect(needsReason(member({ state: "finished", note: "" }))).toBe(false);
+    expect(isProblem(member({ state: "left", note: "Left the run." }))).toBe(true);
   });
 
   test("trouble lists them", () => {

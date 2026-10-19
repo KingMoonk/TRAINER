@@ -339,6 +339,23 @@ job rebuilds the coordinator from `diloco.json`).
 it survives the loss of any `R` of those `R + 1` nodes without the bucket. Only the latest round is kept; runs are
 experiments and there is no round history to restore.
 
+### The owner restarting (#479)
+
+The coordinator runs in the owner's API process, so a restart (a dev `--reload` included) takes it away. Its outer weights and momentum are
+already written at every round boundary (`diloco.json` and the state file it names), so nothing about it lives only in memory. At start
+`Runner._load` hands a `pretrain_distributed` job that was running to `studio_distributed.recover`:
+
+- **resume**: the folder holds the state of round N. The job goes back to `waiting` with `params["resuming"]`, its stale `gang` is dropped,
+  and placement runs again against the machines chosen at launch (`params["machines"]`), after the old members' jobs are taken off those
+  machines' queues (`release_stale`). `studio_diloco.prepare` builds the coordinator from the folder (round N+1 next, same outer state) and
+  invites the members again through the usual path. The tab shows the run as queued with a note until then.
+- **end**: rounds were finished but no outer state reads. The job ends `failed` with "Ended: this machine restarted at round N; outer state
+  for that round was not saved." A run that finished no round starts again. If the folder no longer matches (other data or seed), the job ends
+  saying the run could not be resumed.
+
+A member whose coordinator is gone (no answer for its `patience`, or the coordinator's app answers that it no longer has the run) ends its
+job with a sentence saying so; invited again, it joins the resumed coordinator like a new member.
+
 ### Terms and coordinator failover (#359, #360, #361, #362)
 
 A run has a **term**, starting at 1, that orders its coordinators the way the lease epoch orders a job's runners. A
@@ -382,10 +399,15 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
 - A coordinator steps down when a call carries a higher term or the store holds a claim that outranks its own: it drops
   its `theta`, archives its folder and publishes `{"released": true}`. A returning coordinator does this on its first poll.
 - Members run in worker processes. The app writes `data/diloco_where/<run>.json` (node and URL of the coordinator) when
-  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL assumes the
-  peers' default port.
-- Not done: a failed takeover is not retried on another node except by the same rule on the next poll; a run that
-  finishes under a successor is not saved as a Version by the owner.
+  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL is the one the
+  coordinator's node published with its claim (`url`: `TRAINER_NODE_ADDRESS`, else `https://<its tailnet name>`), or the
+  address this node lists it at when the claim has none; for a coordinator on this node, loopback at the port the API
+  listens on (`Cluster.serve_at`, from `--port`) (#451).
+- A run that finishes under a successor is saved as the owner's Version too: when the owner's job ends `done` and its own
+  `run.json` is not `completed`, the owner fetches the final `last.npz` from the coordinator its where-file names
+  (`GET /collective/{run}/weights`, 409 until the run finished and for a stopped run) into its run folder as
+  `last_term<N>.npz` and records it as above (#451).
+- Not done: a failed takeover is not retried on another node except by the same rule on the next poll.
 
 ## Failures
 
