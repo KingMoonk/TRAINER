@@ -110,13 +110,37 @@ def user_text(sets, chosen):
     return any(not s.get("library") for s in sets if s["id"] in chosen)
 
 
-def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text):
+def plateau_rule(steps, run_hours, setting=None):
+    """The plateau rule (studio_plateau) a job of `steps` steps gets, or None for none. `setting`: True always, False never, None by
+    length: on for a run expected to take over an hour (`run_hours`, from the measured step rate), and when it is not measured yet for
+    one of at least LONG_STEPS steps."""
+    import studio_plateau
+    if setting is False or not steps:
+        return None
+    long = run_hours > studio_plateau.LONG_RUN_SECONDS / 3600 if run_hours is not None else steps >= LONG_STEPS
+    return studio_plateau.default_rule(steps) if setting or long else None
+
+
+LONG_STEPS = 20_000  # a run this long is taken to need the plateau rule when its speed is not known
+
+
+def plateau_line(rule):
+    """The plain sentence for a plateau rule: when the run will end itself."""
+    if not rule:
+        return ""
+    return (f"Stops by itself, keeping its best, once the best validation loss improves by less than {rule['min_gain']:.0%} over "
+            f"{rule['window_steps']:,} steps (not before step {rule['min_steps']:,}).")
+
+
+def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, plateau=None):
     """(label, params) of the pretrain job "Add to the queue" adds for version `v` (see Job in studio_ia.services). `mode` is
-    forced to from_scratch when continuing from `parent` is not valid; `hold` is the held-back fraction, `pieces` the size preview's."""
+    forced to from_scratch when continuing from `parent` is not valid; `hold` is the held-back fraction, `pieces` the size preview's;
+    `plateau` the rule that ends the run when its validation loss goes flat (plateau_rule)."""
     cfg = pretrain_config(v.spec, steps, rows, hold)
     mode = forced_mode(v, parent, mode)
     init = parent.best_checkpoint if mode == "catch_up" else None
     label = f"Version {v.number} {'catch-up' if mode == 'catch_up' else 'from scratch'}"
     return label, {"config": cfg, "datasets": list(chosen), "mode": mode, "init_from": init, "output_dir": None,
                    "user_text": own_text, "previous_best": parent.best_checkpoint if parent else None,
-                   "version": v.number, "heldout_fraction": cfg["validation"], "pieces_per_pass": pieces}
+                   "version": v.number, "heldout_fraction": cfg["validation"], "pieces_per_pass": pieces,
+                   **({"plateau": plateau} if plateau else {})}

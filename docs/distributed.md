@@ -399,10 +399,15 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
 - A coordinator steps down when a call carries a higher term or the store holds a claim that outranks its own: it drops
   its `theta`, archives its folder and publishes `{"released": true}`. A returning coordinator does this on its first poll.
 - Members run in worker processes. The app writes `data/diloco_where/<run>.json` (node and URL of the coordinator) when
-  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL assumes the
-  peers' default port.
-- Not done: a failed takeover is not retried on another node except by the same rule on the next poll; a run that
-  finishes under a successor is not saved as a Version by the owner.
+  the run is coordinated elsewhere than at the start, and the member's locator reads it to rejoin. The URL is the one the
+  coordinator's node published with its claim (`url`: `TRAINER_NODE_ADDRESS`, else `https://<its tailnet name>`), or the
+  address this node lists it at when the claim has none; for a coordinator on this node, loopback at the port the API
+  listens on (`Cluster.serve_at`, from `--port`) (#451).
+- A run that finishes under a successor is saved as the owner's Version too: when the owner's job ends `done` and its own
+  `run.json` is not `completed`, the owner fetches the final `last.npz` from the coordinator its where-file names
+  (`GET /collective/{run}/weights`, 409 until the run finished and for a stopped run) into its run folder as
+  `last_term<N>.npz` and records it as above (#451).
+- Not done: a failed takeover is not retried on another node except by the same rule on the next poll.
 
 ## Failures
 
