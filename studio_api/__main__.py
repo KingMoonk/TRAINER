@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 
 import studio_cluster
+import studio_legacy_cleanup
 from studio_api import accelerator, live
 from studio_api.hosts import allow_host
 
@@ -118,6 +119,7 @@ def build(args):
         workspace = Workspace(args.workspace) if args.workspace is not None else Workspace()
         services = WorkspaceServices(workspace)
         services.runner.cluster.serve_at(args.port, lambda: hosts.tailnet_name)  # where a failover's where-file sends the members
+        studio_legacy_cleanup.start(workspace.root)  # sign-in entries of the removed watchdog
         services.resume_queue_at_start()  # a queue the last run of the app left going carries on by itself
         tags, users = studio_cluster.allowed_callers(workspace.state)
         return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,
