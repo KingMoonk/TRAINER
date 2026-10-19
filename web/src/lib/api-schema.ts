@@ -6390,6 +6390,8 @@ export interface components {
             timeline: components["schemas"]["RoundTimeline"][];
             /** Version */
             version: number | null;
+            /** Win Rate */
+            win_rate?: number | null;
             /** Window S */
             window_s: number | null;
         };

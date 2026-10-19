@@ -185,6 +185,7 @@ class Run(BaseModel):
     can_restart: bool = False  # it ended and saved weights to start a new run from (best.npz, else last.npz)
     best_round: int | None = None  # the round whose weights are the best so far
     best_val_loss: float | None = None
+    win_rate: float | None = None  # the best weights' share of head-to-head wins against the weights the run started from (target_win_rate), as last judged
     stop_rule: str = ""  # which stop rule ended the run, "" when none did
     stop_reason: str = ""  # why the run ended, in a sentence; "" while it goes
     lessons: int = 0  # the teacher's answers the run trains on as extra shards now

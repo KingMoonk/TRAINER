@@ -7939,6 +7939,17 @@
             ],
             "title": "Version"
           },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
           "window_s": {
             "anyOf": [
               {

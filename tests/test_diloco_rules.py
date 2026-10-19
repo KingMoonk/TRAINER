@@ -216,7 +216,7 @@ class Checks(unittest.TestCase):
 
     def test_bad_values_are_rejected_with_a_sentence(self):
         for changes in ({"max_seconds": 0}, {"max_seconds": -5.}, {"max_seconds": float("nan")}, {"patience_rounds": -1}, {"patience_rounds": 1.5},
-                        {"target_val_loss": 0}, {"target_val_loss": -1.}, {"target_win_rate": .5, "teacher": "t"},
+                        {"target_val_loss": 0}, {"target_val_loss": -1.}, {"target_win_rate": 1.5, "teacher": "t"},
                         {"target_win_rate": .5}, {"pivots": ("drop_lessons",), "worse_limit": 1}, {"plateau_checks": 1}, {"plateau_checks": -2}, {"plateau_min_improvement": 0.},
                         {"plateau_min_improvement": 1.}, {"worse_limit": -1}, {"keep_checkpoints": -1}, {"pivots": ("warm_restart",), "worse_limit": 1},
                         {"pivots": ("halve_lr",)}, {"worse_limit": 3, "pivots": ("halve_lr",), "patience_rounds": 3}, {"teacher": 5}, {"max_seconds": True}):
@@ -227,10 +227,6 @@ class Checks(unittest.TestCase):
             support.settings(worse_limit=-1)
         with self.assertRaisesRegex(ValueError, "Each pivot must be one of"):
             support.settings(pivots=("nope",), worse_limit=1)
-
-    def test_target_win_rate_still_points_at_511(self):
-        with self.assertRaisesRegex(ValueError, "target_win_rate.*#511"):
-            support.settings(target_win_rate=.6, teacher="big")
 
     def test_polish_options_need_a_teacher_and_something_to_do(self):
         for changes in ({"polish_every": 2}, {"polish_every": -1}, {"polish_every": 1.5, "teacher": "t"}, {"polish_every": True, "teacher": "t"},
