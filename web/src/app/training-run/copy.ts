@@ -5,6 +5,7 @@ export const T = {
   perStep: "Per-step training error",
   learningRate: "Learning rate",
   nothingTraining: "Nothing is training.",
+  endedTitle: "Why this run ended",
   starting: "Starting",
   noVersion: "No version yet: design one in the Network designer, then train it in Pretraining.",
   seeChange: "see the change",

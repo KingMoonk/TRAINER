@@ -1,64 +1,6 @@
 {
   "components": {
     "schemas": {
-      "AblateRequest": {
-        "properties": {
-          "heads": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "prefixItems": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "integer"
-                    }
-                  ],
-                  "type": "array"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Heads"
-          },
-          "mode": {
-            "default": "zero",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "AblateRequest",
-        "type": "object"
-      },
       "Access": {
         "description": "Who may call this node's API straight over the tailnet (studioConfig.cluster, docs/cluster.md, \"ACL\").",
         "properties": {
@@ -111,184 +53,6 @@
           "allow_tags"
         ],
         "title": "AccessBody",
-        "type": "object"
-      },
-      "ActionOut": {
-        "properties": {
-          "answer": {
-            "title": "Answer"
-          },
-          "scene": {
-            "additionalProperties": true,
-            "title": "Scene",
-            "type": "object"
-          },
-          "state": {
-            "$ref": "#/components/schemas/ViewControls"
-          }
-        },
-        "required": [
-          "state",
-          "scene"
-        ],
-        "title": "ActionOut",
-        "type": "object"
-      },
-      "ActionRequest": {
-        "properties": {
-          "action": {
-            "additionalProperties": true,
-            "title": "Action",
-            "type": "object"
-          },
-          "arrays": {
-            "default": "inline",
-            "enum": [
-              "inline",
-              "binary"
-            ],
-            "title": "Arrays",
-            "type": "string"
-          },
-          "cell": {
-            "items": {
-              "type": "integer"
-            },
-            "maxItems": 2,
-            "minItems": 2,
-            "title": "Cell",
-            "type": "array"
-          },
-          "headStage": {
-            "default": "pattern",
-            "enum": [
-              "scores",
-              "scale",
-              "mask",
-              "pattern",
-              "values"
-            ],
-            "title": "Headstage",
-            "type": "string"
-          },
-          "level": {
-            "default": "Model",
-            "enum": [
-              "Model",
-              "Window",
-              "Head",
-              "Weights"
-            ],
-            "title": "Level",
-            "type": "string"
-          },
-          "mode": {
-            "default": "Build",
-            "enum": [
-              "Build",
-              "Train",
-              "Ride a token"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "note": {
-            "default": "",
-            "title": "Note",
-            "type": "string"
-          },
-          "playing": {
-            "default": false,
-            "title": "Playing",
-            "type": "boolean"
-          },
-          "probing": {
-            "default": false,
-            "title": "Probing",
-            "type": "boolean"
-          },
-          "reduce_motion": {
-            "default": false,
-            "title": "Reduce Motion",
-            "type": "boolean"
-          },
-          "selection": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selection"
-          },
-          "show_numbers": {
-            "default": true,
-            "title": "Show Numbers",
-            "type": "boolean"
-          },
-          "since": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Since"
-          },
-          "snapshot": {
-            "default": 0,
-            "title": "Snapshot",
-            "type": "integer"
-          },
-          "spec": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spec"
-          },
-          "thermal": {
-            "default": false,
-            "title": "Thermal",
-            "type": "boolean"
-          },
-          "tileKind": {
-            "default": "weight",
-            "enum": [
-              "weight",
-              "gradient",
-              "update"
-            ],
-            "title": "Tilekind",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "action"
-        ],
-        "title": "ActionRequest",
         "type": "object"
       },
       "AddRequest": {
@@ -1053,6 +817,98 @@
         "title": "ComputeBody",
         "type": "object"
       },
+      "ContinueBody": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "description": "the text to continue on (new_data; grow, default the run's own)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "hold": {
+            "default": 0.05,
+            "description": "grow: fraction of the text held back",
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
+            "type": "number"
+          },
+          "kind": {
+            "description": "same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights",
+            "enum": [
+              "same",
+              "new_data",
+              "grow"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "layers": {
+            "anyOf": [
+              {
+                "maximum": 96.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layers"
+          },
+          "rows": {
+            "default": 16,
+            "description": "grow: rows per step",
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "grow: the bigger design itself",
+            "title": "Spec"
+          },
+          "steps": {
+            "description": "steps to add (same, new_data), or to train the grown design for (grow)",
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Steps",
+            "type": "integer"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "maximum": 8192.0,
+                "minimum": 8.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "grow: the design's width (with layers), when no spec is given",
+            "title": "Width"
+          }
+        },
+        "required": [
+          "kind",
+          "steps"
+        ],
+        "title": "ContinueBody",
+        "type": "object"
+      },
       "CorrectionRequest": {
         "properties": {
           "correction": {
@@ -1485,6 +1341,36 @@
         "title": "DraftsJob",
         "type": "object"
       },
+      "Ended": {
+        "description": "Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "text"
+        ],
+        "title": "Ended",
+        "type": "object"
+      },
       "EnoughText": {
         "properties": {
           "headline": {
@@ -1628,6 +1514,68 @@
           "lines"
         ],
         "title": "Expectations",
+        "type": "object"
+      },
+      "Expected": {
+        "description": "What the plan can expect of the validation error. `fit`: drawn from this design's own earlier run; `rule`: no run to read.",
+        "properties": {
+          "basis": {
+            "enum": [
+              "fit",
+              "rule"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "curve": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Curve",
+            "type": "array"
+          },
+          "flat_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flat Steps"
+          },
+          "loss_flat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Flat"
+          },
+          "loss_planned": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Planned"
+          }
+        },
+        "required": [
+          "basis"
+        ],
+        "title": "Expected",
         "type": "object"
       },
       "Experiment": {
@@ -1853,218 +1801,6 @@
         "title": "Finished",
         "type": "object"
       },
-      "ForwardRequest": {
-        "properties": {
-          "hooks": {
-            "default": true,
-            "title": "Hooks",
-            "type": "boolean"
-          },
-          "ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "integer"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ids"
-          },
-          "names": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Names"
-          },
-          "text": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ForwardRequest",
-        "type": "object"
-      },
-      "FrameRequest": {
-        "properties": {
-          "arrays": {
-            "default": "inline",
-            "enum": [
-              "inline",
-              "binary"
-            ],
-            "title": "Arrays",
-            "type": "string"
-          },
-          "cell": {
-            "items": {
-              "type": "integer"
-            },
-            "maxItems": 2,
-            "minItems": 2,
-            "title": "Cell",
-            "type": "array"
-          },
-          "headStage": {
-            "default": "pattern",
-            "enum": [
-              "scores",
-              "scale",
-              "mask",
-              "pattern",
-              "values"
-            ],
-            "title": "Headstage",
-            "type": "string"
-          },
-          "level": {
-            "default": "Model",
-            "enum": [
-              "Model",
-              "Window",
-              "Head",
-              "Weights"
-            ],
-            "title": "Level",
-            "type": "string"
-          },
-          "mode": {
-            "default": "Build",
-            "enum": [
-              "Build",
-              "Train",
-              "Ride a token"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "note": {
-            "default": "",
-            "title": "Note",
-            "type": "string"
-          },
-          "playing": {
-            "default": false,
-            "title": "Playing",
-            "type": "boolean"
-          },
-          "probing": {
-            "default": false,
-            "title": "Probing",
-            "type": "boolean"
-          },
-          "reduce_motion": {
-            "default": false,
-            "title": "Reduce Motion",
-            "type": "boolean"
-          },
-          "selection": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selection"
-          },
-          "show_numbers": {
-            "default": true,
-            "title": "Show Numbers",
-            "type": "boolean"
-          },
-          "since": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Since"
-          },
-          "snapshot": {
-            "default": 0,
-            "title": "Snapshot",
-            "type": "integer"
-          },
-          "spec": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spec"
-          },
-          "thermal": {
-            "default": false,
-            "title": "Thermal",
-            "type": "boolean"
-          },
-          "tileKind": {
-            "default": "weight",
-            "enum": [
-              "weight",
-              "gradient",
-              "update"
-            ],
-            "title": "Tilekind",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "FrameRequest",
-        "type": "object"
-      },
       "FreeSpace": {
         "properties": {
           "bytes": {
@@ -2227,67 +1963,6 @@
         "title": "HasText",
         "type": "object"
       },
-      "HeadStatsRequest": {
-        "properties": {
-          "pattern": {
-            "items": {},
-            "minItems": 1,
-            "title": "Pattern",
-            "type": "array"
-          }
-        },
-        "required": [
-          "pattern"
-        ],
-        "title": "HeadStatsRequest",
-        "type": "object"
-      },
-      "HeadsOffRequest": {
-        "properties": {
-          "mode": {
-            "default": "mean",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "off": {
-            "items": {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "integer"
-                }
-              ],
-              "type": "array"
-            },
-            "title": "Off",
-            "type": "array"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "off"
-        ],
-        "title": "HeadsOffRequest",
-        "type": "object"
-      },
       "Hold": {
         "properties": {
           "held": {
@@ -2407,23 +2082,6 @@
         "title": "ImportModelOut",
         "type": "object"
       },
-      "Inspect": {
-        "properties": {
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "Inspect",
-        "type": "object"
-      },
       "Job": {
         "properties": {
           "created_at": {
@@ -2485,6 +2143,11 @@
             "default": 0.0,
             "title": "Created At",
             "type": "number"
+          },
+          "details": {
+            "default": "",
+            "title": "Details",
+            "type": "string"
           },
           "epoch": {
             "default": 0,
@@ -2753,77 +2416,6 @@
         "title": "Knobs",
         "type": "object"
       },
-      "LandscapeRequest": {
-        "description": "What to draw: the loss over a plane of weights. `live` asks for the cheap frame a training run can afford between steps.",
-        "properties": {
-          "grid": {
-            "default": 21,
-            "maximum": 41.0,
-            "minimum": 5.0,
-            "title": "Grid",
-            "type": "integer"
-          },
-          "live": {
-            "default": false,
-            "title": "Live",
-            "type": "boolean"
-          },
-          "mode": {
-            "default": "random",
-            "enum": [
-              "random",
-              "pca"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "new_anchor": {
-            "default": false,
-            "title": "New Anchor",
-            "type": "boolean"
-          },
-          "seed": {
-            "default": 0,
-            "maximum": 2147483647.0,
-            "minimum": 0.0,
-            "title": "Seed",
-            "type": "integer"
-          },
-          "snapshot": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Snapshot"
-          },
-          "span": {
-            "default": 1.0,
-            "maximum": 4.0,
-            "minimum": 0.1,
-            "title": "Span",
-            "type": "number"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "LandscapeRequest",
-        "type": "object"
-      },
       "Lane": {
         "description": "One member's round on the coordinator's clock: seconds since the round opened. A moment is null when it never reported it.",
         "properties": {
@@ -3070,6 +2662,53 @@
         "title": "LeaveRequest",
         "type": "object"
       },
+      "Leftover": {
+        "properties": {
+          "belongs_to": {
+            "description": "the job it came from, or why nothing needs it",
+            "title": "Belongs To",
+            "type": "string"
+          },
+          "bytes": {
+            "description": "what removing it frees",
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "id": {
+            "description": "what to send back to remove it; a path under the workspace",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "interrupted",
+              "failed",
+              "snapshot"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shared": {
+            "description": "bytes it holds that other runs still link to (not freed)",
+            "title": "Shared",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "belongs_to",
+          "bytes",
+          "shared"
+        ],
+        "title": "Leftover",
+        "type": "object"
+      },
       "LessonChange": {
         "additionalProperties": false,
         "properties": {
@@ -3142,38 +2781,6 @@
           "entries"
         ],
         "title": "Listing",
-        "type": "object"
-      },
-      "LogitLensRequest": {
-        "properties": {
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "top_k": {
-            "default": 5,
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Top K",
-            "type": "integer"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "LogitLensRequest",
         "type": "object"
       },
       "LoopCheckOut": {
@@ -3694,41 +3301,6 @@
           }
         },
         "title": "LoopStart",
-        "type": "object"
-      },
-      "LossRequest": {
-        "properties": {
-          "pos": {
-            "default": -1,
-            "title": "Pos",
-            "type": "integer"
-          },
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "trained": {
-            "default": true,
-            "title": "Trained",
-            "type": "boolean"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "LossRequest",
         "type": "object"
       },
       "LrBody": {
@@ -5452,6 +5024,13 @@
             "title": "Hold",
             "type": "number"
           },
+          "hours": {
+            "default": 4.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1440.0,
+            "title": "Hours",
+            "type": "number"
+          },
           "mode": {
             "default": "catch_up",
             "enum": [
@@ -5468,6 +5047,17 @@
             "title": "Passes",
             "type": "integer"
           },
+          "plateau": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau"
+          },
           "preview_rows": {
             "default": 6,
             "maximum": 256.0,
@@ -5481,6 +5071,19 @@
             "minimum": 1.0,
             "title": "Rows",
             "type": "integer"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
           },
           "version": {
             "anyOf": [
@@ -5562,6 +5165,47 @@
           "parameters"
         ],
         "title": "PlanRow",
+        "type": "object"
+      },
+      "PlateauRule": {
+        "description": "studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.",
+        "properties": {
+          "min_gain": {
+            "title": "Min Gain",
+            "type": "number"
+          },
+          "min_steps": {
+            "default": 0,
+            "title": "Min Steps",
+            "type": "integer"
+          },
+          "window_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Seconds"
+          },
+          "window_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Steps"
+          }
+        },
+        "required": [
+          "min_gain"
+        ],
+        "title": "PlateauRule",
         "type": "object"
       },
       "PostTrainingJobOut": {
@@ -5986,10 +5630,35 @@
             "title": "Pieces Per Step",
             "type": "integer"
           },
+          "plateau": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlateauRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plateau_line": {
+            "default": "",
+            "title": "Plateau Line",
+            "type": "string"
+          },
           "reason": {
             "default": "",
             "title": "Reason",
             "type": "string"
+          },
+          "sizing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sizing"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "steps": {
             "anyOf": [
@@ -6202,30 +5871,6 @@
           }
         },
         "title": "PreviewRequest",
-        "type": "object"
-      },
-      "ProbeRequest": {
-        "properties": {
-          "text": {
-            "default": "The cat sat on the mat because it was tired.",
-            "minLength": 2,
-            "title": "Text",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ProbeRequest",
         "type": "object"
       },
       "ProblemRule": {
@@ -6724,6 +6369,14 @@
               }
             ],
             "title": "Eta S"
+          },
+          "failed": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/JobModel"
+            },
+            "title": "Failed",
+            "type": "array"
           },
           "gate": {
             "$ref": "#/components/schemas/studio_api__routers__queue__GateModel",
@@ -7401,32 +7054,6 @@
         "title": "RangeResult",
         "type": "object"
       },
-      "RankRequest": {
-        "properties": {
-          "mode": {
-            "default": "mean",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "RankRequest",
-        "type": "object"
-      },
       "RebuiltJob": {
         "properties": {
           "created_at": {
@@ -7621,6 +7248,24 @@
         "title": "RemoteStop",
         "type": "object"
       },
+      "RemoveLeftovers": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "RemoveLeftovers",
+        "type": "object"
+      },
       "Renewal": {
         "properties": {
           "checkpoint": {
@@ -7718,6 +7363,58 @@
           "reply"
         ],
         "title": "Reply",
+        "type": "object"
+      },
+      "ReplyRequest": {
+        "properties": {
+          "ablate": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ablate"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ReplyRequest",
         "type": "object"
       },
       "ResizeBody": {
@@ -8572,6 +8269,16 @@
           "curve": {
             "$ref": "#/components/schemas/CurveModel"
           },
+          "ended": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ended"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "gate_vs": {
             "anyOf": [
               {
@@ -8896,6 +8603,114 @@
         "title": "SizesBody",
         "type": "object"
       },
+      "Sizing": {
+        "description": "Does the model fit the text and the time? (studio_ia.sizing.sizing)",
+        "properties": {
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expected"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gpu_note": {
+            "default": "",
+            "title": "Gpu Note",
+            "type": "string"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "boolean"
+          },
+          "run_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Hours"
+          },
+          "seconds_per_step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Per Step"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Suggestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_per_param": {
+            "title": "Tokens Per Param",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          },
+          "verdict": {
+            "enum": [
+              "model_too_small",
+              "data_too_small",
+              "balanced"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "warning": {
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "warning",
+          "tokens_per_param",
+          "measured",
+          "hours"
+        ],
+        "title": "Sizing",
+        "type": "object"
+      },
       "SlotInfo": {
         "properties": {
           "modules": {
@@ -8925,24 +8740,6 @@
           "modules"
         ],
         "title": "SlotInfo",
-        "type": "object"
-      },
-      "SnapshotOut": {
-        "properties": {
-          "index": {
-            "title": "Index",
-            "type": "integer"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index",
-          "name"
-        ],
-        "title": "SnapshotOut",
         "type": "object"
       },
       "Source": {
@@ -9210,34 +9007,6 @@
         "title": "StartPassive",
         "type": "object"
       },
-      "StartRequest": {
-        "properties": {
-          "level": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Level"
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mode"
-          }
-        },
-        "title": "StartRequest",
-        "type": "object"
-      },
       "StartRun": {
         "description": "What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.",
         "properties": {
@@ -9417,6 +9186,170 @@
         "title": "StatusRequest",
         "type": "object"
       },
+      "StepRate": {
+        "description": "studio_scaling.measure_step_rate: what a step of the design costs on this computer, on the device a run would use.",
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "seconds_per_step": {
+            "title": "Seconds Per Step",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "title": "Tokens Per Second",
+            "type": "number"
+          }
+        },
+        "required": [
+          "seconds_per_step",
+          "tokens_per_second",
+          "device",
+          "device_name",
+          "rows",
+          "context"
+        ],
+        "title": "StepRate",
+        "type": "object"
+      },
+      "StepRateJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StepRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "StepRateJob",
+        "type": "object"
+      },
+      "StepRateRequest": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "preview_rows": {
+            "default": 6,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Preview Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "StepRateRequest",
+        "type": "object"
+      },
       "Stop": {
         "properties": {
           "epoch": {
@@ -9446,6 +9379,55 @@
           "bytes"
         ],
         "title": "StorageUse",
+        "type": "object"
+      },
+      "Suggestion": {
+        "description": "The design and step count that fit the hours given (studio_ia.sizing.suggest_design).",
+        "properties": {
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "layers": {
+            "title": "Layers",
+            "type": "integer"
+          },
+          "params": {
+            "title": "Params",
+            "type": "integer"
+          },
+          "same_design": {
+            "title": "Same Design",
+            "type": "boolean"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "tokens_per_param": {
+            "title": "Tokens Per Param",
+            "type": "number"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "layers",
+          "params",
+          "steps",
+          "hours",
+          "tokens_per_param",
+          "same_design",
+          "text"
+        ],
+        "title": "Suggestion",
         "type": "object"
       },
       "SummaryJob": {
@@ -9825,36 +9807,6 @@
         "title": "Tower",
         "type": "object"
       },
-      "TraceRequest": {
-        "properties": {
-          "pos": {
-            "default": -1,
-            "title": "Pos",
-            "type": "integer"
-          },
-          "text": {
-            "minLength": 1,
-            "title": "Text",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "title": "TraceRequest",
-        "type": "object"
-      },
       "Tried": {
         "properties": {
           "choices": {
@@ -9976,43 +9928,6 @@
           "type"
         ],
         "title": "ValidationError",
-        "type": "object"
-      },
-      "ValueMapRequest": {
-        "properties": {
-          "block": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Block",
-            "type": "integer"
-          },
-          "head": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Head",
-            "type": "integer"
-          },
-          "heads": {
-            "minimum": 1.0,
-            "title": "Heads",
-            "type": "integer"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "heads"
-        ],
-        "title": "ValueMapRequest",
         "type": "object"
       },
       "Verdict": {
@@ -10246,233 +10161,6 @@
           }
         },
         "title": "VersionRequest",
-        "type": "object"
-      },
-      "ViewControls": {
-        "description": "Everything the viewer keeps between frames. The first five are web/src/lib/viewer.ts's SceneQuery.",
-        "properties": {
-          "cell": {
-            "items": {
-              "type": "integer"
-            },
-            "maxItems": 2,
-            "minItems": 2,
-            "title": "Cell",
-            "type": "array"
-          },
-          "headStage": {
-            "default": "pattern",
-            "enum": [
-              "scores",
-              "scale",
-              "mask",
-              "pattern",
-              "values"
-            ],
-            "title": "Headstage",
-            "type": "string"
-          },
-          "level": {
-            "default": "Model",
-            "enum": [
-              "Model",
-              "Window",
-              "Head",
-              "Weights"
-            ],
-            "title": "Level",
-            "type": "string"
-          },
-          "mode": {
-            "default": "Build",
-            "enum": [
-              "Build",
-              "Train",
-              "Ride a token"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "note": {
-            "default": "",
-            "title": "Note",
-            "type": "string"
-          },
-          "playing": {
-            "default": false,
-            "title": "Playing",
-            "type": "boolean"
-          },
-          "probing": {
-            "default": false,
-            "title": "Probing",
-            "type": "boolean"
-          },
-          "reduce_motion": {
-            "default": false,
-            "title": "Reduce Motion",
-            "type": "boolean"
-          },
-          "selection": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selection"
-          },
-          "show_numbers": {
-            "default": true,
-            "title": "Show Numbers",
-            "type": "boolean"
-          },
-          "snapshot": {
-            "default": 0,
-            "title": "Snapshot",
-            "type": "integer"
-          },
-          "spec": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spec"
-          },
-          "thermal": {
-            "default": false,
-            "title": "Thermal",
-            "type": "boolean"
-          },
-          "tileKind": {
-            "default": "weight",
-            "enum": [
-              "weight",
-              "gradient",
-              "update"
-            ],
-            "title": "Tilekind",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ViewControls",
-        "type": "object"
-      },
-      "ViewerStatus": {
-        "properties": {
-          "available": {
-            "title": "Available",
-            "type": "boolean"
-          },
-          "connected": {
-            "title": "Connected",
-            "type": "boolean"
-          },
-          "running": {
-            "title": "Running",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "available",
-          "running",
-          "connected"
-        ],
-        "title": "ViewerStatus",
-        "type": "object"
-      },
-      "ViewerSummaryRequest": {
-        "properties": {
-          "version": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "title": "ViewerSummaryRequest",
-        "type": "object"
-      },
-      "ViewerSummaryStatus": {
-        "properties": {
-          "bins": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Bins"
-          },
-          "n_ctx": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "N Ctx"
-          },
-          "note": {
-            "title": "Note",
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "ready",
-              "stale",
-              "none",
-              "no_checkpoint"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "step": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Step"
-          }
-        },
-        "required": [
-          "state",
-          "note"
-        ],
-        "title": "ViewerSummaryStatus",
         "type": "object"
       },
       "Warm": {
@@ -10757,58 +10445,6 @@
         "title": "JobOut",
         "type": "object"
       },
-      "studio_api__routers__chat__ReplyRequest": {
-        "properties": {
-          "ablate": {
-            "anyOf": [
-              {
-                "items": {
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "prefixItems": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "integer"
-                    }
-                  ],
-                  "type": "array"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ablate"
-          },
-          "messages": {
-            "items": {
-              "$ref": "#/components/schemas/Message"
-            },
-            "minItems": 1,
-            "title": "Messages",
-            "type": "array"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "messages"
-        ],
-        "title": "ReplyRequest",
-        "type": "object"
-      },
       "studio_api__routers__cluster__Accepted": {
         "properties": {
           "epoch": {
@@ -10894,58 +10530,6 @@
           "tokens_per_second"
         ],
         "title": "Sample",
-        "type": "object"
-      },
-      "studio_api__routers__inspect__ReplyRequest": {
-        "properties": {
-          "mode": {
-            "default": "mean",
-            "enum": [
-              "mean",
-              "zero"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "off": {
-            "items": {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "integer"
-                }
-              ],
-              "type": "array"
-            },
-            "title": "Off",
-            "type": "array"
-          },
-          "prompt": {
-            "minLength": 1,
-            "title": "Prompt",
-            "type": "string"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          }
-        },
-        "required": [
-          "off",
-          "prompt"
-        ],
-        "title": "ReplyRequest",
         "type": "object"
       },
       "studio_api__routers__pretraining__GateModel": {
@@ -11475,7 +11059,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/studio_api__routers__chat__ReplyRequest"
+                "$ref": "#/components/schemas/ReplyRequest"
               }
             }
           },
@@ -12615,6 +12199,65 @@
           }
         },
         "summary": "Validation",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
+    "/collective/{run}/weights": {
+      "get": {
+        "description": "A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left.",
+        "operationId": "weights_collective__run__weights_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Weights",
         "tags": [
           "collective"
         ]
@@ -14565,466 +14208,6 @@
         ]
       }
     },
-    "/inspect/ablate": {
-      "post": {
-        "description": "{baseline, mode, heads: [{block, head, loss, delta, entropy, mean_distance, first_token_mass, previous_token_mass}]}: the loss with each head switched off alone.",
-        "operationId": "ablate_inspect_ablate_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AblateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ablate",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/forward": {
-      "post": {
-        "description": "{ids, tokens, logits, hooks}: one forward pass over `text`, or over the piece `ids`.",
-        "operationId": "forward_inspect_forward_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ForwardRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Forward",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/head-stats": {
-      "post": {
-        "description": "{entropy, mean_distance, first_token_mass, previous_token_mass}, each one number per head: a plain computation on the posted\npattern, so it answers at once instead of as a job.",
-        "operationId": "head_stats_inspect_head_stats_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HeadStatsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Head Stats",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/heads-off": {
-      "post": {
-        "description": "{before, after}: held-back bits per character with the (block, head) pairs in `off` switched off.",
-        "operationId": "heads_off_inspect_heads_off_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HeadsOffRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Heads Off",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/logit-lens": {
-      "post": {
-        "description": "[{hook, probabilities, top_ids, top_probabilities}]: what the model would answer if it stopped after each stage.",
-        "operationId": "logit_lens_inspect_logit_lens_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LogitLensRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Logit Lens",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/loss": {
-      "post": {
-        "description": "{tokens, pos, probabilities, target, pieces}: how likely each next piece was at `pos`.",
-        "operationId": "loss_inspect_loss_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LossRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Loss",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/prepared": {
-      "post": {
-        "description": "{ids, tokens}: the text the version's pieces are read from.",
-        "operationId": "prepared_inspect_prepared_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Inspect"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Prepared",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/rank-heads": {
-      "post": {
-        "description": "[{block, head, rise}]: how much worse the held-back text gets with each head switched off. Slow.",
-        "operationId": "rank_heads_inspect_rank_heads_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RankRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Rank Heads",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/reply": {
-      "post": {
-        "description": "The greedy answer to `prompt` with the (block, head) pairs in `off` switched off for this reply only. The result is the text.",
-        "operationId": "reply_inspect_reply_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/studio_api__routers__inspect__ReplyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Reply",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/trace": {
-      "post": {
-        "description": "{tokens, pos, rows}: what each stage of the model does to the token at `pos`.",
-        "operationId": "trace_inspect_trace_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TraceRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Trace",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
-    "/inspect/value-map": {
-      "post": {
-        "description": "{d_model, heads, blocks, singular}: the singular values of one head's value and output weights.",
-        "operationId": "value_map_inspect_value_map_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ValueMapRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Value Map",
-        "tags": [
-          "inspect"
-        ]
-      }
-    },
     "/jobs": {
       "get": {
         "operationId": "list_jobs_jobs_get",
@@ -16310,6 +15493,48 @@
         ]
       }
     },
+    "/pretraining/step_rate": {
+      "post": {
+        "description": "Time a few steps of the version's design on the device a run of it would use, as a job. The plan reads the answer\n(`sizing.measured`) for the time a run takes and the design that fits the hours given. 409 while the size of the chosen text is\nstill unknown (the word list size comes from it).",
+        "operationId": "step_rate_pretraining_step_rate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepRateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StepRateJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Step Rate",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
     "/pretraining/text_sets": {
       "get": {
         "description": "The sets of text to choose from, as the Pretraining page's tiles.",
@@ -16654,7 +15879,7 @@
     },
     "/queue/jobs/{job_id}": {
       "delete": {
-        "description": "Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).",
+        "description": "Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop). On a\nfailed job it dismisses it from the list.",
         "operationId": "remove_queue_jobs__job_id__delete",
         "parameters": [
           {
@@ -17094,7 +16319,7 @@
     },
     "/queue/start": {
       "post": {
-        "description": "Services.start_queue: let jobs saved as waiting by an earlier session run.",
+        "description": "Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it\nwaits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`\nwith its sentence, instead of a bare 200 followed by a job that has quietly gone.",
         "operationId": "start_queue_queue_start_post",
         "responses": {
           "200": {
@@ -17483,6 +16708,74 @@
         ]
       }
     },
+    "/storage/leftovers": {
+      "get": {
+        "description": "What training left in runs/ that no result needs, largest first: attempts moved aside by a restart, failed runs, and dataset\nsnapshots no run uses. A running job's folder, the checkpoint a waiting job continues from and a version's runs are never listed.",
+        "operationId": "leftovers_storage_leftovers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Leftover"
+                  },
+                  "title": "Response Leftovers Storage Leftovers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Leftovers",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/leftovers/remove": {
+      "post": {
+        "description": "Delete the listed leftovers. An id that is not listed any more (already gone, or protected since) is ignored.",
+        "operationId": "remove_leftovers_storage_leftovers_remove_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveLeftovers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Leftovers",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
     "/traffic": {
       "get": {
         "description": "Server-sent events: `record` events, each a full record (see the module docstring). The newest `last` records come first, then\nevery new one as it happens; a stream's record is sent again when it closes. A `hello` event first names this node and when its buffer began (ids restart with it).",
@@ -17791,6 +17084,59 @@
           }
         },
         "summary": "Checkpoint Step",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/continue": {
+      "post": {
+        "description": "Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the\nqueued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a\ndesign its weights cannot go into) fails the job with a sentence.",
+        "operationId": "continue_version_versions__number__continue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinueBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__versions__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Continue Version",
         "tags": [
           "versions"
         ]
@@ -18108,711 +17454,6 @@
         "summary": "Version Weights Meta",
         "tags": [
           "versions"
-        ]
-      }
-    },
-    "/viewer/action": {
-      "post": {
-        "description": "Do what a viewer control does (studio_scene_json.apply_action) to the state in the body, and answer with the new state and\nthe scene (the whole one, or the frame against `since`).",
-        "operationId": "action_viewer_action_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ActionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ActionOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Action",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/binary": {
-      "post": {
-        "description": "The arrays of the scene (or of the frame against `since`) as little-endian float32 bytes. Their offsets are in\nPOST /viewer/manifest, and the payload's {shape, name} entries name them: send both calls the same body.",
-        "operationId": "binary_viewer_binary_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Binary",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/frame": {
-      "post": {
-        "description": "What changed since `since` (studio_scene_json.scene_frame); the whole scene when `since` is empty.",
-        "operationId": "frame_viewer_frame_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Frame",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/landscape": {
-      "post": {
-        "description": "The loss landscape around a version's weights (Li et al. 2018) as a job: the held-back loss on a grid of weights moved along\ntwo directions. Cheap by design (one fixed small batch, a grid capped by model size) and, with `live`, throttled so training\nkeeps its speed. The result is a LandscapeResult.",
-        "operationId": "landscape_viewer_landscape_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/LandscapeRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Landscape",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/manifest": {
-      "post": {
-        "description": "{name: {offset, shape, dtype}} for the bytes of POST /viewer/binary with the same body.",
-        "operationId": "manifest_viewer_manifest_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FrameRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Manifest",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/poll": {
-      "post": {
-        "description": "The messages the viewer process sent back since the last call. Reading them empties the list.",
-        "operationId": "poll_viewer_poll_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Poll",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/probe": {
-      "post": {
-        "description": "Run one real training step of the current version's checkpoint on a sentence, without touching training. A job: the result\nis {snapshot, note}, the new snapshot's index (see /viewer/snapshots) and the sentence to show.",
-        "operationId": "probe_viewer_probe_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/ProbeRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Probe",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/scene": {
-      "get": {
-        "description": "The whole scene to draw from scratch (studio_scene_json.scene_payload). Query: version, level, mode, headStage, tileKind,\nsnapshot, arrays; web/src/lib/viewer.ts's SceneQuery. A client that keeps more of the controls POSTs /viewer/frame.",
-        "operationId": "scene_viewer_scene_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "arrays",
-            "required": false,
-            "schema": {
-              "default": "inline",
-              "enum": [
-                "inline",
-                "binary"
-              ],
-              "title": "Arrays",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          },
-          {
-            "in": "query",
-            "name": "level",
-            "required": false,
-            "schema": {
-              "default": "Model",
-              "enum": [
-                "Model",
-                "Window",
-                "Head",
-                "Weights"
-              ],
-              "title": "Level",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "mode",
-            "required": false,
-            "schema": {
-              "default": "Build",
-              "enum": [
-                "Build",
-                "Train",
-                "Ride a token"
-              ],
-              "title": "Mode",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "headStage",
-            "required": false,
-            "schema": {
-              "default": "pattern",
-              "enum": [
-                "scores",
-                "scale",
-                "mask",
-                "pattern",
-                "values"
-              ],
-              "title": "Headstage",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tileKind",
-            "required": false,
-            "schema": {
-              "default": "weight",
-              "enum": [
-                "weight",
-                "gradient",
-                "update"
-              ],
-              "title": "Tilekind",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "snapshot",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "title": "Snapshot",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "thermal",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Thermal",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Scene",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/send": {
-      "post": {
-        "description": "Queue one message (e.g. {\"type\": \"scene\", \"level\": \"Window\", \"mode\": \"Train\"}) for the running viewer process.",
-        "operationId": "send_viewer_send_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "title": "Message",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Send",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/snapshots": {
-      "get": {
-        "description": "The snapshots a scene can show, oldest first: a scene's `snapshot` is an index into this list.",
-        "operationId": "snapshots_viewer_snapshots_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/SnapshotOut"
-                  },
-                  "title": "Response Snapshots Viewer Snapshots Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Snapshots",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/start": {
-      "post": {
-        "description": "Launch the Panda3D viewer process on the server's computer (no-op if running) with the current version's design.",
-        "operationId": "start_viewer_start_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/StartRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/status": {
-      "get": {
-        "description": "Whether the Panda3D viewer process can be launched on this computer, is running, and is connected.",
-        "operationId": "status_viewer_status_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Status",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/stop": {
-      "post": {
-        "operationId": "stop_viewer_stop_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Stop",
-        "tags": [
-          "viewer"
-        ]
-      }
-    },
-    "/viewer/summary": {
-      "get": {
-        "description": "Whether the version's whole-context summary (the Model level's attention between positions and stream sizes) is there: ready,\nor what is missing. POST /viewer/summary makes it.",
-        "operationId": "summary_viewer_summary_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ViewerSummaryStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Summary",
-        "tags": [
-          "viewer"
-        ]
-      },
-      "post": {
-        "description": "Compute the version's whole-context summary as a job: one inference pass over a full context window of its held-back text\n(studio_summary.whole_context), saved beside the run's snapshots with the checkpoint and step it came from.",
-        "operationId": "make_summary_viewer_summary_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/ViewerSummaryRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/studio_api__models_work__JobOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Make Summary",
-        "tags": [
-          "viewer"
         ]
       }
     }

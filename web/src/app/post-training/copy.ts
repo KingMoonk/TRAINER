@@ -102,7 +102,7 @@ export const ROUNDS: RoundSpec[] = [
     foot: "Prompts where all answers pass, or all fail, teach nothing and are skipped. Before it starts, the model answers a few of the problems; if it solves none, the round is not run, since every group would teach nothing. Each rule gets the room its answers need, up to 96 word pieces, so a step takes longer than it would with every answer cut at 32.",
     counted: true,
     action: T.add,
-    link: { label: T.makeProblems, href: "/make-data" },
+    link: { label: T.makeProblems, href: "/your-data/?kind=problems#make-extra-data" },
   },
   {
     n: 3,

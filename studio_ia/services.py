@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import io
 import logging
 import queue
 import socket
@@ -82,6 +83,7 @@ class QueueState:
     stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
+    failed: list = field(default_factory=list)  # jobs that ended failed, newest last; see studio_queue.QueueState
 
 
 _log = logging.getLogger(__name__)
@@ -367,6 +369,9 @@ class Services:
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
 
+    def resume_queue_at_start(self):
+        """Carry on the queue the last run of the app left going (no-op where there is no real queue)."""
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
@@ -402,6 +407,16 @@ class Services:
         raise NotImplementedError
 
     def clean_storage(self, days=None, data=False):
+        raise NotImplementedError
+
+    def leftovers(self):
+        """[{id, kind, name, belongs_to, bytes, shared}] of what training left in runs/ that no result needs: interrupted attempts,
+        failed runs and dataset snapshots no run uses (studio_cleanup.leftovers). Never a running job's folder, the checkpoint a
+        waiting job continues from or a version's runs."""
+        raise NotImplementedError
+
+    def remove_leftovers(self, ids):
+        """Delete the listed leftovers (ids from leftovers(); one that is not listed any more is ignored). Returns (items, bytes)."""
         raise NotImplementedError
 
     def free_space(self) -> int:
@@ -486,6 +501,34 @@ class Services:
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
 
+    def cached_step_rate(self, spec, rows):
+        """The step rate measure_step_rate found for `spec` at `rows` rows a step on this computer, or None while it is unknown. Never
+        computes. {"seconds_per_step", "tokens_per_second", "device", "device_name", "note", "rows", "context"}."""
+        return None
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        """Time a few optimizer steps of a throwaway copy of `spec` (`vocab` word pieces) on the device a run of it would use, keep the
+        answer (cached_step_rate) and return it. Slow: call it off the Tk thread. RuntimeError with a sentence when the device cannot
+        hold the model. None when `stop` (a threading.Event) ended it."""
+        raise NotImplementedError
+
+    def loss_evidence(self, version):
+        """The validation points of `version`'s newest run when that run started from step 0 on this design, {"points": [(word
+        pieces read, validation loss)], "run": folder}, else None. What the plan fits a curve to."""
+        return None
+
+    def device_facts(self):
+        """studio_backend.gpu_status(): {available, kind, name, ...} of the GPU this computer offers, or None when it cannot say."""
+        return None
+
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+        """Queue a pretrain job that continues version `number`'s newest run (studio_ia.continue_run): kind "same" adds `steps` steps on
+        the same data, "new_data" adds them on `dataset_ids` (same weights, optimizer and step), "grow" trains a bigger design
+        (`spec`, or this one at `width` and `layers`, saved as the next version) from these weights for `steps` steps. The job's label
+        says what it continues and from which step. Returns {"job_id", "label", "version", "kind", "from_step"}. Reads checkpoints: call it
+        off the Tk thread. ValueError with a sentence when the run cannot be continued that way."""
+        raise NotImplementedError
+
     def word_lists(self):
         """studio_ia.pieces.word_lists for the Builder: the four word lists, the small and whole-word ones fitted on a sample
         of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
@@ -500,6 +543,10 @@ class Services:
     def data(self, kind, query=""):
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
+
+    def text_sets(self):
+        """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
+        return list(self.data("text").sets or [])
 
     def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
@@ -1013,6 +1060,13 @@ class FakeServices(Services):
         self.cleaned = (days, data)
         return (0, 0)
 
+    def leftovers(self):
+        return []
+
+    def remove_leftovers(self, ids):
+        self.removed = list(ids)
+        return (0, 0)
+
     def free_space(self):
         return 120 * 10 ** 9
 
@@ -1161,6 +1215,24 @@ class FakeServices(Services):
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
+
+    def cached_step_rate(self, spec, rows):
+        return self.measure_step_rate(spec, rows, 256)
+
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+        if not any(v.number == number for v in self.versions()):
+            raise ValueError(f"No version {number}.")
+        label = {"same": f"Version {number} continued from step 100", "new_data": f"Version {number} continued from step 100 on new data",
+                 "grow": f"Version {number + 1} grown from version {number} (step 100)"}[kind]
+        made = self.__dict__.setdefault("continued", [])
+        job = Job(id=f"c{len(made) + 1}", kind="pretrain", label=label, params={"continue_from": {"kind": kind, "step": 100, "add": steps}})
+        made.append(job)
+        self.enqueue(job)
+        return {"job_id": job.id, "label": label, "version": number, "kind": kind, "from_step": 100}
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        return {"seconds_per_step": .25, "tokens_per_second": rows * 256 / .25, "device": "cpu", "device_name": "PyTorch / CPU", "note": "",
+                "rows": rows, "context": 256}
 
     def set_plan(self, plan):
         self._queue.plan = dict(plan)
@@ -1558,14 +1630,16 @@ class WorkspaceServices(Services):
 
         super().__init__()
         self._reads(workspace)
+        import studio_distributed
+        studio_distributed.load(self.root)  # the Training tab's runs from before a restart (the queue's restart handling reads them)
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
                                           prepare=lambda job: studio_jobs.prepare(job, self),
                                           ledger=self.ledger, make_room=self.evict_oldest_chat,
                                           on_start=self.chat_job_started, on_end=self.chat_job_ended)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
-        import studio_distributed
-        studio_distributed.load(self.root)  # the Training tab's runs from before a restart
+        for job in self.runner.ended_on_load:  # a distributed run the restart could not resume: its version is not training any more
+            self._record_job("job", {"job": job.id, "status": job.status})
         workspace.progress = self.note
         # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
         self._schema = start_thread(workspace.ensure_schema) if workspace.schema_pending() else None
@@ -2042,10 +2116,50 @@ class WorkspaceServices(Services):
             self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
 
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+        from studio_ia import continue_run as cont
+        from studio_ia import pretraining_plan as plan
+        from studio_ia import sizing
+        from studio_spec import validate_spec
+        try:
+            row = self.store.get(number)
+        except KeyError:
+            raise ValueError(f"No version {number}.") from None
+        if not row["runs"]:
+            raise cont.ContinueError(f"Version {number} has no training run to continue yet.")
+        run = cont.run_of(self._abs(row["runs"][-1]))
+        best = self._abs(row.get("best_checkpoint"))
+        own = False
+        if kind != "same":
+            own = plan.user_text(plan.sets_of(self.data("text")), list(dataset_ids))
+        if kind == "same":
+            label, params = cont.same_job(number, run, steps, best)
+        elif kind == "new_data":
+            label, params = cont.new_data_job(number, run, steps, list(dataset_ids), own, best)
+        elif kind == "grow":
+            design = validate_spec(spec) if spec else sizing.resized_spec(validate_spec(row["spec"]), width, layers)
+            if design is None:
+                raise cont.ContinueError("This design is built block by block, so it cannot be resized automatically: save the bigger design in the Network designer.")
+            warm = self.root / "runs" / f"warm_{uuid.uuid4().hex[:8]}" / "warm_start.npz"
+            cont.write_warm_start(run, design, warm)  # first: a design the weights cannot go into saves no version
+            grown = self.save_version(design, f"grown from version {number} at step {run['step']:,}")
+            label, params = cont.grow_job(number, grown, run, warm, steps, list(dataset_ids), rows, hold, own, best)
+        else:
+            raise cont.ContinueError(f"Unknown way to continue: {kind}.")
+        job = Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=label, params=params, created_at=time.time())
+        self.enqueue(job)
+        return {"job_id": job.id, "label": label, "version": params["version"], "kind": kind, "from_step": run["step"]}
+
     def start_queue(self):
         """Start the runner when jobs are waiting from an earlier session; otherwise the first enqueue starts it."""
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
+
+    def resume_queue_at_start(self):
+        """Carry on the queue a restart cut short: jobs waiting from the last session run again with no Start pressed (a job that
+        was running continues from its own checkpoint, studio_jobs.continue_here). A pause or stop the person made is saved in
+        queue.json and still holds: the runner starts but runs nothing while paused."""
+        self.start_queue()
 
     @timed("services.refresh_downloads")
     def refresh_downloads(self):
@@ -2299,10 +2413,24 @@ class WorkspaceServices(Services):
         self.runner._emit("queue", {})
         return out
 
+    def _queue_rows(self):
+        """The queue's jobs as {id, label, status, params}: what studio_cleanup judges a folder by. Call with the runner's lock held."""
+        return [{"id": j.id, "label": j.label, "status": j.status, "params": dict(j.params)} for j in self.runner.jobs]
+
+    def leftovers(self):
+        import studio_cleanup
+        with self.runner.lock:
+            return studio_cleanup.leftovers(self.root, self._queue_rows())
+
+    def remove_leftovers(self, ids):
+        import studio_cleanup
+        with self.runner.lock:  # no job starts between the check and the delete
+            return studio_cleanup.remove_leftovers(self.root, ids, self._queue_rows())
+
     def remove(self, job_id):
         with self.runner.lock:
             job = next((j for j in self.runner.jobs if j.id == job_id), None)
-            waiting = job is not None and job is not self.runner.running  # a running job is stopped and ends through _record_job
+            waiting = job is not None and job.status in ("waiting", "held")  # a running job is stopped and ends through _record_job; a failed one is only dismissed
         self.runner.remove(job_id)
         if waiting and job.kind == "import_pretrained" and job.params.get("version"):  # it never started: no event will say it ended
             self._drop_empty_import(job.params["version"], "stopped")
@@ -2499,6 +2627,66 @@ class WorkspaceServices(Services):
         hit = self._previews().get(self._preview_key(v, dataset_ids, rows))
         return None if hit is None else {**hit, "tokens_per_second": self._speed(read_metrics)}
 
+    def cached_step_rate(self, spec, rows):
+        return self._step_rates().get(self._rate_key(spec, rows))
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        import studio_scaling
+        from studio_core import atomic_json
+        found = studio_scaling.measure_step_rate(spec, rows, vocab, stop=stop)
+        if found is None:
+            return None
+        found = {**found, "measured_at": time.time()}
+        store = self._step_rates()
+        with self._lock:
+            store[self._rate_key(spec, rows)] = found
+            while len(store) > PREVIEWS_KEPT:
+                store.pop(next(iter(store)))
+            atomic_json(self.root / "data" / "step_rates.json", store)
+        return found
+
+    def _step_rates(self):
+        """{design and rows -> measured step rate}, kept in data/step_rates.json: a rate belongs to this computer and its data folder."""
+        if getattr(self, "_step_rate_store", None) is None:
+            path = self.root / "data" / "step_rates.json"
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError):
+                loaded = {}
+            self._step_rate_store = loaded if isinstance(loaded, dict) else {}
+        return self._step_rate_store
+
+    @staticmethod
+    def _rate_key(spec, rows):
+        return json.dumps([spec, rows], sort_keys=True, default=str)
+
+    def loss_evidence(self, version):
+        from studio_core import read_json
+        from studio_model import read_metrics
+        try:
+            run = Path(self._abs(self.store.get(version.number)["runs"][-1]))
+        except (KeyError, IndexError, TypeError):
+            return None
+        try:
+            record = read_json(run / "run.json") if (run / "run.json").exists() else {}
+            config = read_json(run / "config.json")
+            context = read_json(run / "spec.json")["dims"]["n_ctx"]
+            rows = read_metrics(run / "metrics.jsonl")
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if record.get("initialized_from") or record.get("resumed_from"):
+            return None  # a run that began from other weights is not this design's curve from step 0
+        per_step = int(config.get("batch_size", 1)) * int(config.get("accumulation", 1)) * int(context)
+        points = [(r["step"] * per_step, r["val_loss"]) for r in rows if r.get("val_loss") is not None and r.get("step")]
+        return {"points": points, "run": str(run)} if points else None
+
+    def device_facts(self):
+        from studio_backend import gpu_status
+        try:
+            return gpu_status()
+        except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
+            return None
+
     def _preview_key(self, version, dataset_ids, rows):
         """Same chosen sets, design and stored data (records, held-back text) -> same preview."""
         return json.dumps([sorted(dataset_ids), rows, version.spec, self._stamp(), self._heldout_stamp()], sort_keys=True, default=str)
@@ -2567,12 +2755,16 @@ class WorkspaceServices(Services):
     def _record_distributed(self, job, number, status, out):
         """A distributed run ends: only a run that finished all its rounds gives its coordinator's final weights (`last.npz` in the
         run's folder) to the version it trained, scored like a local pretrain's, with a change note naming the run and its machines.
+        A run that finished under a successor coordinator after a failover (#361) gives the successor's final weights, fetched from it.
         A stopped or failed run saves nothing, even past some rounds: the version goes back to saved."""
         import studio_distributed
         import studio_eval
         from studio_core import read_json
         record, ckpt = out / "run.json", out / "last.npz"
         done = status == "done" and ckpt.exists() and record.exists() and read_json(record).get("status") == "completed"
+        if status == "done" and not done:
+            ckpt = self._successor_weights(job.id, out)
+            done = ckpt is not None
         if done:
             machines = [m.node for m in studio_distributed.run_of(job).machines if m.state != "unreachable"]
             self.store.add_run(number, out)
@@ -2588,6 +2780,34 @@ class WorkspaceServices(Services):
         self.emit("versions", None)
         if done:
             self._bench_later(number)
+
+    def _successor_weights(self, run, out):
+        """The final weights of `run` from the coordinator the where-file names (studio_failover writes it after a failover, term 2 or
+        more), saved in the run's folder as last_term<N>.npz. None when there is no successor or it cannot send them (not finished,
+        stopped, unreachable): the run then saves nothing, as one that did not finish. Network: call it off the UI thread."""
+        import studio_diloco
+        from studio_core import read_json
+        import zipfile
+        from studio_peer import PeerClient, PeerError
+        try:
+            where = read_json(studio_diloco.where_file(self.root, run))
+            node, term, url = str(where["node"]), int(where["term"]), str(where["url"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if term < 2:
+            return None
+        try:
+            body = PeerClient(url).get_bytes(f"/collective/{run}/weights", {"term": term})
+            np.load(io.BytesIO(body), allow_pickle=False).close()  # an archive, before it is kept
+        except (PeerError, OSError, ValueError, zipfile.BadZipFile) as exc:
+            _log.warning("The final weights of run %s could not be fetched from %s (term %s): %s", run, node, term, exc)
+            return None
+        path = out / f"last_term{term}.npz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        part.write_bytes(body)
+        part.replace(path)
+        return path
 
     def _note_devices(self, number, ckpt, scored=False):
         """Record on the version the device kind that trained `ckpt` and, when the caller just scored it, the one that scored it."""
@@ -2995,6 +3215,21 @@ class WorkspaceServices(Services):
         return {"scores": got, "baseline": base, "verdict": None if base is None else studio_bench.gate_verdict(base, got)}
 
     # data / evaluation ------------------------------------------------------
+    def text_sets(self):
+        """The text sets from the counts storage keeps exact (Workspace.kind_stats), not from the summary: answering needs no scan
+        of the rows, so it takes milliseconds on a workspace of a million of them."""
+        import studio_data_kinds as dk
+        out = []
+        for dataset in list(self.workspace.state["datasets"]):
+            if dataset.get("storage") == "sqlite":
+                stats = self.workspace.kind_stats(dataset["id"])
+                count = stats.get("text", (0,))[0] if stats is not None else sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+            else:
+                count = sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+            if count:
+                out.append({"id": dataset["id"], "name": dataset["name"], "count": count})
+        return out
+
     def data(self, kind, query=""):
         summaries = self._summaries()
         full = summaries[kind]

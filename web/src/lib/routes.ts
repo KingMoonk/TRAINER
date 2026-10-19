@@ -12,21 +12,13 @@ export const AREAS: Area[] = [
 ];
 
 // `hidden` routes are reached from elsewhere (a link from a run) and stay out of the sidebar's page list.
-export type Route = { route: string; href: string; area: string; title: string; lead: string; lookInside?: boolean; hidden?: boolean };
+export type Route = { route: string; href: string; area: string; title: string; lead: string; hidden?: boolean };
 
 export const ROUTES: Route[] = [
   { route: "builder", href: "/builder", area: "models", title: "Build your model", lead: "Change the picture. See what it costs and what it does." },
   { route: "quicktest", href: "/quick-test", area: "models", title: "Quick test", lead: "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real." },
   { route: "compare", href: "/compare", area: "models", title: "Compare runs", lead: "Change one thing, hold the rest equal, run several seeds." },
-  { route: "trace", href: "/trace", area: "models", title: "Trace a position", lead: "Follow one position's stream through the model.", lookInside: true },
-  { route: "head_zoom", href: "/head-zoom", area: "models", title: "Inside a head", lead: "One attention head, one step at a time, on a real prompt.", lookInside: true },
-  { route: "value_map", href: "/value-map", area: "models", title: "Value map", lead: "How a head's values are projected down and back up, and why the heads add up.", lookInside: true },
-  { route: "loss", href: "/loss", area: "models", title: "Loss", lead: "What one wrong or right prediction costs, and the gradient it sends back.", lookInside: true },
-  { route: "landscape", href: "/landscape", area: "models", title: "Loss landscape", lead: "The error as you move the weights, drawn live while a version trains.", lookInside: true },
-  { route: "head_lab", href: "/head-lab", area: "models", title: "Head lab", lead: "Where does each attention head look, and how much does the model rely on it?", lookInside: true },
-  { route: "inside3d", href: "/inside-3d", area: "models", title: "Inside the network", lead: "Build the model from the inside and watch it train.", lookInside: true },
   { route: "your_data", href: "/your-data", area: "data", title: "Your data", lead: "Three kinds, because each one trains a different stage." },
-  { route: "make_data", href: "/make-data", area: "data", title: "Make extra data", lead: "Optional. Generate more, then keep what passes review." },
   { route: "pretraining", href: "/pretraining", area: "data", title: "Pretraining", lead: "Feed it text. It learns by predicting the next word, over and over." },
   { route: "storage", href: "/storage", area: "data", title: "Storage", lead: "What the app keeps on this computer's disk, and what you can delete to free space." },
   { route: "runs", href: "/runs", area: "runs", title: "Runs", lead: "Every training run on this computer and the cluster: what it is doing now and how the last ones ended." },

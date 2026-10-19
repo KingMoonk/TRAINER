@@ -297,7 +297,8 @@ class ClusterHost(Host):
 
     def claim(self, claim):
         self.claims[claim.run] = claim
-        self.cluster.claims[claim.run] = {"term": claim.term, "round": claim.round, "rank": claim.rank}
+        url = self.cluster.url_for_peers()  # where the others' members find this coordinator (url_of)
+        self.cluster.claims[claim.run] = {"term": claim.term, "round": claim.round, "rank": claim.rank, **({"url": url} if url else {})}
         self.cluster.state.put(CLAIM, claim.run, self.cluster.claims[claim.run])
 
     def withdraw(self, run):
@@ -339,11 +340,16 @@ class ClusterHost(Host):
                                                   "detail": f"Term {term} is coordinated on {claim.node if claim else 'another node'}; rounds closed here are discarded."})
 
     # -- telling the others on this node
-    def url_of(self, node):
-        from studio_peer import DEFAULT_PORT
+    def url_of(self, node, run):
+        """Where a member on this node reaches the coordinator of `run` on `node`: this node's API on loopback at the port it listens on,
+        else the url `node` published with its claim, else (an old claim, or one naming a loopback address) the address this node lists
+        `node` at."""
         if node == self.name:
-            return f"http://127.0.0.1:{DEFAULT_PORT}"
-        return self.cluster.address_of(node)
+            return f"http://127.0.0.1:{self.cluster.api_port}"
+        import studio_distributed
+        entry = self.cluster.state.get(node, CLAIM, run)
+        url = str(((entry or {}).get("value") or {}).get("url") or "")
+        return url if url and not studio_distributed.loopback(url) else self.cluster.address_of(node)
 
     def point(self, run, claim, node_down):
         """Write where the members here find the coordinator (studio_diloco.file_locator): only after a failover (term 2 or more), only
@@ -352,7 +358,7 @@ class ClusterHost(Host):
             return
         if run not in self.cluster.members and run not in self.cluster.replicas:
             return  # no member of the run here
-        url = self.url_of(claim.node)
+        url = self.url_of(claim.node, run)
         if not url:
             return
         import studio_diloco

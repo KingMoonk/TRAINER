@@ -103,6 +103,7 @@ class Cluster:
         self.hostname = hostname or socket.gethostname()  # this node's origin in the observation store
         self._local_runs = local_runs  # tests give each in-process node its own; None: this process's runs (studio_distributed)
         self.address = address if address is not None else (self.environ.get("TRAINER_NODE_ADDRESS") or "").strip() or None
+        self.api_port, self._tailnet = studio_cluster.DEFAULT_PORT, lambda: ""  # serve_at: how this node's API is reached
         self._store_factory = store or self.workspace_store
         self._own_factory = own or (lambda: studio_cluster.own_info(version=_version()))
         self._own = None
@@ -242,6 +243,18 @@ class Cluster:
             jobs = list(self.runner.jobs)
         return studio_distributed.local_runs(jobs, create=True, coordinators=self.coordinators)
 
+    def serve_at(self, port, tailnet=lambda: ""):
+        """Say how this node's API is reached (studio_api.__main__): on loopback at `port` by the workers here, and by the peers at
+        TRAINER_NODE_ADDRESS, else https://<tailnet()>, where `tailscale serve` listens (tailnet() is this node's MagicDNS name or '')."""
+        self.api_port, self._tailnet = int(port), tailnet
+
+    def url_for_peers(self):
+        """The address the peers reach this node's API at (serve_at), or None when it is not known."""
+        if self.address:
+            return self.address
+        name = self._tailnet()
+        return f"https://{name}" if name else None
+
     def address_of(self, origin):
         """The listed address of the peer that is `origin`, or None when this node's list has none by that name."""
         return next((a for a, name in self._names.items() if name == origin and a in self.peers()), None)
@@ -328,9 +341,11 @@ class Cluster:
         """A distributed run goes on this machine (it coordinates and is a member) once `min_members` of the machines it was given are
         free at once; it then holds a slot on up to `max_members` of them (`job.params["gang"]`, the addresses), or on none and waits."""
         import studio_diloco
+        import studio_distributed
+        studio_distributed.release_stale(job, self.client_for)  # a run resuming after a restart frees the machines its old members hold
         if self.peers() and self._threads and not self.polled.is_set():
             self.polled.wait(studio_cluster.POLL_TIMEOUT + 1)
-        here = sched.decide(job.kind, self.nodes(), self.health, job.params.get("pinned"))
+        here =sched.decide(job.kind, self.nodes(), self.health, job.params.get("pinned"))
         if here.where != "local":
             self.waiting[job.id] = here.reason
             return here
