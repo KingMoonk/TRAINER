@@ -7,6 +7,11 @@ import { design, type Choices, type Registry, type Tower as TowerShape } from "@
 import { BUILDER, fill } from "@/lib/copy/builder";
 import { Tower } from "./tower";
 
+// Radix Select asks for pointer capture, which jsdom lacks.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.setPointerCapture ??= () => {};
+
 vi.mock("./pieces", () => ({ Pieces: () => <div>Text pieces</div> }));
 afterEach(() => vi.restoreAllMocks());
 
