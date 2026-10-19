@@ -84,6 +84,44 @@
         "title": "Added",
         "type": "object"
       },
+      "AskPause": {
+        "properties": {
+          "from_node": {
+            "minLength": 1,
+            "title": "From Node",
+            "type": "string"
+          },
+          "run_label": {
+            "default": "",
+            "title": "Run Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_node"
+        ],
+        "title": "AskPause",
+        "type": "object"
+      },
+      "AskPeer": {
+        "properties": {
+          "address": {
+            "minLength": 1,
+            "title": "Address",
+            "type": "string"
+          },
+          "run_label": {
+            "default": "",
+            "title": "Run Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "AskPeer",
+        "type": "object"
+      },
       "Block": {
         "properties": {
           "block": {
@@ -111,6 +149,32 @@
           "own"
         ],
         "title": "Block",
+        "type": "object"
+      },
+      "BlockingJob": {
+        "description": "The job on a machine that a member waits behind.",
+        "properties": {
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta S"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "eta_s"
+        ],
+        "title": "BlockingJob",
         "type": "object"
       },
       "Body_import_data_data__kind__import_post": {
@@ -1704,13 +1768,6 @@
             "title": "Example",
             "type": "string"
           },
-          "links": {
-            "items": {
-              "$ref": "#/components/schemas/PartLink"
-            },
-            "title": "Links",
-            "type": "array"
-          },
           "module": {
             "title": "Module",
             "type": "string"
@@ -1733,8 +1790,7 @@
           "what",
           "module",
           "module_text",
-          "example",
-          "links"
+          "example"
         ],
         "title": "Explained",
         "type": "object"
@@ -2102,6 +2158,135 @@
           "size"
         ],
         "title": "ImportModelOut",
+        "type": "object"
+      },
+      "Invite": {
+        "description": "A run another computer added this one to: its member job in this computer's queue, in the shared member vocabulary.",
+        "properties": {
+          "blocking_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockingJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "can_pause_and_join": {
+            "title": "Can Pause And Join",
+            "type": "boolean"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_label": {
+            "title": "Run Label",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "invited",
+              "joining",
+              "training",
+              "behind",
+              "dropped",
+              "left",
+              "stopped",
+              "unreachable",
+              "waiting",
+              "never_joined",
+              "finished"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          }
+        },
+        "required": [
+          "job_id",
+          "run_id",
+          "run_label",
+          "owner",
+          "node",
+          "state",
+          "reason",
+          "can_pause_and_join"
+        ],
+        "title": "Invite",
+        "type": "object"
+      },
+      "Invites": {
+        "properties": {
+          "invites": {
+            "items": {
+              "$ref": "#/components/schemas/Invite"
+            },
+            "title": "Invites",
+            "type": "array"
+          },
+          "pause_requests": {
+            "items": {
+              "$ref": "#/components/schemas/PauseRequest"
+            },
+            "title": "Pause Requests",
+            "type": "array"
+          }
+        },
+        "required": [
+          "invites",
+          "pause_requests"
+        ],
+        "title": "Invites",
         "type": "object"
       },
       "Job": {
@@ -3409,6 +3594,16 @@
             "title": "Address",
             "type": "string"
           },
+          "blocking_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockingJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "can_stop": {
             "title": "Can Stop",
             "type": "boolean"
@@ -3491,6 +3686,11 @@
             ],
             "title": "Phase"
           },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
           "reported_ago": {
             "anyOf": [
               {
@@ -3535,7 +3735,7 @@
               "left",
               "stopped",
               "unreachable",
-              "unplaced",
+              "waiting",
               "never_joined",
               "finished"
             ],
@@ -4235,29 +4435,6 @@
         "title": "PairSaved",
         "type": "object"
       },
-      "PartLink": {
-        "properties": {
-          "block": {
-            "title": "Block",
-            "type": "integer"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "route": {
-            "title": "Route",
-            "type": "string"
-          }
-        },
-        "required": [
-          "route",
-          "label",
-          "block"
-        ],
-        "title": "PartLink",
-        "type": "object"
-      },
       "Parts": {
         "properties": {
           "channel": {
@@ -4918,6 +5095,45 @@
           "paths"
         ],
         "title": "PathsRequest",
+        "type": "object"
+      },
+      "PauseRequest": {
+        "description": "Another computer asked this one to pause the job it is running. Only a person here acts on it.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "blocking_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockingJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_node": {
+            "title": "From Node",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "run_label": {
+            "title": "Run Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "from_node",
+          "run_label",
+          "at"
+        ],
+        "title": "PauseRequest",
         "type": "object"
       },
       "PhaseModel": {
@@ -14003,6 +14219,284 @@
           }
         },
         "summary": "Defaults",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/invites": {
+      "get": {
+        "description": "The runs other computers added this one to (no accept step: they join by themselves when this computer is free) and the pause\nrequests other computers sent it. The same words the owner's run page uses for this machine.",
+        "operationId": "list_invites_distributed_invites_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Invites",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/invites/{job_id}/leave": {
+      "post": {
+        "description": "Leave the run: the owner is told to drop this member and keep it out (the same call as Stop on the owner's run page), and the\nmember job leaves this queue, a running one stopping. The owner not answering does not stop this computer from leaving.",
+        "operationId": "leave_run_distributed_invites__job_id__leave_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/invites/{job_id}/pause-and-join": {
+      "post": {
+        "description": "Pause the job running here and put the member job in its place. The paused job goes back to waiting and continues from its own\ncheckpoint when the run ends. 409 when the member job already runs or nothing else runs.",
+        "operationId": "pause_and_join_distributed_invites__job_id__pause_and_join_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause And Join",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/pause-requests": {
+      "post": {
+        "description": "Another computer asks this one to pause its running job. It is shown here as an alert, and nothing happens until a person\nhere accepts it. Asking again from the same computer for the same run refreshes the request.",
+        "operationId": "receive_pause_request_distributed_pause_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskPause"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseRequest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Pause Request",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/pause-requests/{request_id}": {
+      "delete": {
+        "description": "Decline a pause request; the running job carries on.",
+        "operationId": "dismiss_pause_request_distributed_pause_requests__request_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Pause Request",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/pause-requests/{request_id}/accept": {
+      "post": {
+        "description": "Pause the running job and hold it, so a waiting member job runs. The held job is released from the Queue page. 404 for an\nunknown request, 409 when nothing runs here any more.",
+        "operationId": "accept_pause_request_distributed_pause_requests__request_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invites"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Pause Request",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/peers/pause-request": {
+      "post": {
+        "description": "Ask another machine to pause the job it is running, so a run can use it. The request shows there as an alert; nothing is\npaused until a person there accepts. 502 with a sentence when the machine does not answer.",
+        "operationId": "ask_peer_to_pause_distributed_peers_pause_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskPeer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseRequest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask Peer To Pause",
         "tags": [
           "distributed"
         ]

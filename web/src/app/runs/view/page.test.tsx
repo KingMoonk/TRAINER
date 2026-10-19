@@ -110,7 +110,7 @@ describe("Run view: a DiLoCo run", () => {
           ...diloco(), state: "finished", phase: "finished", can_stop: false,
           members: [
             member("mac-mini", { address: "local", local: true, device: "mps", can_stop: false, state: "finished" }),
-            member("gpu-box", { state: "unplaced", note: reason, can_stop: false }),
+            member("gpu-box", { state: "never_joined", note: reason, reason, can_stop: false }),
           ],
         },
       },

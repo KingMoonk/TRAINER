@@ -236,9 +236,9 @@ class ReadModel(unittest.TestCase):
         box.state, box.reason = "unplaced", runs.UNPLACED
         rows = self.ended_rows("finished", {"mac": {"state": "training", "missed": 0, "sent": False, "note": ""}})
         self.assertEqual((rows["mac"]["state"], rows["mac"]["note"]), ("finished", ""))
-        self.assertEqual((rows["box"]["state"], rows["box"]["note"], rows["box"]["can_stop"]), ("unplaced", runs.UNPLACED, False))
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"], rows["box"]["can_stop"]), ("never_joined", runs.UNPLACED, False))
         self.assertEqual((rows["old"]["state"], rows["old"]["note"]), ("unreachable", "old did not answer within 2 seconds."))
-        self.assertEqual(self.ended_rows("stopped", {})["box"]["state"], "unplaced")
+        self.assertEqual(self.ended_rows("stopped", {})["box"]["state"], "never_joined")
 
     def test_an_invited_machine_that_was_never_heard_from_never_joined_when_the_run_ends(self):
         rows = self.ended_rows("finished", {"mac": {"state": "training", "missed": 0, "sent": False, "note": ""}})

@@ -18,6 +18,7 @@ import studio_cluster
 import studio_distributed as runs
 import studio_diloco
 import studio_facts
+import studio_membership
 import studio_peer
 from studio_api.app import get_services
 from studio_api.routers.pretraining import _version
@@ -65,14 +66,23 @@ class Sample(BaseModel):
     tokens_per_second: float | None
 
 
+class BlockingJob(BaseModel):
+    """The job on a machine that a member waits behind."""
+
+    label: str
+    eta_s: float | None  # seconds it has left; null when it cannot say
+
+
 class Member(BaseModel):
     node: str  # the name it joins under
     address: str  # "local" for this computer
     local: bool
     device: str  # cuda | mps | cpu, as the machine reported when the run started; "" when unknown
     device_name: str
-    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "unplaced", "never_joined", "finished"]
+    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "waiting", "never_joined", "finished"]
     note: str  # one sentence: why it is behind, dropped or unreachable
+    reason: str = ""  # the same sentence, under the shared member vocabulary: why it is waiting or unreachable, and what to do about it
+    blocking_job: BlockingJob | None = None  # state waiting: the job on that machine it joins after
     missed: int  # rounds in a row it has missed
     sent: bool  # its change for the open round has arrived
     rounds_done: int
@@ -223,7 +233,7 @@ def _live_rows(services):
     for run, coordinator, job in cluster.local_runs():
         if coordinator is not None and job is not None and job.status in ("failed", "stopped", "done"):
             coordinator.stop()  # its own member is gone: the run cannot go on
-        out.append(runs.view(run, coordinator, job))
+        out.append(runs.view(run, coordinator, job, runs.peer_facts(run, cluster)))
     return out
 
 
@@ -412,3 +422,158 @@ def stop_member(run_id: str, node: str, services: Services) -> Run:
         raise HTTPException(409, str(exc)) from None
     runs.release_member(run, node)
     return Run.model_validate(_read(run, job)[0])
+
+
+# ---- this computer as a member of other computers' runs ---------------------------------------------------------------
+
+class Invite(BaseModel):
+    """A run another computer added this one to: its member job in this computer's queue, in the shared member vocabulary."""
+
+    job_id: str  # the member job in this computer's queue
+    run_id: str
+    run_label: str
+    owner: str  # the computer that added this one
+    node: str  # the name this computer joins under
+    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "waiting", "never_joined", "finished"]
+    reason: str  # one sentence on the state
+    blocking_job: BlockingJob | None = None  # state waiting: the local job it joins after
+    round: int | None = None  # rounds the run has finished, once the owner's account has arrived
+    rounds: int | None = None
+    tokens_per_second: float | None = None
+    can_pause_and_join: bool  # the local job running now can step aside for it
+
+
+class PauseRequest(BaseModel):
+    """Another computer asked this one to pause the job it is running. Only a person here acts on it."""
+
+    id: str
+    from_node: str
+    run_label: str
+    blocking_job: BlockingJob | None = None  # the job that would pause; null once nothing runs here
+    at: float
+
+
+class Invites(BaseModel):
+    invites: list[Invite]
+    pause_requests: list[PauseRequest]
+
+
+class AskPause(BaseModel):
+    from_node: str = Field(min_length=1)
+    run_label: str = ""
+
+
+class AskPeer(BaseModel):
+    address: str = Field(min_length=1)  # the machine to ask: its address from the Machines list
+    run_label: str = ""  # the run this computer is about to start, for the request's text
+
+
+def _running_here(services):
+    """(the job running now, seconds it has left) on this computer."""
+    state = services.queue()
+    return state.job, state.eta_s
+
+
+def _own_name(services):
+    cluster = _cluster(services)
+    return cluster.hostname if cluster is not None else os.uname().nodename
+
+
+def _invites(services):
+    """This computer's invites and pause requests, read live."""
+    state = services.queue()
+    running, eta = state.job, state.eta_s
+    cluster = _cluster(services)
+    known = {row["id"]: row for row in studio_facts.cluster_runs(cluster, [])} if cluster is not None else {}
+    jobs = [job for job in [state.job, *state.up_next] if job is not None]
+    rows = [studio_membership.invite_row(job, running, eta, known.get(job.params.get("run"))) for job in studio_membership.member_jobs(jobs)]
+    return Invites(invites=[Invite.model_validate(row) for row in rows],
+                   pause_requests=[PauseRequest.model_validate(row) for row in studio_membership.pending_requests(running, eta)])
+
+
+def _member_job(services, job_id):
+    state = services.queue()
+    job = next((j for j in [state.job, *state.up_next] if j is not None and j.id == job_id and j.kind == "diloco_member"), None)
+    if job is None:
+        raise HTTPException(404, f"No invite {job_id}.")
+    return job
+
+
+def _yield(services, to=None):
+    runner = getattr(services, "runner", None)
+    if runner is None or not hasattr(runner, "yield_running"):
+        raise HTTPException(409, "This computer's queue cannot step a job aside.")
+    if not runner.yield_running(to):
+        raise HTTPException(409, "Nothing is running here that could step aside.")
+
+
+@router.get("/invites")
+def list_invites(services: Services) -> Invites:
+    """The runs other computers added this one to (no accept step: they join by themselves when this computer is free) and the pause
+    requests other computers sent it. The same words the owner's run page uses for this machine."""
+    return _invites(services)
+
+
+@router.post("/invites/{job_id}/pause-and-join")
+def pause_and_join(job_id: str, services: Services) -> Invites:
+    """Pause the job running here and put the member job in its place. The paused job goes back to waiting and continues from its own
+    checkpoint when the run ends. 409 when the member job already runs or nothing else runs."""
+    job = _member_job(services, job_id)
+    if job.status == "running":
+        raise HTTPException(409, "It is already running.")
+    _yield(services, job_id)
+    return _invites(services)
+
+
+@router.post("/invites/{job_id}/leave")
+def leave_run(job_id: str, services: Services) -> Invites:
+    """Leave the run: the owner is told to drop this member and keep it out (the same call as Stop on the owner's run page), and the
+    member job leaves this queue, a running one stopping. The owner not answering does not stop this computer from leaving."""
+    job = _member_job(services, job_id)
+    studio_membership.tell_owner_left(job)
+    state = services.queue()
+    if any(j is not None and j.id == job_id for j in [state.job, *state.up_next]):
+        services.remove(job_id)
+    return _invites(services)
+
+
+@router.post("/pause-requests", status_code=201)
+def receive_pause_request(body: AskPause, services: Services) -> PauseRequest:
+    """Another computer asks this one to pause its running job. It is shown here as an alert, and nothing happens until a person
+    here accepts it. Asking again from the same computer for the same run refreshes the request."""
+    request = studio_membership.ask_here(body.from_node, body.run_label)
+    state = services.queue()
+    return PauseRequest.model_validate(studio_membership.requests_row(request, state.job, state.eta_s))
+
+
+@router.post("/pause-requests/{request_id}/accept")
+def accept_pause_request(request_id: str, services: Services) -> Invites:
+    """Pause the running job and hold it, so a waiting member job runs. The held job is released from the Queue page. 404 for an
+    unknown request, 409 when nothing runs here any more."""
+    state = services.queue()
+    if request_id not in {r["id"] for r in studio_membership.pending_requests(state.job, state.eta_s)}:
+        raise HTTPException(404, f"No pause request {request_id}.")
+    _yield(services)
+    studio_membership.dismiss(request_id)
+    return _invites(services)
+
+
+@router.delete("/pause-requests/{request_id}")
+def dismiss_pause_request(request_id: str, services: Services) -> Invites:
+    """Decline a pause request; the running job carries on."""
+    if not studio_membership.dismiss(request_id):
+        raise HTTPException(404, f"No pause request {request_id}.")
+    return _invites(services)
+
+
+@router.post("/peers/pause-request", status_code=201)
+def ask_peer_to_pause(body: AskPeer, services: Services) -> PauseRequest:
+    """Ask another machine to pause the job it is running, so a run can use it. The request shows there as an alert; nothing is
+    paused until a person there accepts. 502 with a sentence when the machine does not answer."""
+    cluster = _cluster(services)
+    client_for = cluster.client_for if cluster is not None else None
+    try:
+        answer = studio_membership.ask_peer(body.address, _own_name(services), body.run_label, client_for)
+    except studio_peer.PeerError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return PauseRequest.model_validate(answer)

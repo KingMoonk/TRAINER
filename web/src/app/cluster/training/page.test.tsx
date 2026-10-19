@@ -66,7 +66,7 @@ describe("Training tab: the start form", () => {
     expect(screen.getByRole("checkbox", { name: /Notes/ })).not.toBeChecked();
     expect(await screen.findByRole("checkbox", { name: /gpu-box/ })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /old-laptop/ })).toBeInTheDocument();
-    expect(screen.getByText("Not answering")).toBeInTheDocument();
+    expect(screen.getByText("Unreachable")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /Version 2 · Wider/ })).toBeInTheDocument();
     expect(screen.getByText("No run has been started. Start one above.")).toBeInTheDocument();
   });
@@ -157,7 +157,7 @@ describe("Training tab: a run", () => {
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     expect(await screen.findByTestId("reason-old-laptop")).toHaveTextContent(/^old-laptop did not answer within 2 seconds\.$/);
     expect(screen.getByTestId("reason-brother-pc")).toHaveTextContent("refused this computer (401)");
-    expect(within(screen.getByTestId("member-old-laptop")).getByText("Could not be reached")).toBeInTheDocument();
+    expect(within(screen.getByTestId("member-old-laptop")).getByText("Unreachable")).toBeInTheDocument();
     expect(screen.getByTestId("member-gpu-box")).toHaveTextContent("Training");
     expect(screen.queryByTestId("reason-gpu-box")).toBeNull();
   });

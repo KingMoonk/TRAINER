@@ -93,7 +93,7 @@ describe("New run", () => {
     server();
     renderPage(<NewRunPage />, { route: "/runs/new/" });
     expect(await screen.findByTestId("worker-lab")).toBeDisabled();
-    expect(screen.getByTestId("worker-lab")).toHaveTextContent("Not answering");
+    expect(screen.getByTestId("worker-lab")).toHaveTextContent("Unreachable");
   });
 
   test("a peer alone is pinned with params.pinned", async () => {

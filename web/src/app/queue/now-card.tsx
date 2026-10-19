@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ClusterQueue } from "@/lib/cluster";
+import { inviteFor, useInvites } from "@/lib/join";
+import { MemberRow } from "./member-row";
 import { T } from "./copy";
 import { placeText, progressLine, rowFor, stateLine, type Queue } from "./logic";
 import { MembersLine } from "./nodes";
@@ -57,6 +59,7 @@ function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActi
   const job = queue.job!;
   const row = rowFor(cluster, job.id);
   const fraction = queue.total ? Math.min(1, queue.step / queue.total) : 0;
+  const invite = inviteFor(useInvites().data, job.id);
   return (
     <>
       <p className="text-base" data-testid="state-line">
@@ -68,19 +71,25 @@ function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActi
         </p>
       )}
       <MembersLine job={job} />
-      <p className="text-sm text-muted-foreground" data-testid="progress-line">
-        {progressLine(queue)}
-      </p>
-      <div
-        role="progressbar"
-        aria-label="Job progress"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(fraction * 100)}
-        className="h-2 w-full rounded-full bg-muted"
-      >
-        <div className="h-2 rounded-full bg-highlight-strong transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
-      </div>
+      {invite ? (
+        <MemberRow invite={invite} />
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground" data-testid="progress-line">
+            {progressLine(queue)}
+          </p>
+          <div
+            role="progressbar"
+            aria-label="Job progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(fraction * 100)}
+            className="h-2 w-full rounded-full bg-muted"
+          >
+            <div className="h-2 rounded-full bg-highlight-strong transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
+          </div>
+        </>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {queue.paused ? (
           <Button onClick={() => actions.resume.mutate()} disabled={actions.resume.isPending}>
