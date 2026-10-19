@@ -4,14 +4,14 @@
 // knobs, what the draft costs, what to expect, the versions, and the not-saved tray with its save and discard.
 
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Segmented } from "@/components/builder/tower";
+import { DiscreteControl } from "@/components/builder/discrete-control";
 import {
   bar,
   COST_ROWS,
@@ -146,25 +146,36 @@ type ControlsProps = {
 };
 
 export function Controls({ registry, cur, draft, knobs, onKnob }: ControlsProps) {
-  const headIndex = registry.heads.indexOf(draft.H);
-  const curHeadIndex = registry.heads.indexOf(cur.H);
   return (
-    <Panel title={BUILDER.look_back_heads} tip={BUILDER.look_back_heads_tip} testId="controls">
-      <Segmented
-        options={registry.heads}
-        value={headIndex}
-        saved={curHeadIndex}
-        onChange={(i) => onKnob("H", registry.heads[i])}
-        disabled={!knobs?.H}
-        testId="heads"
-      />
-      {knobs && !knobs.H && <p className="text-xs text-muted-foreground">{BUILDER.no_heads}</p>}
-      <p className="pt-1 text-sm font-medium" title={BUILDER.thinking_room_tip}>
-        {BUILDER.thinking_room}
-      </p>
-      <Segmented options={registry.widths} value={draft.W} saved={cur.W} onChange={(i) => onKnob("W", i)} disabled={!knobs?.W} testId="width" />
-      {knobs && !knobs.W && <p className="text-xs text-muted-foreground">{BUILDER.no_room}</p>}
+    <Panel title={BUILDER.model_controls} testId="controls">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+        <div className="min-w-0">
+          <DiscreteControl label={BUILDER.look_back_heads} help={BUILDER.heads_help} options={registry.heads} value={registry.heads.indexOf(draft.H)} saved={registry.heads.indexOf(cur.H)} onChange={(i) => onKnob("H", registry.heads[i])} disabled={!knobs?.H} testId="heads" />
+          {knobs && !knobs.H && <p className="mt-2 text-xs text-muted-foreground">{BUILDER.no_heads}</p>}
+        </div>
+        <div className="min-w-0">
+          <DiscreteControl label={BUILDER.thinking_room} help={BUILDER.width_help} options={registry.widths} value={draft.W} saved={cur.W} onChange={(i) => onKnob("W", i)} disabled={!knobs?.W} testId="width" />
+          {knobs && !knobs.W && <p className="mt-2 text-xs text-muted-foreground">{BUILDER.no_room}</p>}
+        </div>
+      </div>
     </Panel>
+  );
+}
+
+/** Native disclosure keeps optional tools mounted and preserves their local work. */
+export function BuilderDisclosure({ title, hint, reveal, children }: { title: string; hint: string; reveal?: unknown; children: React.ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (reveal && ref.current) ref.current.open = true;
+  }, [reveal]);
+  return (
+    <details ref={ref} className="min-w-0 rounded-xl border bg-card/50">
+      <summary className="cursor-pointer rounded-xl px-4 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        {title}
+        <span className="mt-1 block text-xs font-normal text-muted-foreground">{hint}</span>
+      </summary>
+      <div className="flex min-w-0 flex-col gap-3 border-t p-3">{children}</div>
+    </details>
   );
 }
 
@@ -330,6 +341,7 @@ type TrayProps = {
 
 export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, onSave, onSplit, onDiscard }: TrayProps) {
   const nv = nextVersionName(base);
+  const unchanged = base !== null && !cannotWrite && chips.length === 0;
   const saveButton = (
     <Button size="sm" onClick={onSave} disabled={!canSave || saving} id="builder-save" data-testid="save">
       {fill(BUILDER.save_as, { version: nv })}
@@ -382,8 +394,8 @@ export function Tray({ base, chips, cannotWrite, saving, canSave, splitCount, on
     text = fill(BUILDER.no_changes_text, { version: versionName(base) });
   }
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2" data-testid="tray" aria-live="polite">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className={cn("flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4", unchanged ? "py-2" : "py-3")} data-testid="tray" aria-live="polite">
+      <div className={cn("flex min-w-0 flex-1 gap-1", unchanged ? "flex-wrap items-baseline gap-x-3" : "flex-col")}>
         <p className={cn("text-sm font-medium", (cannotWrite || chips.length > 0) && AMBER)}>{kicker}</p>
         <p className="text-xs text-muted-foreground">{text}</p>
         {chips.length > 1 && base !== null && !cannotWrite && (

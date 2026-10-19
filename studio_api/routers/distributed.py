@@ -71,7 +71,7 @@ class Member(BaseModel):
     local: bool
     device: str  # cuda | mps | cpu, as the machine reported when the run started; "" when unknown
     device_name: str
-    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "finished"]
+    state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "unplaced", "never_joined", "finished"]
     note: str  # one sentence: why it is behind, dropped or unreachable
     missed: int  # rounds in a row it has missed
     sent: bool  # its change for the open round has arrived
@@ -361,7 +361,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         raise HTTPException(400, f"The run needs {settings.min_members} machines at once, but only {len(machines)} "
                                  f"{'is' if len(machines) == 1 else 'are'} chosen, this computer included.")
     config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
-    label = f"Version {version.number} across {len(machines)} machine{'s' if len(machines) != 1 else ''}"
+    label = runs.across_label(version.number, len(machines))
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},

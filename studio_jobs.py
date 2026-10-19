@@ -43,7 +43,8 @@ def prepare(job, services):
 
 
 FOLDER_FILES = ("config.json", "dataset.jsonl", "last.npz", "best.npz")  # what studio_model.train refuses to overwrite
-RESUME_PARAMS = ("resume", "resume_steps", "resume_base", "resume_local")
+RESUME_PARAMS = ("resume", "resume_steps", "resume_base", "resume_local", "resume_rebase")
+USER_CONTINUES = ("same", "new_data")  # `params["continue_from"]["kind"]` that resume a checkpoint (studio_ia.continue_run)
 
 
 def continue_here(job):
@@ -51,12 +52,18 @@ def continue_here(job):
     training refuses to write into. Move that folder aside, and when it holds this job's `last.npz` with its `dataset.jsonl` set
     `params["resume"]` so `pretrain` continues from it with the optimizer, sampler and RNG (`resume_local` lets it fall back to a
     fresh start if training still refuses the file). Otherwise start fresh and say why on the job's note. A job that has never run
-    here has no folder and is left alone."""
+    here has no folder and is left alone, unless the person asked to continue a run (`params["continue_from"]`): then its first start
+    resumes that run's `last.npz` (`new_data`: rebased on the job's own text)."""
     p = job.params
     for key in RESUME_PARAMS:
         p.pop(key, None)
     out = Path(p["output_dir"])
+    wanted = p.get("continue_from") or {}
     if not any((out / name).exists() for name in FOLDER_FILES):
+        if wanted.get("kind") in USER_CONTINUES:
+            p.update(resume=wanted["checkpoint"], resume_steps=wanted["total"], resume_base=0)
+            if wanted["kind"] == "new_data":
+                p["resume_rebase"] = True
         return
     aside = out.with_name(f"{out.name}-before-restart")
     for n in range(2, 1000):
@@ -64,7 +71,7 @@ def continue_here(job):
             break
         aside = out.with_name(f"{out.name}-before-restart-{n}")
     shutil.move(str(out), str(aside))
-    steps = int((p.get("config") or {}).get("steps") or 0)
+    steps = int(wanted.get("total") or (p.get("config") or {}).get("steps") or 0)  # (a rebased job's config holds only the steps it adds)
     step, reason = _checkpoint_step(aside / "last.npz"), ""
     if step is None:
         reason = "it had not saved a usable checkpoint"
@@ -112,40 +119,106 @@ def pretrain(job, context, emit, stop, pause):
     options = dict(emit=emit, stop=stop, pause=pause, wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
                    snapshot_every=p.get("snapshot_every", 50),  # feeds the 3D page's scrubber; newest 20 kept
                    offload_optimizer=offload)
+    options, watcher = _watched(job, options, stop)
+    if p.get("datasets") is not None:
+        import studio_ia.continue_run as continuing
+        continuing.source_note(out, p)  # what a later "continue this run" needs to know of the text
     if p.get("resume"):
-        resumed = _resume(job, cfg, out, init, options)
+        resumed = _resume(job, cfg, out, init, options, context)
         if resumed is not None:
-            return resumed
-    return studio_model.train(cfg, _examples(job, context), out, init_from=init, **options)
+            return _plateau_end(job, out, watcher, resumed)
+    return _plateau_end(job, out, watcher, studio_model.train(_weights_only_steps(job, cfg), _examples(job, context), out, init_from=init, **options))
 
 
-def _resume(job, cfg, out, init, options):
+def _weights_only_steps(job, cfg):
+    """The config for a start from published weights (no checkpoint to resume): a continued run adds only its `add` steps there,
+    whatever total its config names for the resume."""
+    wanted = job.params.get("continue_from") or {}
+    return dict(cfg, steps=int(wanted["add"])) if wanted.get("kind") in USER_CONTINUES else cfg
+
+
+def _watched(job, options, stop):
+    """`options` for studio_model.train with the plateau rule (`params["plateau"]`, studio_plateau) watching the events it emits and
+    ending the stage through the stop event it polls. Returns (options, the watcher or None when the job has no rule)."""
+    rule = job.params.get("plateau")
+    if not rule:
+        return options, None
+    import studio_plateau
+    watcher = studio_plateau.Plateau(rule, use_history=not job.params.get("resume_rebase"))
+    watcher.flag = studio_plateau.Flagged(stop, watcher)
+    emit = watcher.emit = options["emit"]
+
+    def relay(event):
+        emit(event)  # the metric is reported (and its checkpoints saved) before the rule can end the stage
+        watcher.feed(event)
+    return {**options, "emit": relay, "stop": watcher.flag}, watcher
+
+
+def _plateau_end(job, out, watcher, record):
+    """When the plateau rule ended the stage (not a stop the person asked for): say why on the job (`params["ended"]`), in the run's
+    own `run.json` and as an info event, and mark the run completed, not stopped. The best checkpoint was kept by training."""
+    if watcher is None or watcher.hit is None or watcher.flag.user_stopped():
+        return record
+    import studio_plateau
+    from studio_core import atomic_json, read_json
+    ended = {"reason": "plateau", "text": studio_plateau.reason_text(watcher.hit), **watcher.hit}
+    job.params["ended"] = ended
+    watcher.emit({"type": "info", "text": ended["text"]})
+    if isinstance(record, dict):
+        record.update(status="completed", budget_reached="plateau", ended=ended)
+        path = Path(out) / "run.json"
+        try:
+            atomic_json(path, {**read_json(path), **{k: record[k] for k in ("status", "budget_reached", "ended")}})
+        except (OSError, ValueError):
+            pass  # the run page then lacks the reason; the job still has it
+    return record
+
+
+def _resume(job, cfg, out, init, options, context=None):
     """Continue from `params["resume"]`, a full checkpoint (`last.npz`: weights, optimizer, sampler and RNG) this node wrote, on the data
     it was written with (the `dataset.jsonl` beside it, so a changed dataset cannot refuse it) and for the `resume_steps` its attempt
     was planned for. Emits "resumed" with `resume_base`, the steps done before that attempt, once training has accepted the checkpoint,
     so the owner counts progress from there. When training refuses it before the first step and the job has published weights to start
     from (`init`), emits "resume_refused" and returns None: the caller trains from those with a fresh optimizer. Without them the
-    refusal is the job's failure."""
+    refusal is the job's failure.
+
+    A run the person asked to continue (`params["continue_from"]`, studio_ia.continue_run) resumes the same way, but says so in plain
+    info lines: the "resumed" and "resume_refused" events make the queue write "the app stopped while this ran". With `resume_rebase`
+    the data is the job's own text and training rebases the checkpoint onto it, adding `cfg["steps"]` steps."""
     import studio_model
     path = Path(job.params["resume"])
     emit, started = options["emit"], []
+    wanted = job.params.get("continue_from") or {}
+    asked = wanted.get("kind") in USER_CONTINUES and str(path) == str(wanted.get("checkpoint"))  # (not a restart's or a lost node's own file)
+    rebase = bool(job.params.get("resume_rebase"))
 
     def relay(event):
         if not started:
             started.append(True)
-            said = {"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": studio_model.load_checkpoint(path)["step"]}
-            if job.params.get("resume_local"):  # this queue shows the progress itself, from the checkpoint's step
-                said["total"] = int(job.params.get("resume_steps") or cfg["steps"])
-            emit(said)
+            step = studio_model.load_checkpoint(path)["step"]
+            if asked:
+                emit({"type": "info", "text": f"Continuing from step {step:,} with the optimizer state it had" + (", on new text." if rebase else ".")})
+            else:
+                said = {"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": step}
+                if job.params.get("resume_local"):  # this queue shows the progress itself, from the checkpoint's step
+                    said["total"] = int(job.params.get("resume_steps") or cfg["steps"])
+                emit(said)
         emit(event)
     try:
-        examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
-        return studio_model.train(dict(cfg, steps=int(job.params.get("resume_steps") or cfg["steps"])), examples, out, resume=path,
-                                  **{**options, "emit": relay})
+        if rebase:
+            examples, steps = _examples(job, context), cfg["steps"]
+        else:
+            examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
+            steps = int(job.params.get("resume_steps") or cfg["steps"])
+        return studio_model.train(dict(cfg, steps=steps), examples, out, resume=path, rebase=rebase, **{**options, "emit": relay})
     except (OSError, ValueError, KeyError) as exc:
         if started or (init is None and not job.params.get("resume_local")):  # (a local restart can always start fresh instead)
             raise
-        emit({"type": "resume_refused", "reason": str(exc) or type(exc).__name__})
+        if asked:
+            emit({"type": "info", "text": f"The full checkpoint could not be continued ({str(exc) or type(exc).__name__}): training "
+                                          f"{wanted['add']:,} more steps from its weights with a fresh optimizer."})
+        else:
+            emit({"type": "resume_refused", "reason": str(exc) or type(exc).__name__})
         return None
 
 
@@ -206,6 +279,12 @@ def restore_answers(job, context, emit, stop, pause):
     return studio_rl.run_round(3, job, context, emit, stop, pause)
 
 
+def rlhf_loop(job, context, emit, stop, pause):
+    """The automated RLHF loop (studio_loop): rounds until a stop rule, resumable from its folder (params["output_dir"])."""
+    import studio_loop
+    studio_loop.run_job(job, context, emit, stop, pause)
+
+
 def quicktest(job, context, emit, stop, pause):
     import studio_quicktest
     p = job.params
@@ -230,4 +309,4 @@ def not_built(job, context, emit, stop, pause):
 
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
             "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained,
-            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member}
+            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member, "rlhf_loop": rlhf_loop}

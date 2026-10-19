@@ -265,17 +265,22 @@ class AuthTest(unittest.TestCase):
     def test_main_opens_the_server_for_loopback_and_fake_only(self):
         from studio_api.__main__ import make
 
+        def workspace_like():  # FakeServices standing in for WorkspaceServices, with the runner whose cluster build() tells its port
+            services = FakeServices()
+            services.runner = mock.Mock()
+            return services
+
         for argv, expect_open in ((["--fake"], True), (["--fake", "--bind", "100.64.0.1"], True)):
             app, _, _ = make(argv)
             self.assertIs(app.state.open, expect_open, argv)
             shut(app)
         for host in LOCAL:
-            with mock.patch("studio_core.Workspace"), mock.patch("studio_ia.services.WorkspaceServices", return_value=FakeServices()):
+            with mock.patch("studio_core.Workspace"), mock.patch("studio_ia.services.WorkspaceServices", return_value=workspace_like()):
                 app, bound, _ = make(["--allow-cpu", "--bind", host])
             self.assertTrue(app.state.open, host)
             self.assertEqual(bound, host)
             shut(app)
-        with mock.patch("studio_core.Workspace"), mock.patch("studio_ia.services.WorkspaceServices", return_value=FakeServices()):
+        with mock.patch("studio_core.Workspace"), mock.patch("studio_ia.services.WorkspaceServices", return_value=workspace_like()):
             app, _, _ = make(["--allow-cpu", "--bind", "100.64.0.1"])
         self.assertFalse(app.state.open)
         shut(app)

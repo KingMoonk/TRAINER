@@ -134,6 +134,44 @@ class PostTrainingApiTest(unittest.TestCase):
         self.assertEqual(self.client.post("/post-training/rounds", json={"round": 1, "lora_rank": 7}).status_code, 400)
         self.assertEqual(self.queued(), [])
 
+    def test_a_loop_is_queued_listed_stopped_and_carried_on(self):
+        version = trained(self.services)
+        queued = self.client.post("/post-training/loops", json={"judge_model": "qwen", "config": {"max_rounds": 5, "patience": 2}})
+        self.assertEqual(queued.status_code, 200, queued.text)
+        job = self.queued()[-1]
+        self.assertEqual((job.kind, job.id, queued.json()["job"]), ("rlhf_loop", job.id, job.id))
+        self.assertEqual(job.params["config"], {"max_rounds": 5, "patience": 2})
+        self.assertEqual((job.params["version"], job.params["judge_model"], job.params["loop_id"]), (version.number, "qwen", queued.json()["loop_id"]))
+        listed = self.client.get("/post-training/loops").json()
+        self.assertEqual([(x["id"], x["active"]) for x in listed], [(queued.json()["loop_id"], True)])
+        again = self.client.post("/post-training/loops", json={"resume": queued.json()["loop_id"]})
+        self.assertEqual(again.status_code, 400)
+        self.assertIn("already", again.json()["detail"])
+        self.assertEqual(self.client.post(f"/post-training/loops/{queued.json()['loop_id']}/stop").json(), {"stopped": True})
+        self.assertEqual(self.client.post("/post-training/loops/nope/stop").status_code, 400)
+        self.assertEqual(self.client.post("/post-training/loops", json={"config": {"max_rounds": 0}}).status_code, 422)
+
+    def test_a_loop_needs_something_to_learn_from(self):
+        trained(self.services)
+        self.services.post_training = lambda version: {"counts": {"problems": 0}}
+        response = self.client.post("/post-training/loops", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("rule can check", response.json()["detail"])
+        self.assertEqual(self.client.post("/post-training/loops", json={"judge_model": "qwen"}).status_code, 200)
+
+    def test_judges_say_why_ollama_could_not_be_read(self):
+        with patch("studio_rlhf.OllamaTeacher.models", side_effect=RuntimeError("Cannot reach Ollama at http://localhost:11434. Is it running?")):
+            body = self.client.get("/post-training/judges").json()
+        self.assertEqual(body["models"], [])
+        self.assertIn("Cannot reach Ollama", body["error"])
+        with patch("studio_rlhf.OllamaTeacher.models", return_value=["a", "b"]):
+            self.assertEqual(self.client.get("/post-training/judges").json()["models"], ["a", "b"])
+
+    def test_adopting_a_loop_is_a_job_with_the_gate_result(self):
+        job, _ = finished(self.tap, self.client.post("/post-training/loops/abc/adopt"))
+        self.assertEqual(job["status"], "done", job)
+        self.assertFalse(job["result"]["ok"])
+
     def test_import_saves_a_version_and_says_so_on_events(self):
         response = self.client.post("/post-training/imports", data={"name": "gpt2"})
         self.assertEqual(response.status_code, 200, response.text)

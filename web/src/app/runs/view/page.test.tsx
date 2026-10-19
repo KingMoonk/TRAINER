@@ -102,6 +102,31 @@ describe("Run view: a DiLoCo run", () => {
     expect(calls(all, "POST", "/distributed/runs/r1/stop")).toHaveLength(0);
   });
 
+  test("after the run ends, a machine that never joined says why and the coordinator that finished is not red", async () => {
+    const reason = "It was busy when the run was placed. It joins a later round if it is free by then.";
+    mockApi({
+      "GET /distributed/runs/r1": {
+        body: {
+          ...diloco(), state: "finished", phase: "finished", can_stop: false,
+          members: [
+            member("mac-mini", { address: "local", local: true, device: "mps", can_stop: false, state: "finished" }),
+            member("gpu-box", { state: "unplaced", note: reason, can_stop: false }),
+          ],
+        },
+      },
+      "GET /queue": { body: queue({ job: null }) },
+      "GET /cluster/nodes": { body: NODES },
+    });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    await screen.findByTestId("run-title");
+    expect(screen.getByTestId("state-gpu-box")).toHaveTextContent("Never joined");
+    expect(screen.getByTestId("reason-gpu-box")).toHaveTextContent(reason);
+    expect(screen.getByTestId("node-gpu-box")).not.toHaveClass("border-destructive");
+    expect(screen.getByTestId("state-mac-mini")).toHaveTextContent("Finished");
+    expect(screen.queryByTestId("reason-mac-mini")).not.toBeInTheDocument();
+    expect(screen.getByTestId("node-mac-mini")).not.toHaveClass("border-destructive");
+  });
+
   test("a run that cannot be stopped here offers no stop controls", async () => {
     mockApi({
       "GET /distributed/runs/r1": { body: { ...diloco(), can_stop: false, members: diloco().members.map((m) => ({ ...m, can_stop: false })) } },

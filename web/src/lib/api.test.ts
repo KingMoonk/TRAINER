@@ -116,10 +116,10 @@ describe("unwrap", () => {
 describe("api (the typed client)", () => {
   test("calls the route, with the path parameter filled and the query serialised", async () => {
     const { api } = await load();
-    const calls = mockApi({ "GET /viewer/snapshots": { body: [] }, "GET /jobs/*": { body: { id: "j" } } });
+    const calls = mockApi({ "GET /data/problems/rows": { body: [] }, "GET /jobs/*": { body: { id: "j" } } });
     await api.GET("/jobs/{job_id}", { params: { path: { job_id: "j" } } });
-    await api.GET("/viewer/snapshots", { params: { query: { version: 3 } } });
-    expect(calls.map((c) => `${c.method} ${c.path}${c.search}`)).toEqual(["GET /jobs/j", "GET /viewer/snapshots?version=3"]);
+    await api.GET("/data/{kind}/rows", { params: { path: { kind: "problems" }, query: { limit: 3 } } });
+    expect(calls.map((c) => `${c.method} ${c.path}${c.search}`)).toEqual(["GET /jobs/j", "GET /data/problems/rows?limit=3"]);
   });
 
   test("adds the token header from storage on every request, and none without one", async () => {
