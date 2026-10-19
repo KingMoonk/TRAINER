@@ -3,7 +3,9 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TRAINING as T } from "@/lib/copy/training";
+import { speedupText, verdictTone } from "@/app/runs/view/health";
 import { factAge, otherRuns } from "@/app/runs/view/live";
+import { cn } from "@/lib/utils";
 import type { Run } from "./logic";
 
 /** The other runs, a short list under the live one. Choosing one makes it the live run. */
@@ -20,7 +22,12 @@ export function RunsList({ runs, live, onSelect }: { runs: Run[]; live: Run | un
             <span className="font-medium">{run.label}</span>
             <Badge variant={run.state === "failed" ? "destructive" : "secondary"} data-testid={`other-state-${run.id}`}>{T.states[run.state]}</Badge>
             <span className="text-xs text-muted-foreground">{T.roundOf.replace("{round}", String(run.round)).replace("{rounds}", String(run.rounds))}</span>
-            {factAge(run) && <span className="text-xs text-muted-foreground" data-testid={`other-age-${run.id}`}>{factAge(run)}</span>}
+            {run.health && run.health.verdict.state !== "not_enough_data" && (
+              <span className={cn("rounded-full border px-2 py-0.5 text-xs", verdictTone(run.health.verdict.state))} data-testid={`other-verdict-${run.id}`}>
+                {speedupText(run.health) ? `${speedupText(run.health)} · ` : ""}{run.health.verdict.text}
+              </span>
+            )}
+            {factAge(run) &&<span className="text-xs text-muted-foreground" data-testid={`other-age-${run.id}`}>{factAge(run)}</span>}
             <Button className="ml-auto" variant="outline" size="sm" aria-label={T.showRunLabel.replace("{label}", run.label)} onClick={() => onSelect(run.id)}>
               {T.showRun}
             </Button>

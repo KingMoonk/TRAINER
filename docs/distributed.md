@@ -387,6 +387,22 @@ started from, as an Ollama judge sees it. The settings are in `Settings`; only a
 - **A coordinator made from a replica** (a failover) has neither the prompts nor the starting weights: it journals `win_rate_off` and goes on
   without the rule.
 
+### Reviewing the teacher's lessons (#513)
+
+Each polish turns the model's weak answers into one **lesson**, which is one data shard (`lessons.jsonl` holds its rows). Members cache shards
+by id, so the unit you can drop is the shard, not a row. A lesson has a status: `live` (dealt to the members), `dropped` (by you) or
+`left_out` (by a step back to an earlier save, or a failover). The list is kept in `diloco.json`, so it survives an owner restart.
+
+- `GET /distributed/runs/{run}/lessons` lists them, oldest first: `id`, `round`, `rows`, `status`, `keepable`, `items` (up to 50 answers: the
+  prompt, the model's reply and the teacher's answer) and `more` (answers not shown).
+- `POST /distributed/runs/{run}/lessons/{lesson}/drop` and `.../keep` change one and answer with the list. The next round opens without a
+  dropped lesson (or with a kept one); the round already open keeps what it dealt. 404 for an unknown lesson, 409 when the run is not going
+  or is over. `keepable` is false for a lesson that is dealt now and for one whose rows this computer no longer holds (after a failover): Keep
+  would fail, so the web hides it.
+- Only the coordinator can change a lesson. A computer that does not coordinate the run asks the one that does, and passes its 4xx answer
+  through; an unreachable owner or a 5xx is a 502.
+- Journal events `lesson_dropped` and `lesson_kept`. A dropped lesson's prompts stay out of the win-rate judging (see "Stopping on a head-to-head win rate"): dropping a lesson does not put its prompts back into the comparison.
+
 ### The owner restarting (#479)
 
 The coordinator runs in the owner's API process, so a restart (a dev `--reload` included) takes it away. Its outer weights and momentum are

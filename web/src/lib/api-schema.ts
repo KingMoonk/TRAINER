@@ -390,6 +390,107 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collect State
+         * @description What the collector is doing now.
+         */
+        get: operations["collect_state_collect_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collect/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Config */
+        get: operations["get_config_collect_config_get"];
+        /**
+         * Put Config
+         * @description Save settings. 400 with a sentence for a bad value (a site that is excluded, a cap out of range). Turning collection on starts it.
+         */
+        put: operations["put_config_collect_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collect/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collect Options
+         * @description Topics, sources with their licence and terms notes, the sites that are never collected.
+         */
+        get: operations["collect_options_collect_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collect/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause
+         * @description Pause now; the collector notices within a second.
+         */
+        post: operations["pause_collect_pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collect/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume
+         * @description Resume, turning collection on if it was off.
+         */
+        post: operations["resume_collect_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collective/{run}/join": {
         parameters: {
             query?: never;
@@ -1570,6 +1671,68 @@ export interface paths {
         get: operations["get_run_distributed_runs__run_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Lessons
+         * @description What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the
+         *     run is not going. A run another computer coordinates is read by asking that computer.
+         */
+        get: operations["run_lessons_distributed_runs__run_id__lessons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/lessons/{lesson}/drop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drop Run Lesson
+         * @description Leave a lesson out of the rounds that open from now on; the round in flight keeps it. 404 for an id that is no lesson, 409 when
+         *     the run is over or not going. Answers the lessons as they stand.
+         */
+        post: operations["drop_run_lesson_distributed_runs__run_id__lessons__lesson__drop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/lessons/{lesson}/keep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep Run Lesson
+         * @description Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop.
+         */
+        post: operations["keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3416,6 +3579,118 @@ export interface components {
             /** Nodes */
             nodes: components["schemas"]["QueueNode"][];
         };
+        /** CollectConfig */
+        CollectConfig: {
+            /** Approved */
+            approved: string[];
+            /** Blocked */
+            blocked: string[];
+            /** Custom Topics */
+            custom_topics: string[];
+            /** Enabled */
+            enabled: boolean;
+            github: components["schemas"]["GitHub"];
+            idle: components["schemas"]["Idle"];
+            licences: components["schemas"]["Licences"];
+            limits: components["schemas"]["Limits"];
+            /** Paused */
+            paused: boolean;
+            sources: components["schemas"]["Sources"];
+            stackexchange: components["schemas"]["StackExchange"];
+            /** Topics */
+            topics: string[];
+            web: components["schemas"]["Web"];
+        };
+        /** CollectOptions */
+        CollectOptions: {
+            /** Excluded */
+            excluded: components["schemas"]["Excluded"][];
+            /** Licences */
+            licences: components["schemas"]["LicenceOption"][];
+            /** Sources */
+            sources: components["schemas"]["SourceOption"][];
+            /** Topics */
+            topics: components["schemas"]["Topic"][];
+            /** User Agent */
+            user_agent: string;
+        };
+        /** CollectState */
+        CollectState: {
+            /** Bandwidth Cap */
+            bandwidth_cap: number;
+            /** Bandwidth Today */
+            bandwidth_today: number;
+            /** Bandwidth Total */
+            bandwidth_total: number;
+            /** Disk Cap */
+            disk_cap: number;
+            /** Disk Used */
+            disk_used: number;
+            /** Enabled */
+            enabled: boolean;
+            /** File */
+            file: string;
+            /** Heartbeat Age */
+            heartbeat_age?: number | null;
+            /** Journal */
+            journal: components["schemas"]["JournalRow"][];
+            /** Paused */
+            paused: boolean;
+            /** Plan */
+            plan: components["schemas"]["studio_api__routers__collect__PlanRow"][];
+            /** Reason */
+            reason: string;
+            /** Requests Today */
+            requests_today: {
+                [key: string]: number;
+            };
+            /**
+             * Running
+             * @description the background collector process is alive
+             */
+            running: boolean;
+            /** Sets */
+            sets: components["schemas"]["CollectedSet"][];
+            /** Sources */
+            sources: components["schemas"]["SourceProgress"][];
+            stats: components["schemas"]["Stats"];
+            /**
+             * Status
+             * @description off | running | waiting | paused | idle | error
+             */
+            status: string;
+            /**
+             * Waiting Shards
+             * @description finished shards not yet added to your data
+             */
+            waiting_shards: number;
+        };
+        /** CollectedSet */
+        CollectedSet: {
+            /** Bytes */
+            bytes: number;
+            dropped: components["schemas"]["Dropped"];
+            /** Group */
+            group: string;
+            /** Id */
+            id: string;
+            /**
+             * Kept
+             * @description records the collector kept for this set
+             */
+            kept: number;
+            /** Name */
+            name: string;
+            /**
+             * Records
+             * @description records in the set now (what the trainer reads)
+             */
+            records: number;
+            /** Redactions */
+            redactions: number;
+            /** Seen */
+            seen: number;
+        };
         /** ComparePlan */
         ComparePlan: {
             /** Base */
@@ -3425,7 +3700,7 @@ export interface components {
             /** N Sweeps */
             n_sweeps: number;
             /** Variants */
-            variants: components["schemas"]["PlanRow"][];
+            variants: components["schemas"]["studio_api__routers__benchmark__PlanRow"][];
             /** Wall Seconds */
             wall_seconds: number;
         };
@@ -3478,6 +3753,31 @@ export interface components {
             };
             /** V */
             v: number;
+        };
+        /**
+         * ConfigUpdate
+         * @description Any of the settings; what is left out is kept. A list or a website list replaces the whole list.
+         */
+        ConfigUpdate: {
+            /** Approved */
+            approved?: string[] | null;
+            /** Blocked */
+            blocked?: string[] | null;
+            /** Custom Topics */
+            custom_topics?: string[] | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            github?: components["schemas"]["GitHubUpdate"] | null;
+            idle?: components["schemas"]["IdleUpdate"] | null;
+            licences?: components["schemas"]["LicencesUpdate"] | null;
+            limits?: components["schemas"]["LimitsUpdate"] | null;
+            /** Paused */
+            paused?: boolean | null;
+            sources?: components["schemas"]["SourcesUpdate"] | null;
+            stackexchange?: components["schemas"]["StackExchangeUpdate"] | null;
+            /** Topics */
+            topics?: string[] | null;
+            web?: components["schemas"]["Web"] | null;
         };
         /** ContinueBody */
         ContinueBody: {
@@ -3697,6 +3997,44 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** Dropped */
+        Dropped: {
+            /**
+             * Decontam
+             * @default 0
+             */
+            decontam: number;
+            /**
+             * Duplicate
+             * @default 0
+             */
+            duplicate: number;
+            /**
+             * Invalid
+             * @default 0
+             */
+            invalid: number;
+            /**
+             * Licence
+             * @default 0
+             */
+            licence: number;
+            /**
+             * Near Duplicate
+             * @default 0
+             */
+            near_duplicate: number;
+            /**
+             * Pii
+             * @default 0
+             */
+            pii: number;
+            /**
+             * Quality
+             * @default 0
+             */
+            quality: number;
+        };
         /**
          * Ended
          * @description Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).
@@ -3733,6 +4071,13 @@ export interface components {
             path: string;
             /** Size */
             size?: number | null;
+        };
+        /** Excluded */
+        Excluded: {
+            /** Host */
+            host: string;
+            /** Reason */
+            reason: string;
         };
         /** ExpectBody */
         ExpectBody: {
@@ -3907,6 +4252,20 @@ export interface components {
              */
             store: boolean;
         };
+        /** GitHub */
+        GitHub: {
+            /** Max Repos */
+            max_repos: number;
+            /** Queries */
+            queries: string[];
+        };
+        /** GitHubUpdate */
+        GitHubUpdate: {
+            /** Max Repos */
+            max_repos?: number | null;
+            /** Queries */
+            queries?: string[] | null;
+        };
         /** GuessCheck */
         GuessCheck: {
             /** Hits */
@@ -3938,6 +4297,16 @@ export interface components {
             /** Has Text */
             has_text: boolean;
         };
+        /** HealthVerdict */
+        HealthVerdict: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "working" | "not_helping" | "diverging" | "not_enough_data";
+            /** Text */
+            text: string;
+        };
         /** Hold */
         Hold: {
             /**
@@ -3945,6 +4314,28 @@ export interface components {
              * @default true
              */
             held: boolean;
+        };
+        /** Idle */
+        Idle: {
+            /** Cpu Percent */
+            cpu_percent: number;
+            /** Only On Mains */
+            only_on_mains: boolean;
+            /** Only When Idle */
+            only_when_idle: boolean;
+            /** Unmetered Confirmed */
+            unmetered_confirmed: boolean;
+        };
+        /** IdleUpdate */
+        IdleUpdate: {
+            /** Cpu Percent */
+            cpu_percent?: number | null;
+            /** Only On Mains */
+            only_on_mains?: boolean | null;
+            /** Only When Idle */
+            only_when_idle?: boolean | null;
+            /** Unmetered Confirmed */
+            unmetered_confirmed?: boolean | null;
         };
         /** ImportJob */
         ImportJob: {
@@ -4200,6 +4591,15 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** JournalRow */
+        JournalRow: {
+            /** At */
+            at: string;
+            /** Text */
+            text: string;
+            /** Type */
+            type: string;
+        };
         /** JudgesOut */
         JudgesOut: {
             /** Error */
@@ -4323,6 +4723,105 @@ export interface components {
              * @description bytes it holds that other runs still link to (not freed)
              */
             shared: number;
+        };
+        /** Lesson */
+        Lesson: {
+            /** Id */
+            id: number;
+            /** Items */
+            items: components["schemas"]["LessonItem"][];
+            /** Keepable */
+            keepable: boolean;
+            /** More */
+            more: number;
+            /** Round */
+            round: number;
+            /** Rows */
+            rows: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "live" | "dropped" | "left_out";
+        };
+        /** LessonItem */
+        LessonItem: {
+            /** Answer */
+            answer: string;
+            /** Prompt */
+            prompt: string;
+            /** Reply */
+            reply: string;
+        };
+        /** LicenceOption */
+        LicenceOption: {
+            /**
+             * Default
+             * @description kept without asking
+             */
+            default: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Opt In
+             * @description the licences setting that allows it; empty for the default classes
+             * @default
+             */
+            opt_in: string;
+        };
+        /** Licences */
+        Licences: {
+            /** Copyleft */
+            copyleft: boolean;
+            /** Non Commercial */
+            non_commercial: boolean;
+            /** Unknown */
+            unknown: boolean;
+        };
+        /** LicencesUpdate */
+        LicencesUpdate: {
+            /** Copyleft */
+            copyleft?: boolean | null;
+            /** Non Commercial */
+            non_commercial?: boolean | null;
+            /** Unknown */
+            unknown?: boolean | null;
+        };
+        /** Limits */
+        Limits: {
+            /** Auto Approve Mb */
+            auto_approve_mb: number;
+            /** Bandwidth Mb Per Day */
+            bandwidth_mb_per_day: number;
+            /** Disk Mb */
+            disk_mb: number;
+            /** Max Dataset Mb */
+            max_dataset_mb: number;
+            /** Max File Mb */
+            max_file_mb: number;
+            /** Requests Per Host Per Day */
+            requests_per_host_per_day: number;
+            /** Seconds Between Requests */
+            seconds_between_requests: number;
+        };
+        /** LimitsUpdate */
+        LimitsUpdate: {
+            /** Auto Approve Mb */
+            auto_approve_mb?: number | null;
+            /** Bandwidth Mb Per Day */
+            bandwidth_mb_per_day?: number | null;
+            /** Disk Mb */
+            disk_mb?: number | null;
+            /** Max Dataset Mb */
+            max_dataset_mb?: number | null;
+            /** Max File Mb */
+            max_file_mb?: number | null;
+            /** Requests Per Host Per Day */
+            requests_per_host_per_day?: number | null;
+            /** Seconds Between Requests */
+            seconds_between_requests?: number | null;
         };
         /** Line */
         Line: {
@@ -4638,6 +5137,26 @@ export interface components {
             /** Tokens Per Second */
             tokens_per_second: number | null;
         };
+        /**
+         * MemberHealth
+         * @description One member's share of one round, measured (studio_run_health.record). compute + wait + sync is the round's seconds.
+         */
+        MemberHealth: {
+            /** Compute S */
+            compute_s: number;
+            /** Loss */
+            loss: number | null;
+            /** Steps */
+            steps: number;
+            /** Sync S */
+            sync_s: number;
+            /** Tokens */
+            tokens: number;
+            /** Tokens Per S */
+            tokens_per_s: number | null;
+            /** Wait S */
+            wait_s: number | null;
+        };
         /** Message */
         Message: {
             /** Content */
@@ -4755,6 +5274,13 @@ export interface components {
             hostname: string;
             /** Memory Bytes */
             memory_bytes: number;
+            /**
+             * Speeds
+             * @default {}
+             */
+            speeds: {
+                [key: string]: components["schemas"]["Speed"];
+            };
             /** Version */
             version: string;
         };
@@ -5055,30 +5581,6 @@ export interface components {
             /** Version */
             version?: number | null;
         };
-        /** PlanRow */
-        PlanRow: {
-            /** Adjustments */
-            adjustments?: unknown[];
-            /** Changes */
-            changes?: string[];
-            /** Matched */
-            matched: boolean;
-            /** Name */
-            name: string;
-            /** Parameters */
-            parameters: number;
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-            /** Relative Error */
-            relative_error?: number | null;
-            /** Steps */
-            steps?: number | null;
-            /** Variant */
-            variant: number;
-        };
         /**
          * PlateauRule
          * @description studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.
@@ -5174,10 +5676,20 @@ export interface components {
         };
         /** PresetCost */
         PresetCost: {
+            /**
+             * Device
+             * @default cpu
+             */
+            device: string;
             /** Fits */
             fits: boolean | null;
             /** Lines */
             lines: string[];
+            /**
+             * Measured
+             * @default false
+             */
+            measured: boolean;
             /** Need */
             need: number;
             /** Params */
@@ -6072,6 +6584,39 @@ export interface components {
             /** Val Loss Before Polish */
             val_loss_before_polish?: number | null;
         };
+        /** RoundHealth */
+        RoundHealth: {
+            /** Bytes Down */
+            bytes_down: number;
+            /** Bytes Up */
+            bytes_up: number;
+            /** Compression */
+            compression: number | null;
+            /** Dtype */
+            dtype: string;
+            /** Loss */
+            loss: number | null;
+            /** Lr */
+            lr: number | null;
+            /** Members */
+            members: {
+                [key: string]: components["schemas"]["MemberHealth"];
+            };
+            /** Round */
+            round: number;
+            /** Seconds */
+            seconds: number;
+            /** Slowest */
+            slowest: string | null;
+            /** Sync S */
+            sync_s: number;
+            /** Tokens */
+            tokens: number;
+            /** Update Norm */
+            update_norm: number | null;
+            /** Val Loss */
+            val_loss: number | null;
+        };
         /** RoundQueued */
         RoundQueued: {
             /** Id */
@@ -6311,6 +6856,7 @@ export interface components {
              * @default
              */
             handoff: string;
+            health?: components["schemas"]["RunHealth"] | null;
             /** History */
             history: components["schemas"]["Round"][];
             /** Id */
@@ -6411,7 +6957,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging" | "lesson_dropped" | "lesson_kept";
             /** Node */
             node: string;
             /** Round */
@@ -6422,6 +6968,35 @@ export interface components {
             t: number;
             /** Text */
             text: string;
+        };
+        /**
+         * RunHealth
+         * @description Is the cluster helping (studio_run_health.summarize)? The numbers are over the latest rounds that had two or more members.
+         */
+        RunHealth: {
+            /** Aggregate Tokens Per S */
+            aggregate_tokens_per_s: number | null;
+            /** Baseline Node */
+            baseline_node: string;
+            /** Baseline Tokens Per S */
+            baseline_tokens_per_s: number | null;
+            /** Basis */
+            basis: string;
+            /** Comm Share */
+            comm_share: number | null;
+            /** Rounds */
+            rounds: components["schemas"]["RoundHealth"][];
+            /** Speedup */
+            speedup: number | null;
+            /** Straggler */
+            straggler: string;
+            verdict: components["schemas"]["HealthVerdict"];
+            /** Wait Node */
+            wait_node: string;
+            /** Wait Share */
+            wait_share: number | null;
+            /** Window */
+            window: number;
         };
         /** RunPageModel */
         RunPageModel: {
@@ -6537,6 +7112,20 @@ export interface components {
              */
             weights_dtype: string;
         };
+        /** Site */
+        Site: {
+            /** Host */
+            host: string;
+            /** Licence */
+            licence: string;
+            /**
+             * Pages
+             * @default 200
+             */
+            pages: number;
+            /** Seeds */
+            seeds?: string[];
+        };
         /** Sizes */
         Sizes: {
             /** Activations */
@@ -6641,12 +7230,88 @@ export interface components {
              */
             total: number;
         };
+        /** SourceOption */
+        SourceOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Note
+             * @description a caution, such as a tool this computer lacks; empty when none
+             * @default
+             */
+            note: string;
+            /**
+             * Terms
+             * @description the licence and terms note for this source
+             */
+            terms: string;
+            /** What */
+            what: string;
+        };
+        /** SourceProgress */
+        SourceProgress: {
+            /** Detail */
+            detail: string;
+            /** Done */
+            done: boolean;
+            /** Downloaded */
+            downloaded: number;
+            /** Error */
+            error: string;
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Topic */
+            topic: string;
+        };
+        /** Sources */
+        Sources: {
+            /** Github */
+            github: boolean;
+            /** Hub */
+            hub: boolean;
+            /** Stackexchange */
+            stackexchange: boolean;
+            /** Web */
+            web: boolean;
+        };
+        /** SourcesUpdate */
+        SourcesUpdate: {
+            /** Github */
+            github?: boolean | null;
+            /** Hub */
+            hub?: boolean | null;
+            /** Stackexchange */
+            stackexchange?: boolean | null;
+            /** Web */
+            web?: boolean | null;
+        };
         /** SpecBody */
         SpecBody: {
             /** Spec */
             spec: {
                 [key: string]: unknown;
             };
+        };
+        /** Speed */
+        Speed: {
+            /** Age S */
+            age_s: number;
+            /** Device */
+            device: string;
+            /** Seconds */
+            seconds: {
+                [key: string]: number;
+            };
+            /** Tokens */
+            tokens: number;
         };
         /** SplitBody */
         SplitBody: {
@@ -6686,6 +7351,24 @@ export interface components {
             spec: {
                 [key: string]: unknown;
             };
+        };
+        /** StackExchange */
+        StackExchange: {
+            /** Dump Url */
+            dump_url: string;
+            /** Min Score */
+            min_score: number;
+            /** Sites */
+            sites: string[];
+        };
+        /** StackExchangeUpdate */
+        StackExchangeUpdate: {
+            /** Dump Url */
+            dump_url?: string | null;
+            /** Min Score */
+            min_score?: number | null;
+            /** Sites */
+            sites?: string[] | null;
         };
         /**
          * StartRun
@@ -6758,6 +7441,30 @@ export interface components {
             seq: number;
             /** Value */
             value: unknown;
+        };
+        /** Stats */
+        Stats: {
+            /**
+             * Bytes Kept
+             * @default 0
+             */
+            bytes_kept: number;
+            dropped?: components["schemas"]["Dropped"];
+            /**
+             * Kept
+             * @default 0
+             */
+            kept: number;
+            /**
+             * Redactions
+             * @default 0
+             */
+            redactions: number;
+            /**
+             * Seen
+             * @default 0
+             */
+            seen: number;
         };
         /** StatusRequest */
         StatusRequest: {
@@ -7046,6 +7753,13 @@ export interface components {
             /** On */
             on: boolean;
         };
+        /** Topic */
+        Topic: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
         /** Tower */
         Tower: {
             /** Blocks */
@@ -7228,6 +7942,11 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** Web */
+        Web: {
+            /** Sites */
+            sites: components["schemas"]["Site"][];
+        };
         /** WordList */
         WordList: {
             /** Chips */
@@ -7319,12 +8038,70 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** PlanRow */
+        studio_api__routers__benchmark__PlanRow: {
+            /** Adjustments */
+            adjustments?: unknown[];
+            /** Changes */
+            changes?: string[];
+            /** Matched */
+            matched: boolean;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Relative Error */
+            relative_error?: number | null;
+            /** Steps */
+            steps?: number | null;
+            /** Variant */
+            variant: number;
+        };
         /** Accepted */
         studio_api__routers__cluster__Accepted: {
             /** Epoch */
             epoch: number;
             /** Job Id */
             job_id: string;
+        };
+        /** PlanRow */
+        studio_api__routers__collect__PlanRow: {
+            /** Approved */
+            approved: boolean;
+            /** Blocked */
+            blocked: boolean;
+            /** Bytes */
+            bytes: number;
+            /** Files */
+            files: number;
+            /** Group */
+            group: string;
+            /** Id */
+            id: string;
+            /** Licence */
+            licence: string;
+            /** Licence Class */
+            licence_class: string;
+            /** Reason */
+            reason: string;
+            /** Score */
+            score: number;
+            /** Source */
+            source: string;
+            /**
+             * Status
+             * @description planned | needs_approval | skipped
+             */
+            status: string;
+            /** Topic */
+            topic: string;
+            /** Url */
+            url: string;
         };
         /** Accepted */
         studio_api__routers__collective__Accepted: {
@@ -8050,6 +8827,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collect_state_collect_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectState"];
+                };
+            };
+        };
+    };
+    get_config_collect_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectConfig"];
+                };
+            };
+        };
+    };
+    put_config_collect_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectConfig"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collect_options_collect_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectOptions"];
+                };
+            };
+        };
+    };
+    pause_collect_pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectConfig"];
+                };
+            };
+        };
+    };
+    resume_collect_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectConfig"];
                 };
             };
         };
@@ -9941,6 +10851,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_lessons_distributed_runs__run_id__lessons_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_run_lesson_distributed_runs__run_id__lessons__lesson__drop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                lesson: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                lesson: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
                 };
             };
             /** @description Validation Error */

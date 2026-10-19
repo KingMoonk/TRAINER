@@ -10,6 +10,13 @@ from studio_api.version import app_version
 router = APIRouter(tags=["node"])
 
 
+class Speed(BaseModel):
+    device: str  # the device this node's own auto picks for the design: cpu | cuda | mps
+    seconds: dict[str, float]  # measured seconds per step on each device that could be timed
+    tokens: int  # tokens one step read
+    age_s: float  # how long ago it was measured
+
+
 class Node(BaseModel):
     hostname: str
     version: str
@@ -18,6 +25,7 @@ class Node(BaseModel):
     memory_bytes: int
     busy: bool
     dtypes: list[str]
+    speeds: dict[str, Speed] = {}  # design shape (a hash) -> this machine's measured step time for it; only probes valid for this machine as it is now
 
 
 @router.get("/node", response_model=Node)

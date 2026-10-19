@@ -1,0 +1,2 @@
+# Test fixture in the PII-stripper test: a fake AWS-key-shaped string, now assembled at runtime.
+c80232fbc9e51ebfb2cc386db0282c699cf9274e:tests/test_collect_core.py:aws-access-token:80

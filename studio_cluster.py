@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import socket
 from concurrent.futures import ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from urllib.parse import urlsplit
 
 from studio_peer import PeerClient, PeerError, base_url
@@ -25,6 +25,7 @@ GATEWAY_ERRORS = (502, 503, 504)  # what a proxy answers when the server behind 
 POLL_TIMEOUT = 2.  # seconds: a peer that does not answer this fast is offline for now
 DEFAULT_TAG = "tag:trainer"  # the tag a node carries to call its peers (docs/cluster.md)
 LOCAL = "local"  # the address of this machine's own NodeInfo
+SPEED_TIE = 1.05  # measured seconds within this ratio count as equal: the earlier node in the list keeps the job
 MAX_NODES = 32  # peers in the list: each is polled on its own thread
 
 # dtypes a device kind trains in. Conservative: bfloat16 on Apple's GPU is not listed, because torch's Metal kernels cover it unevenly.
@@ -44,6 +45,15 @@ class NodeInfo:
     dtypes: tuple = ("float32",)
     online: bool = True
     error: str = ""
+    speeds: dict = field(default_factory=dict)  # design shape (studio_probe.shape_key) -> {device, seconds: {device: s}, tokens, age_s}: what this node measured
+
+    def seconds_for(self, shape):
+        """(device, seconds per step) this node measured for the design `shape`, or None when it has not (or reports none). The device
+        is the one the node's own `auto` picks for it, which may be its CPU on a machine with a GPU."""
+        hit = self.speeds.get(shape) if shape else None
+        if not hit:
+            return None
+        return hit["device"], hit["seconds"][hit["device"]]
 
     @property
     def free(self):
@@ -67,7 +77,23 @@ def info_from_payload(address, payload):
     return NodeInfo(address=address, hostname=payload["hostname"], version=str(payload.get("version", "")), device=payload["device"],
                     device_name=str(payload.get("device_name", "")), memory_bytes=memory if isinstance(memory, int) and memory > 0 else 0,
                     busy=bool(payload.get("busy", False)),
-                    dtypes=tuple(str(d) for d in dtypes) if isinstance(dtypes, list) and dtypes else ("float32",))
+                    dtypes=tuple(str(d) for d in dtypes) if isinstance(dtypes, list) and dtypes else ("float32",),
+                    speeds=clean_speeds(payload.get("speeds")))
+
+
+def clean_speeds(value):
+    """The `speeds` of a peer's report, keeping only well-formed entries (a peer may be a different version): a measured pick that has
+    a positive seconds-per-step, and an age within studio_probe.MAX_AGE_S."""
+    from studio_probe import MAX_AGE_S
+    out = {}
+    for shape, hit in (value.items() if isinstance(value, dict) else ()):
+        try:
+            seconds = {str(d): float(v) for d, v in hit["seconds"].items() if float(v) > 0}
+            if hit["device"] in seconds and 0 <= float(hit["age_s"]) <= MAX_AGE_S:
+                out[str(shape)] = {"device": hit["device"], "seconds": seconds, "tokens": int(hit["tokens"]), "age_s": float(hit["age_s"])}
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return out
 
 
 def offline(address, error, hostname=""):
@@ -188,9 +214,9 @@ def funnel_token(state):
     return token
 
 
-def own_info(busy=False, version="", status=None, memory=None):
+def own_info(busy=False, version="", status=None, memory=None, speeds=None):
     """This machine's NodeInfo. `status` is `studio_backend.gpu_status()` and `memory` the computer's memory in bytes; both are
-    probed when not given. `busy` is whether the queue is running a job; the caller knows, this module does not."""
+    probed when not given. `speeds` is `studio_probe.reported(status)`, read from the cache when not given. `busy` is whether the queue is running a job; the caller knows, this module does not."""
     if status is None:
         try:
             from studio_backend import gpu_status
@@ -205,8 +231,14 @@ def own_info(busy=False, version="", status=None, memory=None):
         except Exception:
             memory = 0
     size = int(status.get("memory_bytes") or 0) if kind == "cuda" else int(memory or 0)
+    if speeds is None:
+        try:
+            import studio_probe
+            speeds = studio_probe.reported(status)
+        except Exception:  # a probe cache that cannot be read is no speeds, not a node that cannot report
+            speeds = {}
     return NodeInfo(address=LOCAL, hostname=socket.gethostname(), version=version, device=kind, device_name=status.get("name") or "",
-                    memory_bytes=size, busy=bool(busy), dtypes=DTYPES[kind])
+                    memory_bytes=size, busy=bool(busy), dtypes=DTYPES[kind], speeds=speeds)
 
 
 def fetch_json(url, timeout=POLL_TIMEOUT):
@@ -324,21 +356,48 @@ def pinned_nodes(pinned, nodes):
     return [n for n in nodes if n.address.lower() == key] or [n for n in nodes if n.hostname.lower() == key]
 
 
-def place(requirements, nodes, pinned=None):
-    """The node a job should run on, or None when none fits (the job waits). Pure.
+def place(requirements, nodes, pinned=None, shape=None):
+    """The node a job should run on, or None when none fits (the job waits). Pure. See `place_why`."""
+    return place_why(requirements, nodes, pinned, shape)[0]
+
+
+def place_why(requirements, nodes, pinned=None, shape=None):
+    """(node, why): the node a job should run on (None when none fits: the job waits) and, when its speed decided, a sentence saying so.
 
     pinned: the address or hostname the user chose. That node is returned if it fits (free, memory, dtype), else None: a pin
-    is never overridden by a better node. A hostname that two nodes share names no node, so the job waits (see `pinned_nodes`). Otherwise every node that fits is ranked by (device preference met, then the most
-    memory when the job asks for it) and the first in `nodes` order wins a tie, so list this machine first to keep work local."""
+    is never overridden by a better node. A hostname that two nodes share names no node, so the job waits (see `pinned_nodes`).
+
+    Otherwise every node that fits is ranked. `shape` is the job's design shape (`studio_probe.shape_key`): when every node that
+    meets the device preference has measured it (`NodeInfo.speeds`), the fastest of them wins (the device a node picks for itself
+    counts, so a GPU machine whose probe chose its CPU does not meet a "cuda" preference); on a tie, and whenever any of them has
+    not measured it, the rule is the old one: the device preference, then the most memory when the job asks for it, and the first in
+    `nodes` order, so list this machine first to keep work local. An unmeasured shape is therefore never guessed at."""
     if pinned:
         found = pinned_nodes(pinned, nodes)
-        return found[0] if len(found) == 1 and fits(requirements, found[0]) else None
+        return (found[0] if len(found) == 1 and fits(requirements, found[0]) else None), ""
     candidates = [n for n in nodes if fits(requirements, n)]
     if not candidates:
-        return None
+        return None, ""
     wanted = requirements.device
 
-    def rank(node):
-        return (wanted in ("any", node.device), node.memory_bytes if requirements.most_memory else 0)
+    def device(node):
+        measured = node.seconds_for(shape)
+        return measured[0] if measured else node.device
 
-    return max(candidates, key=rank)  # max returns the first of equals
+    def preferred(node):
+        return wanted in ("any", device(node))
+
+    best = max(preferred(n) for n in candidates)
+    tier = [n for n in candidates if preferred(n) == best]
+    measured = {n.address: n.seconds_for(shape) for n in tier}
+    if len(tier) > 1 and shape and all(measured.values()):
+        fastest = min(m[1] for m in measured.values())
+        tier = [n for n in tier if measured[n.address][1] <= fastest * SPEED_TIE]  # in `nodes` order
+        winner = max(tier, key=lambda n: n.memory_bytes if requirements.most_memory else 0)
+        slowest = max(m[1] for a, m in measured.items() if a != winner.address)
+        mine = measured[winner.address]
+        if slowest > mine[1] * SPEED_TIE:
+            return winner, (f"{winner.hostname or winner.address} measured {mine[1]:.3g} s per step for this design on its "
+                            f"{mine[0].upper()}, {slowest / mine[1]:.1f}x faster than the slowest free machine.")
+        return winner, ""
+    return max(tier, key=lambda n: n.memory_bytes if requirements.most_memory else 0), ""  # max returns the first of equals

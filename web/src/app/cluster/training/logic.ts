@@ -10,6 +10,17 @@ export type Defaults = components["schemas"]["Defaults"];
 export type StartRun = components["schemas"]["StartRun"];
 export type TextSet = components["schemas"]["TextSet"];
 export type ClusterNode = components["schemas"]["ClusterNode"];
+export type Lesson = components["schemas"]["Lesson"];
+
+/** The button a lesson offers: a lesson in use can be dropped, any other is kept again. */
+export function lessonAction(lesson: Lesson): { verb: "drop" | "keep"; label: string } {
+  return lesson.status === "live" ? { verb: "drop", label: T.lessonDrop } : { verb: "keep", label: T.lessonKeep };
+}
+
+/** "After round 2 · 3 answers": where a lesson came from and how much it holds (rounds are counted from 1 on the page). */
+export function lessonFrom(lesson: Lesson): string {
+  return T.lessonFrom.replace("{round}", String(lesson.round + 1)).replace("{rows}", String(lesson.rows)).replace("{answers}", lesson.rows === 1 ? T.lessonAnswer : T.lessonAnswers);
+}
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
 export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string };
