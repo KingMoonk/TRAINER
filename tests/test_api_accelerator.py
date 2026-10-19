@@ -94,10 +94,14 @@ class GracefulShutdownTest(unittest.TestCase):
 
     def test_both_runs_cut_open_streams_after_a_short_wait(self):
         self.assertTrue(0 < entry.GRACEFUL_SHUTDOWN <= 5)
-        for argv in (["--fake"], ["--fake", "--reload"]):
-            with mock.patch("uvicorn.run") as run, mock.patch.object(entry, "build"), mock.patch.dict("os.environ"):
-                entry.main(argv)
-            self.assertEqual(run.call_args.kwargs["timeout_graceful_shutdown"], entry.GRACEFUL_SHUTDOWN, argv)
+        with mock.patch("uvicorn.run") as run, mock.patch.object(entry, "build"), mock.patch.dict("os.environ"):
+            entry.main(["--fake"])
+        self.assertEqual(run.call_args.kwargs["timeout_graceful_shutdown"], entry.GRACEFUL_SHUTDOWN)
+        # --reload builds its own Config for the deferring reloader: stub the reloader so no server starts
+        with mock.patch("uvicorn.Config") as config, mock.patch("uvicorn.Server"), mock.patch.object(entry, "deferred_reloader"), \
+                mock.patch.dict("os.environ"):
+            entry.main(["--fake", "--reload"])
+        self.assertEqual(config.call_args.kwargs["timeout_graceful_shutdown"], entry.GRACEFUL_SHUTDOWN)
 
 
 if __name__ == "__main__":
