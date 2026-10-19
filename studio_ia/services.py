@@ -82,6 +82,7 @@ class QueueState:
     stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
+    failed: list = field(default_factory=list)  # jobs that ended failed, newest last; see studio_queue.QueueState
 
 
 _log = logging.getLogger(__name__)
@@ -2252,7 +2253,7 @@ class WorkspaceServices(Services):
     def remove(self, job_id):
         with self.runner.lock:
             job = next((j for j in self.runner.jobs if j.id == job_id), None)
-            waiting = job is not None and job is not self.runner.running  # a running job is stopped and ends through _record_job
+            waiting = job is not None and job.status in ("waiting", "held")  # a running job is stopped and ends through _record_job; a failed one is only dismissed
         self.runner.remove(job_id)
         if waiting and job.kind == "import_pretrained" and job.params.get("version"):  # it never started: no event will say it ended
             self._drop_empty_import(job.params["version"], "stopped")

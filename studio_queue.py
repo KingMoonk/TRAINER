@@ -15,6 +15,7 @@ from pathlib import Path
 
 import studio_passive_watch as platform_helpers  # battery + keep-awake live there; never duplicated
 from studio_core import atomic_json
+from studio_failures import explain
 from studio_passive import PassiveStore
 from studio_timing import timed
 
@@ -22,6 +23,7 @@ KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "c
          "pretrain_distributed", "diloco_member")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
+FAILED_SHOWN = 5
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
 PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine; "(session <id>)" follows it
 
@@ -49,7 +51,8 @@ class Job:
     eta_s: float | None = None
     created_at: float = field(default_factory=time.time)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    error: str = ""
+    error: str = ""                 # a failed job's reason as one sentence (studio_failures)
+    details: str = ""               # the raw text behind it, "" when the sentence is the error's own text
     node: str = ""                  # the peer it runs (or ran) on; "" for a job that runs here
     epoch: int = 0                  # the lease epoch it was last placed at (studio_scheduler); a write carrying another epoch is refused
     owner: str = ""                 # for a job another node owns and this one runs: how to reach that node
@@ -77,6 +80,7 @@ class QueueState:
     stopping: bool = False         # stop_after_cooldown in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)  # asdict(Plan)
+    failed: list = field(default_factory=list)  # jobs that ended failed (the last FAILED_SHOWN), with their sentence in .error; removing one dismisses it
 
 
 def _idle_macos():
@@ -350,7 +354,7 @@ class Runner:
                 handle.done.wait()
                 error = handle.error
             except Exception as exc:  # noqa: BLE001
-                error = str(exc) or type(exc).__name__
+                error = explain(exc)[0]
             if error:
                 self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": error})
                 return
@@ -376,7 +380,8 @@ class Runner:
             return QueueState(
                 job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
-                up_next=self._queued(), plan=dataclasses.asdict(self.plan))
+                up_next=self._queued(), plan=dataclasses.asdict(self.plan),
+                failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
 
     def start(self):
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -588,12 +593,12 @@ class Runner:
             self._emit("train", {"job": job.id, **event})
 
         awake = platform_helpers.keep_awake(os.getpid()) if self.plan.keep_awake else None
-        error, handle = short, None
+        error, details, handle = short, "", None
         if not short:
             try:
                 handle = self._start(job, handler, emit, self.wake.set)
             except Exception as exc:  # noqa: BLE001 - prepare or the spawn failed: the job fails with the reason
-                error = str(exc) or type(exc).__name__
+                error, details = explain(exc)
         self._emit("job", {"job": job.id, "status": "running"})
         while handle and not handle.done.is_set():
             self.wake.clear()
@@ -606,9 +611,9 @@ class Runner:
         with self.lock:
             if handle:
                 job.params.update(handle.params)
-                error = handle.error
+                error, details = handle.error, handle.details
             job.status = "failed" if error else "stopped" if self.stop_event.is_set() else "done"
-            job.error = error
+            job.error, job.details = error, details if error else ""
             self.running = None
             self.stopping = False
             self.follow_up(job)

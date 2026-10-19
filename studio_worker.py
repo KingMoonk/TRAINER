@@ -2,7 +2,7 @@
 
 The app (Handle) starts `python -m studio_worker run <spec.json>` and the two talk over a localhost socket, one JSON object per
 line. The worker sends {"event": ...} for each event its handler emits, then {"params": the params the handler changed} and
-{"error": sentence} or {"done": true}. The app sends {"cmd": "stop" | "pause" | "resume"}. A socket, not stdin and stdout: a
+{"error": sentence, "details": the raw text} (studio_failures.explain) or {"done": true}. The app sends {"cmd": "stop" | "pause" | "resume"}. A socket, not stdin and stdout: a
 frozen windowed build has no usable standard streams. The socket closing means the app has gone, so the worker stops its job
 and exits within EXIT_GRACE. The worker ends its side of the stream with shutdown(SHUT_WR), a FIN, and exits only once the app has
 closed its side (or EXIT_GRACE has passed): a process that exits with the socket open can end the connection with a reset, and on
@@ -61,7 +61,7 @@ def _line(message):
 
 
 def crash_message(code):
-    return f"The job stopped unexpectedly: its process ended with code {code}. Details are in logs/worker.log."
+    return f"The job stopped unexpectedly: its process ended with code {code}. Start it again from the Queue page. Details are in logs/worker.log."
 
 
 # --------------------------------------------------------------------------- app side
@@ -72,7 +72,7 @@ class Handle:
 
     def __init__(self, job, handler, context, emit, folder, log_path, on_end=None):
         self.job, self.emit, self.on_end = job, emit, on_end
-        self.params, self.error, self.done = {}, "", threading.Event()
+        self.params, self.error, self.details, self.done = {}, "", "", threading.Event()
         self._finished, self._conn, self._lock = False, None, threading.Lock()
         self._want, self._sent = {"stop": False, "pause": False}, {"stop": False, "pause": False}
         self._token = secrets.token_hex(16)
@@ -150,7 +150,7 @@ class Handle:
                     elif "params" in message:
                         self.params = message["params"]
                     elif "error" in message:
-                        self.error, self._finished = message["error"] or "Error", True
+                        self.error, self.details, self._finished = message["error"] or "Error", message.get("details") or "", True
                     elif "done" in message:
                         self._finished = True
         except (OSError, ValueError):
@@ -163,7 +163,7 @@ class Handle:
                     part.close()  # before waiting: the worker waits for this close before it exits
             code = self.proc.wait()
             if not self._finished:
-                self.error = crash_message(code)
+                self.error, self.details = crash_message(code), f"The worker process exited with code {code}."
             self._server.close()
             self.spec.unlink(missing_ok=True)
             self.done.set()
@@ -266,7 +266,7 @@ def run(spec_path):
     from studio_timing import timed
     job = Job(**spec["job"])
     before = {k: json.dumps(v, default=_plain, sort_keys=True) for k, v in job.params.items()}
-    ref, error = spec["handler"], ""
+    ref, error, details = spec["handler"], "", ""
     try:
         if ref["path"] and ref["path"] not in sys.path:
             sys.path.insert(0, ref["path"])
@@ -275,10 +275,11 @@ def run(spec_path):
             handler(job, JobContext(**spec["context"]), lambda event: send({"event": event}), stop, pause)
     except Exception as exc:  # noqa: BLE001 - every failure becomes the job's error; the traceback goes to the log
         traceback.print_exc()
-        error = str(exc) or type(exc).__name__
+        from studio_failures import explain
+        error, details = explain(exc)
     changed = {k: v for k, v in job.params.items() if before.get(k) != json.dumps(v, default=_plain, sort_keys=True)}
     send({"params": changed})
-    send({"error": error} if error else {"done": True})
+    send({"error": error, "details": details} if error else {"done": True})
     with sending:
         try:
             conn.shutdown(socket.SHUT_WR)  # the stream ends with a FIN after the result, never a reset
