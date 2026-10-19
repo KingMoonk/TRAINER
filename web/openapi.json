@@ -1053,6 +1053,98 @@
         "title": "ComputeBody",
         "type": "object"
       },
+      "ContinueBody": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "description": "the text to continue on (new_data; grow, default the run's own)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "hold": {
+            "default": 0.05,
+            "description": "grow: fraction of the text held back",
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
+            "type": "number"
+          },
+          "kind": {
+            "description": "same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights",
+            "enum": [
+              "same",
+              "new_data",
+              "grow"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "layers": {
+            "anyOf": [
+              {
+                "maximum": 96.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layers"
+          },
+          "rows": {
+            "default": 16,
+            "description": "grow: rows per step",
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "grow: the bigger design itself",
+            "title": "Spec"
+          },
+          "steps": {
+            "description": "steps to add (same, new_data), or to train the grown design for (grow)",
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Steps",
+            "type": "integer"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "maximum": 8192.0,
+                "minimum": 8.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "grow: the design's width (with layers), when no spec is given",
+            "title": "Width"
+          }
+        },
+        "required": [
+          "kind",
+          "steps"
+        ],
+        "title": "ContinueBody",
+        "type": "object"
+      },
       "CorrectionRequest": {
         "properties": {
           "correction": {
@@ -18353,6 +18445,59 @@
           }
         },
         "summary": "Checkpoint Step",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/continue": {
+      "post": {
+        "description": "Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the\nqueued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a\ndesign its weights cannot go into) fails the job with a sentence.",
+        "operationId": "continue_version_versions__number__continue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinueBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__versions__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Continue Version",
         "tags": [
           "versions"
         ]

@@ -3067,6 +3067,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/versions/{number}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Version
+         * @description Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the
+         *     queued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a
+         *     design its weights cannot go into) fails the job with a sentence.
+         */
+        post: operations["continue_version_versions__number__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/versions/{number}/export": {
         parameters: {
             query?: never;
@@ -3970,6 +3992,52 @@ export interface components {
             };
             /** V */
             v: number;
+        };
+        /** ContinueBody */
+        ContinueBody: {
+            /**
+             * Dataset Ids
+             * @description the text to continue on (new_data; grow, default the run's own)
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @description grow: fraction of the text held back
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Kind
+             * @description same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights
+             * @enum {string}
+             */
+            kind: "same" | "new_data" | "grow";
+            /** Layers */
+            layers?: number | null;
+            /**
+             * Rows
+             * @description grow: rows per step
+             * @default 16
+             */
+            rows: number;
+            /**
+             * Spec
+             * @description grow: the bigger design itself
+             */
+            spec?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Steps
+             * @description steps to add (same, new_data), or to train the grown design for (grow)
+             */
+            steps: number;
+            /**
+             * Width
+             * @description grow: the design's width (with layers), when no spec is given
+             */
+            width?: number | null;
         };
         /** CorrectionRequest */
         CorrectionRequest: {
@@ -13188,6 +13256,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_version_versions__number__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueBody"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {
