@@ -9,7 +9,7 @@ export const member = (name: string, over: Partial<Member> = {}): Member => ({
 });
 
 export const round = (n: number, over: Partial<Round> = {}): Round => ({
-  round: n, step: (n + 1) * 100, loss: 4 - n, val_loss: 4.5 - n, bytes_up: 2 ** 20, bytes_down: 2 * 2 ** 20, seconds: 2, members: 2, contributed: 2, dropped: [], best: false, pivot: "", ...over,
+  round: n, step: (n + 1) * 100, loss: 4 - n, val_loss: 4.5 - n, bytes_up: 2 ** 20, bytes_down: 2 * 2 ** 20, seconds: 2, members: 2, contributed: 2, dropped: [], best: false, pivot: "", polished: false, polish_val_loss: null, lessons: 0, ...over,
 });
 
 export const lane = (node: string, over: Partial<Lane> = {}): Lane => ({
@@ -24,7 +24,7 @@ export const event = (seq: number, over: Partial<RunEvent> = {}): RunEvent => ({
 
 export const run = (over: Partial<Run> = {}): Run => ({
   id: "r1", label: "Version 2 across machines", version: 2, saved_version: null, state: "running", note: "", started_at: 100, owner: "mac-mini", round: 2, rounds: 10, inner_steps: 100,
-  outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", term: 1, coordinator: "", handoff: "", origin: "", age_s: 0, origin_down: false, can_stop: true, paused: false, can_pause: false, can_resume: false, can_restart: false, best_round: null, best_val_loss: null, stop_rule: "", stop_reason: "", history: [round(0), round(1)],
+  outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", term: 1, coordinator: "", handoff: "", origin: "", age_s: 0, origin_down: false, can_stop: true, paused: false, can_pause: false, can_resume: false, can_restart: false, best_round: null, best_val_loss: null, stop_rule: "", stop_reason: "", lessons: 0, lessons_left_out: 0, history: [round(0), round(1)],
   phase: "training", deadline_s: null, grace_s: 2, window_s: null, contributed: 0, expected: 2, theta_bytes: 0, now_s: 20, timeline: [], events: [],
   members: [
     member("mac-mini", { address: "local", local: true, device: "mps", device_name: "Apple M2", rounds_done: 2, steps: 200, tokens_per_second: 2048, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", can_stop: false }),

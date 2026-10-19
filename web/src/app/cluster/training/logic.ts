@@ -166,6 +166,7 @@ export function errorMarks(run: Run): Mark[] {
   const marks: Mark[] = run.history.flatMap((row) =>
     row.pivot ? [{ id: `pivot-${row.round}`, x: row.round + 1, label: T.pivots[row.pivot] ?? T.pivotFallback, dash: "4 3" }] : [],
   );
+  for (const row of run.history) if (row.polished) marks.push({ id: `polish-${row.round}`, x: row.round + 1, label: T.polished, color: "var(--chart-3)", dash: "1 3" });
   if (run.best_round != null) marks.push({ id: "best", x: run.best_round + 1, label: T.bestRound, color: "var(--chart-2)" });
   return marks;
 }
@@ -187,4 +188,11 @@ export function trafficSeries(history: Round[]): Series[] {
     { id: "up", label: T.up, points: history.map((row) => ({ x: row.round + 1, y: mb(row.bytes_up) })) },
     { id: "down", label: T.down, points: history.map((row) => ({ x: row.round + 1, y: mb(row.bytes_down) })) },
   ];
+}
+
+/** What the teacher added to the training text, or nothing when it added none. */
+export function lessonsText(run: Run): string {
+  if (!run.lessons && !run.lessons_left_out) return "";
+  const live = T.lessonsLine.replace("{live}", String(run.lessons));
+  return run.lessons_left_out ? `${live}, ${T.lessonsLeftOut.replace("{out}", String(run.lessons_left_out))}` : live;
 }

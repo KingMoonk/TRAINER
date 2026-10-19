@@ -55,9 +55,12 @@
         "bytes_up": 4000000,
         "contributed": 2,
         "dropped": [],
+        "lessons": 0,
         "loss": 5.0509,
         "members": 2,
         "pivot": "",
+        "polish_val_loss": null,
+        "polished": false,
         "round": 0,
         "seconds": 6.0,
         "step": 100,
@@ -67,6 +70,8 @@
     "id": "demo-run",
     "inner_steps": 100,
     "label": "Demo run on a Mac mini and a GPU box",
+    "lessons": 0,
+    "lessons_left_out": 0,
     "members": [
       {
         "address": "local",

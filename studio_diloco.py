@@ -28,6 +28,7 @@ import gc
 import hashlib
 import io
 import json
+import math
 import random
 import re
 import shutil
@@ -63,6 +64,7 @@ PROGRESS_WAIT = .25  # seconds a progress report or a snapshot waits for a round
 EVENTS_KEPT = 200  # the coordinator's event log is bounded
 TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished round's also goes to metrics.jsonl)
 SAMPLES_KEPT = 240  # progress samples kept per member for the open round
+PROMPTS_PER_POLISH = 500  # the teacher is given this many training prompts per polish, a new window each time
 
 
 class Background:
@@ -160,13 +162,17 @@ class Settings:
     max_seconds: float | None = None   # active wall-clock; time with fewer than min_members does not count
     patience_rounds: int = 0           # rounds without a better val_loss
     target_val_loss: float | None = None
-    target_win_rate: float | None = None  # not available yet (#508): rejected
-    teacher: str = ""                  # the teacher model's name (#508)
+    target_win_rate: float | None = None  # not available yet (#511): rejected
+    teacher: str = ""                  # the teacher model's name (an Ollama model); needed by polish_every
     plateau_checks: int = 0            # rounds the val_loss must have improved within, else it is a plateau (0: off)
     plateau_min_improvement: float = .01
     worse_limit: int = 0               # rounds in a row worse than the best before the coordinator goes back to the best and pivots (0: off)
     pivots: tuple = ()                 # what to try, in order: halve_lr (also the outer learning rate), next_dataset
     keep_checkpoints: int = 0          # per-round checkpoints (round_<n>.npz) kept in the run folder; 0: none besides last.npz and best.npz
+    # teacher polish and lessons (#508): after every polish_every-th closed round (never the last), the coordinator has the teacher polish theta
+    polish_every: int = 0              # rounds between polishes; 0: off
+    polish: bool = True                # keep the polished weights when they won the teacher's head-to-head and are no worse on validation
+    lessons: bool = True               # train on the teacher's better answers as extra shards
 
     def __post_init__(self):
         if self.inner_steps < 1 or self.rounds < 1 or self.shards < 1:
@@ -221,12 +227,17 @@ def replica_nodes(members, count, prefer=()):
     return (first + [node for node in order if node not in first])[:max(0, count)]
 
 
-def deal_shards(seed, round_number, members, shard_count, first=0):
-    """{member: sorted shard ids}: the shards first..first+shard_count-1 (one data source's) shuffled by (seed, round, membership) and
-    dealt round-robin, so a rerun with the same membership history deals the same, and one member always holds every shard in order."""
-    order = list(range(first, first + shard_count))
+def deal_ids(seed, round_number, members, ids):
+    """{member: sorted shard ids}: the shards `ids` shuffled by (seed, round, membership) and dealt round-robin, so a rerun with the
+    same membership history deals the same, and one member always holds every shard in order."""
+    order = list(ids)
     random.Random(f"{seed}:{round_number}:{','.join(members)}").shuffle(order)
     return {member: sorted(order[index::len(members)]) for index, member in enumerate(members)}
+
+
+def deal_shards(seed, round_number, members, shard_count, first=0):
+    """deal_ids for the shards first..first+shard_count-1 (one data source's)."""
+    return deal_ids(seed, round_number, members, range(first, first + shard_count))
 
 
 def sampler_seed(seed, rank, round_number):
@@ -424,6 +435,10 @@ class Coordinator:
         self.spans, self.later = [(0, self.shard_count)], []  # per data source: its first shard id and shard count; the (windows, bounds) of the sources after the first
         self.rules = drules.State()
         self.paused = False  # the owner paused the run: no round opens until resume (a round in flight finishes)
+        self.polishing = False  # the teacher is polishing theta, on a thread off the lock: like paused, no round opens meanwhile
+        self.polisher, self.teacher_settings, self.polish_on = default_polish, {}, True  # polish_on: off on a coordinator made from a replica
+        self._polish_stop = threading.Event()  # set by stop, step-down and release: the polish in flight is discarded
+        self.lessons, self.lesson_windows = [], {}  # [{shard, round, rows, status}] in shard-id order; shard id -> its windows
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
@@ -440,6 +455,7 @@ class Coordinator:
             self.history, self.step_time, self.state_file = state["history"], state.get("step_time"), state["state_file"]
             self.rules = drules.State.from_json(state.get("rules"))
             self.paused = bool(state.get("paused"))
+            self.lessons = [dict(entry) for entry in state.get("lessons") or []]
             self.finished = self.next_round >= settings.rounds or bool(state.get("finished"))
 
     # -- building and resuming
@@ -491,6 +507,10 @@ class Coordinator:
         coordinator.model_spec = model.spec
         for number, more in enumerate(later, 1):
             coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, directory / "windows" / f"source{number}"))
+        if settings.polish_every:
+            coordinator._write_prompts(training)
+            coordinator.teacher_settings = teacher_settings(settings)  # prepare replaces it with the workspace's own
+        coordinator._load_lessons()
         if coordinator.rules.source >= len(coordinator.spans):
             raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "
                              f"{'is' if len(coordinator.spans) == 1 else 'are'} supplied (later_examples); training on the first would be a different run.")
@@ -550,7 +570,8 @@ class Coordinator:
         cfg = info["config"]
         model = sm.ScratchTransformer(cfg, vocabulary)
         state = {"term": term, "momentum": momentum, "round": int(record["round"]), "generation": int(record["generation"]),
-                 "history": record["history"], "step_time": record.get("step_time"), "state_file": None, "rules": record.get("rules"), "paused": record.get("paused")}
+                 "history": record["history"], "step_time": record.get("step_time"), "state_file": None, "rules": record.get("rules"), "paused": record.get("paused"),
+                 "lessons": record.get("lessons")}
         coordinator = cls(run, directory, cfg, Tokenizer.restore(info["tokenizer"]), Windows(parts), val, settings, theta,
                           _evaluator(model, val, cfg["batch_size"]), record["digest"], clock, state, on_step_down)
         coordinator.shard_count, coordinator.parts = count, parts
@@ -560,6 +581,9 @@ class Coordinator:
         coordinator.model_spec = model.spec
         coordinator.deal = record.get("shard_deal") or {}
         coordinator._start_files(model)
+        coordinator.polish_on = False  # the replica holds no training examples to make prompts from, nor the teacher's rows
+        for entry in coordinator.lessons:
+            entry["status"] = "left_out"  # the replica holds no lesson shards, so the lessons the old coordinator dealt are not dealt any more
         if coordinator.history:  # only the latest round's weights came over: they are the best this coordinator can keep
             last, rules = coordinator.history[-1], coordinator.rules
             loss = last.get("val_loss")
@@ -581,6 +605,10 @@ class Coordinator:
         atomic_json(directory / "run.json", coordinator.record)
         coordinator._event("took_over", "", coordinator.next_round,
                            f"Term {term} began here, continuing from round {coordinator.next_round} of term {record.get('term', 1)}.")
+        if settings.polish_every:
+            coordinator._event("polish_off", "", coordinator.next_round,
+                               "The teacher polish ends here: this node holds neither the training examples nor the lessons the old coordinator wrote, "
+                               "so the run goes on without them.")
         return coordinator
 
     @staticmethod
@@ -604,6 +632,58 @@ class Coordinator:
         self.spans.append((self.shard_count, count))
         self.shard_count += count
 
+    # -- prompts and lessons (teacher polish)
+    def _write_prompts(self, training):
+        """prompts.jsonl: the conversations of the training split the teacher is asked to answer (never a validation one), once per run."""
+        path = self.directory / "prompts.jsonl"
+        if path.is_file():
+            return
+        from studio_rlhf import prompts_from
+        temporary = path.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            for prompt in prompts_from(training):
+                stream.write(json.dumps(prompt, ensure_ascii=False) + "\n")
+        temporary.replace(path)
+
+    def prompt_window(self, polish_number):
+        """The prompts of the `polish_number`-th polish (counting from 1): PROMPTS_PER_POLISH of them, a new window each time, wrapping
+        round the file."""
+        path = self.directory / "prompts.jsonl"
+        if not path.is_file():
+            return []
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not lines:
+            return []
+        start = (polish_number - 1) * PROMPTS_PER_POLISH % len(lines)
+        return [json.loads(line) for line in (lines[start:] + lines[:start])[:PROMPTS_PER_POLISH]]
+
+    def _lesson_windows(self, rows):
+        """The training windows of lesson rows: each teacher rewrite is the conversation plus the better answer."""
+        import studio_model as sm
+        examples = [{"messages": [*row["messages"], {"role": "assistant", "content": row["chosen"]}]} for row in rows]
+        return sm.samples_from(examples, self.tokenizer, self.cfg)
+
+    def _load_lessons(self):
+        """Rebuild the windows of the lessons diloco.json lists from lessons.jsonl (a restart). A lesson whose rows are gone is left out."""
+        if not self.lessons:
+            return
+        path = self.directory / "lessons.jsonl"
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.is_file() else []
+        for entry in self.lessons:
+            if entry["status"] != "live":
+                continue
+            mine = [row for row in rows if row.get("shard") == entry["shard"]]
+            windows = self._lesson_windows(mine) if mine else []
+            if len(windows):
+                self.lesson_windows[entry["shard"]] = windows
+            else:
+                entry["status"] = "left_out"
+
+    def live_lessons(self, since=None):
+        """The lessons being dealt; with `since`, only those written after round `since` closed or later (they were first trained on in
+        a round after that round's weights)."""
+        return [entry for entry in self.lessons if entry["status"] == "live" and (since is None or entry["round"] >= since)]
+
     @staticmethod
     def _read_state(directory, cfg, settings, digest):
         path = directory / "diloco.json"
@@ -617,7 +697,8 @@ class Coordinator:
             momentum = {key[len(STATE_PREFIXES[1]):]: archive[key].copy() for key in archive.files if key.startswith(STATE_PREFIXES[1])}
         return {"theta": theta, "momentum": momentum, "state_file": saved["state_file"], "round": saved["round"], "generation": saved["generation"],
                 "history": saved["history"], "step_time": saved.get("step_time"), "term": saved.get("term", 1),
-                "rules": saved.get("rules"), "finished": saved.get("finished", False), "paused": saved.get("paused", False)}
+                "rules": saved.get("rules"), "finished": saved.get("finished", False), "paused": saved.get("paused", False),
+                "lessons": saved.get("lessons", [])}
 
     def _start_files(self, model):
         from studio_core import atomic_json, now
@@ -625,6 +706,7 @@ class Coordinator:
         atomic_json(self.directory / "spec.json", model.spec)
         atomic_json(self.directory / "tokenizer.json", self.tokenizer.serialize())
         (self.directory / "metrics.jsonl").write_text("", encoding="utf-8")
+        (self.directory / "lessons.jsonl").unlink(missing_ok=True)  # a new run has no lessons: the rows of an earlier one in this folder are not its own
         self.record = {"name": self.cfg["name"], "createdAt": now(), "status": "training", "step": 0, "steps": self.cfg["steps"],
                        "parameters": model.parameter_count, "vocabulary": self.tokenizer.vocab_size, "backend": "diloco",
                        "device": "distributed", "rounds": self.settings.rounds, "inner_steps": self.settings.inner_steps}
@@ -660,6 +742,7 @@ class Coordinator:
             if term <= self.superseded or term < self.term or (term == self.term and not force):
                 return
             self.superseded = term
+            self._polish_stop.set()  # a polish in flight is for a coordinator that no longer holds the run
             self._event("stepped_down", "", self.next_round, f"Term {term} exists (this node held term {self.term}): no longer coordinating the run.")
             self.cond.notify_all()
         if self.on_step_down:
@@ -796,7 +879,7 @@ class Coordinator:
         self.leaving.clear()
 
     def _open(self, now):
-        if self.paused:
+        if self.paused or self.polishing:
             return False
         for node in sorted(self.pending, key=lambda n: self.pending[n]["seq"]):
             if len(self.members) < self.settings.max_members:
@@ -809,7 +892,8 @@ class Coordinator:
             self.last_members = active
         window = round_seconds(self.settings, self.step_time)
         first, count = self.spans[min(self.rules.source, len(self.spans) - 1)]
-        self.current = Round(self.next_round, self.generation, active, deal_shards(self.cfg["seed"], self.next_round, active, count, first),
+        ids = [*range(first, first + count), *(entry["shard"] for entry in self.live_lessons())]  # the source's shards, then the lessons
+        self.current = Round(self.next_round, self.generation, active, deal_ids(self.cfg["seed"], self.next_round, active, ids),
                              now, now + window, window)
         return True
 
@@ -867,6 +951,8 @@ class Coordinator:
         self._save(row, current)
         if self.finished:
             self._event("finished", "", current.number, self.rules.stop_text or f"The run finished after {self.next_round} rounds.")
+        else:
+            self._start_polish(row, current, verdict)
         self.cond.notify_all()
 
     def _apply_rules(self, row, current):
@@ -874,14 +960,22 @@ class Coordinator:
         next pivot when the loss kept getting worse or stopped improving, or end the run with the rule's reason. Returns the verdict."""
         rules = self.rules
         drules.accrue(rules, self.clock(), len(self.members) >= self.settings.min_members and not self.paused)
+        loss = row["val_loss"]
+        better = loss is not None and math.isfinite(loss) and (rules.best_loss is None or loss < rules.best_loss)
+        since = current.number if better else rules.best_round  # the best round once this one is folded in: the lessons written after it are the ones a drop_lessons pivot leaves out
+        lessons = len(self.live_lessons(since)) if since is not None else 0
         verdict = drules.observe(rules, self.settings, current.number, row["step"], row["val_loss"], sources=len(self.spans),
-                                 final=self.finished)  # the round `rounds` ends anyway: keep the best, no restore or stop reason
+                                 final=self.finished, lessons=lessons)  # the round `rounds` ends anyway: keep the best, no restore or stop reason
         row["best"] = rules.best_round == current.number
         if verdict["improved"]:
             self._write_best()
         if verdict["action"] == "pivot" and rules.best_round is not None:
             self._restore_best()
             row["pivot"] = verdict["name"]
+            if verdict["name"] == "drop_lessons":
+                for entry in self.live_lessons(rules.best_round):
+                    entry["status"] = "left_out"
+                    self.lesson_windows.pop(entry["shard"], None)
             before = f"{verdict['before']:.4g}" if verdict["before"] is not None else "no number"
             why = (f"the validation loss got worse {verdict['streak']} rounds in a row" if verdict["why"] == "worse"
                    else "the validation loss stopped improving")
@@ -905,7 +999,8 @@ class Coordinator:
 
     def _view(self, number, node):
         entry = self.members.get(node) or self.pending.get(node)
-        base = {"term": self.term, "round": number, "member": entry is not None, "current": self.next_round, "paused": self.paused}
+        base = {"term": self.term, "round": number, "member": entry is not None, "current": self.next_round, "paused": self.paused,
+                "polishing": self.polishing}
         if self.finished:
             return {**base, "state": "finished"}
         if number < self.next_round:
@@ -934,7 +1029,8 @@ class Coordinator:
                 self.cond.wait(min(left, .25))  # a short slice: a deadline passing on the clock wakes nobody else
                 self._advance()
                 view = self._view(number, node)
-                if view["state"] != first["state"] or view.get("member") != first.get("member") or view["paused"] != first["paused"]:
+                if (view["state"] != first["state"] or view.get("member") != first.get("member") or view["paused"] != first["paused"]
+                        or view["polishing"] != first["polishing"]):
                     return view
             return first
 
@@ -1024,6 +1120,8 @@ class Coordinator:
             self.lock.release()
 
     def shard_bytes(self, shard):
+        if shard in self.lesson_windows:  # a lesson shard: its ids come after the data sources'
+            return shard_blob(self.lesson_windows[shard], 0, len(self.lesson_windows[shard]))
         if not 0 <= shard < self.shard_count:
             raise KeyError(shard)
         if self.parts is not None:
@@ -1093,6 +1191,8 @@ class Coordinator:
             return "stopped" if self.stopped else "finished"
         if self.stage:
             return self.stage
+        if self.polishing:
+            return "polishing"
         if current is None:
             return "paused" if self.paused else "waiting"
         reports = [self.reports.get(node) for node in current.members]
@@ -1148,7 +1248,8 @@ class Coordinator:
                 "window_s": current.window if current is not None else None, "contributed": len(current.contributions) if current is not None else 0,
                 "expected": len(self._expected(current)) if current is not None else 0, "theta_bytes": self.theta_nbytes, "now_s": now - self.started,
                 "timeline": timelines, "events": [dict(event) for event in self.events],
-                "rules": {**self.rules.to_json(), "points": len(self.rules.points)}, "paused": self.paused}
+                "rules": {**self.rules.to_json(), "points": len(self.rules.points)}, "paused": self.paused,
+                "lessons": [dict(entry) for entry in self.lessons]}
         self._last = view
         return view
 
@@ -1178,6 +1279,7 @@ class Coordinator:
                 return
             from studio_core import atomic_json
             self.stopped = self.finished = True
+            self._polish_stop.set()
             self._event("finished", "", self.next_round, reason)
             if self.record:
                 self.record["status"] = "stopped"
@@ -1235,6 +1337,104 @@ class Coordinator:
         saved = json.loads(path.read_text(encoding="utf-8"))
         atomic_json(path, {**saved, "paused": self.paused, "rules": self.rules.to_json()})
 
+    # -- the teacher's polish
+    def _start_polish(self, row, current, verdict):
+        """After every polish_every-th closed round (called with the lock held, the round saved): hand last.npz to the teacher on a thread
+        of its own, and open no round until it is done. Never after the final round, and not after a round that went back to the best
+        weights (the loss measured is not of the weights now held). Does nothing without prompts, on a coordinator made from a replica
+        (which holds no data of its own to make them from), or once the run has ended."""
+        every = self.settings.polish_every
+        if (not every or not self.polish_on or self.superseded or self.stopped or self.next_round % every or verdict["action"] == "pivot"):
+            return
+        prompts = self.prompt_window(self.next_round // every)
+        if not prompts:
+            return
+        stop = self._polish_stop = threading.Event()
+        context = {"number": current.number, "step": row["step"], "old": row["val_loss"], "members": list(current.members), "prompts": prompts, "row": row}
+        self.polishing = True
+        self._event("polish", "", current.number, f"Round {current.number}: the teacher ({self.settings.teacher}) is polishing the weights. "
+                                                 f"No round opens until it is done.")
+        threading.Thread(target=self._polish_run, args=(context, stop), daemon=True, name="diloco-polish").start()
+
+    def _polish_run(self, context, stop):
+        """The polish thread: ask the teacher (self.polisher), score a polished checkpoint on the validation windows, then hand the outcome
+        to _polish_done under the lock. Nothing here touches the run's state; no round is open to change it."""
+        outcome = {"error": "", "rows": [], "theta": None, "loss": None}
+        try:
+            base = self.directory / "last.npz"
+            result = self.polisher(self.directory / "teacher", self.teacher_settings, str(base), context["prompts"], self.cfg.get("device", "auto"),
+                                   stop, lambda event: None)
+            outcome["rows"] = [dict(found) for found in result.get("lessons") or []]
+            path = result.get("checkpoint")
+            if self.settings.polish and path and not stop.is_set() and Path(path).resolve() != base.resolve():
+                outcome["theta"] = self._weights_of(path, self.theta)
+                outcome["loss"] = self.evaluate(outcome["theta"])
+        except Exception as exc:  # the teacher is optional: a failed polish is skipped and the run goes on
+            outcome["error"] = (str(exc) or type(exc).__name__)[:300]
+        with self.cond:
+            try:
+                self._polish_done(context, outcome, stop)
+            finally:
+                self.polishing = False
+                self._advance()
+                self.cond.notify_all()
+
+    def _polish_done(self, context, outcome, stop):
+        """Take the teacher's work into the run (lock held). The polished weights replace theta only when the teacher's head-to-head gate
+        passed (the polisher returned another checkpoint) and their validation loss is no worse than the round's; the better answers
+        become a lesson: extra shards from the next round on. A stopped, released or superseded run takes nothing."""
+        if stop.is_set() or self.superseded or self.finished or not self.theta:
+            return
+        number, row, old, new = context["number"], context["row"], context["old"], outcome["loss"]
+        if outcome["error"]:
+            self._event("polish", "", number, f"Round {number}: the teacher polish was skipped ({outcome['error']}). Training goes on without it.")
+            return
+        said = []
+        if outcome["theta"] is not None:
+            if old is not None and new is not None and math.isfinite(new) and new <= old:
+                self.theta = outcome["theta"]
+                self._params, self._state = (None, b""), (None, b"")
+                verdict = drules.revise(self.rules, self.settings, number, context["step"], old, new)
+                row.update({"polished": True, "polish_val_loss": float(new), "best": self.rules.best_round == number})
+                if verdict["improved"]:
+                    self._write_best()
+                if verdict["action"] == "stop":
+                    self.finished = True
+                said.append(f"kept the polished weights (validation loss {new:.4g}, was {old:.4g})")
+            else:
+                said.append("kept the weights it had: the polished ones were no better on the validation windows"
+                            + (f" ({new:.4g} against {old:.4g})" if new is not None and old is not None else ""))
+        elif self.settings.polish:
+            said.append("the polished weights did not win the teacher's head-to-head, so they were not kept")
+        added = self._add_lessons(number, outcome["rows"]) if self.settings.lessons else 0
+        if added:
+            row["lessons"] = added
+            said.append(f"wrote {added} lesson{'s' if added != 1 else ''} to train on from the next round")
+        elif self.settings.lessons:
+            said.append("had no lessons to give")
+        self._persist(context["members"], self.deal)
+        self._write_record(row)
+        self._event("polish", "", number, f"Round {number}: the teacher " + ("; ".join(said) or "had nothing to add") + ".")
+        if self.finished:
+            self._event("finished", "", number, self.rules.stop_text or f"The run finished after {self.next_round} rounds.")
+        self._remember()
+
+    def _add_lessons(self, number, rows):
+        """Keep the teacher's rewrites as one lesson: a new shard (the ids after the data sources' and the earlier lessons') that the
+        next round deals with the others. Returns how many rows it holds; 0 when they make no training window."""
+        rows = [row for row in rows if row.get("messages") and row.get("chosen")]
+        windows = self._lesson_windows(rows) if rows else []
+        if not len(windows):
+            return 0
+        shard = self.shard_count + len(self.lessons)
+        with (self.directory / "lessons.jsonl").open("a", encoding="utf-8") as stream:
+            for row in rows:
+                stream.write(json.dumps({"shard": shard, "round": number, "messages": row["messages"], "chosen": row["chosen"],
+                                         "rejected": row.get("rejected", "")}, ensure_ascii=False) + "\n")
+        self.lesson_windows[shard] = windows
+        self.lessons.append({"shard": shard, "round": number, "rows": len(rows), "status": "live"})
+        return len(rows)
+
     # -- durability
     def _touch(self, node=""):
         self.touched = time.monotonic()
@@ -1255,13 +1455,20 @@ class Coordinator:
 
     def _save(self, row, closed):
         """The round's files, in the order that keeps a crash recoverable: the state, last.npz, then diloco.json that names it."""
-        from studio_core import atomic_json, now
-        step = self._persist(closed.members, closed.deal)
+        self._persist(closed.members, closed.deal)
         with (self.directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({k: row[k] for k in ("step", "loss", "val_loss", "tokens_per_second", "lr", "grad_norm")}
                                     | {"round": row["round"], "timeline": self._timeline(closed)}) + "\n")
         self._event("checkpoint", "", row["round"], f"Round {row['round']} checkpoint written.")
-        self.record.update({"step": step, "val_loss": row["val_loss"], "status": "completed" if self.finished else "training",
+        self._write_record(row)
+        self._remember()
+
+    def _write_record(self, row):
+        """run.json as it stands after round `row` (the weights now in theta, so a polished round counts with its polished loss)."""
+        from studio_core import atomic_json, now
+        self.record.update({"step": self.next_round * self.settings.inner_steps,
+                            "val_loss": row["polish_val_loss"] if row.get("polished") else row["val_loss"],
+                            "status": "completed" if self.finished else "training",
                             "best_round": self.rules.best_round, "best_val_loss": self.rules.best_loss})
         if self.rules.stop_rule:
             self.record.update({"stop_rule": self.rules.stop_rule, "stop_reason": self.rules.stop_text})
@@ -1270,7 +1477,6 @@ class Coordinator:
         if self.finished:
             self.record["finishedAt"] = now()
         atomic_json(self.directory / "run.json", self.record)
-        self._remember()
 
     def _persist(self, members, deal):
         """Write the state for `next_round` rounds closed: the state archive, last.npz, then diloco.json that names it (a crash between
@@ -1289,7 +1495,8 @@ class Coordinator:
             "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
             "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
             "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash,
-            "rules": self.rules.to_json(), "layout": [count for _, count in self.spans], "paused": self.paused and not self.finished})
+            "rules": self.rules.to_json(), "layout": [count for _, count in self.spans], "paused": self.paused and not self.finished,
+            "lessons": self.lessons})
         if old and old != self.state_file:
             (self.directory / old).unlink(missing_ok=True)
         return step
@@ -1327,6 +1534,7 @@ class Coordinator:
     def release(self):
         """Drop the big arrays once the run is over; the files on disk are the result."""
         with self.cond:
+            self._polish_stop.set()
             self.theta, self.momentum, self._params, self._state = {}, {}, (None, b""), (None, b"")
 
 
@@ -1359,6 +1567,39 @@ IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten
 _LOCK = threading.Lock()
 
 
+def teacher_settings(settings, root=None):
+    """The Ollama teacher a run polishes with: the workspace's RLHF settings (address, rubric, judge model) with the run's own teacher model."""
+    from studio_rlhf import SETTINGS_DEFAULTS, load_settings
+    return {**(load_settings(root) if root else json.loads(json.dumps(SETTINGS_DEFAULTS))), "teacher_model": settings.teacher}
+
+
+def _teacher(found):
+    from studio_rlhf import OllamaTeacher
+    return OllamaTeacher(found["url"], found["teacher_model"], rubric=found.get("rubric"), judge_model=found.get("judge_model") or None)
+
+
+def check_teacher(found):
+    """RuntimeError, saying why, when the Ollama teacher cannot be reached."""
+    _teacher(found).models()
+
+
+def default_polish(directory, found, checkpoint, prompts, device, stop, emit):
+    """One preference round of the teacher from `checkpoint` (the port of studio_passive.default_teacher_round): sample, grade, train, and
+    keep the result only if it wins the head-to-head gate. Returns {"checkpoint", "win_rate", "lessons": [{"messages", "chosen", "rejected"}]};
+    "checkpoint" is the given one when the gate did not pass. Raises when the teacher cannot be reached."""
+    from studio_rlhf import PreferenceStore, auto_rlhf
+    teacher = _teacher(found)
+    teacher.models()  # RuntimeError when Ollama is not reachable
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    store = PreferenceStore(directory)
+    before = len(store)
+    result = auto_rlhf(str(checkpoint), prompts, teacher, store, directory, {"rounds": 1}, {"device": device}, emit, stop, None, teacher.judge_teacher())
+    if result.get("aborted"):
+        raise RuntimeError(result["aborted"])
+    rows = [row for row in store.all()[before:] if row.get("kind") == "rewrite"]
+    return {"checkpoint": result["checkpoint"], "win_rate": result["win_rate"], "lessons": [dict(row) for row in rows]}
+
+
 def register(run, coordinator):
     with _LOCK:
         for key, other in list(COORDINATORS.items()):
@@ -1378,6 +1619,13 @@ def prepare(job, services, directory, port, client_for=None):
     p = job.params
     config = dict(p["config"])
     settings = Settings.from_params(p, steps=config.get("steps"))
+    teacher = None
+    if settings.polish_every:  # fail the job now, not at the first polish, when the teacher cannot be reached
+        teacher = teacher_settings(settings, getattr(services, "root", None))
+        try:
+            check_teacher(teacher)
+        except RuntimeError as exc:
+            raise ValueError(f"The run polishes with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
     examples = p["examples"] if "examples" in p else services.examples(p)
     try:
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
@@ -1387,6 +1635,8 @@ def prepare(job, services, directory, port, client_for=None):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None
         raise
     run = studio_distributed.run_of(job)
+    if teacher is not None:
+        coordinator.teacher_settings = teacher
     coordinator.prefer = (run.handoff,) if run.handoff else ()  # the node chosen to coordinate holds the run from the first round on
     register(job.id, coordinator)
     run.folder = str(directory)
@@ -1701,7 +1951,7 @@ class Member:
         """Like _enter, but returns what it took (an Entered) instead of applying it; None when the run finished, the member was fenced
         out or stop was set. `quiet`, for the background exchange, leaves the phase and round the reporter says alone."""
         from studio_peer import PeerError
-        asked, noted = want, False
+        asked, noted, noted_polish = want, False, False
         while not self.stop.is_set():
             if not quiet:
                 self.report_round = want
@@ -1723,6 +1973,9 @@ class Member:
             if view["state"] == "pending" and view.get("paused") and not quiet and not noted:
                 noted = True
                 self.emit({"type": "info", "text": "The run is paused by its owner. Waiting for it to be resumed."})
+            if view["state"] == "pending" and view.get("polishing") and not quiet and not noted_polish:
+                noted_polish = True
+                self.emit({"type": "info", "text": "The teacher is polishing the weights. The next round opens when it is done."})
             if view["state"] == "closed":
                 want = view["current"]
             elif view["state"] == "pending" and not view["member"]:

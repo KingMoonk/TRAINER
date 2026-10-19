@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, errorMarks, holdButtons, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, lessonsText, holdButtons, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { member as build, round, run } from "./test-data";
@@ -134,6 +134,14 @@ describe("the charts", () => {
       ["pivot-2", 3, "Learning rate halved"], ["pivot-3", 4, "Next text"], ["pivot-4", 5, "Changed course"], ["best", 2, "Best"],
     ]);
     expect(errorMarks(run({ history: [round(0)] }))).toEqual([]);
+  });
+
+  test("the error curve marks a polished round and says what the lessons did", () => {
+    const r = run({ history: [round(0), round(1, { polished: true, polish_val_loss: 3, lessons: 4 })] });
+    expect(errorMarks(r).map((m) => [m.id, m.x, m.label])).toEqual([["polish-1", 2, "Teacher polish"]]);
+    expect(lessonsText(run())).toBe("");
+    expect(lessonsText(run({ lessons: 4 }))).toBe("4 lessons from the teacher in the training text");
+    expect(lessonsText(run({ lessons: 4, lessons_left_out: 2 }))).toBe("4 lessons from the teacher in the training text, 2 left out");
   });
 
   test("Pause shows while the run can be paused, Resume while it is paused, Restart once it ended", () => {

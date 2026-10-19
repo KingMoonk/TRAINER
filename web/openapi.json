@@ -7751,6 +7751,11 @@
             "title": "Dropped",
             "type": "array"
           },
+          "lessons": {
+            "default": 0,
+            "title": "Lessons",
+            "type": "integer"
+          },
           "loss": {
             "anyOf": [
               {
@@ -7770,6 +7775,22 @@
             "default": "",
             "title": "Pivot",
             "type": "string"
+          },
+          "polish_val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polish Val Loss"
+          },
+          "polished": {
+            "default": false,
+            "title": "Polished",
+            "type": "boolean"
           },
           "round": {
             "title": "Round",
@@ -8027,6 +8048,11 @@
           "paused": {
             "default": false,
             "title": "Paused",
+            "type": "boolean"
+          },
+          "polishing": {
+            "default": false,
+            "title": "Polishing",
             "type": "boolean"
           },
           "rank": {
@@ -8381,6 +8407,16 @@
             "title": "Label",
             "type": "string"
           },
+          "lessons": {
+            "default": 0,
+            "title": "Lessons",
+            "type": "integer"
+          },
+          "lessons_left_out": {
+            "default": 0,
+            "title": "Lessons Left Out",
+            "type": "integer"
+          },
           "members": {
             "items": {
               "$ref": "#/components/schemas/Member"
@@ -8432,6 +8468,7 @@
               "collecting",
               "outer_step",
               "validating",
+              "polishing",
               "finished",
               "stopped"
             ],
@@ -8571,7 +8608,9 @@
               "paused",
               "resumed",
               "took_over",
-              "stepped_down"
+              "stepped_down",
+              "polish",
+              "polish_off"
             ],
             "title": "Kind",
             "type": "string"
