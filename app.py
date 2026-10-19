@@ -3,13 +3,14 @@
 Takes the flags of `python -m studio_api` (which starts the API alone, for development and for a node without a screen).
 
 python app.py --smoke REPORT: the release check on the frozen build. Imports the modules PyInstaller cannot see, serves FakeServices on a free port,
-waits for /node to answer, stops, and writes what it found to REPORT; the exit code is 0 only when everything came up. No browser, no web build needed."""
+waits for /node to answer, stops, and writes what it found to REPORT; the exit code is 0 only when everything came up, the web build included. No browser opens."""
 import importlib
 import pkgutil
 import socket
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
@@ -22,15 +23,20 @@ HIDDEN = ("studio_brain3d", "studio_worker")  # the --hidden-import list in .git
 
 
 def split_smoke(argv):
-    """(report path or None, the other arguments): --smoke REPORT is app.py's own, so it is taken out before studio_api parses the rest."""
+    """(report path or None, the other arguments): --smoke REPORT or --smoke=REPORT is app.py's own, so it is taken out before studio_api parses the rest."""
     argv = list(argv)
-    if "--smoke" not in argv:
+    for at, arg in enumerate(argv):
+        if arg == "--smoke" or arg.startswith("--smoke="):
+            break
+    else:
         return None, argv
-    at = argv.index("--smoke")
-    if at + 1 >= len(argv):
+    if arg == "--smoke":
+        report, used = (argv[at + 1] if at + 1 < len(argv) else ""), 2
+    else:
+        report, used = arg[len("--smoke="):], 1
+    if not report or report.startswith("--"):
         raise SystemExit("--smoke needs a report file")
-    report = argv[at + 1]
-    return report, argv[:at] + argv[at + 2:]
+    return report, argv[:at] + argv[at + used:]
 
 
 def missing_modules():
@@ -54,38 +60,53 @@ def free_port():
 
 
 def smoke(argv, report):
-    """Returns the exit code: 0 when every module imported and /node answered. The report holds one line per finding."""
-    import uvicorn
-
-    from studio_api.__main__ import build, parse
-
-    lines = missing_modules()
-    if not lines:
-        args = parse(argv + ["--fake", "--port", str(free_port())], prog="python app.py --smoke")
-        server = uvicorn.Server(uvicorn.Config(build(args), host=args.bind, port=args.port, proxy_headers=False))
-        done, answered = threading.Event(), []
-
-        def stop():
-            answered.append(True)
-            server.should_exit = True
-
-        def watch():
-            open_when_up(url_of(args), done, stop, browser=False)
-            server.should_exit = True  # also when /node never answered, so the run ends
-
-        threading.Thread(target=watch, name="smoke", daemon=True).start()
-        try:
-            server.run()
-        finally:
-            done.set()
-        if not (answered and server.started):
-            lines.append(f"/node did not answer on port {args.port} within {OPEN_WITHIN:.0f}s")
+    """Returns the exit code: 0 when every module imported, the web build is there and /node answered. The report holds one line per
+    finding, then OK or FAIL; any exception (a bind failure included) is written to it too."""
+    try:
+        lines = smoke_findings(argv)
+    except BaseException:  # noqa: BLE001 - SystemExit from a bind failure must reach the report as well
+        lines = [traceback.format_exc().rstrip()]
     failed = bool(lines)
     text = "\n".join(lines + ["FAIL" if failed else "OK"]) + "\n"
     with open(report, "w", encoding="utf-8") as f:  # a windowed build has no console, so the report file is the only output
         f.write(text)
-    print(text, end="")
+    if sys.stdout:
+        print(text, end="")
     return 1 if failed else 0
+
+
+def smoke_findings(argv):
+    import uvicorn
+
+    from studio_api import app as api_app
+    from studio_api.__main__ import build, parse
+
+    lines = missing_modules()
+    if not (api_app.WEB_OUT / "index.html").is_file():
+        lines.append(f"web build missing: {api_app.WEB_OUT / 'index.html'}")
+    if lines:
+        return lines
+    args = parse(argv + ["--fake", "--port", str(free_port())], prog="python app.py --smoke")
+    # log_config=None: a windowed Windows build has no stdout or stderr, and uvicorn's default formatter calls isatty() on them
+    server = uvicorn.Server(uvicorn.Config(build(args), host=args.bind, port=args.port, proxy_headers=False, log_config=None))
+    done, answered = threading.Event(), []
+
+    def stop():
+        answered.append(True)
+        server.should_exit = True
+
+    def watch():
+        open_when_up(url_of(args), done, stop, browser=False)
+        server.should_exit = True  # also when /node never answered, so the run ends
+
+    threading.Thread(target=watch, name="smoke", daemon=True).start()
+    try:
+        server.run()
+    finally:
+        done.set()
+    if not (answered and server.started):
+        return [f"/node did not answer on port {args.port} within {OPEN_WITHIN:.0f}s"]
+    return []
 
 
 def url_of(args):
@@ -118,7 +139,7 @@ def main(argv=None, after_open=None):
     from studio_api.__main__ import build, parse
 
     report, argv = split_smoke(sys.argv[1:] if argv is None else argv)
-    if report:
+    if report is not None:
         return smoke(argv, report)
     args = parse(argv, prog="python app.py")
     if args.reload or args.dump_openapi:
