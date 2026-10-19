@@ -370,6 +370,8 @@ def run_attempt(task, seed, device, runner=train_runner, clock=time.perf_counter
         steps=final["step"], best_bpc=state["best"], tokens=final.get("trained_tokens"),
         time_to_target_s=final.get("elapsed_seconds") if state["hit"] else None,
         tokens_per_s=tps, steps_per_s=(tps / per_step) if tps and per_step else None,
+        communication_share=(final["comm_seconds"] / final["elapsed_seconds"]
+                             if final.get("comm_seconds") is not None and final.get("elapsed_seconds") else None),
         setup_s=state["setup"], first_step_s=first.get("elapsed_seconds") if first else None,
         warmup_s=max(0., first["elapsed_seconds"] - steady_step) if first and steady_step and first.get("elapsed_seconds") else None,
         wall_s=clock() - started)
@@ -380,7 +382,7 @@ def run_attempt(task, seed, device, runner=train_runner, clock=time.perf_counter
 
 
 def run_benchmark(task_id, device="cpu", attempts=None, runner=train_runner, clock=time.perf_counter, stop=None, emit=None,
-                  info=None, measure=measured_peak, app_version="dev", division="single", work=None, now=time.time):
+                  info=None, measure=measured_peak, app_version="dev", division="single", work=None, now=time.time, limit=None):
     """Run the task's attempts on one device and return the result dict (not yet stored)."""
     task = get_task(task_id)
     verify(task)
@@ -390,7 +392,7 @@ def run_benchmark(task_id, device="cpu", attempts=None, runner=train_runner, clo
     stop = stop or threading.Event()
     emit = emit or (lambda event: None)
     info = info or describe_device(device)
-    limit = peak(info, task.precision, measure)
+    limit = limit or peak(info, task.precision, measure)
     flops = flops_per_token(task)
     energy = Energy(info.get("kind"))
     if info.get("kind") == "cuda":
@@ -426,8 +428,54 @@ def run_benchmark(task_id, device="cpu", attempts=None, runner=train_runner, clo
             "flops_per_token": flops, "peak": limit, "mfu": mfu(median_tps, flops, limit["flops"]),
             "setup_s": statistics.median([a["setup_s"] for a in live if a["setup_s"] is not None]) if live and any(a["setup_s"] is not None for a in live) else None,
             "warmup_s": statistics.median([a["warmup_s"] for a in live if a["warmup_s"] is not None]) if live and any(a["warmup_s"] is not None for a in live) else None,
+            "communication_share": (statistics.median(shares) if (shares := [a["communication_share"] for a in live if a.get("communication_share") is not None]) else None),
             "peak_memory_bytes": _peak_memory(info.get("kind")), "energy_joules": energy.joules(),
             "error": next((a["error"] for a in done if a.get("error")), None)}
+
+
+# ---------------------------------------------------------------------------------------------------- the cluster division
+
+
+def scaling(cluster_median, members, results, task):
+    """Scaling efficiency of a cluster time against the best single-device result of the same task version.
+
+    speedup = best single time / cluster time. The ideal speedup is what the members would give if their rates simply added: each
+    member counts best / its own single-device time, taken from its stored single result (matched by label); a member with no stored
+    result cannot be weighed, and then the ideal is the machine count. efficiency = speedup / ideal. None when no single result exists."""
+    singles = [r for r in results if r["task"] == task.id and r["version"] == task.version and r["checksum"] == task.checksum
+               and r["division"] == "single" and r["status"] == "converged"]
+    if not singles or not cluster_median:
+        return None
+    best = min(singles, key=lambda r: r["time_to_target"]["median"])
+    t_best = best["time_to_target"]["median"]
+    own = {}
+    for r in singles:
+        own[r["label"]] = min(own.get(r["label"], math.inf), r["time_to_target"]["median"])
+    labels = [m.get("label") for m in members]
+    weighed = all(label in own for label in labels)
+    ideal = sum(t_best / own[label] for label in labels) if weighed else float(len(members))
+    speedup = t_best / cluster_median
+    return {"baseline_id": best["id"], "baseline_label": best["label"], "baseline_s": t_best, "speedup": speedup, "ideal_speedup": ideal,
+            "ideal_basis": "member single-device results" if weighed else "machine count", "efficiency": speedup / ideal, "machines": len(members)}
+
+
+def run_cluster(task_id, members, runner, results, emit=None, stop=None, clock=time.perf_counter, attempts=None, app_version="dev",
+                measure=measured_peak, now=time.time):
+    """The same task trained across `members` (a list of {"label", "info": describe_device-style dict}) by `runner`, which takes the
+    place of studio_model.train: it gets device "cluster" and reports the same metric rows, plus "comm_seconds" (time spent exchanging
+    weights so far) for the communication share. The result is of division "cluster", with scaling against the best single-device
+    result in `results` and a peak that is the sum of the members' peaks."""
+    task = get_task(task_id)
+    if len(members) < 2:
+        raise ValueError("A cluster result needs at least two machines.")
+    peaks = [peak(m["info"], task.precision, measure) for m in members]
+    limit = {"flops": sum(p["flops"] for p in peaks), "kind": "datasheet" if all(p["kind"] == "datasheet" for p in peaks) else "measured_gemm",
+             "source": "sum over the machines: " + "; ".join(f"{m['label']}: {p['source'][:60]}" for m, p in zip(members, peaks))}
+    info = {"kind": "cluster", "name": f"{len(members)} machines", "node": "cluster", "members": [dict(m["info"], label=m["label"]) for m in members]}
+    result = run_benchmark(task_id, "cluster", attempts, runner, clock, stop, emit, info, measure, app_version, "cluster", now=now, limit=limit)
+    result["label"] = "cluster: " + ", ".join(m["label"] for m in members)
+    result["scaling"] = scaling((result["time_to_target"] or {}).get("median"), members, results, task)
+    return result
 
 
 # ---------------------------------------------------------------------------------------------------- storage and views
@@ -484,7 +532,7 @@ def leaderboard(results, task_id):
 
 def summary(r):
     keys = ("id", "created_at", "task", "version", "division", "status", "label", "app_version", "time_to_target", "best_bpc", "tokens_per_s",
-            "steps_per_s", "mfu", "peak_memory_bytes", "energy_joules", "setup_s", "warmup_s", "attempt_count", "target_bpc", "error")
+            "steps_per_s", "mfu", "peak_memory_bytes", "energy_joules", "scaling", "communication_share", "setup_s", "warmup_s", "attempt_count", "target_bpc", "error")
     out = {k: r.get(k) for k in keys}
     out["peak_kind"] = (r.get("peak") or {}).get("kind")
     out["device"] = {k: (r.get("device") or {}).get(k) for k in ("kind", "name", "node", "torch", "cuda", "driver", "threads")}

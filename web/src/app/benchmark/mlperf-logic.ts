@@ -22,7 +22,10 @@ export type Summary = {
   target_bpc?: number;
   error?: string | null;
   relative_time?: number | null;
+  communication_share?: number | null;
+  scaling?: Scaling | null;
 };
+export type Scaling = { baseline_label: string; baseline_s: number; speedup: number; ideal_speedup: number; ideal_basis: string; efficiency: number; machines: number };
 export type Board = {
   task: string;
   version: number;
@@ -62,6 +65,15 @@ export function peakNote(kind: string | null | undefined): string {
   if (kind === "datasheet") return "of the datasheet peak";
   if (kind === "measured_gemm") return "of the best matrix multiply torch reached here";
   return "";
+}
+
+/** "78% scaling efficiency: 3.1x faster than the best single device (box · GPU), 4.0x ideal for 4 machines". Empty without a single-device result. */
+export function scalingText(r: Pick<Summary, "scaling" | "communication_share">): string {
+  const s = r.scaling;
+  const comm = r.communication_share == null ? "" : ` ${Math.round(r.communication_share * 100)}% of the time went to communication.`;
+  if (!s) return comm.trim();
+  const basis = s.ideal_basis === "machine count" ? `${s.machines} machines` : "the machines' own speeds";
+  return `${Math.round(s.efficiency * 100)}% scaling efficiency: ${s.speedup.toFixed(2)}x faster than the best single device (${s.baseline_label}), ${s.ideal_speedup.toFixed(2)}x ideal for ${basis}.${comm}`;
 }
 
 export const relativeText = (r: number | null | undefined) => (r == null ? "-" : r === 1 ? "fastest" : `${r.toFixed(2)}x slower`);

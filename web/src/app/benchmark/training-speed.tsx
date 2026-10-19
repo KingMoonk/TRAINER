@@ -15,6 +15,7 @@ import {
   peakNote,
   rateText,
   relativeText,
+  scalingText,
   statusText,
   timeText,
   versionChanges,
@@ -154,6 +155,7 @@ export function TrainingSpeed() {
                         <td className="py-1 pr-3">{r.label}</td>
                         <td className="py-1 pr-3" title={r.error ?? ""}>
                           {statusText(r.status)}
+                          {scalingText(r) && <span className="block text-xs text-muted-foreground">{scalingText(r)}</span>}
                         </td>
                         <td className="py-1 pr-3 font-mono">{timeText(r.time_to_target)}</td>
                         <td className="py-1 pr-3 font-mono">{rateText(r.tokens_per_s)}</td>

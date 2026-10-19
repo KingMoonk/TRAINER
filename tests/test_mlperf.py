@@ -159,6 +159,67 @@ class ViewTests(unittest.TestCase):
             self.assertEqual(job.params["result"]["status"], "converged")
 
 
+def cluster_runner(bpcs, comm=.25):
+    """A fake cluster: the metric rows carry the time spent exchanging weights so far."""
+    inner = fake_runner(bpcs, step_seconds=.25, first_extra=0.)
+
+    def runner(task, seed, device, emit, stop, directory):
+        inner(task, seed, device, lambda e: emit(dict(e, comm_seconds=e["elapsed_seconds"] * comm) if e.get("type") == "metric" else e), stop, directory)
+    return runner
+
+
+class ClusterTests(unittest.TestCase):
+    MEMBERS = [{"label": "a", "info": {"kind": "cpu", "name": "Fake CPU"}}, {"label": "b", "info": {"kind": "cpu", "name": "Fake CPU"}}]
+
+    def single(self, ident, label, seconds):
+        base = bench(fake_runner([1.]), attempts=1)
+        return dict(base, id=ident, label=label, time_to_target={"median": seconds, "min": seconds, "max": seconds, "n": 1})
+
+    def cluster(self, results, runner=None):
+        return m.run_cluster("small", self.MEMBERS, runner or cluster_runner([5., 3., 1.9]), results, attempts=1, measure=lambda d: 1e12)
+
+    def test_scaling_efficiency_against_the_best_single_device(self):
+        # two equal machines each take 30 s alone; the cluster needs 3 evaluations x 20 steps x .25 s = 15 s: a perfect 2x
+        r = self.cluster([self.single("s1", "a", 30.), self.single("s2", "b", 30.)])
+        self.assertEqual((r["division"], r["status"]), ("cluster", "converged"))
+        self.assertAlmostEqual(r["time_to_target"]["median"], 15.)
+        s = r["scaling"]
+        self.assertEqual(s["baseline_s"], 30.)
+        self.assertAlmostEqual(s["speedup"], 2.)
+        self.assertAlmostEqual(s["efficiency"], 1.)
+        self.assertEqual(s["ideal_basis"], "member single-device results")
+        self.assertAlmostEqual(r["communication_share"], .25)
+
+    def test_a_slower_member_lowers_the_ideal_and_unknown_members_count_as_machines(self):
+        r = self.cluster([self.single("s1", "a", 30.), self.single("s2", "b", 60.)])  # ideal 1 + .5 = 1.5; speedup 2: efficiency > 1 is reported as is
+        self.assertAlmostEqual(r["scaling"]["ideal_speedup"], 1.5)
+        r = self.cluster([self.single("s1", "a", 30.)])
+        self.assertEqual(r["scaling"]["ideal_basis"], "machine count")
+        self.assertAlmostEqual(r["scaling"]["efficiency"], 1.)
+
+    def test_no_single_result_means_no_scaling_and_a_miss_has_none(self):
+        self.assertIsNone(self.cluster([])["scaling"])
+        miss = self.cluster([self.single("s1", "a", 30.)], cluster_runner([5., 4.]))
+        self.assertEqual(miss["status"], "did_not_converge")
+        self.assertIsNone(miss["scaling"])
+
+    def test_other_task_versions_are_not_the_baseline(self):
+        old = dict(self.single("s1", "a", 1.), version=0)
+        self.assertIsNone(self.cluster([old])["scaling"])
+
+    def test_peak_is_the_sum_of_the_members(self):
+        r = self.cluster([])
+        self.assertEqual(r["peak"]["flops"], 2e12)
+        with self.assertRaises(ValueError):
+            m.run_cluster("small", self.MEMBERS[:1], cluster_runner([1.]), [])
+
+    def test_it_lands_on_the_cluster_leaderboard(self):
+        r = self.cluster([self.single("s1", "a", 30.)])
+        board = m.leaderboard([r, self.single("s1", "a", 30.)], "small")["divisions"]
+        self.assertEqual(len(board["cluster"]), 1)
+        self.assertAlmostEqual(board["cluster"][0]["scaling"]["efficiency"], 1.)
+
+
 class RouterTests(ApiCase):
     prefix = "/mlperf"
 

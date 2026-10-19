@@ -67,6 +67,18 @@ describe("Training speed section", () => {
     expect(screen.getByText(/Result 1: v1 · Result 2: v2/)).toBeInTheDocument();
   });
 
+  test("a cluster result shows its scaling efficiency and communication share", async () => {
+    const cluster = result("k", "cluster: box · GPU, old · CPU", 20, {
+      division: "cluster",
+      communication_share: 0.2,
+      scaling: { baseline_label: "box · GPU", baseline_s: 30, speedup: 1.5, ideal_speedup: 2, ideal_basis: "machine count", efficiency: 0.75, machines: 2 },
+    });
+    mockApi({ "GET /mlperf/board": { body: { ...board, board: { ...board.board, divisions: { single: board.board.divisions.single, cluster: [cluster] } } } } });
+    renderPage(<TrainingSpeed />);
+    expect(await screen.findByText(/Leaderboard: Cluster/)).toBeInTheDocument();
+    expect(screen.getByText(/75% scaling efficiency: 1.50x faster than the best single device \(box · GPU\)/)).toHaveTextContent("20% of the time went to communication");
+  });
+
   test("compares the ticked results", async () => {
     const calls = mockApi({
       "GET /mlperf/board": { body: board },
