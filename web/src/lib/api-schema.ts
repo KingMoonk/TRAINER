@@ -1576,6 +1576,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Lessons
+         * @description What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the
+         *     run is not going. A run another computer coordinates is read by asking that computer.
+         */
+        get: operations["run_lessons_distributed_runs__run_id__lessons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/lessons/{lesson}/drop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drop Run Lesson
+         * @description Leave a lesson out of the rounds that open from now on; the round in flight keeps it. 404 for an id that is no lesson, 409 when
+         *     the run is over or not going. Answers the lessons as they stand.
+         */
+        post: operations["drop_run_lesson_distributed_runs__run_id__lessons__lesson__drop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/lessons/{lesson}/keep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep Run Lesson
+         * @description Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop.
+         */
+        post: operations["keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/members/{node}/stop": {
         parameters: {
             query?: never;
@@ -4324,6 +4386,35 @@ export interface components {
              */
             shared: number;
         };
+        /** Lesson */
+        Lesson: {
+            /** Id */
+            id: number;
+            /** Items */
+            items: components["schemas"]["LessonItem"][];
+            /** Keepable */
+            keepable: boolean;
+            /** More */
+            more: number;
+            /** Round */
+            round: number;
+            /** Rows */
+            rows: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "live" | "dropped" | "left_out";
+        };
+        /** LessonItem */
+        LessonItem: {
+            /** Answer */
+            answer: string;
+            /** Prompt */
+            prompt: string;
+            /** Reply */
+            reply: string;
+        };
         /** Line */
         Line: {
             /** Bad */
@@ -6411,7 +6502,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging" | "lesson_dropped" | "lesson_kept";
             /** Node */
             node: string;
             /** Round */
@@ -9947,6 +10038,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_lessons_distributed_runs__run_id__lessons_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_run_lesson_distributed_runs__run_id__lessons__lesson__drop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                lesson: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                lesson: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
                 };
             };
             /** @description Validation Error */

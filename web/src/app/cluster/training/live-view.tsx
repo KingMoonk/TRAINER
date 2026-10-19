@@ -11,7 +11,8 @@ import { TRAINING as T } from "@/lib/copy/training";
 import { EventLog } from "@/app/runs/view/event-log";
 import { liveLossSeries, tokensSeries } from "@/app/runs/view/live";
 import { ErrorCurve } from "./error-curve";
-import { bytesText, lessonsText, stopReasonText, trafficSeries, type Run } from "./logic";
+import { bytesText, isActive, lessonsText, stopReasonText, trafficSeries, type Run } from "./logic";
+import { Lessons } from "./lessons-list";
 import { RunControls } from "./run-controls";
 import { MemberAlerts } from "./member-alerts";
 import { RoundBanner } from "@/app/runs/view/round-banner";
@@ -113,6 +114,7 @@ export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMemb
         <Link href={runViewHref(run.id)} className="w-fit text-sm text-highlight underline-offset-4 hover:underline" data-testid={`open-run-view-${run.id}`}>{V.openRunView}</Link>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
+        {isActive(run) && run.lessons + run.lessons_left_out > 0 && <Lessons run={run} />}
         <MemberAlerts run={run} />
         <RoundBanner run={run} />
         <Topology

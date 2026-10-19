@@ -2916,6 +2916,80 @@
         "title": "Leftover",
         "type": "object"
       },
+      "Lesson": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LessonItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "keepable": {
+            "title": "Keepable",
+            "type": "boolean"
+          },
+          "more": {
+            "title": "More",
+            "type": "integer"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "live",
+              "dropped",
+              "left_out"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "round",
+          "rows",
+          "status",
+          "keepable",
+          "items",
+          "more"
+        ],
+        "title": "Lesson",
+        "type": "object"
+      },
+      "LessonItem": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "reply": {
+            "title": "Reply",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "reply",
+          "answer"
+        ],
+        "title": "LessonItem",
+        "type": "object"
+      },
       "Line": {
         "properties": {
           "bad": {
@@ -8027,7 +8101,9 @@
               "lessons",
               "win_rate",
               "win_rate_off",
-              "judging"
+              "judging",
+              "lesson_dropped",
+              "lesson_kept"
             ],
             "title": "Kind",
             "type": "string"
@@ -14153,6 +14229,165 @@
           }
         },
         "summary": "Get Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/lessons": {
+      "get": {
+        "description": "What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the\nrun is not going. A run another computer coordinates is read by asking that computer.",
+        "operationId": "run_lessons_distributed_runs__run_id__lessons_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "title": "Response Run Lessons Distributed Runs  Run Id  Lessons Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Lessons",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/lessons/{lesson}/drop": {
+      "post": {
+        "description": "Leave a lesson out of the rounds that open from now on; the round in flight keeps it. 404 for an id that is no lesson, 409 when\nthe run is over or not going. Answers the lessons as they stand.",
+        "operationId": "drop_run_lesson_distributed_runs__run_id__lessons__lesson__drop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lesson",
+            "required": true,
+            "schema": {
+              "title": "Lesson",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "title": "Response Drop Run Lesson Distributed Runs  Run Id  Lessons  Lesson  Drop Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Drop Run Lesson",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/lessons/{lesson}/keep": {
+      "post": {
+        "description": "Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop.",
+        "operationId": "keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lesson",
+            "required": true,
+            "schema": {
+              "title": "Lesson",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "title": "Response Keep Run Lesson Distributed Runs  Run Id  Lessons  Lesson  Keep Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep Run Lesson",
         "tags": [
           "distributed"
         ]
