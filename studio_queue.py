@@ -659,6 +659,7 @@ class Runner:
             if handle:
                 job.params.update(handle.params)
                 error, details = handle.error, handle.details
+            error = error or job.params.pop("ended_reason", "")  # a watchdog ended the job (studio_cluster_watch): its sentence is the error
             job.status = "failed" if error else "stopped" if self.stop_event.is_set() else "done"
             job.error, job.details = error, details if error else ""
             self.running = None
