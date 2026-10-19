@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { emit, mockApi } from "@/test/network";
+import { invite } from "@/test/invites";
 import { renderPage } from "@/test/render";
 import QueuePage from "./page";
 
@@ -113,6 +114,30 @@ describe("Queue page", () => {
     expect(screen.getByRole("radio", { name: "Any time" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Most" })).toBeChecked();
     expect(idleSwitch()).toBeChecked();
+  });
+
+  test("a member job shows the run it belongs to, its state, and the run's round and progress", async () => {
+    const mine = invite({ job_id: "run1", state: "training", round: 6, rounds: 50, tokens_per_second: 1200 });
+    server({}, { "GET /distributed/invites": { body: { invites: [mine], pause_requests: [] } } });
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("member-of")).toHaveTextContent("Member of 'Version 7' from Michael's Mac");
+    expect(within(screen.getByTestId("member-of")).getByText("Training")).toBeVisible();
+    expect(screen.getByTestId("member-round")).toHaveTextContent("Round 6 of 50, 1,200 tok/s");
+    expect(screen.getByRole("progressbar", { name: "Run progress" })).toHaveAttribute("aria-valuenow", "12");
+    expect(screen.queryByTestId("progress-line")).toBeNull(); // the job's own step line gives way to the run's round
+  });
+
+  test("a member job whose owner has not reported a round yet says it is waiting for that report", async () => {
+    server({}, { "GET /distributed/invites": { body: { invites: [invite({ job_id: "run1", state: "joining" })], pause_requests: [] } } });
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("member-round")).toHaveTextContent("Waiting for Michael's Mac's first report on the round");
+  });
+
+  test("a job that is not a member job keeps its own step line", async () => {
+    server({}, { "GET /distributed/invites": { body: { invites: [invite({ job_id: "other" })], pause_requests: [] } } });
+    renderPage(<QueuePage />);
+    expect(await screen.findByTestId("progress-line")).toHaveTextContent("step 100 of 1,000");
+    expect(screen.queryByTestId("member-row")).toBeNull();
   });
 
   test("hold, release, move, run next and remove a waiting job", async () => {

@@ -33,13 +33,14 @@ test("starts a run with an unreachable machine, shows why it is out, then stops 
   await page.getByLabel("Rounds", { exact: true }).fill("500"); // long enough that the run is still going when it is stopped
   const started = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname.replace(/\/$/, "") === "/distributed/runs");
   await page.getByRole("button", { name: "Start run" }).click();
+  await page.getByRole("button", { name: "Start with the ready machines now, others join when free" }).click(); // the chosen machine does not answer
   const id = ((await (await started).json()) as Run).id;
 
   const card = page.getByTestId(`run-${id}`); // the run just started becomes the live view
   await expect(card).toBeVisible({ timeout: 10_000 });
   await expect(card).toContainText("of 500 rounds done");
   const unreachable = card.getByTestId(`member-${NOBODY}`);
-  await expect(unreachable).toContainText("Could not be reached", { timeout: 10_000 });
+  await expect(unreachable).toContainText("Unreachable", { timeout: 10_000 });
   await expect(card.getByTestId(`reason-${NOBODY}`)).toContainText(NOBODY);
   await expect(card.getByText("This computer", { exact: true })).toBeVisible(); // the run goes on without the machine that did not answer
 

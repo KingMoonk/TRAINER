@@ -202,7 +202,7 @@ describe("whose account of a run this is", () => {
   });
 
   test("a run whose origin is not answering says so, with the age of its last account", () => {
-    expect(factAge(run({ origin: "mac", age_s: 300, origin_down: true }))).toBe("mac is not answering; last heard 5 min ago");
-    expect(factAge(run({ origin: "mac", age_s: 0, origin_down: true }))).toContain("not answering");
+    expect(factAge(run({ origin: "mac", age_s: 300, origin_down: true }))).toBe("mac is unreachable; last heard 5 min ago");
+    expect(factAge(run({ origin: "mac", age_s: 0, origin_down: true }))).toContain("unreachable");
   });
 });
