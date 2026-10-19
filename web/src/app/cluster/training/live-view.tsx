@@ -11,6 +11,7 @@ import { TRAINING as T } from "@/lib/copy/training";
 import { EventLog } from "@/app/runs/view/event-log";
 import { liveLossSeries, tokensSeries } from "@/app/runs/view/live";
 import { bytesText, lossSeries, trafficSeries, type Run } from "./logic";
+import { MemberAlerts } from "./member-alerts";
 import { RoundBanner } from "@/app/runs/view/round-banner";
 import { Timeline } from "@/app/runs/view/timeline";
 import { Topology } from "@/app/runs/view/topology";
@@ -106,6 +107,7 @@ export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMemb
         <Link href={runViewHref(run.id)} className="w-fit text-sm text-highlight underline-offset-4 hover:underline" data-testid={`open-run-view-${run.id}`}>{V.openRunView}</Link>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
+        <MemberAlerts run={run} />
         <RoundBanner run={run} />
         <Topology
           run={run}

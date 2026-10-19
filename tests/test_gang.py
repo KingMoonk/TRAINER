@@ -246,7 +246,7 @@ class OwnerCluster(unittest.TestCase):
         rows = {m.node: m for m in runs.run_of(job).machines}
         self.assertEqual((rows["b"].state, rows["c"].state), ("invited", "unplaced"))
         view = runs.member_rows(runs.run_of(job), None, "")
-        self.assertEqual([(r["node"], r["state"], r["can_stop"]) for r in view], [("laptop", "invited", False), ("b", "invited", True), ("c", "invited", False)])
+        self.assertEqual([(r["node"], r["state"], r["can_stop"]) for r in view], [("laptop", "invited", False), ("b", "invited", True), ("c", "waiting", False)])
         self.assertEqual(view[2]["note"], runs.UNPLACED)
 
     def test_the_run_is_named_for_the_machines_that_took_a_slot(self):

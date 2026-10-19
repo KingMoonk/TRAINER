@@ -255,7 +255,7 @@ describe("Queue page with several machines", () => {
     expect(other.getByTestId("other-g2")).toHaveAttribute("data-stale", "true");
     expect(other.getByTestId("other-g1")).toHaveTextContent("last known");
     expect(other.getByTestId("other-g1")).toHaveTextContent("Version 9 pretraining");
-    expect(other.getByRole("status")).toHaveTextContent("gpu-box is not answering");
+    expect(other.getByRole("status")).toHaveTextContent("gpu-box is unreachable");
     expect(other.getByTestId("node-gpu-box:8000")).toHaveClass("opacity-60");
     // The "Run on" list still names the machine, marked.
     expect(machines(screen.getByRole("combobox", { name: "Run on: First waiting" }))).toEqual(["Any machine", "All machines (DiLoCo)", "mac-mini (this machine)", "gpu-box (offline)"]);

@@ -1380,6 +1380,152 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Invites
+         * @description The runs other computers added this one to (no accept step: they join by themselves when this computer is free) and the pause
+         *     requests other computers sent it. The same words the owner's run page uses for this machine.
+         */
+        get: operations["list_invites_distributed_invites_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/invites/{job_id}/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Leave Run
+         * @description Leave the run: the owner is told to drop this member and keep it out (the same call as Stop on the owner's run page), and the
+         *     member job leaves this queue, a running one stopping. The owner not answering does not stop this computer from leaving.
+         */
+        post: operations["leave_run_distributed_invites__job_id__leave_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/invites/{job_id}/pause-and-join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause And Join
+         * @description Pause the job running here and put the member job in its place. The paused job goes back to waiting and continues from its own
+         *     checkpoint when the run ends. 409 when the member job already runs or nothing else runs.
+         */
+        post: operations["pause_and_join_distributed_invites__job_id__pause_and_join_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/pause-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive Pause Request
+         * @description Another computer asks this one to pause its running job. It is shown here as an alert, and nothing happens until a person
+         *     here accepts it. Asking again from the same computer for the same run refreshes the request.
+         */
+        post: operations["receive_pause_request_distributed_pause_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/pause-requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss Pause Request
+         * @description Decline a pause request; the running job carries on.
+         */
+        delete: operations["dismiss_pause_request_distributed_pause_requests__request_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/pause-requests/{request_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Pause Request
+         * @description Pause the running job and hold it, so a waiting member job runs. The held job is released from the Queue page. 404 for an
+         *     unknown request, 409 when nothing runs here any more.
+         */
+        post: operations["accept_pause_request_distributed_pause_requests__request_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/peers/pause-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask Peer To Pause
+         * @description Ask another machine to pause the job it is running, so a run can use it. The request shows there as an alert; nothing is
+         *     paused until a person there accepts. 502 with a sentence when the machine does not answer.
+         */
+        post: operations["ask_peer_to_pause_distributed_peers_pause_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs": {
         parameters: {
             query?: never;
@@ -3114,6 +3260,26 @@ export interface components {
             /** Added */
             added: boolean;
         };
+        /** AskPause */
+        AskPause: {
+            /** From Node */
+            from_node: string;
+            /**
+             * Run Label
+             * @default
+             */
+            run_label: string;
+        };
+        /** AskPeer */
+        AskPeer: {
+            /** Address */
+            address: string;
+            /**
+             * Run Label
+             * @default
+             */
+            run_label: string;
+        };
         /** Block */
         Block: {
             /** Block */
@@ -3124,6 +3290,16 @@ export interface components {
             parts: {
                 [key: string]: string;
             };
+        };
+        /**
+         * BlockingJob
+         * @description The job on a machine that a member waits behind.
+         */
+        BlockingJob: {
+            /** Eta S */
+            eta_s: number | null;
+            /** Label */
+            label: string;
         };
         /** Body_import_data_data__kind__import_post */
         Body_import_data_data__kind__import_post: {
@@ -3936,6 +4112,45 @@ export interface components {
             /** Size */
             size: number;
         };
+        /**
+         * Invite
+         * @description A run another computer added this one to: its member job in this computer's queue, in the shared member vocabulary.
+         */
+        Invite: {
+            blocking_job?: components["schemas"]["BlockingJob"] | null;
+            /** Can Pause And Join */
+            can_pause_and_join: boolean;
+            /** Job Id */
+            job_id: string;
+            /** Node */
+            node: string;
+            /** Owner */
+            owner: string;
+            /** Reason */
+            reason: string;
+            /** Round */
+            round?: number | null;
+            /** Rounds */
+            rounds?: number | null;
+            /** Run Id */
+            run_id: string;
+            /** Run Label */
+            run_label: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "waiting" | "never_joined" | "finished";
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+        };
+        /** Invites */
+        Invites: {
+            /** Invites */
+            invites: components["schemas"]["Invite"][];
+            /** Pause Requests */
+            pause_requests: components["schemas"]["PauseRequest"][];
+        };
         /** Job */
         Job: {
             /**
@@ -4505,6 +4720,7 @@ export interface components {
         Member: {
             /** Address */
             address: string;
+            blocking_job?: components["schemas"]["BlockingJob"] | null;
             /** Can Stop */
             can_stop: boolean;
             /** Device */
@@ -4529,6 +4745,11 @@ export interface components {
             note: string;
             /** Phase */
             phase: ("downloading" | "training" | "uploading" | "waiting") | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
             /** Reported Ago */
             reported_ago: number | null;
             /** Round Steps */
@@ -4545,7 +4766,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "unplaced" | "never_joined" | "finished";
+            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "waiting" | "never_joined" | "finished";
             /** Step In Round */
             step_in_round: number;
             /** Steps */
@@ -5102,6 +5323,21 @@ export interface components {
         PathsRequest: {
             /** Paths */
             paths: string[];
+        };
+        /**
+         * PauseRequest
+         * @description Another computer asked this one to pause the job it is running. Only a person here acts on it.
+         */
+        PauseRequest: {
+            /** At */
+            at: number;
+            blocking_job?: components["schemas"]["BlockingJob"] | null;
+            /** From Node */
+            from_node: string;
+            /** Id */
+            id: string;
+            /** Run Label */
+            run_label: string;
         };
         /** PhaseModel */
         PhaseModel: {
@@ -9744,6 +9980,216 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Defaults"];
+                };
+            };
+        };
+    };
+    list_invites_distributed_invites_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invites"];
+                };
+            };
+        };
+    };
+    leave_run_distributed_invites__job_id__leave_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invites"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_and_join_distributed_invites__job_id__pause_and_join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invites"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_pause_request_distributed_pause_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskPause"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_pause_request_distributed_pause_requests__request_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invites"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_pause_request_distributed_pause_requests__request_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invites"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_peer_to_pause_distributed_peers_pause_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskPeer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseRequest"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
