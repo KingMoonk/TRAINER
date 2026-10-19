@@ -1,11 +1,15 @@
 """Heterogeneous members (#430): the coordinator deals each member inner steps in proportion to its measured speed, on a fake clock
 and fake members whose step takes a fixed time."""
 import dataclasses
+import math
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
+from fastapi.testclient import TestClient
 
 import studio_diloco
 from tests import diloco_support as support
@@ -154,6 +158,19 @@ class Totals(Fleet):
         self.assertTrue(all(np.isfinite(value).all() for value in c.theta.values()))
 
 
+class Timing(unittest.TestCase):
+    def test_the_reported_seconds_are_the_timed_steps_without_warm_up_or_pauses(self):
+        member = studio_diloco.Member.__new__(studio_diloco.Member)
+        member.warm, member.began, member.clock = False, 0., lambda: 1000.  # a wall clock that ran through a long pause
+        member.busy, member.timed = 0., 0
+        member.stepped(30.)  # the first step of the attempt: warm-up, not timed
+        for _ in range(4):
+            member.stepped(.5)
+        self.assertEqual(member._work_seconds(5), 2.5)
+        member.busy, member.timed = 0., 0  # a new round, before any step was timed: the wall time
+        self.assertEqual(member._work_seconds(5), 1000.)
+
+
 class Schedule(unittest.TestCase):
     def test_the_rate_follows_the_position_in_the_round_not_the_step_count(self):
         member = studio_diloco.Member.__new__(studio_diloco.Member)
@@ -167,6 +184,102 @@ class Schedule(unittest.TestCase):
         self.assertIsInstance(member.rate_step(90), int)
         member.entered = studio_diloco.Entered(3, {}, 0, 0, 1., [])
         self.assertEqual(member.rate_step(90), 350)
+
+
+class Rule(unittest.TestCase):
+    """deal_steps on its own, including the numbers a real run could hand it."""
+
+    def deal(self, h, times, members=None):
+        settings = support.settings(inner_steps=h)
+        return studio_diloco.deal_steps(settings, members or list(times), times)
+
+    def test_the_total_stays_h_per_measured_member_whatever_the_rounding(self):
+        for h in (1, 2, 3, 7, 10, 100):
+            for times in ({"a": 1., "b": 2., "c": 4.}, {"a": 1., "b": 3.}, {"a": 1., "b": 1.5, "c": 7., "d": 2.}):
+                dealt = self.deal(h, times)
+                if min(dealt.values()) > max(1, math.ceil(h * studio_diloco.MIN_SHARE)) and max(dealt.values()) < int(h * studio_diloco.MAX_SHARE):
+                    self.assertEqual(sum(dealt.values()), h * len(times), (h, times, dealt))
+                self.assertTrue(all(value >= 1 for value in dealt.values()), (h, times, dealt))
+
+    def test_small_h_still_gives_every_member_a_step(self):
+        for h in (1, 2, 3):
+            dealt = self.deal(h, {"a": 1., "b": 50.})
+            self.assertTrue(all(1 <= value <= max(h, int(h * studio_diloco.MAX_SHARE)) for value in dealt.values()), (h, dealt))
+        self.assertEqual(self.deal(1, {"a": 1., "b": 1.}), {"a": 1, "b": 1})
+
+    def test_nothing_measured_one_member_and_a_probe_only_group_deal_h(self):
+        self.assertEqual(self.deal(8, {"a": None, "b": None}), {"a": 8, "b": 8})
+        self.assertEqual(self.deal(8, {}, ["a", "b"]), {"a": 8, "b": 8})
+        self.assertEqual(self.deal(8, {"a": 3.}), {"a": 8})
+        self.assertEqual(self.deal(8, {"a": 3.}, ["a", "new"]), {"a": 8, "new": 2})
+
+    def test_non_finite_and_non_positive_times_count_as_not_measured(self):
+        for bad in (math.inf, math.nan, 0., -1.):
+            self.assertEqual(self.deal(8, {"a": bad, "b": bad}), {"a": 8, "b": 8}, bad)
+            self.assertEqual(self.deal(8, {"a": bad, "b": 1.}, ["a", "b"]), {"a": 2, "b": 8}, bad)  # a is the probe
+
+    def test_speeds_within_five_percent_keep_h_for_everyone(self):
+        self.assertEqual(self.deal(100, {"a": 1., "b": 1.03, "c": .99}), {"a": 100, "b": 100, "c": 100})
+        self.assertNotEqual(self.deal(100, {"a": 1., "b": 1.2})["a"], 100)
+
+    def test_a_contribution_with_non_finite_seconds_is_refused(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        c = support.build(Path(tmp.name), inner_steps=3)
+        c.join("a")
+        view = c.round_view(0, "a")
+        for bad in (math.inf, math.nan, -1.):
+            with self.assertRaises(ValueError):
+                c.submit(0, "a", view["generation"], 0, 10, 3, support.constant_delta(c), bad)
+        self.assertEqual(c.current.contributions, {})
+
+
+class RealMembers(unittest.TestCase):
+    """Real Member threads over the real routes with studio_model.train, and an uneven deal: node0 gets 2, 4, 6, ... steps a round and
+    node1 gets 2. A fast member that is dealt more than H on average must not run out of steps, and each member runs what it was dealt."""
+
+    ROUNDS, H = 4, 4
+
+    def run_members(self, overlap):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name)
+        coordinator = support.build(folder / "c", "uneven", inner_steps=self.H, rounds=self.ROUNDS, min_members=2, outer_lr=.7, outer_momentum=0.)
+        studio_diloco.COORDINATORS["uneven"] = coordinator
+        self.addCleanup(studio_diloco.COORDINATORS.pop, "uneven", None)
+        opened, errors = [], []
+
+        def deal(settings, members, step_times):
+            opened.append(len(opened))
+            return {node: 2 * (opened[-1] + 1) if node == "node0" else 2 for node in members}
+
+        with mock.patch.object(studio_diloco, "deal_steps", deal), TestClient(support.app()) as client:
+            def member(index):
+                try:
+                    studio_diloco.run_member(support.Peer(client), "uneven", f"node{index}", 0, folder / f"m{index}", folder / f"out{index}",
+                                             lambda event: None, threading.Event(), wait=.5, overlap=overlap)
+                except Exception as exc:  # noqa: BLE001 - reported below
+                    errors.append(exc)
+            threads = [threading.Thread(target=member, args=(i,)) for i in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(240)
+        self.assertEqual(errors, [])
+        self.assertTrue(coordinator.finished)
+        return coordinator
+
+    def test_each_member_runs_its_dealt_steps_and_the_run_finishes(self):
+        c = self.run_members(False)
+        self.assertEqual([row["dealt"] for row in c.history], [{"node0": 2 * (r + 1), "node1": 2} for r in range(self.ROUNDS)])
+        self.assertEqual([row["steps"] for row in c.history], [row["dealt"] for row in c.history])
+        self.assertEqual([row["tokens"] > 0 for row in c.history], [True] * self.ROUNDS)
+
+    def test_an_overlapped_member_runs_the_deal_it_has_the_round_after_it_was_dealt(self):
+        c = self.run_members(True)
+        self.assertEqual([row["steps"]["node1"] for row in c.history], [2] * self.ROUNDS)
+        # the exchange that brings round n's deal ends after round n's steps: round n runs on the deal of round n - 1 (round 0 and 1 on the first)
+        self.assertEqual([row["steps"]["node0"] for row in c.history], [2, 2, 4, 6])
 
 
 if __name__ == "__main__":

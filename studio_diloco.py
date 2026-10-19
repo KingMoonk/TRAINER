@@ -61,6 +61,7 @@ PROGRESS_STEPS = 20  # ... or after this many steps, whichever comes first (neve
 MIN_SHARE = .1  # a member is dealt at least this fraction of H steps (deal_steps) ...
 MAX_SHARE = 3  # ... and at most this many times H
 PROBE_SHARE = .25  # a member with no measurement yet is dealt this fraction of H: a short first round that times it
+SPEED_BAND = 1.05  # measured speeds within this ratio count as equal: everyone keeps H (real hardware is never exactly equal)
 STEP_TIME_SMOOTHING = .5  # the weight of the latest round in a member's smoothed seconds per step
 PROGRESS_GAP = .5
 PROGRESS_TIMEOUT = 5.  # seconds a progress report may take; a slow or failing one is dropped
@@ -259,19 +260,27 @@ def round_seconds(settings, step_time, steps=None):
 
 def deal_steps(settings, members, step_times):
     """{member: inner steps} for a round, so that the members' predicted finish times (steps * measured seconds per step) match.
-    The measured members share the work an equal-H round would give them (H each) in proportion to their speed, clamped to
-    [MIN_SHARE, MAX_SHARE] of H; so equal speeds (and one member) give H to everyone, and mixed speeds do the same total work in
-    the time of the fastest-weighted share instead of waiting for the slowest. A member with no measurement gets a probe round of
-    PROBE_SHARE of H, so it is timed without holding the others up. While nobody is measured everyone gets H."""
+    The measured members share the work an equal-H round would give them (H each) in proportion to their speed (the rounding
+    remainder goes to the largest fractions, so the total stays H per measured member), each share clamped to [MIN_SHARE, MAX_SHARE]
+    of H. Equal speeds (within SPEED_BAND), one member, or no measurement give H to everyone; a member with no measurement gets a
+    probe round of PROBE_SHARE of H beside measured ones. A clamped share breaks the match of finish times, so the round runs as long
+    as the slowest clamped member needs (the deadline follows it)."""
     h = settings.inner_steps
-    measured = {node: step_times[node] for node in members if step_times.get(node, 0) > 0}
+    measured = {node: step_times[node] for node in members
+                if isinstance(step_times.get(node), (int, float)) and 0 < step_times[node] < math.inf}
     if not measured:
         return {node: h for node in members}
-    low, high = max(1, math.ceil(h * MIN_SHARE)), max(1, int(h * MAX_SHARE))
+    speeds = {node: 1. / seconds for node, seconds in measured.items()}
     probe = min(h, max(1, round(h * PROBE_SHARE)))
-    speed_total = sum(1. / seconds for seconds in measured.values())
-    work = h * len(measured)
-    return {node: (min(high, max(low, round(work / measured[node] / speed_total))) if node in measured else probe) for node in members}
+    if max(speeds.values()) <= SPEED_BAND * min(speeds.values()):
+        return {node: h if node in measured else probe for node in members}
+    low, high = max(1, math.ceil(h * MIN_SHARE)), max(1, int(h * MAX_SHARE))
+    work, total = h * len(measured), sum(speeds.values())
+    exact = {node: work * speed / total for node, speed in speeds.items()}
+    share = {node: math.floor(value) for node, value in exact.items()}
+    for node in sorted(exact, key=lambda n: exact[n] - share[n], reverse=True)[:work - sum(share.values())]:
+        share[node] += 1
+    return {node: min(high, max(low, share[node])) if node in share else probe for node in members}
 
 
 def quantize_int8(value):
@@ -959,7 +968,7 @@ class Coordinator:
                     self.members[node]["missed"] = 0
             elif node not in self.leaving:
                 self._miss(node)
-        times = {node: seconds / steps for node, (_, steps, seconds, _, _) in sent.items() if steps > 0 and seconds > 0}
+        times = {node: seconds / steps for node, (_, steps, seconds, _, _) in sent.items() if steps > 0 and 0 < seconds < math.inf}
         self.step_time = min(times.values()) if times else self.step_time
         for node, seconds in times.items():  # a smoothed per-member speed, which the next rounds are dealt by
             before = self.step_times.get(node)
@@ -1188,6 +1197,8 @@ class Coordinator:
                 raise ValueError("The delta does not match the model's parameters.")
             if not all(np.isfinite(value).all() for value in delta.values()):
                 raise ValueError("The delta holds a non-finite value.")
+            if not math.isfinite(seconds) or seconds < 0:
+                raise ValueError("A contribution's seconds must be a finite number.")
             if tokens < 0 or steps < 1:
                 raise ValueError("A contribution needs at least one step.")
             current.contributions[node] = (int(tokens), int(steps), float(seconds), loss, delta)
@@ -1771,6 +1782,7 @@ class Member:
         self.base = f"/collective/{run}"
         self.train, self.val, self.sampler = Windows(), Windows(), random.Random(0)
         self.started, self.finished, self.fenced = False, False, False
+        self.warm, self.busy, self.timed = False, 0., 0  # stepped(): the first step is warm-up; the time and count of the timed steps of the round
         self.term, self.superseded = 0, 0  # the coordinator's term (0: not learnt yet); superseded: a higher term seen, so nothing more goes to this coordinator
         self.loss = None
         self.shards = {}
@@ -1805,6 +1817,19 @@ class Member:
         """The factor the run's pivots (halve_lr) put on the learning rate, as the round in hand was opened with."""
         return self.entered.lr_scale if self.entered is not None else 1.
 
+    def stepped(self, seconds):
+        """train() tells how long the step just done took (the step itself: not time paused, not the sync). The first step of an
+        attempt is warm-up (kernels, allocations) and is not timed."""
+        if not self.warm:
+            self.warm = True
+            return
+        self.busy, self.timed = self.busy + seconds, self.timed + 1
+
+    def _work_seconds(self, steps):
+        """Seconds of work for `steps` steps, at the pace of the timed steps of the round (without pauses and warm-up); the wall time
+        since the round began when none was timed."""
+        return self.busy / self.timed * steps if self.timed else self.clock() - self.began
+
     def due(self, step, trained_tokens):
         self.round_step = step - self.first_step  # the reporter thread reads it; nothing here waits on the network
         if self.round_step - self.reported_step >= PROGRESS_STEPS:
@@ -1832,6 +1857,7 @@ class Member:
         self.first_step, self.first_tokens, self.began, self.deadline = step, trained_tokens, self.clock(), self.clock() + self.deadline_s
         self.sampler.seed(sampler_seed(self.info["seed"], self.rank, self.round))
         self.round_step, self.reported_step = 0, 0
+        self.busy, self.timed = 0., 0
         self.report_round = self.round
         self._phase("training")
 
@@ -1861,7 +1887,7 @@ class Member:
         number, weights = self.round, {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         delta = {name: self.anchor[name] - weights[name] for name in self.anchor}
         params = {"term": self.term, "node": self.node, "generation": entered.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
-                  "steps": step - self.first_step, "seconds": self.clock() - self.began}
+                  "steps": step - self.first_step, "seconds": self._work_seconds(step - self.first_step)}
         if self.loss is not None:
             params["loss"] = self.loss
         self.pending = self.spawn(lambda: self._exchange(number, delta, params))
@@ -2225,7 +2251,7 @@ class Member:
         delta = {name: self.theta[name] - weights[name].astype(np.float32) for name in self.theta}
         body = encode_arrays(delta, self.info["delta_dtype"])
         params = {"term": self.term, "node": self.node, "generation": self.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
-                  "steps": step - self.first_step, "seconds": self.clock() - self.began}
+                  "steps": step - self.first_step, "seconds": self._work_seconds(step - self.first_step)}
         if self.loss is not None:
             params["loss"] = self.loss
         self._post(self.round, body, params)
@@ -2285,7 +2311,7 @@ class Member:
                     self.loss = event.get("loss")
                     self.live = {"loss": self.loss, "tokens_per_second": event.get("tokens_per_second")}
                 emit(event)
-            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": self.info["total_steps"]}
+            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": self.info["rounds"] * max(self.info["inner_steps"], int(self.info["inner_steps"] * MAX_SHARE))}  # the loop bound: no member is dealt more than MAX_SHARE of H a round; the schedule length is total_steps
             if self.memory_share:
                 import studio_memory
                 declared = cfg["batch_size"]

@@ -95,7 +95,7 @@ class Member(BaseModel):
     # what it last reported (about every 2 s while it runs); empty until the coordinator has heard from it
     phase: Literal["downloading", "training", "uploading", "waiting"] | None
     step_in_round: int  # inner steps done in the open round
-    round_steps: int  # inner steps in a round (H)
+    round_steps: int  # inner steps dealt to this member for the open round (H unless the coordinator deals by speed)
     loss: float | None  # its live inner loss in the open round
     live_tokens_per_second: float | None
     reported_ago: float | None  # seconds since the report, on the coordinator's clock
