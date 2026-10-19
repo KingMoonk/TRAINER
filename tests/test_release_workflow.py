@@ -18,6 +18,9 @@ class ReleaseWorkflow(unittest.TestCase):
     def test_hidden_imports_match_what_the_smoke_test_checks(self):
         self.assertEqual(set(re.findall(r"--hidden-import (\S+)", pyinstaller_command())), set(app.HIDDEN))
 
+    def test_the_routers_studio_api_imports_by_name_are_collected(self):
+        self.assertIn("--collect-submodules studio_api.routers", pyinstaller_command())
+
     def test_web_out_is_bundled_where_the_api_looks_for_it(self):
         """Frozen, studio_api/app.py lives under the bundle root (sys._MEIPASS), so WEB_OUT is <root>/web/out whatever the checkout."""
         wanted = api_app.WEB_OUT.relative_to(ROOT).as_posix()

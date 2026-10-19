@@ -39,9 +39,9 @@ jobs:
         working-directory: web
       - run: pnpm build
         working-directory: web
-      # studio_brain3d is only ever launched by name (the 3D viewer), so the import scan cannot see it
+      # studio_brain3d is only ever launched by name (the 3D viewer), and studio_api.app imports its routers by an f-string name and skips one it cannot find, so the import scan sees neither
       # --add-data puts web/out at <bundle>/web/out, where studio_api.app.WEB_OUT resolves in a frozen app (its __file__ lies under sys._MEIPASS)
-      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_worker --add-data "web/out${{ matrix.sep }}web/out"
+      - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_worker --collect-submodules studio_api.routers --add-data "web/out${{ matrix.sep }}web/out"
       # Launches the frozen build with no window: it must import the hidden imports and every studio_modules submodule, serve FakeServices on a free port and answer /node.
       # The report file is the only output of a --windowed build, so it is printed here; a missing module or a timeout fails the build before anything is zipped.
       - name: Smoke test the frozen app

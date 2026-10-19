@@ -44,8 +44,10 @@ def split_smoke(argv):
 def missing_modules():
     """Lines naming each module that fails to import in this build: the hidden imports and every studio_modules submodule."""
     import studio_modules
+    from studio_api.app import ROUTERS
 
-    names = list(HIDDEN) + [m.name for m in pkgutil.walk_packages(studio_modules.__path__, "studio_modules.")]
+    # studio_api.app skips a router it cannot find, so a build without them would serve only the web pages; name them here
+    names = list(HIDDEN) + [f"studio_api.routers.{r}" for r in ROUTERS] + [m.name for m in pkgutil.walk_packages(studio_modules.__path__, "studio_modules.")]
     lines = []
     for name in names:
         try:
