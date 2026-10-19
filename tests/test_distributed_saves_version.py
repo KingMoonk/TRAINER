@@ -153,11 +153,29 @@ class FinishedAfterFailover(unittest.TestCase):
         row = self.end("done")
         self.assertEqual((row["status"], row["runs"], row["best_checkpoint"]), ("saved", [], None))
 
-    def test_a_failed_owner_job_asks_no_one(self):
+    def test_a_failed_owner_job_still_saves_the_run_that_finished_under_the_successor(self):
         self.train(self.successor, 2)
         row = self.end("failed")
-        self.assertEqual((row["status"], self.asked), ("saved", []))
+        self.assertEqual(self.asked, [self.URL])
+        self.assertEqual((row["status"], row["runs"]), ("trained", [str(self.out)]))
+        self.assertEqual(Path(row["best_checkpoint"]), self.out / "last_term2.npz")
+        self.assertEqual(runs.RUNS["run1"].saved, 1)
 
+    def test_a_stopped_owner_job_still_saves_the_run_that_finished_under_the_successor(self):
+        self.train(self.successor, 2)
+        row = self.end("stopped")
+        self.assertEqual((row["status"], row["runs"]), ("trained", [str(self.out)]))
+
+    def test_a_run_the_person_stopped_saves_nothing_and_asks_no_one(self):
+        self.train(self.successor, 2)
+        runs.RUNS["run1"].stopped = True
+        row = self.end("stopped")
+        self.assertEqual((row["status"], row["runs"], row["best_checkpoint"], self.asked), ("saved", [], None, []))
+
+    def test_a_failed_owner_job_saves_nothing_while_the_successor_has_rounds_left(self):
+        self.train(self.successor, 1)
+        row = self.end("failed")
+        self.assertEqual((row["status"], row["runs"], row["best_checkpoint"]), ("saved", [], None))
 
 if __name__ == "__main__":
     unittest.main()

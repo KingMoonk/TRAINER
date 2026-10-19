@@ -2755,14 +2755,15 @@ class WorkspaceServices(Services):
     def _record_distributed(self, job, number, status, out):
         """A distributed run ends: only a run that finished all its rounds gives its coordinator's final weights (`last.npz` in the
         run's folder) to the version it trained, scored like a local pretrain's, with a change note naming the run and its machines.
-        A run that finished under a successor coordinator after a failover (#361) gives the successor's final weights, fetched from it.
-        A stopped or failed run saves nothing, even past some rounds: the version goes back to saved."""
+        A run that finished under a successor coordinator after a failover (#361) gives the successor's final weights, fetched from it,
+        whatever way the owner's own job ended (#453: its member may have stopped or failed while the run went on), unless the person
+        stopped the run. Otherwise a stopped or failed run saves nothing, even past some rounds: the version goes back to saved."""
         import studio_distributed
         import studio_eval
         from studio_core import read_json
         record, ckpt = out / "run.json", out / "last.npz"
         done = status == "done" and ckpt.exists() and record.exists() and read_json(record).get("status") == "completed"
-        if status == "done" and not done:
+        if not done and status in ("done", "failed", "stopped") and not studio_distributed.run_of(job).stopped:
             ckpt = self._successor_weights(job.id, out)
             done = ckpt is not None
         if done:
