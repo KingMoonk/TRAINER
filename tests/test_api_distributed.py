@@ -227,6 +227,35 @@ class ReadModel(unittest.TestCase):
         again = runs.view(self.run, None, None)
         self.assertEqual((again["state"], len(again["history"])), ("finished", 1))
 
+    def ended_rows(self, state, nodes, events=()):
+        snap = self.snap(state=state, round=4, nodes=nodes, events=list(events))
+        return {m["node"]: m for m in runs.view(self.run, self.coordinator(snap), None)["members"]}
+
+    def test_an_ended_run_keeps_why_a_machine_never_joined(self):
+        box = self.run.machines[1]
+        box.state, box.reason = "unplaced", runs.UNPLACED
+        rows = self.ended_rows("finished", {"mac": {"state": "training", "missed": 0, "sent": False, "note": ""}})
+        self.assertEqual((rows["mac"]["state"], rows["mac"]["note"]), ("finished", ""))
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"], rows["box"]["can_stop"]), ("unplaced", runs.UNPLACED, False))
+        self.assertEqual((rows["old"]["state"], rows["old"]["note"]), ("unreachable", "old did not answer within 2 seconds."))
+        self.assertEqual(self.ended_rows("stopped", {})["box"]["state"], "unplaced")
+
+    def test_an_invited_machine_that_was_never_heard_from_never_joined_when_the_run_ends(self):
+        rows = self.ended_rows("finished", {"mac": {"state": "training", "missed": 0, "sent": False, "note": ""}})
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"]), ("never_joined", runs.NEVER_JOINED))
+        self.assertEqual(rows["mac"]["state"], "finished")  # this computer's own member is never "never joined"
+        self.assertEqual(self.ended_rows("finished", {})["mac"]["state"], "finished")
+
+    def test_a_member_that_left_once_the_run_finished_reads_as_finished_but_one_that_left_earlier_still_left(self):
+        left = {"state": "left", "missed": 0, "sent": False, "note": "Left the run."}
+        events = [{"seq": 1, "kind": "left", "node": "box", "round": 1}, {"seq": 2, "kind": "finished", "node": "", "round": 3},
+                  {"seq": 3, "kind": "left", "node": "mac", "round": 4}]
+        rows = self.ended_rows("finished", {"mac": left, "box": left}, events)
+        self.assertEqual((rows["mac"]["state"], rows["mac"]["note"]), ("finished", ""))
+        self.assertEqual((rows["box"]["state"], rows["box"]["note"]), ("left", "Left the run."))
+        stopped = self.ended_rows("stopped", {"mac": left, "box": left}, events)
+        self.assertEqual(stopped["mac"]["state"], "left")
+
     def test_stopping_a_run_that_waits_in_the_queue_ends_it(self):
         runs.stop_run(self.run, None, clients())
         view = runs.view(self.run, None, None)

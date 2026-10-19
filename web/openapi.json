@@ -3431,6 +3431,8 @@
               "left",
               "stopped",
               "unreachable",
+              "unplaced",
+              "never_joined",
               "finished"
             ],
             "title": "State",
