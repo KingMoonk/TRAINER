@@ -177,6 +177,46 @@
         "title": "BlockingJob",
         "type": "object"
       },
+      "BoardOut": {
+        "additionalProperties": true,
+        "properties": {
+          "board": {
+            "additionalProperties": true,
+            "description": "studio_mlperf.leaderboard: results per division, fastest first, and the other task versions held apart",
+            "title": "Board",
+            "type": "object"
+          },
+          "devices": {
+            "description": "the devices this machine can time a task on",
+            "items": {
+              "type": "string"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "history": {
+            "additionalProperties": true,
+            "description": "the single-device division's converged times in time order, with the app version of each",
+            "title": "History",
+            "type": "object"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskOut"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks",
+          "board",
+          "history",
+          "devices"
+        ],
+        "title": "BoardOut",
+        "type": "object"
+      },
       "Body_import_data_data__kind__import_post": {
         "properties": {
           "files": {
@@ -807,6 +847,23 @@
           "wall_seconds"
         ],
         "title": "ComparePlan",
+        "type": "object"
+      },
+      "CompareRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "CompareRequest",
         "type": "object"
       },
       "CompareSetup": {
@@ -6181,29 +6238,6 @@
         "title": "QueueStateModel",
         "type": "object"
       },
-      "Queued": {
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "outlook": {
-            "title": "Outlook",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "label",
-          "outlook"
-        ],
-        "title": "Queued",
-        "type": "object"
-      },
       "QuickTestCheck": {
         "properties": {
           "detail": {
@@ -8266,19 +8300,6 @@
         "title": "RunPageModel",
         "type": "object"
       },
-      "RunRequest": {
-        "properties": {
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version"
-        ],
-        "title": "RunRequest",
-        "type": "object"
-      },
       "SharedVersion": {
         "description": "What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights.",
         "properties": {
@@ -9541,6 +9562,50 @@
         "title": "SyncReply",
         "type": "object"
       },
+      "TaskOut": {
+        "additionalProperties": true,
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "checksum": {
+            "title": "Checksum",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "step_cap": {
+            "title": "Step Cap",
+            "type": "integer"
+          },
+          "target_bpc": {
+            "title": "Target Bpc",
+            "type": "number"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "title",
+          "target_bpc",
+          "checksum",
+          "attempts",
+          "step_cap"
+        ],
+        "title": "TaskOut",
+        "type": "object"
+      },
       "TeacherOut": {
         "properties": {
           "name": {
@@ -10269,6 +10334,42 @@
         "title": "JobOut",
         "type": "object"
       },
+      "studio_api__routers__benchmark__Queued": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "outlook": {
+            "title": "Outlook",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "outlook"
+        ],
+        "title": "Queued",
+        "type": "object"
+      },
+      "studio_api__routers__benchmark__RunRequest": {
+        "properties": {
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "RunRequest",
+        "type": "object"
+      },
       "studio_api__routers__cluster__Accepted": {
         "properties": {
           "epoch": {
@@ -10354,6 +10455,55 @@
           "tokens_per_second"
         ],
         "title": "Sample",
+        "type": "object"
+      },
+      "studio_api__routers__mlperf__Queued": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "Queued",
+        "type": "object"
+      },
+      "studio_api__routers__mlperf__RunRequest": {
+        "properties": {
+          "attempts": {
+            "anyOf": [
+              {
+                "maximum": 5.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts"
+          },
+          "device": {
+            "default": "cpu",
+            "title": "Device",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "RunRequest",
         "type": "object"
       },
       "studio_api__routers__pretraining__GateModel": {
@@ -10595,7 +10745,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Queued"
+                  "$ref": "#/components/schemas/studio_api__routers__benchmark__Queued"
                 }
               }
             },
@@ -10712,7 +10862,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RunRequest"
+                "$ref": "#/components/schemas/studio_api__routers__benchmark__RunRequest"
               }
             }
           },
@@ -14692,6 +14842,135 @@
         "summary": "Get Job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/mlperf/board": {
+      "get": {
+        "operationId": "board_mlperf_board_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "task",
+            "required": false,
+            "schema": {
+              "default": "small",
+              "title": "Task",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Board",
+        "tags": [
+          "mlperf"
+        ]
+      }
+    },
+    "/mlperf/compare": {
+      "post": {
+        "description": "Summaries of the chosen results side by side. 422 when they are of different tasks or task versions.",
+        "operationId": "compare_mlperf_compare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Compare Mlperf Compare Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare",
+        "tags": [
+          "mlperf"
+        ]
+      }
+    },
+    "/mlperf/run": {
+      "post": {
+        "description": "Queue a run of the task on this machine; it starts when the queue is free.",
+        "operationId": "run_mlperf_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/studio_api__routers__mlperf__RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__mlperf__Queued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run",
+        "tags": [
+          "mlperf"
         ]
       }
     },

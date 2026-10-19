@@ -627,6 +627,19 @@ class Services:
         dict plus "tasks" and "held_back" (False when no held-back choice problem exists and training ones are asked). Slow."""
         raise NotImplementedError
 
+    def mlperf_board(self, task_id) -> dict:
+        """The Training speed section: {"tasks": [{"id", "version", "title", "target_bpc", "checksum"}], "board": studio_mlperf.leaderboard,
+        "history": studio_mlperf.history for the single-device division, "devices": the choices a run can name}. Reads stored results only."""
+        raise NotImplementedError
+
+    def mlperf_compare(self, ids) -> dict:
+        """Side by side summaries of stored results (studio_mlperf.compare); ValueError when they are of different task versions."""
+        raise NotImplementedError
+
+    def mlperf_enqueue(self, task_id, device, attempts=None) -> dict:
+        """Queue a training-speed run (job kind "mlperf") on this machine; {"id", "label"}. It waits its turn behind any training job."""
+        raise NotImplementedError
+
     def benchmark(self) -> dict:
         """The benchmark track as stored, never computing: {"suite" id, "sizes" {docs, choice, problems}, "dropped" {kind: n filtered
         out}, "rows": [{"number", "name", "lineage", "tokens", "result" (studio_bench.run_suite's dict, None until it has run)}]},
@@ -1234,6 +1247,21 @@ class FakeServices(Services):
         return {"items": 40, "tasks": 2, "held_back": True, "chance": .3,
                 "rows": [{"shots": 0, "used": 0, "correct": 11, "accuracy": .275}, {"shots": 1, "used": 1, "correct": 13, "accuracy": .325},
                          {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
+
+    def mlperf_board(self, task_id):
+        import studio_mlperf
+        results = getattr(self, "_mlperf", [])
+        return {"tasks": studio_mlperf.task_list(), "board": studio_mlperf.leaderboard(results, task_id),
+                "history": studio_mlperf.history(results, task_id), "devices": ["cpu"]}
+
+    def mlperf_compare(self, ids):
+        import studio_mlperf
+        return studio_mlperf.compare(getattr(self, "_mlperf", []), ids)
+
+    def mlperf_enqueue(self, task_id, device, attempts=None):
+        import studio_mlperf
+        studio_mlperf.get_task(task_id)
+        return {"id": "mlperf01", "label": f"Training speed: {task_id} on {device}"}
 
     def benchmark(self):
         import studio_bench
@@ -2780,6 +2808,26 @@ class WorkspaceServices(Services):
         result = studio_bench.benchmark(self.root, (v.number if number is None else number, checkpoint), suite,
                                         self._bench_tokens(v, checkpoint), skip=skip)
         return result
+
+    def mlperf_board(self, task_id):
+        import studio_backend
+        import studio_mlperf
+        results = studio_mlperf.load_results(self.root)
+        gpu = studio_backend.gpu_status()
+        return {"tasks": studio_mlperf.task_list(), "board": studio_mlperf.leaderboard(results, task_id),
+                "history": studio_mlperf.history(results, task_id), "devices": ["cpu"] + ([gpu["kind"]] if gpu.get("available") else [])}
+
+    def mlperf_compare(self, ids):
+        import studio_mlperf
+        return studio_mlperf.compare(studio_mlperf.load_results(self.root), ids)
+
+    def mlperf_enqueue(self, task_id, device, attempts=None):
+        import studio_mlperf
+        task = studio_mlperf.get_task(task_id)
+        label = f"Training speed: {task.title} v{task.version} on {device}"
+        job = Job(id=uuid.uuid4().hex[:8], kind="mlperf", label=label, params={"task": task_id, "device": device, "attempts": attempts})
+        self.enqueue(job)
+        return {"id": job.id, "label": label}
 
     def benchmark(self):
         import studio_bench
