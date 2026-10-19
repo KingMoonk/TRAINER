@@ -10,7 +10,7 @@ from studio_validate import errors
 
 
 def base():
-    return validate_spec(default_spec())
+    return validate_spec(default_spec(preset="classic"))
 
 
 def choices(**patch):

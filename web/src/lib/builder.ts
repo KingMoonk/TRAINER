@@ -55,6 +55,7 @@ export type Draft = { base: number | null; draft: Choices; anchor: Anchor | null
 export const design = {
   registry: () => unwrap(api.GET("/design/registry")),
   presets: () => unwrap(api.GET("/design/presets")),
+  start: () => unwrap(api.GET("/design/start")),
   read: (spec: Spec) => unwrap(api.POST("/design/read", { body: { spec } })),
   write: (base: Spec, choices: Choices, was: Choices | null) => unwrap(api.POST("/design/write", { body: { base, choices, was } })),
   choose: (choices: Choices, slot: Slot, short: string, block: number | null) =>

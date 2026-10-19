@@ -8567,6 +8567,25 @@
         "title": "SplitStep",
         "type": "object"
       },
+      "Start": {
+        "properties": {
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec",
+          "note"
+        ],
+        "title": "Start",
+        "type": "object"
+      },
       "StartPassive": {
         "additionalProperties": false,
         "description": "The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.",
@@ -13671,6 +13690,28 @@
           }
         },
         "summary": "Split Preview",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/start": {
+      "get": {
+        "description": "The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it.",
+        "operationId": "start_design_start_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Start"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Start",
         "tags": [
           "design"
         ]

@@ -57,9 +57,9 @@ class StorageApiTest(unittest.TestCase):
 
     def test_exports_list_trained_versions_with_the_reason_gguf_is_unavailable(self):
         import studio_spec
-        word = studio_spec.default_spec()
+        word = studio_spec.default_spec(preset="classic")
         word["tokenizer"] = {"id": "word"}
-        for spec in (studio_spec.default_spec(), word, studio_spec.default_spec()):
+        for spec in (studio_spec.default_spec(preset="classic"), word, studio_spec.default_spec(preset="classic")):
             self.services.save_version({"architecture": spec}, "")
         for v in self.services._versions[:2]:
             v.best_checkpoint = "best.npz"

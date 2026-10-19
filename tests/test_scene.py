@@ -12,7 +12,7 @@ from studio_summary import bin_edges
 
 class Scenes(unittest.TestCase):
     def spec(self):
-        spec = default_spec()
+        spec = default_spec(preset="classic")
         spec['dims'].update(d_model=16, n_layer=3, n_ctx=256, dropout=0.)
         return validate_spec(spec)
 

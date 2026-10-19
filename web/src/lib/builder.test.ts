@@ -446,6 +446,7 @@ describe("design (the stateless /design calls)", () => {
   test.each([
     ["registry", () => design.registry(), "GET", "/design/registry", undefined],
     ["presets", () => design.presets(), "GET", "/design/presets", undefined],
+    ["start", () => design.start(), "GET", "/design/start", undefined],
     ["read", () => design.read(spec), "POST", "/design/read", { spec }],
     ["write", () => design.write(spec, cur, null), "POST", "/design/write", { base: spec, choices: cur, was: null }],
     ["choose", () => design.choose(cur, "mixer", "attn", 1), "POST", "/design/choose", { choices: cur, slot: "mixer", short: "attn", block: 1 }],

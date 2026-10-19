@@ -73,11 +73,15 @@ export function Builder() {
   const registry = registryQ.data;
   const current = currentQ.data ?? null;
   const base = current?.number ?? null;
-  const baseSpec = useMemo(() => specOf(current), [current]);
+  // With no saved version a new design starts from the modern preset, not from the server's bare defaults.
+  const storedSpec = useMemo(() => specOf(current), [current]);
+  const fresh = currentQ.isSuccess && Object.keys(storedSpec).length === 0;
+  const startQ = useQuery({ queryKey: ["design", "start"], queryFn: design.start, enabled: fresh, staleTime: Infinity, retry: false });
+  const baseSpec = useMemo(() => (fresh ? (startQ.data?.spec ?? {}) : storedSpec), [fresh, startQ.data, storedSpec]);
   const curQ = useQuery({
     queryKey: ["design", "read", baseSpec],
     queryFn: () => design.read(baseSpec),
-    enabled: currentQ.isSuccess,
+    enabled: currentQ.isSuccess && (!fresh || startQ.isSuccess),
     staleTime: Infinity,
     retry: false,
   });

@@ -1300,6 +1300,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start
+         * @description The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it.
+         */
+        get: operations["start_design_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/design/tower": {
         parameters: {
             query?: never;
@@ -6965,6 +6985,15 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Start */
+        Start: {
+            /** Note */
+            note: string;
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * StartPassive
          * @description The New session form. Every field has the plan's default (studio_passive.DEFAULT_PLAN); the plan is validated by merge_plan.
@@ -9932,6 +9961,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_design_start_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Start"];
                 };
             };
         };

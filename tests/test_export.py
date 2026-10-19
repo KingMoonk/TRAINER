@@ -26,7 +26,7 @@ except ImportError:  # the Hugging Face comparison is skipped where transformers
 
 
 def gpt2_spec(layers=2, d_model=32, heads=4, context=32, tokenizer="byte", d_ff=0):
-    spec = studio_spec.default_spec()
+    spec = studio_spec.default_spec(preset="classic")
     spec["dims"].update(d_model=d_model, n_layer=layers, n_ctx=context)
     spec["tokenizer"] = {"id": tokenizer}
     spec["block"]["mixer"] = {"id": "attention", "config": {"heads": heads}}

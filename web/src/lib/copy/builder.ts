@@ -112,6 +112,10 @@ export const BUILDER = {
     "This downloads about 548 MB from Hugging Face once and keeps it. Each time you start from GPT-2 the studio adds about 0.5 GB for the new version, and a full fine-tune saves checkpoints with their training state of about 1.5 GB each. Continue?",
   import_gpt2_started:
     "Downloading GPT-2 in the background. Its version is listed now but gets its weights only when the queue finishes it; if the download fails or you stop it, that version is removed or marked.",
+  preset_modern:
+    "Where a new design starts: RMSNorm, rotary positions, shared look-back heads, SwiGLU of the same size, a warmup-stable-decay rate, and bfloat16 where this computer runs it.",
+  preset_classic: "The studio's original recipe (LayerNorm, GELU, learned positions, float32), kept to compare against older results.",
+  start_note: "New design: it starts from the modern preset.",
   preset_starter: "This studio's small default: trains in minutes on any computer.",
   preset_tiny_llama_style: "A small model built from Llama's newer parts: RMSNorm, rotary positions, shared look-back heads, SwiGLU.",
   preset_gpt2_small_style: "The shape of OpenAI's smallest GPT-2: 12 blocks, 768 numbers per word, a 1,024-piece window.",

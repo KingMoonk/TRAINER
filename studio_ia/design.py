@@ -288,7 +288,7 @@ def fits(c, ram=None):
 
 # ---------------------------------------------------------------------------------------------- ready-made designs
 
-PRESETS = (("starter", "starter_model"), ("tiny_llama_style", "llama_model"), ("gpt2_small_style", "gpt2_model"),
+PRESETS = (("modern", "modern_model"), ("classic", "classic_model"), ("starter", "starter_model"), ("tiny_llama_style", "llama_model"), ("gpt2_small_style", "gpt2_model"),
            ("gpt3_small_style", "gpt3_model"), ("gpt3_medium_style", "gpt3_model"))  # studio_arch key, GLOSSARY entry
 SLOW_STEP = 30  # seconds per step past which a design is called very slow
 
@@ -302,7 +302,8 @@ def gpt2_words_ready():
 def preset_specs(gpt2_words=False):
     """[(key, spec)] of studio_arch's presets in PRESETS order (Tiny Llama only when its modules are registered).
     With gpt2_words the GPT-2 and GPT-3 designs read text with GPT-2's word list, as the originals did."""
-    presets = model_spec_presets()
+    from studio_preset import legacy_spec, modern_spec
+    presets = dict(model_spec_presets(), modern=modern_spec("Modern preset")[0], classic=legacy_spec("Classic preset"))
     out = []
     for key, _term in PRESETS:
         if key not in presets:
