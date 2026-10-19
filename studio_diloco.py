@@ -71,6 +71,7 @@ EVENTS_KEPT = 200  # the coordinator's event log is bounded
 TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished round's also goes to metrics.jsonl)
 SAMPLES_KEPT = 240  # progress samples kept per member for the open round
 EVAL_PROMPTS = 12  # prompts of the head-to-head against the starting weights (target_win_rate)
+MIN_EVAL_PROMPTS = 4  # fewest held-out prompts a win-rate stop may rest on: with 3 or fewer one prompt moves the rate by a third or more
 PROMPTS_PER_POLISH = 500  # the teacher is given this many training prompts per polish, a new window each time
 LESSON_ITEMS_SHOWN = 50  # how many of a lesson's answers lesson_list shows (the rest are counted)
 
@@ -548,12 +549,14 @@ class Coordinator:
         if settings.target_win_rate is not None and not val:
             raise ValueError("target_win_rate needs a validation split: without one no round has a validation loss, so no round is ever the best "
                              "to compare. Hold some of the text out (validation above 0), or leave target_win_rate unset.")
-        polish_prompts = eval_prompts = None
-        if conversations is not None and (settings.polish_every or settings.target_win_rate is not None):
-            polish_prompts, eval_prompts = split_prompts(conversations, settings, cfg["seed"])
         model = sm.ScratchTransformer(cfg, tokenizer.vocab_size)
         theta = {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         state = cls._read_state(directory, cfg, settings, digest)
+        polish_prompts = eval_prompts = None
+        files = [name for name, on in (("prompts.jsonl", settings.polish_every), ("eval_prompts.jsonl", settings.target_win_rate is not None)) if on]
+        # A resume keeps the prompts it wrote: chats deleted or re-marked since must not stop it, and must not change what it is compared on.
+        if conversations is not None and files and not (state and all((directory / name).is_file() for name in files)):
+            polish_prompts, eval_prompts = split_prompts(conversations, settings, cfg["seed"])
         if state:
             theta = state["theta"]
         elif start_from:
@@ -1956,22 +1959,36 @@ IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten
 _LOCK = threading.Lock()
 
 
-def split_prompts(conversations, settings, seed):
-    """(polish prompts, head-to-head prompts) from the teacher's conversations: the prompts they make (a conversation ending in an assistant
-    turn, twice the same one counted once), shuffled by the run's seed, then dealt so the two never share one. With both rules on the
-    head-to-head gets up to EVAL_PROMPTS of them but never more than half; with one on, that rule gets them all (the head-to-head up to
-    EVAL_PROMPTS). ValueError, in a sentence, when the rules are on and there are too few to give each its own."""
+def unique_prompts(conversations):
+    """The prompts the conversations make (those ending in an assistant turn), the same question counted once: what a teacher can be asked."""
     from studio_rlhf import prompts_from
     unique = {}
     for prompt in prompts_from(conversations):
         unique.setdefault(json.dumps(prompt["messages"], sort_keys=True), prompt)
-    prompts = list(unique.values())
+    return list(unique.values())
+
+
+def prompts_needed(polish, versus):
+    """How many different prompts the teacher's rules need: one to polish on; MIN_EVAL_PROMPTS held out for the win-rate stop, and with
+    both on that many again for the polish (the head-to-head never takes more than half)."""
+    return (2 * MIN_EVAL_PROMPTS if polish else MIN_EVAL_PROMPTS) if versus else 1
+
+
+def split_prompts(conversations, settings, seed):
+    """(polish prompts, head-to-head prompts) from the teacher's conversations: the different prompts they make, shuffled by the run's
+    seed, then dealt so the two never share one. With both rules on the head-to-head gets up to EVAL_PROMPTS of them but never more than
+    half; with one on, that rule gets them all (the head-to-head up to EVAL_PROMPTS). ValueError, in a sentence, when there are fewer
+    than the rules need (prompts_needed)."""
+    prompts = unique_prompts(conversations)
     random.Random(seed).shuffle(prompts)
     polish, versus = bool(settings.polish_every), settings.target_win_rate is not None
+    need = prompts_needed(polish, versus)
+    if len(prompts) < need:
+        what = (f"the win-rate target compares on at least {MIN_EVAL_PROMPTS} held-out prompts" + (f" and the polish needs {MIN_EVAL_PROMPTS} more" if polish else "")
+                if versus else "the polish needs a prompt")
+        raise ValueError(f"The chosen data makes {len(prompts)} different prompt{'' if len(prompts) == 1 else 's'}, but {what}: "
+                         f"add conversations (at least {need} different questions), or turn the teacher off.")
     if polish and versus:
-        if len(prompts) < 2:
-            raise ValueError("polish_every and target_win_rate each need conversations of their own, and the chosen data has "
-                             f"{'one' if prompts else 'none'}: add conversations, or turn one of them off.")
         held = min(EVAL_PROMPTS, len(prompts) // 2)
         return prompts[held:], prompts[:held]
     return (prompts, []) if polish else ([], prompts[:EVAL_PROMPTS])

@@ -1360,6 +1360,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/chat_sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Chat Sets
+         * @description The sets that hold conversations: the form's prompt sources for a run with a teacher (they are never trained on).
+         */
+        get: operations["chat_sets_distributed_chat_sets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/defaults": {
         parameters: {
             query?: never;
@@ -3276,6 +3296,18 @@ export interface components {
             draft_spec: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * ChatSet
+         * @description One set that holds conversations, which a run's teacher may take its prompts from.
+         */
+        ChatSet: {
+            /** Count */
+            count: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
         };
         /** CheckBody */
         CheckBody: {
@@ -9733,6 +9765,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_sets_distributed_chat_sets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSet"][];
                 };
             };
         };

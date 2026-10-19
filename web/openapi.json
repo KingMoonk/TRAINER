@@ -287,6 +287,30 @@
         "title": "ChangesBody",
         "type": "object"
       },
+      "ChatSet": {
+        "description": "One set that holds conversations, which a run's teacher may take its prompts from.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count"
+        ],
+        "title": "ChatSet",
+        "type": "object"
+      },
       "CheckBody": {
         "properties": {
           "new_version": {
@@ -13823,6 +13847,32 @@
         "summary": "Write",
         "tags": [
           "design"
+        ]
+      }
+    },
+    "/distributed/chat_sets": {
+      "get": {
+        "description": "The sets that hold conversations: the form's prompt sources for a run with a teacher (they are never trained on).",
+        "operationId": "chat_sets_distributed_chat_sets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatSet"
+                  },
+                  "title": "Response Chat Sets Distributed Chat Sets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Chat Sets",
+        "tags": [
+          "distributed"
         ]
       }
     },

@@ -160,17 +160,65 @@ class Reaches(Base):
         self.assertEqual(first, studio_diloco.split_prompts(list(chats), settings, 7))
         self.assertNotEqual(first, studio_diloco.split_prompts(chats, settings, 8))
 
-    def test_a_lone_conversation_cannot_serve_both_options(self):
-        lone = self.workspace.create_dataset("One chat")
-        self.workspace.add(lone, [{"text": t} for t in TEXT] + GOOD_CHATS[:1])
-        response = self.start(dataset_ids=[lone], teacher="judge:1b", polish_every=1, target_win_rate=.5)
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("only one", response.json()["detail"])
+    def few_chats(self, count, name="Few chats"):
+        few = self.workspace.create_dataset(name)
+        self.workspace.add(few, [{"text": t} for t in TEXT] + GOOD_CHATS[:count])
+        return few
+
+    def test_a_lone_conversation_can_only_polish(self):
+        lone = self.few_chats(1)
+        for body in ({"polish_every": 1, "target_win_rate": .5}, {"target_win_rate": .5}):  # nothing to hold out
+            with self.subTest(body=body):
+                response = self.start(dataset_ids=[lone], teacher="judge:1b", **body)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("at least", response.json()["detail"])
         self.assertEqual(self.queued, [])
-        for body in ({"polish_every": 1}, {"target_win_rate": .5}):  # one option alone can use it
-            self.assertEqual(self.start(dataset_ids=[lone], teacher="judge:1b", **body).status_code, 201)
-        with self.assertRaisesRegex(ValueError, "each need conversations of their own"):
-            studio_diloco.split_prompts(GOOD_CHATS[:1], studio_diloco.Settings(rounds=4, polish_every=1, target_win_rate=.5, teacher="t"), 1)
+        self.assertEqual(self.start(dataset_ids=[lone], teacher="judge:1b", polish_every=1).status_code, 201)  # polish alone may use fewer
+
+    def test_a_win_rate_needs_a_few_held_out_prompts(self):
+        least = studio_diloco.MIN_EVAL_PROMPTS
+        self.assertEqual(self.start(dataset_ids=[self.few_chats(least - 1)], teacher="judge:1b", target_win_rate=.5).status_code, 400)
+        self.assertEqual(self.start(dataset_ids=[self.few_chats(least, "Enough")], teacher="judge:1b", target_win_rate=.5).status_code, 201)
+        both = self.start(dataset_ids=[self.few_chats(2 * least - 1, "Not enough for both")], teacher="judge:1b", polish_every=1, target_win_rate=.5)
+        self.assertEqual(both.status_code, 400)
+        self.assertIn(f"at least {2 * least}", both.json()["detail"])
+        self.assertEqual(self.start(dataset_ids=[self.few_chats(2 * least, "Both")], teacher="judge:1b", polish_every=1, target_win_rate=.5).status_code, 201)
+        # the coordinator holds the same line for a job that got past the route (data changed since, a direct caller)
+        settings = studio_diloco.Settings(rounds=4, polish_every=1, target_win_rate=.5, teacher="t")
+        with self.assertRaisesRegex(ValueError, "different prompts"):
+            studio_diloco.split_prompts(GOOD_CHATS[:2 * least - 1], settings, 1)
+        polish, versus = studio_diloco.split_prompts(GOOD_CHATS[:2 * least], settings, 1)
+        self.assertEqual((len(polish), len(versus)), (least, least))
+
+    def test_the_same_question_asked_twice_counts_once(self):
+        twice = self.workspace.create_dataset("Twice")
+        asked = [{"user": "Same question?", "assistant": f"Answer {n}.", "quality": "Good"} for n in range(6)]
+        self.workspace.add(twice, [{"text": t} for t in TEXT] + asked)
+        self.assertTrue(self.services.has_conversations([twice]))
+        self.assertFalse(self.services.has_conversations([twice], at_least=2))
+        response = self.start(dataset_ids=[twice], teacher="judge:1b", polish_every=1, target_win_rate=.5)
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(self.start(dataset_ids=[twice], teacher="judge:1b", polish_every=1).status_code, 201)  # one prompt will do to polish
+        self.assertEqual(len(studio_diloco.unique_prompts(asked)), 1)
+
+    def test_a_resume_keeps_its_prompts_when_the_conversations_are_gone(self):
+        self.assertEqual(self.start(teacher="judge:1b", polish_every=1, target_win_rate=.5).status_code, 201)
+        first = self.coordinator_of(self.queued[0])
+        before = {name: (first.directory / name).read_text(encoding="utf-8") for name in ("prompts.jsonl", "eval_prompts.jsonl")}
+        first._persist([], {})  # a round has closed: the state a restart reads
+        first.release()
+        studio_diloco.COORDINATORS.clear()
+        # the chats are deleted (or no longer marked Good) since: the job's data now makes no prompt at all
+        with mock.patch.object(self.services, "conversations", return_value=[]), mock.patch.object(studio_diloco, "check_teacher"):
+            again = studio_diloco.prepare(self.queued[0], self.services, self.root / "run", 8787)
+        self.addCleanup(again.release)
+        for name, text in before.items():
+            self.assertEqual((again.directory / name).read_text(encoding="utf-8"), text)
+        studio_diloco.COORDINATORS.clear()
+        # a new run in the same data still needs them
+        with mock.patch.object(self.services, "conversations", return_value=[]), mock.patch.object(studio_diloco, "check_teacher"):
+            with self.assertRaisesRegex(ValueError, "different prompts"):
+                studio_diloco.prepare(self.queued[0], self.services, self.root / "fresh", 8787)
 
     def test_a_set_of_conversations_only_can_be_the_source_of_the_prompts(self):
         chats = self.workspace.create_dataset("Only chats")
@@ -191,10 +239,20 @@ class Reaches(Base):
         response = self.start(dataset_ids=[ends_on_user], teacher="judge:1b", polish_every=1)
         self.assertEqual(response.status_code, 400, response.text)
 
-    def test_another_coordinator_with_a_teacher_is_a_400(self):
+    def test_a_coordinator_that_is_not_on_the_machines_tab_is_told_so_before_the_teacher_is_(self):
         response = self.start(coordinator="gpu-box", machines=["gpu-box"], teacher="judge:1b", polish_every=1)
         self.assertEqual(response.status_code, 400)
-        self.assertIn("only on the computer that starts the run", response.json()["detail"])
+        self.assertIn("not on the Machines tab", response.json()["detail"])
+
+    def test_the_chat_sets_are_listed_for_the_form(self):
+        chats = self.workspace.create_dataset("Only chats")
+        self.workspace.add(chats, GOOD_CHATS[:3])
+        listed = {row["id"]: row for row in self.client.get("/distributed/chat_sets").json()}
+        self.assertEqual(listed[chats], {"id": chats, "name": "Only chats", "count": 3})
+        self.assertEqual(listed[self.set]["count"], len(GOOD_CHATS) + len(PENDING_CHATS))
+        text = self.workspace.create_dataset("Plain")
+        self.workspace.add(text, [{"text": t} for t in TEXT])
+        self.assertNotIn(text, [row["id"] for row in self.client.get("/distributed/chat_sets").json()])
 
     def test_a_start_with_no_conversations_is_a_400(self):
         text_only = self.workspace.create_dataset("Plain")

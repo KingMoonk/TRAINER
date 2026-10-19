@@ -230,6 +230,20 @@ def defaults() -> Defaults:
                     outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype)
 
 
+class ChatSet(BaseModel):
+    """One set that holds conversations, which a run's teacher may take its prompts from."""
+
+    id: str
+    name: str
+    count: int
+
+
+@router.get("/chat_sets")
+def chat_sets(services: Services) -> list[ChatSet]:
+    """The sets that hold conversations: the form's prompt sources for a run with a teacher (they are never trained on)."""
+    return [ChatSet.model_validate(row) for row in services.conversation_sets()]
+
+
 def _jobs(services):
     runner = getattr(services, "runner", None)
     if runner is not None:
@@ -399,15 +413,15 @@ def _teacher_options(body, services, dataset_ids):
         return {}, {}
     if not teacher:
         raise HTTPException(400, "Teacher polish and the win-rate target need a teacher: choose one of the models Ollama has.")
-    if body.coordinator:
-        raise HTTPException(400, "The teacher runs only on the computer that starts the run, so another computer cannot coordinate a run with a teacher. "
-                                 "Leave the coordinator as this computer, or leave the teacher out.")
-    both = bool(body.polish_every) and body.target_win_rate is not None
-    if not services.has_conversations(dataset_ids, body.reviewed_only, 2 if both else 1):
+    polish, versus = bool(body.polish_every), body.target_win_rate is not None
+    need = studio_diloco.prompts_needed(polish, versus)
+    if not services.has_conversations(dataset_ids, body.reviewed_only, need):
         have = "none of them is marked Good" if body.reviewed_only else "it holds none"
-        if both and services.has_conversations(dataset_ids, body.reviewed_only):
-            raise HTTPException(400, "Polishing and the win-rate target each need conversations of their own, and the chosen data has only one. "
-                                     "Add conversations, or use only one of the two.")
+        if services.has_conversations(dataset_ids, body.reviewed_only):
+            why = (f"The win-rate target compares on at least {studio_diloco.MIN_EVAL_PROMPTS} held-out prompts" +
+                   (f", and polishing needs {studio_diloco.MIN_EVAL_PROMPTS} more of its own" if polish else "")) if versus else "Polishing needs a prompt"
+            raise HTTPException(400, f"{why}, so the chosen data needs at least {need} different questions asked in its conversations (a question asked twice "
+                                     "counts once). Add conversations, or turn the teacher off" + ("" if not (polish and versus) else ", or use only one of the two") + ".")
         raise HTTPException(400, f"The teacher answers conversations from the chosen data, and {have}. Choose data with conversations in it, or leave the teacher out.")
     fields = {"teacher": teacher, "polish_every": body.polish_every or 0, **({"target_win_rate": body.target_win_rate} if body.target_win_rate is not None else {})}
     return fields, {**fields, "conversations": True}
@@ -444,7 +458,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     if version is None:
         raise HTTPException(409, "Save a design in the Network designer first.")
     known = {s["id"] for s in plan.sets_of(services.data("text"))}
-    chats = {s["id"] for s in plan.sets_of(services.data("conversations"))} if _teaches(body) else set()  # only the teacher's prompts come from these
+    chats = {s["id"] for s in services.conversation_sets()} if _teaches(body) else set()  # only the teacher's prompts come from these
     unknown = [d for d in dataset_ids if d not in known and d not in chats]
     if unknown or not dataset_ids or not any(d in known for d in dataset_ids):
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
@@ -462,6 +476,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     chosen = listed if body.all_machines else [a for a in listed if a in body.machines]
     peers = studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
     _check_coordinator(body.coordinator, chosen, peers, own)
+    if teaching and body.coordinator:  # after the coordinator's own checks, so an offline or unknown one is told so
+        raise HTTPException(400, "The teacher runs only on the computer that starts the run, so another computer cannot coordinate a run with a teacher. "
+                                 "Leave the coordinator as this computer, or leave the teacher out.")
     left_out = []
     if body.all_machines:
         peers, left_out = _answering(peers, own)

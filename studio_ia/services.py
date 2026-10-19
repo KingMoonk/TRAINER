@@ -478,12 +478,16 @@ class Services:
         raise NotImplementedError
 
     def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
-        """True when these sets hold `at_least` conversations a run's teacher can answer (only the ones marked Good with `reviewed_only`)."""
+        """True when these sets hold `at_least` different prompts a run's teacher can answer (only conversations marked Good with `reviewed_only`)."""
         raise NotImplementedError
 
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
+
+    def conversation_sets(self):
+        """[{id, name, count}] of the sets that hold conversations: the places a cluster run's teacher can take its prompts from."""
+        return list(self.data("conversations").sets or [])
 
     def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
@@ -2131,8 +2135,9 @@ class WorkspaceServices(Services):
                 and (messages_of(e) or [{}])[-1].get("role") == "assistant")
 
     def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
-        import itertools
-        return len(list(itertools.islice(self._conversation_rows(list(dataset_ids), reviewed_only), at_least))) >= at_least
+        import studio_diloco
+        # Prompts, not rows: two chats that ask the same question make one prompt (the coordinator's split dedupes the same way).
+        return len(studio_diloco.unique_prompts(self._conversation_rows(list(dataset_ids), reviewed_only))) >= at_least
 
     def has_reviewed_text(self, dataset_ids):
         """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held
@@ -2892,14 +2897,21 @@ class WorkspaceServices(Services):
     def text_sets(self):
         """The text sets from the counts storage keeps exact (Workspace.kind_stats), not from the summary: answering needs no scan
         of the rows, so it takes milliseconds on a workspace of a million of them."""
+        return self._sets_holding("text")
+
+    def conversation_sets(self):
+        """The sets that hold conversations, counted the same way as text_sets."""
+        return self._sets_holding("conversations")
+
+    def _sets_holding(self, kind):
         import studio_data_kinds as dk
         out = []
         for dataset in list(self.workspace.state["datasets"]):
             if dataset.get("storage") == "sqlite":
                 stats = self.workspace.kind_stats(dataset["id"])
-                count = stats.get("text", (0,))[0] if stats is not None else sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+                count = stats.get(kind, (0,))[0] if stats is not None else sum(dk.classify(e) == kind for e in self.workspace.iter_examples(dataset["id"]))
             else:
-                count = sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+                count = sum(dk.classify(e) == kind for e in self.workspace.iter_examples(dataset["id"]))
             if count:
                 out.append({"id": dataset["id"], "name": dataset["name"], "count": count})
         return out
