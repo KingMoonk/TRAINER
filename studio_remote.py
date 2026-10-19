@@ -36,7 +36,7 @@ import studio_state
 from studio_peer import PeerClient
 
 POLL_EVERY = 5.  # seconds between polls of the peers
-POLL_BACKOFF_MAX = 60.  # the longest wait between polls of a peer that does not answer; it doubles from 2 * POLL_EVERY
+POLL_BACKOFF_MAX = 2 * POLL_EVERY  # the longest wait between polls of a peer that does not answer: a peer that answers again is seen within this
 TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
 RESUME_EVENTS = ("resumed", "resume_refused")  # which way a job placed again on the node that wrote its checkpoint went (`_own_checkpoint`)
@@ -121,6 +121,7 @@ class Cluster:
         self._sweeping, self._sweep_at = False, 0.  # a sweep of checkpoints is running; the clock time the next may start
         self._known = {}  # peer address -> its last NodeInfo
         self._silent = {}  # peer address -> (polls in a row it did not answer, clock time of the next poll): it is left alone until then
+        self._answered, self._probed = {}, {}  # peer address -> clock time of its last answer; of the last time it was asked
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
         self._store, self._store_problem, self._store_mtime = None, "", object()  # object(): not yet read, equal to no mtime
         self.state = studio_state.Replica(self.hostname, studio_state.next_incarnation(runner.root / "data" / studio_state.INCARNATION_FILE),
@@ -270,6 +271,24 @@ class Cluster:
         age = studio_facts.heartbeat_age(self, origin)
         return age is None or age > studio_facts.DOWN_AFTER
 
+    def contact(self, address):
+        """(seconds since the peer at `address` was last heard from, seconds until it is asked again): either is None when not known.
+        Heard from is its last answer to a poll or its newest heartbeat in this node's copy of the store, whichever is later."""
+        now, heard = self.clock(), []
+        if address in self._answered:
+            heard.append(now - self._answered[address])
+        name = self._names.get(address)
+        age = studio_facts.heartbeat_age(self, name) if name else None
+        if age is not None:
+            heard.append(age)
+        if address in self._silent:
+            check = max(0., self._silent[address][1] - now)
+        elif address in self._probed:
+            check = max(0., POLL_EVERY - (now - self._probed[address]))
+        else:
+            check = None
+        return (max(0., min(heard)) if heard else None), check
+
     def poll_once(self):
         try:
             self.publish_state()
@@ -294,6 +313,8 @@ class Cluster:
 
         now = self.clock()
         self._silent = {a: v for a, v in self._silent.items() if a in peers}
+        self._answered = {a: v for a, v in self._answered.items() if a in peers}
+        self._probed = {a: v for a, v in self._probed.items() if a in peers}
         due = [a for a in peers if a not in self._silent or now >= self._silent[a][1]]  # a silent peer is asked less and less often
         with ThreadPoolExecutor(max_workers=min(8, len(due) or 1)) as pool:
             results = list(pool.map(ask, due))
@@ -302,11 +323,13 @@ class Cluster:
             if info is not None and info.hostname:
                 self._names[address] = info.hostname
             self._known[address] = info or studio_cluster.offline(address, error)
+            self._probed[address] = self.clock()
             if info is not None:
                 self._silent.pop(address, None)
+                self._answered[address] = self._probed[address]
             else:
                 count = self._silent.get(address, (0,))[0] + 1
-                self._silent[address] = (count, self.clock() + min(POLL_BACKOFF_MAX, 2 * POLL_EVERY * 2 ** (count - 1)))
+                self._silent[address] = (count, self._probed[address] + min(POLL_BACKOFF_MAX, POLL_EVERY * 2 ** (count - 1)))
         self.polled.set()
         try:  # who coordinates which run, from the store as it is after this poll's syncs (studio_failover)
             self.failover.step()

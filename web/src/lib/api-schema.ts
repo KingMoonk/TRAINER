@@ -3337,10 +3337,14 @@ export interface components {
             error: string;
             /** Hostname */
             hostname: string;
+            /** Last Heard S */
+            last_heard_s?: number | null;
             /** Local */
             local: boolean;
             /** Memory Bytes */
             memory_bytes: number;
+            /** Next Check S */
+            next_check_s?: number | null;
             /** Online */
             online: boolean;
             /**
