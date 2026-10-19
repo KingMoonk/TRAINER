@@ -397,7 +397,9 @@ def round_rows(history, best_round=None):
              "best": best_round is not None and row["round"] == best_round, "pivot": row.get("pivot") or "",
              "bytes_up": row.get("delta_bytes", 0), "bytes_down": row.get("theta_bytes", 0), "seconds": row.get("seconds", 0.),
              "members": len(row.get("members", [])), "contributed": len(row.get("contributed", [])),
-             "dropped": list(row.get("dropped", []))} for row in history]
+             "dropped": list(row.get("dropped", [])), "polish": row.get("polish", ""), "val_loss_before_polish": row.get("val_loss_before_polish"),
+             "polish_val_loss": row.get("polish_val_loss"),
+             "lessons": row.get("lessons", 0)} for row in history]
 
 
 def member_stats(history, node):
@@ -579,11 +581,13 @@ def view(run, coordinator, job, peers=None):
     settings = (snap or {}).get("settings") or run.settings
     rules = (snap or {}).get("rules") or {}
     paused = bool((snap or {}).get("paused")) and state in ("waiting", "running")
+    lessons = (snap or {}).get("lessons") or []
     return {"id": run.id, "label": run.label, "version": run.version, "state": state, "note": note, "started_at": run.started_at,
             "owner": run.owner, "handoff": run.handoff, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or "", peers),
             "history": round_rows((snap or {}).get("history", []), rules.get("best_round")), "can_stop": state in ACTIVE,
+            "lessons": sum(e["rows"] for e in lessons if e["status"] == "live"), "lessons_left_out": sum(e["rows"] for e in lessons if e["status"] != "live"),
             "paused": paused, "can_pause": state in ("waiting", "running") and not paused and coordinator is not None, "can_resume": paused,
             "can_restart": state in ENDED and not restart_blocker(run, getattr(coordinator, "term", run.term)),
             "best_round": rules.get("best_round"), "best_val_loss": rules.get("best_loss"), "stop_rule": rules.get("stop_rule") or "",

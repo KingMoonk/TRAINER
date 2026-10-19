@@ -82,6 +82,7 @@ class RoundView(Versioned):
     replica: bool = False  # this member is one of the run's replicas: it also takes GET /state each round and GET /validation once
     lr_scale: float = 1.  # the factor the run's pivots (halve_lr) put on the learning rate from this round on
     paused: bool = False  # the owner paused the run: a pending round stays pending until it is resumed
+    polishing: bool = False  # the teacher is polishing the weights: a pending round stays pending until it is done
 
 
 class Accepted(Versioned):

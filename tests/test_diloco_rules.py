@@ -157,6 +157,58 @@ class State(unittest.TestCase):
         self.assertEqual(rules.State.from_json({"best_round": 2, "from_the_future": 1}).best_round, 2)
 
 
+class Revise(unittest.TestCase):
+    """revise: a round re-judged with the loss its polished weights got."""
+
+    def folded(self, losses, **changes):
+        s = settings(**changes)
+        state = rules.State()
+        for number, loss in enumerate(losses):
+            rules.observe(state, s, number, (number + 1) * s.inner_steps, loss)
+        return s, state
+
+    def test_a_polish_that_beats_the_best_makes_its_round_the_best_and_restarts_the_streaks(self):
+        s, state = self.folded([5., 4., 4.5, 4.6])
+        self.assertEqual((state.best_round, state.rounds_since_best, state.worse_streak), (1, 2, 2))
+        verdict = rules.revise(state, s, 3, 12, 4.6, 3.9)
+        self.assertEqual((verdict["action"], verdict["improved"]), ("continue", True))
+        self.assertEqual((state.best_round, state.best_loss, state.rounds_since_best, state.worse_streak), (3, 3.9, 0, 0))
+        self.assertEqual(state.points[-1], [12, 3.9])
+
+    def test_a_polish_of_the_best_round_lowers_the_best_loss_and_keeps_the_streaks(self):
+        s, state = self.folded([5., 4.])
+        verdict = rules.revise(state, s, 1, 6, 4., 3.8)
+        self.assertEqual((verdict["improved"], state.best_round, state.best_loss), (True, 1, 3.8))
+
+    def test_a_polish_that_stays_behind_the_best_changes_only_the_plateau_point(self):
+        s, state = self.folded([3., 4., 4.5])
+        verdict = rules.revise(state, s, 2, 9, 4.5, 4.2)
+        self.assertEqual((verdict["improved"], state.best_round, state.best_loss, state.rounds_since_best, state.worse_streak), (False, 0, 3., 2, 2))
+        self.assertEqual(state.points[-1], [9, 4.2])
+
+    def test_a_polish_can_reach_the_target_and_stop_the_run(self):
+        s, state = self.folded([5., 4.], target_val_loss=3.5)
+        verdict = rules.revise(state, s, 1, 6, 4., 3.4)
+        self.assertEqual((verdict["action"], verdict["rule"]), ("stop", "target_val_loss"))
+        self.assertEqual(state.stop_rule, "target_val_loss")
+
+    def test_a_final_round_is_not_stopped(self):
+        s, state = self.folded([5., 4.], target_val_loss=3.5)
+        self.assertEqual(rules.revise(state, s, 1, 6, 4., 3.4, final=True)["action"], "continue")
+
+    def test_drop_lessons_is_skipped_when_no_lesson_was_written_since_the_best(self):
+        s = settings(worse_limit=1, pivots=("drop_lessons", "halve_lr"), polish_every=2, teacher="t")
+        state = rules.State()
+        rules.observe(state, s, 0, 3, 5.)
+        verdict = rules.observe(state, s, 1, 6, 6., lessons=0)
+        self.assertEqual((verdict["action"], verdict["name"]), ("pivot", "halve_lr"))
+        state = rules.State()
+        rules.observe(state, s, 0, 3, 5.)
+        verdict = rules.observe(state, s, 1, 6, 6., lessons=2)
+        self.assertEqual((verdict["action"], verdict["name"]), ("pivot", "drop_lessons"))
+        self.assertEqual(state.lr_scale, 1.)
+
+
 class Checks(unittest.TestCase):
     def rejects(self, **changes):
         with self.assertRaises(ValueError, msg=str(changes)):
@@ -176,11 +228,31 @@ class Checks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Each pivot must be one of"):
             support.settings(pivots=("nope",), worse_limit=1)
 
-    def test_target_win_rate_and_drop_lessons_say_they_arrive_with_508(self):
-        with self.assertRaisesRegex(ValueError, "target_win_rate.*#508"):
+    def test_target_win_rate_still_points_at_511(self):
+        with self.assertRaisesRegex(ValueError, "target_win_rate.*#511"):
             support.settings(target_win_rate=.6, teacher="big")
-        with self.assertRaisesRegex(ValueError, "drop_lessons.*#508"):
+
+    def test_polish_options_need_a_teacher_and_something_to_do(self):
+        for changes in ({"polish_every": 2}, {"polish_every": -1}, {"polish_every": 1.5, "teacher": "t"}, {"polish_every": True, "teacher": "t"},
+                        {"polish_every": 2, "teacher": "t", "polish": False, "lessons": False}, {"polish": "yes"}, {"lessons": 1}):
+            with self.assertRaises(ValueError, msg=str(changes)):
+                support.settings(**changes)
+        with self.assertRaisesRegex(ValueError, "polish_every must be below rounds"):
+            support.settings(polish_every=4, teacher="t")  # rounds is 4: no polish follows the final round
+        with self.assertRaisesRegex(ValueError, "polish_every needs a teacher"):
+            support.settings(polish_every=2)
+        s = support.settings(polish_every=2, teacher="t", polish=False)
+        self.assertEqual((s.polish_every, s.polish, s.lessons), (2, False, True))
+        plain = support.settings()
+        self.assertEqual((plain.polish_every, plain.polish, plain.lessons), (0, True, True))
+
+    def test_drop_lessons_needs_polish_every_with_lessons_on(self):
+        with self.assertRaisesRegex(ValueError, "drop_lessons.*polish_every"):
             support.settings(pivots=("drop_lessons",), worse_limit=1)
+        with self.assertRaisesRegex(ValueError, "drop_lessons.*lessons"):
+            support.settings(pivots=("drop_lessons",), worse_limit=1, polish_every=2, teacher="t", lessons=False)
+        s = support.settings(pivots=("drop_lessons",), worse_limit=1, polish_every=2, teacher="t")
+        self.assertEqual(s.pivots, ("drop_lessons",))
 
     def test_good_values_are_accepted_and_the_defaults_set_nothing(self):
         s = support.settings(max_seconds=60, patience_rounds=3, target_val_loss=2.5, plateau_checks=3,

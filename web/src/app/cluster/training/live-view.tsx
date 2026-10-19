@@ -11,7 +11,7 @@ import { TRAINING as T } from "@/lib/copy/training";
 import { EventLog } from "@/app/runs/view/event-log";
 import { liveLossSeries, tokensSeries } from "@/app/runs/view/live";
 import { ErrorCurve } from "./error-curve";
-import { bytesText, stopReasonText, trafficSeries, type Run } from "./logic";
+import { bytesText, lessonsText, stopReasonText, trafficSeries, type Run } from "./logic";
 import { RunControls } from "./run-controls";
 import { MemberAlerts } from "./member-alerts";
 import { RoundBanner } from "@/app/runs/view/round-banner";
@@ -102,6 +102,7 @@ export function LiveView({ run, stoppingRun, stoppingNode, onStopRun, onStopMemb
         </CardDescription>
         {run.paused && <p className="text-sm text-warning" data-testid={`run-paused-${run.id}`}>{T.pausedNote}</p>}
         {stopReasonText(run) && <p className="text-sm text-muted-foreground" data-testid={`run-stop-reason-${run.id}`}>{stopReasonText(run)}</p>}
+        {lessonsText(run) && <p className="text-sm text-muted-foreground" data-testid={`run-lessons-${run.id}`}>{lessonsText(run)}</p>}
         <RunControls run={run} onRestarted={onRestarted} />
         {run.note && <p className="text-sm text-muted-foreground" data-testid={`run-note-${run.id}`}>{run.note}</p>}
         {run.saved_version != null && (

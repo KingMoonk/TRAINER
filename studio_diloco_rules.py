@@ -15,8 +15,9 @@ from dataclasses import dataclass, field, fields
 
 import studio_plateau
 
-PIVOTS = ("halve_lr", "next_dataset")  # drop_lessons and target_win_rate arrive with teacher polish and lessons (#508)
-PIVOT_TEXT = {"halve_lr": "halved the learning rate", "next_dataset": "switched to the next data source"}
+PIVOTS = ("halve_lr", "next_dataset", "drop_lessons")  # target_win_rate arrives with the head-to-head stop rule (#511)
+PIVOT_TEXT = {"halve_lr": "halved the learning rate", "next_dataset": "switched to the next data source",
+              "drop_lessons": "left out the teacher's lessons written since"}
 
 
 def _number(value, label, low=None, high=None, integer=False, allow_none=False, strict_low=False):
@@ -36,7 +37,7 @@ def check(s):
     _number(s.patience_rounds, "patience_rounds", 0, integer=True)
     _number(s.target_val_loss, "target_val_loss", 0, allow_none=True, strict_low=True)
     if s.target_win_rate is not None:
-        raise ValueError("target_win_rate is not available yet: it arrives with teacher polish in #508.")
+        raise ValueError("target_win_rate is not available yet: it arrives with the head-to-head stop rule in #511.")
     _number(s.plateau_checks, "plateau_checks", 0, integer=True)
     if s.plateau_checks == 1:
         raise ValueError("plateau_checks must be 0 (off) or at least 2.")
@@ -45,8 +46,17 @@ def check(s):
     _number(s.keep_checkpoints, "keep_checkpoints", 0, integer=True)
     if not isinstance(s.teacher, str):
         raise ValueError("teacher must be a model name.")
-    if "drop_lessons" in s.pivots:
-        raise ValueError("The drop_lessons pivot is not available yet: lessons arrive with #508.")
+    _number(s.polish_every, "polish_every", 0, integer=True)
+    if not isinstance(s.polish, bool) or not isinstance(s.lessons, bool):
+        raise ValueError("polish and lessons must each be true or false.")
+    if s.polish_every and s.polish_every >= s.rounds:
+        raise ValueError(f"polish_every must be below rounds ({s.rounds}): there is no polish after the final round, so it would never run.")
+    if s.polish_every and not s.teacher:
+        raise ValueError("polish_every needs a teacher: set teacher to the name of an Ollama model.")
+    if s.polish_every and not (s.polish or s.lessons):
+        raise ValueError("With polish_every set, at least one of polish and lessons must be on, or the teacher would do nothing.")
+    if "drop_lessons" in s.pivots and not (s.polish_every and s.lessons):
+        raise ValueError("The drop_lessons pivot needs polish_every and lessons on: without lessons it would never have anything to drop.")
     if any(p not in PIVOTS for p in s.pivots):
         raise ValueError("Each pivot must be one of: " + ", ".join(PIVOTS) + ".")
     if s.pivots and not (s.worse_limit or s.plateau_checks):
@@ -101,11 +111,14 @@ def plateaued(state, s):
     return plateau.hit is not None
 
 
-def next_pivot(state, s, sources=1):
-    """(index, name) of the next usable pivot in the list, or None. next_dataset needs a source after the current one."""
+def next_pivot(state, s, sources=1, lessons=0):
+    """(index, name) of the next usable pivot in the list, or None. next_dataset needs a source after the current one; drop_lessons
+    needs `lessons` above 0 (the live lessons written since the best round)."""
     for index in range(state.pivot_index, len(s.pivots)):
         name = s.pivots[index]
         if name == "next_dataset" and state.source + 1 >= sources:
+            continue
+        if name == "drop_lessons" and not lessons:
             continue
         return index, name
     return None
@@ -122,9 +135,10 @@ def stop_reason(state, s):
     return None
 
 
-def observe(state, s, number, step, val_loss, sources=1, final=False):
+def observe(state, s, number, step, val_loss, sources=1, final=False, lessons=0):
     """Fold the closed round `number` (its `step` and `val_loss`) into `state` and say what to do next. `final`: the run ends with this
-    round anyway, so only the best is kept and no rule or pivot applies. A round without a finite loss counts as worse only once there
+    round anyway, so only the best is kept and no rule or pivot applies. `lessons`: the live lessons written since the best round,
+    which is what a drop_lessons pivot would leave out. A round without a finite loss counts as worse only once there
     is a best to be worse than. Returns
     {"action": "continue" | "stop" | "pivot", "improved": bool, ...}: a stop carries its "rule" and "text"; a pivot its "name",
     "before" (this round's loss), "best" (the loss it goes back to), "best_round" and "why" (what triggered it)."""
@@ -148,7 +162,7 @@ def observe(state, s, number, step, val_loss, sources=1, final=False):
     if not why:
         return {"action": "continue", "improved": improved}
     streak = state.worse_streak
-    move = next_pivot(state, s, sources)
+    move = next_pivot(state, s, sources, lessons)
     if move is None:
         if why == "plateau" and not s.pivots:
             rule, text = "plateau", (f"Stopped: the validation loss improved by less than {s.plateau_min_improvement:.2%} "
@@ -166,3 +180,24 @@ def observe(state, s, number, step, val_loss, sources=1, final=False):
         state.source += 1
     return {"action": "pivot", "improved": improved, "name": name, "before": val_loss, "best": state.best_loss,
             "best_round": state.best_round, "why": why, "streak": streak}
+
+
+def revise(state, s, number, step, old, new, final=False):
+    """Re-judge round `number`, the one `observe` just folded in with the loss `old`, now that a teacher polish gave its weights the
+    loss `new` (finite and at most `old`: the coordinator accepts no polish that is worse). The round becomes the best when `new` beats
+    the best before it, and its streaks restart; a round that already was the best stays so with the lower loss; any other keeps the
+    place it had. The stage's last point is replaced for the plateau test. Then the stop rules are asked again, since the lower loss
+    may have reached the target. No pivot is applied. Returns {"action": "continue" | "stop", "improved": bool (now the best round)};
+    a stop carries its "rule" and "text"."""
+    if state.best_round == number:
+        state.best_loss = float(new)
+    elif state.best_loss is None or new < state.best_loss:
+        state.best_round, state.best_loss, state.rounds_since_best, state.worse_streak = number, float(new), 0, 0
+    if state.points and state.points[-1] == [step, float(old)]:
+        state.points[-1] = [step, float(new)]
+    improved = state.best_round == number
+    found = None if final else stop_reason(state, s)
+    if found:
+        state.stop_rule, state.stop_text = found
+        return {"action": "stop", "improved": improved, "rule": found[0], "text": found[1]}
+    return {"action": "continue", "improved": improved}

@@ -6508,6 +6508,11 @@ export interface components {
             contributed: number;
             /** Dropped */
             dropped: string[];
+            /**
+             * Lessons
+             * @default 0
+             */
+            lessons: number;
             /** Loss */
             loss: number | null;
             /** Members */
@@ -6517,6 +6522,14 @@ export interface components {
              * @default
              */
             pivot: string;
+            /**
+             * Polish
+             * @default
+             * @enum {string}
+             */
+            polish: "" | "accepted" | "rejected" | "skipped";
+            /** Polish Val Loss */
+            polish_val_loss?: number | null;
             /** Round */
             round: number;
             /** Seconds */
@@ -6525,6 +6538,8 @@ export interface components {
             step: number;
             /** Val Loss */
             val_loss: number | null;
+            /** Val Loss Before Polish */
+            val_loss_before_polish?: number | null;
         };
         /** RoundQueued */
         RoundQueued: {
@@ -6621,6 +6636,11 @@ export interface components {
              * @default false
              */
             paused: boolean;
+            /**
+             * Polishing
+             * @default false
+             */
+            polishing: boolean;
             /** Rank */
             rank?: number | null;
             /**
@@ -6763,6 +6783,16 @@ export interface components {
             inner_steps: number;
             /** Label */
             label: string;
+            /**
+             * Lessons
+             * @default 0
+             */
+            lessons: number;
+            /**
+             * Lessons Left Out
+             * @default 0
+             */
+            lessons_left_out: number;
             /** Members */
             members: components["schemas"]["Member"][];
             /** Note */
@@ -6794,7 +6824,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "finished" | "stopped";
+            phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "polishing" | "finished" | "stopped";
             /** Round */
             round: number;
             /** Rounds */
@@ -6838,7 +6868,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons";
             /** Node */
             node: string;
             /** Round */

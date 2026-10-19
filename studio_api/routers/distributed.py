@@ -115,7 +115,11 @@ class Round(BaseModel):
     contributed: int
     dropped: list[str]
     best: bool = False  # the lowest validation loss so far: best.npz holds this round's weights while it stays the best
-    pivot: str = ""  # the pivot the stop rules applied after this round ("halve_lr", "next_dataset"), else ""
+    pivot: str = ""  # the pivot the stop rules applied after this round ("halve_lr", "next_dataset", "drop_lessons"), else ""
+    polish: Literal["", "accepted", "rejected", "skipped"] = ""  # the teacher's polish after this round: kept ("accepted": val_loss is then the polished weights' loss), tried but not kept, or failed; "" when none ran
+    val_loss_before_polish: float | None = None  # the loss the round measured before an accepted polish replaced it
+    polish_val_loss: float | None = None  # the loss of polished weights that were not kept
+    lessons: int = 0  # the teacher's better answers written after this round, to train on from the next
 
 
 class Lane(BaseModel):
@@ -145,7 +149,7 @@ class RunEvent(BaseModel):
     seq: int
     t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
     kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished", "pivot", "paused", "resumed", "took_over",
-                  "stepped_down"]
+                  "stepped_down", "polish", "polish_off", "lessons"]
     node: str  # "" for the run
     round: int
     text: str
@@ -183,7 +187,9 @@ class Run(BaseModel):
     best_val_loss: float | None = None
     stop_rule: str = ""  # which stop rule ended the run, "" when none did
     stop_reason: str = ""  # why the run ended, in a sentence; "" while it goes
-    phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "finished", "stopped"]
+    lessons: int = 0  # the teacher's answers the run trains on as extra shards now
+    lessons_left_out: int = 0  # ... and those a drop_lessons pivot, or a successor coordinator, left out
+    phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "polishing", "finished", "stopped"]
     deadline_s: float | None  # seconds left to the open round's deadline
     grace_s: float  # the wait after the deadline for a member's download and upload
     window_s: float | None  # the open round's deadline length

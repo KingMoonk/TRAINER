@@ -36,6 +36,8 @@
     "id": "demo-run",
     "inner_steps": 100,
     "label": "Demo run on a Mac mini and a GPU box",
+    "lessons": 0,
+    "lessons_left_out": 0,
     "members": [
       {
         "address": "local",
