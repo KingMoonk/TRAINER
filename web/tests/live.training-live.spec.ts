@@ -39,7 +39,7 @@ test("the view moves on its own: progress, a phase, the countdown, the timeline 
   // the timeline keeps only the last few rounds, so by now the demo run's round 1 may have rolled off: any round's lane for the machine will do
   await expect(card.locator("[data-testid^='lane-'][data-testid$='-gpu-box']").first()).toBeVisible();
   await expect(card.getByRole("region", { name: "Journal" }).getByRole("listitem").first()).toBeVisible();
-  await expect(card.getByRole("region", { name: "Loss over the rounds" })).toBeVisible();
+  await expect(card.getByRole("region", { name: "Error curve" })).toBeVisible();
   await expect(card.getByRole("region", { name: "Tokens per second" })).toBeVisible();
 });
 
