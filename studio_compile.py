@@ -177,8 +177,8 @@ class CompiledModel:
         return sum(value.numel() for key, value in self.p.items() if key not in self.adapter_names)
 
     def zero_grad(self):
-        for grad in self.g.values():
-            grad.zero_()
+        if self.g:
+            torch._foreach_zero_(list(self.g.values()))
         self.overflowed = False
 
     def accept_gradients(self):
@@ -346,9 +346,9 @@ class CompiledModel:
             if finite and not bool(torch.stack(finite).all()):
                 self.overflowed = True
                 return
-            for name, grad in zip(names, grads):
-                if grad is not None:
-                    self.g[name].add_(grad, alpha=1. / scale)
+            used = [(self.g[name], grad) for name, grad in zip(names, grads) if grad is not None]
+            if used:
+                torch._foreach_add_([buffer for buffer, _ in used], [grad for _, grad in used], alpha=1. / scale)
 
     def backward(self, dlogits, tape):
         """Accumulate parameter gradients for any loss expressed as d(loss)/d(logits).
