@@ -28,6 +28,7 @@ export const ROUTES: Route[] = [
   { route: "your_data", href: "/your-data", area: "data", title: "Your data", lead: "Three kinds, because each one trains a different stage." },
   { route: "make_data", href: "/make-data", area: "data", title: "Make extra data", lead: "Optional. Generate more, then keep what passes review." },
   { route: "pretraining", href: "/pretraining", area: "data", title: "Pretraining", lead: "Feed it text. It learns by predicting the next word, over and over." },
+  { route: "collect", href: "/collect", area: "data", title: "Collect data", lead: "Gather open datasets and question-and-answer data in the background, only from sources whose terms allow it." },
   { route: "storage", href: "/storage", area: "data", title: "Storage", lead: "What the app keeps on this computer's disk, and what you can delete to free space." },
   { route: "runs", href: "/runs", area: "runs", title: "Runs", lead: "Every training run on this computer and the cluster: what it is doing now and how the last ones ended." },
   { route: "new_run", href: "/runs/new", area: "runs", title: "New run", lead: "Pick a model, the data, and the machines to train it on." },

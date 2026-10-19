@@ -917,6 +917,309 @@
         "title": "ClusterQueue",
         "type": "object"
       },
+      "CollectConfig": {
+        "properties": {
+          "approved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Approved",
+            "type": "array"
+          },
+          "blocked": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocked",
+            "type": "array"
+          },
+          "custom_topics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Custom Topics",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "github": {
+            "$ref": "#/components/schemas/GitHub"
+          },
+          "idle": {
+            "$ref": "#/components/schemas/Idle"
+          },
+          "licences": {
+            "$ref": "#/components/schemas/Licences"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/Sources"
+          },
+          "stackexchange": {
+            "$ref": "#/components/schemas/StackExchange"
+          },
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Topics",
+            "type": "array"
+          },
+          "web": {
+            "$ref": "#/components/schemas/Web"
+          }
+        },
+        "required": [
+          "enabled",
+          "paused",
+          "topics",
+          "custom_topics",
+          "sources",
+          "licences",
+          "limits",
+          "idle",
+          "approved",
+          "blocked",
+          "stackexchange",
+          "github",
+          "web"
+        ],
+        "title": "CollectConfig",
+        "type": "object"
+      },
+      "CollectOptions": {
+        "properties": {
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/Excluded"
+            },
+            "title": "Excluded",
+            "type": "array"
+          },
+          "licences": {
+            "items": {
+              "$ref": "#/components/schemas/LicenceOption"
+            },
+            "title": "Licences",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceOption"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/components/schemas/Topic"
+            },
+            "title": "Topics",
+            "type": "array"
+          },
+          "user_agent": {
+            "title": "User Agent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topics",
+          "sources",
+          "excluded",
+          "licences",
+          "user_agent"
+        ],
+        "title": "CollectOptions",
+        "type": "object"
+      },
+      "CollectState": {
+        "properties": {
+          "bandwidth_cap": {
+            "title": "Bandwidth Cap",
+            "type": "integer"
+          },
+          "bandwidth_today": {
+            "title": "Bandwidth Today",
+            "type": "integer"
+          },
+          "bandwidth_total": {
+            "title": "Bandwidth Total",
+            "type": "integer"
+          },
+          "disk_cap": {
+            "title": "Disk Cap",
+            "type": "integer"
+          },
+          "disk_used": {
+            "title": "Disk Used",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "heartbeat_age": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat Age"
+          },
+          "journal": {
+            "items": {
+              "$ref": "#/components/schemas/JournalRow"
+            },
+            "title": "Journal",
+            "type": "array"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "plan": {
+            "items": {
+              "$ref": "#/components/schemas/studio_api__routers__collect__PlanRow"
+            },
+            "title": "Plan",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "requests_today": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Requests Today",
+            "type": "object"
+          },
+          "running": {
+            "description": "the background collector process is alive",
+            "title": "Running",
+            "type": "boolean"
+          },
+          "sets": {
+            "items": {
+              "$ref": "#/components/schemas/CollectedSet"
+            },
+            "title": "Sets",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceProgress"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/Stats"
+          },
+          "status": {
+            "description": "off | running | waiting | paused | idle | error",
+            "title": "Status",
+            "type": "string"
+          },
+          "waiting_shards": {
+            "description": "finished shards not yet added to your data",
+            "title": "Waiting Shards",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "paused",
+          "running",
+          "status",
+          "reason",
+          "stats",
+          "sets",
+          "plan",
+          "sources",
+          "disk_used",
+          "disk_cap",
+          "bandwidth_today",
+          "bandwidth_cap",
+          "bandwidth_total",
+          "requests_today",
+          "waiting_shards",
+          "journal",
+          "file"
+        ],
+        "title": "CollectState",
+        "type": "object"
+      },
+      "CollectedSet": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "dropped": {
+            "$ref": "#/components/schemas/Dropped"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kept": {
+            "description": "records the collector kept for this set",
+            "title": "Kept",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "records": {
+            "description": "records in the set now (what the trainer reads)",
+            "title": "Records",
+            "type": "integer"
+          },
+          "redactions": {
+            "title": "Redactions",
+            "type": "integer"
+          },
+          "seen": {
+            "title": "Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "group",
+          "name",
+          "kept",
+          "records",
+          "bytes",
+          "seen",
+          "redactions",
+          "dropped"
+        ],
+        "title": "CollectedSet",
+        "type": "object"
+      },
       "ComparePlan": {
         "properties": {
           "base": {
@@ -940,7 +1243,7 @@
           },
           "variants": {
             "items": {
-              "$ref": "#/components/schemas/PlanRow"
+              "$ref": "#/components/schemas/studio_api__routers__benchmark__PlanRow"
             },
             "title": "Variants",
             "type": "array"
@@ -1051,6 +1354,162 @@
           "v"
         ],
         "title": "ComputeBody",
+        "type": "object"
+      },
+      "ConfigUpdate": {
+        "additionalProperties": false,
+        "description": "Any of the settings; what is left out is kept. A list or a website list replaces the whole list.",
+        "properties": {
+          "approved": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved"
+          },
+          "blocked": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked"
+          },
+          "custom_topics": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Topics"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "github": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdleUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "licences": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LicencesUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LimitsUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourcesUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stackexchange": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StackExchangeUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "topics": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topics"
+          },
+          "web": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Web"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ConfigUpdate",
         "type": "object"
       },
       "CorrectionRequest": {
@@ -1485,6 +1944,47 @@
         "title": "DraftsJob",
         "type": "object"
       },
+      "Dropped": {
+        "properties": {
+          "decontam": {
+            "default": 0,
+            "title": "Decontam",
+            "type": "integer"
+          },
+          "duplicate": {
+            "default": 0,
+            "title": "Duplicate",
+            "type": "integer"
+          },
+          "invalid": {
+            "default": 0,
+            "title": "Invalid",
+            "type": "integer"
+          },
+          "licence": {
+            "default": 0,
+            "title": "Licence",
+            "type": "integer"
+          },
+          "near_duplicate": {
+            "default": 0,
+            "title": "Near Duplicate",
+            "type": "integer"
+          },
+          "pii": {
+            "default": 0,
+            "title": "Pii",
+            "type": "integer"
+          },
+          "quality": {
+            "default": 0,
+            "title": "Quality",
+            "type": "integer"
+          }
+        },
+        "title": "Dropped",
+        "type": "object"
+      },
       "EnoughText": {
         "properties": {
           "headline": {
@@ -1550,6 +2050,24 @@
           "is_dir"
         ],
         "title": "Entry",
+        "type": "object"
+      },
+      "Excluded": {
+        "properties": {
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "reason"
+        ],
+        "title": "Excluded",
         "type": "object"
       },
       "ExpectBody": {
@@ -2147,6 +2665,58 @@
         "title": "GenerateRequest",
         "type": "object"
       },
+      "GitHub": {
+        "properties": {
+          "max_repos": {
+            "title": "Max Repos",
+            "type": "integer"
+          },
+          "queries": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Queries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queries",
+          "max_repos"
+        ],
+        "title": "GitHub",
+        "type": "object"
+      },
+      "GitHubUpdate": {
+        "properties": {
+          "max_repos": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Repos"
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queries"
+          }
+        },
+        "title": "GitHubUpdate",
+        "type": "object"
+      },
       "GuessCheck": {
         "properties": {
           "hits": {
@@ -2297,6 +2867,84 @@
           }
         },
         "title": "Hold",
+        "type": "object"
+      },
+      "Idle": {
+        "properties": {
+          "cpu_percent": {
+            "title": "Cpu Percent",
+            "type": "number"
+          },
+          "only_on_mains": {
+            "title": "Only On Mains",
+            "type": "boolean"
+          },
+          "only_when_idle": {
+            "title": "Only When Idle",
+            "type": "boolean"
+          },
+          "unmetered_confirmed": {
+            "title": "Unmetered Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "only_when_idle",
+          "only_on_mains",
+          "unmetered_confirmed",
+          "cpu_percent"
+        ],
+        "title": "Idle",
+        "type": "object"
+      },
+      "IdleUpdate": {
+        "properties": {
+          "cpu_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Percent"
+          },
+          "only_on_mains": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Only On Mains"
+          },
+          "only_when_idle": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Only When Idle"
+          },
+          "unmetered_confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unmetered Confirmed"
+          }
+        },
+        "title": "IdleUpdate",
         "type": "object"
       },
       "ImportJob": {
@@ -2698,6 +3346,29 @@
         "title": "JoinRequest",
         "type": "object"
       },
+      "JournalRow": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "type",
+          "text"
+        ],
+        "title": "JournalRow",
+        "type": "object"
+      },
       "JudgesOut": {
         "properties": {
           "error": {
@@ -3086,6 +3757,224 @@
           "status"
         ],
         "title": "LessonChange",
+        "type": "object"
+      },
+      "LicenceOption": {
+        "properties": {
+          "default": {
+            "description": "kept without asking",
+            "title": "Default",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "opt_in": {
+            "default": "",
+            "description": "the licences setting that allows it; empty for the default classes",
+            "title": "Opt In",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "default"
+        ],
+        "title": "LicenceOption",
+        "type": "object"
+      },
+      "Licences": {
+        "properties": {
+          "copyleft": {
+            "title": "Copyleft",
+            "type": "boolean"
+          },
+          "non_commercial": {
+            "title": "Non Commercial",
+            "type": "boolean"
+          },
+          "unknown": {
+            "title": "Unknown",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "non_commercial",
+          "unknown",
+          "copyleft"
+        ],
+        "title": "Licences",
+        "type": "object"
+      },
+      "LicencesUpdate": {
+        "properties": {
+          "copyleft": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copyleft"
+          },
+          "non_commercial": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Non Commercial"
+          },
+          "unknown": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unknown"
+          }
+        },
+        "title": "LicencesUpdate",
+        "type": "object"
+      },
+      "Limits": {
+        "properties": {
+          "auto_approve_mb": {
+            "title": "Auto Approve Mb",
+            "type": "number"
+          },
+          "bandwidth_mb_per_day": {
+            "title": "Bandwidth Mb Per Day",
+            "type": "number"
+          },
+          "disk_mb": {
+            "title": "Disk Mb",
+            "type": "number"
+          },
+          "max_dataset_mb": {
+            "title": "Max Dataset Mb",
+            "type": "number"
+          },
+          "max_file_mb": {
+            "title": "Max File Mb",
+            "type": "number"
+          },
+          "requests_per_host_per_day": {
+            "title": "Requests Per Host Per Day",
+            "type": "number"
+          },
+          "seconds_between_requests": {
+            "title": "Seconds Between Requests",
+            "type": "number"
+          }
+        },
+        "required": [
+          "disk_mb",
+          "bandwidth_mb_per_day",
+          "requests_per_host_per_day",
+          "seconds_between_requests",
+          "max_dataset_mb",
+          "max_file_mb",
+          "auto_approve_mb"
+        ],
+        "title": "Limits",
+        "type": "object"
+      },
+      "LimitsUpdate": {
+        "properties": {
+          "auto_approve_mb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Approve Mb"
+          },
+          "bandwidth_mb_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bandwidth Mb Per Day"
+          },
+          "disk_mb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Mb"
+          },
+          "max_dataset_mb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Dataset Mb"
+          },
+          "max_file_mb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max File Mb"
+          },
+          "requests_per_host_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Per Host Per Day"
+          },
+          "seconds_between_requests": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Between Requests"
+          }
+        },
+        "title": "LimitsUpdate",
         "type": "object"
       },
       "Line": {
@@ -5495,73 +6384,6 @@
           }
         },
         "title": "PlanRequest",
-        "type": "object"
-      },
-      "PlanRow": {
-        "properties": {
-          "adjustments": {
-            "items": {},
-            "title": "Adjustments",
-            "type": "array"
-          },
-          "changes": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Changes",
-            "type": "array"
-          },
-          "matched": {
-            "title": "Matched",
-            "type": "boolean"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "parameters": {
-            "title": "Parameters",
-            "type": "integer"
-          },
-          "reason": {
-            "default": "",
-            "title": "Reason",
-            "type": "string"
-          },
-          "relative_error": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Relative Error"
-          },
-          "steps": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Steps"
-          },
-          "variant": {
-            "title": "Variant",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "variant",
-          "name",
-          "matched",
-          "parameters"
-        ],
-        "title": "PlanRow",
         "type": "object"
       },
       "PostTrainingJobOut": {
@@ -8822,6 +9644,36 @@
         "title": "SharedVersion",
         "type": "object"
       },
+      "Site": {
+        "properties": {
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "licence": {
+            "title": "Licence",
+            "type": "string"
+          },
+          "pages": {
+            "default": 200,
+            "title": "Pages",
+            "type": "integer"
+          },
+          "seeds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Seeds",
+            "type": "array"
+          }
+        },
+        "required": [
+          "host",
+          "licence"
+        ],
+        "title": "Site",
+        "type": "object"
+      },
       "Sizes": {
         "properties": {
           "activations": {
@@ -8994,6 +9846,172 @@
         "title": "Source",
         "type": "object"
       },
+      "SourceOption": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "description": "a caution, such as a tool this computer lacks; empty when none",
+            "title": "Note",
+            "type": "string"
+          },
+          "terms": {
+            "description": "the licence and terms note for this source",
+            "title": "Terms",
+            "type": "string"
+          },
+          "what": {
+            "title": "What",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "what",
+          "terms"
+        ],
+        "title": "SourceOption",
+        "type": "object"
+      },
+      "SourceProgress": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "downloaded": {
+            "title": "Downloaded",
+            "type": "integer"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "name",
+          "topic",
+          "status",
+          "detail",
+          "downloaded",
+          "done",
+          "error"
+        ],
+        "title": "SourceProgress",
+        "type": "object"
+      },
+      "Sources": {
+        "properties": {
+          "github": {
+            "title": "Github",
+            "type": "boolean"
+          },
+          "hub": {
+            "title": "Hub",
+            "type": "boolean"
+          },
+          "stackexchange": {
+            "title": "Stackexchange",
+            "type": "boolean"
+          },
+          "web": {
+            "title": "Web",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hub",
+          "stackexchange",
+          "github",
+          "web"
+        ],
+        "title": "Sources",
+        "type": "object"
+      },
+      "SourcesUpdate": {
+        "properties": {
+          "github": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github"
+          },
+          "hub": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hub"
+          },
+          "stackexchange": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stackexchange"
+          },
+          "web": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Web"
+          }
+        },
+        "title": "SourcesUpdate",
+        "type": "object"
+      },
       "SpecBody": {
         "properties": {
           "spec": {
@@ -9124,6 +10142,74 @@
           "prediction"
         ],
         "title": "SplitStep",
+        "type": "object"
+      },
+      "StackExchange": {
+        "properties": {
+          "dump_url": {
+            "title": "Dump Url",
+            "type": "string"
+          },
+          "min_score": {
+            "title": "Min Score",
+            "type": "integer"
+          },
+          "sites": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sites",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sites",
+          "min_score",
+          "dump_url"
+        ],
+        "title": "StackExchange",
+        "type": "object"
+      },
+      "StackExchangeUpdate": {
+        "properties": {
+          "dump_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dump Url"
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Score"
+          },
+          "sites": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sites"
+          }
+        },
+        "title": "StackExchangeUpdate",
         "type": "object"
       },
       "StartPassive": {
@@ -9398,6 +10484,35 @@
           "value"
         ],
         "title": "StateEntry",
+        "type": "object"
+      },
+      "Stats": {
+        "properties": {
+          "bytes_kept": {
+            "default": 0,
+            "title": "Bytes Kept",
+            "type": "integer"
+          },
+          "dropped": {
+            "$ref": "#/components/schemas/Dropped"
+          },
+          "kept": {
+            "default": 0,
+            "title": "Kept",
+            "type": "integer"
+          },
+          "redactions": {
+            "default": 0,
+            "title": "Redactions",
+            "type": "integer"
+          },
+          "seen": {
+            "default": 0,
+            "title": "Seen",
+            "type": "integer"
+          }
+        },
+        "title": "Stats",
         "type": "object"
       },
       "StatusRequest": {
@@ -9803,6 +10918,24 @@
           "on"
         ],
         "title": "TextSet",
+        "type": "object"
+      },
+      "Topic": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "Topic",
         "type": "object"
       },
       "Tower": {
@@ -10513,6 +11646,22 @@
         "title": "Warm",
         "type": "object"
       },
+      "Web": {
+        "properties": {
+          "sites": {
+            "items": {
+              "$ref": "#/components/schemas/Site"
+            },
+            "title": "Sites",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sites"
+        ],
+        "title": "Web",
+        "type": "object"
+      },
       "WordList": {
         "properties": {
           "chips": {
@@ -10757,6 +11906,73 @@
         "title": "JobOut",
         "type": "object"
       },
+      "studio_api__routers__benchmark__PlanRow": {
+        "properties": {
+          "adjustments": {
+            "items": {},
+            "title": "Adjustments",
+            "type": "array"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "relative_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Error"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "variant": {
+            "title": "Variant",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "variant",
+          "name",
+          "matched",
+          "parameters"
+        ],
+        "title": "PlanRow",
+        "type": "object"
+      },
       "studio_api__routers__chat__ReplyRequest": {
         "properties": {
           "ablate": {
@@ -10825,6 +12041,85 @@
           "epoch"
         ],
         "title": "Accepted",
+        "type": "object"
+      },
+      "studio_api__routers__collect__PlanRow": {
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "blocked": {
+            "title": "Blocked",
+            "type": "boolean"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "files": {
+            "title": "Files",
+            "type": "integer"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "licence": {
+            "title": "Licence",
+            "type": "string"
+          },
+          "licence_class": {
+            "title": "Licence Class",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "description": "planned | needs_approval | skipped",
+            "title": "Status",
+            "type": "string"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "topic",
+          "group",
+          "licence",
+          "licence_class",
+          "bytes",
+          "status",
+          "reason",
+          "score",
+          "url",
+          "files",
+          "approved",
+          "blocked"
+        ],
+        "title": "PlanRow",
         "type": "object"
       },
       "studio_api__routers__collective__Accepted": {
@@ -11911,6 +13206,155 @@
         "summary": "Stop Remote",
         "tags": [
           "cluster"
+        ]
+      }
+    },
+    "/collect": {
+      "get": {
+        "description": "What the collector is doing now.",
+        "operationId": "collect_state_collect_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Collect State",
+        "tags": [
+          "collect"
+        ]
+      }
+    },
+    "/collect/config": {
+      "get": {
+        "operationId": "get_config_collect_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Config",
+        "tags": [
+          "collect"
+        ]
+      },
+      "put": {
+        "description": "Save settings. 400 with a sentence for a bad value (a site that is excluded, a cap out of range). Turning collection on starts it.",
+        "operationId": "put_config_collect_config_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Config",
+        "tags": [
+          "collect"
+        ]
+      }
+    },
+    "/collect/options": {
+      "get": {
+        "description": "Topics, sources with their licence and terms notes, the sites that are never collected.",
+        "operationId": "collect_options_collect_options_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Collect Options",
+        "tags": [
+          "collect"
+        ]
+      }
+    },
+    "/collect/pause": {
+      "post": {
+        "description": "Pause now; the collector notices within a second.",
+        "operationId": "pause_collect_pause_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pause",
+        "tags": [
+          "collect"
+        ]
+      }
+    },
+    "/collect/resume": {
+      "post": {
+        "description": "Resume, turning collection on if it was off.",
+        "operationId": "resume_collect_resume_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Resume",
+        "tags": [
+          "collect"
         ]
       }
     },

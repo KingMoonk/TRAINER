@@ -50,7 +50,7 @@ describe("the five sidebar areas", () => {
   test("group the routes as the design does", () => {
     const pagesIn = (area: string) => ROUTES.filter((r) => r.area === area).map((r) => r.route);
     expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare", "trace", "head_zoom", "value_map", "loss", "landscape", "head_lab", "inside3d"]);
-    expect(pagesIn("data").sort()).toEqual(["make_data", "pretraining", "storage", "your_data"]);
+    expect(pagesIn("data").sort()).toEqual(["collect", "make_data", "pretraining", "storage", "your_data"]);
     expect(pagesIn("runs")).toEqual(["runs", "new_run", "run_view", "training_run", "post_training", "queue", "passive", "cluster_training"]);
     expect(pagesIn("eval")).toEqual(["chat", "benchmark"]);
     expect(pagesIn("machines")).toEqual(["machines"]);

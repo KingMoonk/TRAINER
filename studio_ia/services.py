@@ -746,6 +746,39 @@ class Services:
         """The held-back documents as text."""
         raise NotImplementedError
 
+    # collect (passive training-data collection, issue #447) -------------------------------------------
+    def collect_options(self):
+        """{topics, sources, excluded, licences, user_agent}: what the Collect page offers (studio_collect.view.options)."""
+        raise NotImplementedError
+
+    def collect_config(self):
+        """The collector's settings (studio_collect.config.DEFAULTS shape)."""
+        raise NotImplementedError
+
+    def save_collect_config(self, overrides):
+        """Apply a partial settings dict and return the settings. ValueError, in plain words, for a bad value. Starts the background
+        collector when collection is on."""
+        raise NotImplementedError
+
+    def collect_state(self):
+        """What the collector is doing: status, counters, plan, per-source progress, disk and bandwidth use, journal (studio_collect.view.state)."""
+        raise NotImplementedError
+
+    def collect_pause(self):
+        """Pause collection at once (the service notices within a second). Returns the settings."""
+        raise NotImplementedError
+
+    def collect_resume(self):
+        """Resume (and turn on) collection; starts the background collector. Returns the settings."""
+        raise NotImplementedError
+
+    def collect_start(self):
+        """Begin keeping the collector running and registering its shards (the API calls this at start-up)."""
+
+    def collect_stop(self):
+        """Stop doing that (the API calls this at shut-down). The background collector itself keeps going."""
+
+
 
 DEMO_RUN = "demo-run"  # the id of the run `studio_api --fake` starts with (FakeServices.demo_run)
 
@@ -1448,6 +1481,46 @@ class FakeServices(Services):
 
     def inspect_reply(self, version, prompt, off=(), mode="mean"):
         return f"[reply with {len(off)} heads off]" if off else "[reply]"
+
+    # collect: the real settings, state and view over a scratch folder, with no collector process behind it -------------
+    def _collect_root(self):
+        if getattr(self, "_collect_dir", None) is None:
+            import shutil
+            import tempfile
+            import weakref
+            self._collect_dir = tempfile.mkdtemp(prefix="collect-fake-")
+            weakref.finalize(self, shutil.rmtree, self._collect_dir, True)
+        return self._collect_dir
+
+    def collect_options(self):
+        from studio_collect import view
+        return view.options()
+
+    def collect_config(self):
+        from studio_collect import view
+        return view.get_config(self._collect_root())
+
+    def save_collect_config(self, overrides):
+        from studio_collect import view
+        config = view.set_config(self._collect_root(), overrides)
+        self.emit("collect", {})
+        return config
+
+    def collect_state(self):
+        from studio_collect import view
+        return view.state(self._collect_root(), running=False)
+
+    def collect_pause(self):
+        from studio_collect import view
+        config = view.set_paused(self._collect_root(), True)
+        self.emit("collect", {})
+        return config
+
+    def collect_resume(self):
+        from studio_collect import view
+        config = view.set_paused(self._collect_root(), False)
+        self.emit("collect", {})
+        return config
 
 
 # ---- the real façade -------------------------------------------------------------------------------------------
@@ -3589,6 +3662,54 @@ class WorkspaceServices(Services):
     def inspect_reply(self, version, prompt, off=(), mode="mean"):
         import studio_inspect
         return studio_inspect.greedy_reply(self._checkpoint(version), prompt, list(off), mode)
+
+    # collect -----------------------------------------------------------------------------------------
+    def collect_manager(self):
+        """The app-side manager of the background collector (starts the service, registers its shards); made on first use."""
+        if getattr(self, "_collect", None) is None:
+            from studio_collect.manager import Manager
+            self._collect = Manager(self.workspace, self.emit)
+        return self._collect
+
+    def collect_start(self):
+        self.collect_manager().start()
+
+    def collect_stop(self):
+        if getattr(self, "_collect", None) is not None:
+            self._collect.close()
+
+    def collect_options(self):
+        from studio_collect import view
+        return view.options()
+
+    def collect_config(self):
+        from studio_collect import view
+        return view.get_config(self.root)
+
+    def _collect_changed(self, config):
+        from studio_collect import service
+        if config["enabled"]:
+            service.ensure_running(self.root)
+        self.emit("collect", {})
+        return config
+
+    def save_collect_config(self, overrides):
+        from studio_collect import view
+        return self._collect_changed(view.set_config(self.root, overrides))
+
+    def collect_state(self):
+        from studio_collect import service, view
+        return view.state(self.root, running=service.running(self.root))
+
+    def collect_pause(self):
+        from studio_collect import view
+        return self._collect_changed(view.set_paused(self.root, True))
+
+    def collect_resume(self):
+        from studio_collect import view
+        return self._collect_changed(view.set_paused(self.root, False))
+
+
 
 
 class FixtureServices(WorkspaceServices):
