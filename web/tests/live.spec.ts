@@ -52,6 +52,7 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
   await expect(tray).toContainText(existing.length ? "No changes" : "Not saved yet");
 
   // Pick a different position module: the picker's menu comes from /design/part-options.
+  await page.getByRole("button", { name: "Advanced modules", exact: true }).click();
   const picker = page.getByTestId("picker-position");
   const before = await picker.textContent();
   await picker.click();
@@ -62,6 +63,7 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
 
   await page.getByTestId("save").click();
   if (existing.length) await page.getByTestId("guess-skip").click(); // a version after the first asks for a guess first
+  await page.locator("summary").filter({ hasText: "Version history & results" }).click();
   await expect(page.getByTestId(`version-${next}`)).toBeVisible();
   await expect(tray).toContainText("No changes");
 });
