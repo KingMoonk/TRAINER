@@ -42,8 +42,9 @@ QUEUE_STATES = ("running", "waiting", "held")
 def _queue_rows(runner):
     with runner.lock:
         jobs = list(runner.jobs)
+        running, eta = getattr(runner, "running", None), (getattr(runner, "progress", None) or {}).get("eta_s")
     return [{"id": j.id, "kind": j.kind, "label": j.label or "", "status": j.status, "node": getattr(j, "node", "") or "",
-             "owner": getattr(j, "owner", "") or "", "note": j.note or "",
+             "owner": getattr(j, "owner", "") or "", "note": j.note or "", "eta_s": eta if j is running else None,
              "params": {"pinned": j.params.get("pinned")} if j.params.get("pinned") else {}}
             for j in jobs if j.status in QUEUE_STATES]
 
@@ -82,7 +83,7 @@ def _publish_runs(cluster):
     for run, coordinator, job in cluster.local_runs():
         if coordinator is None and run.final is None and job is None:
             continue  # the app no longer holds this run (a later term may coordinate it elsewhere): not this node's fact
-        row = runs.view(run, coordinator, job)
+        row = runs.view(run, coordinator, job, runs.peer_facts(run, cluster))
         ids.append(run.id)
         if coordinator is not None:
             live.append(run.id)
