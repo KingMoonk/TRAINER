@@ -38,14 +38,14 @@ test("the view moves on its own: progress, a phase, the countdown, the timeline 
   await expect(card.getByRole("region", { name: "Round timeline" })).toBeVisible();
   // the timeline keeps only the last few rounds, so by now the demo run's round 1 may have rolled off: any round's lane for the machine will do
   await expect(card.locator("[data-testid^='lane-'][data-testid$='-gpu-box']").first()).toBeVisible();
-  await expect(card.getByRole("region", { name: "Events" }).getByRole("listitem").first()).toBeVisible();
+  await expect(card.getByRole("region", { name: "Journal" }).getByRole("listitem").first()).toBeVisible();
   await expect(card.getByRole("region", { name: "Loss over the rounds" })).toBeVisible();
   await expect(card.getByRole("region", { name: "Tokens per second" })).toBeVisible();
 });
 
 test("a round closes with an outer step, which the log lists newest first with its size", async ({ page }) => {
   await page.goto("/cluster/training/");
-  const log = page.getByTestId("run-demo-run").getByRole("region", { name: "Events" });
+  const log = page.getByTestId("run-demo-run").getByRole("region", { name: "Journal" });
   await expect(log.locator("[data-kind='outer_step']").first()).toBeVisible({ timeout: 30_000 });
   await expect(log.locator("[data-kind='outer_step']").first()).toContainText(/size/i);
   const seqs = await log.getByRole("listitem").evaluateAll((items) => items.map((li) => Number(li.getAttribute("data-testid")?.replace("event-", ""))));
