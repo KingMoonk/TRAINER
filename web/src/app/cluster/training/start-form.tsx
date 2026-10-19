@@ -186,7 +186,7 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
               <label key={c.id} className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.chats.includes(c.id)} onChange={(e) => set({ chats: toggled(form.chats, c.id, e.target.checked) })} />
                 <span>{c.name}</span>
-                <span className="text-xs text-muted-foreground">{c.count.toLocaleString("en-US")}</span>
+                <span className="text-xs text-muted-foreground">{c.count >= 1000 ? "1,000+" : c.count.toLocaleString("en-US")}</span>
               </label>
             ))}
           </fieldset>

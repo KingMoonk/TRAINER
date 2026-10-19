@@ -2899,9 +2899,23 @@ class WorkspaceServices(Services):
         of the rows, so it takes milliseconds on a workspace of a million of them."""
         return self._sets_holding("text")
 
+    CHAT_COUNT_CAP = 1000  # the count of a set's prompts stops here (the form shows "1000+"): reading a huge set to the end buys nothing
+
     def conversation_sets(self):
-        """The sets that hold conversations, counted the same way as text_sets."""
-        return self._sets_holding("conversations")
+        """[{id, name, count}] of the sets with prompts a run's teacher can answer: count is the different prompts (what has_conversations
+        counts), at most CHAT_COUNT_CAP; a set with none is not listed."""
+        import studio_diloco
+        from studio_rlhf import prompts_from
+        out = []
+        for dataset in list(self.workspace.state["datasets"]):
+            keys = set()
+            for row in self._conversation_rows([dataset["id"]], False):
+                keys.update(studio_diloco.prompt_key(p) for p in prompts_from([row]))
+                if len(keys) >= self.CHAT_COUNT_CAP:
+                    break
+            if keys:
+                out.append({"id": dataset["id"], "name": dataset["name"], "count": len(keys)})
+        return out
 
     def _sets_holding(self, kind):
         import studio_data_kinds as dk

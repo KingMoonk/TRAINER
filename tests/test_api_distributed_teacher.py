@@ -220,6 +220,50 @@ class Reaches(Base):
             with self.assertRaisesRegex(ValueError, "different prompts"):
                 studio_diloco.prepare(self.queued[0], self.services, self.root / "fresh", 8787)
 
+    def test_a_stages_run_trains_on_the_same_text_with_or_without_a_teacher(self):
+        self.assertEqual(self.start().status_code, 201)
+        self.assertEqual(self.start(teacher="judge:1b", polish_every=1, target_win_rate=.5).status_code, 201)
+        for job in self.queued:
+            job.params["stages"] = {"scorer": "held_out"}  # the data path of #533: the pool of text sets, each with a held-out slice
+        plain = self.coordinator_of(self.queued[0], "plain")
+        taught = self.coordinator_of(self.queued[1], "taught")
+        self.assertIsNotNone(taught.stages)
+        self.assertEqual(taught.digest, plain.digest)
+        self.assertEqual(len(taught.train), len(plain.train))
+        self.assertTrue(all(d in taught.stages.names[0] for d in self.queued[1].params["datasets"]))
+        trained = "".join(json.dumps(e) for e in self.services.examples(self.queued[1].params))
+        self.assertNotIn(" plus ", trained)  # the teacher's conversations are never in the members' text
+        self.assertTrue(self.prompts_of(taught, "prompts.jsonl") and self.prompts_of(taught, "eval_prompts.jsonl"))
+
+    def resume_without(self, name):
+        """Start a teacher run with both options, close a round, delete prompt file `name`, and resume it with the chats still there."""
+        self.assertEqual(self.start(teacher="judge:1b", polish_every=1, target_win_rate=.5).status_code, 201)
+        first = self.coordinator_of(self.queued[0])
+        kept = {n: (first.directory / n).read_text(encoding="utf-8") for n in ("prompts.jsonl", "eval_prompts.jsonl") if n != name}
+        first._persist([], {})
+        first.release()
+        studio_diloco.COORDINATORS.clear()
+        (first.directory / name).unlink()
+        with mock.patch.object(studio_diloco, "check_teacher"):
+            again = studio_diloco.prepare(self.queued[0], self.services, self.root / "run", 8787)
+        self.addCleanup(again.release)
+        self.assertFalse((again.directory / name).exists(), "a resume must not split the chats again")
+        for other, text in kept.items():
+            self.assertEqual((again.directory / other).read_text(encoding="utf-8"), text)
+        return again
+
+    def test_a_resume_that_lost_its_held_out_prompts_goes_on_without_the_win_rate(self):
+        again = self.resume_without("eval_prompts.jsonl")
+        self.assertFalse(again.versus_on)
+        self.assertTrue(again.polish_on)
+        self.assertEqual([e["kind"] for e in again.events if e["kind"].endswith("_off")], ["win_rate_off"])
+
+    def test_a_resume_that_lost_its_polish_prompts_goes_on_without_the_polish(self):
+        again = self.resume_without("prompts.jsonl")
+        self.assertFalse(again.polish_on)
+        self.assertTrue(again.versus_on)
+        self.assertEqual([e["kind"] for e in again.events if e["kind"].endswith("_off")], ["polish_off"])
+
     def test_a_set_of_conversations_only_can_be_the_source_of_the_prompts(self):
         chats = self.workspace.create_dataset("Only chats")
         self.workspace.add(chats, GOOD_CHATS)
@@ -253,6 +297,18 @@ class Reaches(Base):
         text = self.workspace.create_dataset("Plain")
         self.workspace.add(text, [{"text": t} for t in TEXT])
         self.assertNotIn(text, [row["id"] for row in self.client.get("/distributed/chat_sets").json()])
+
+    def test_the_chat_sets_count_the_prompts_a_run_can_use(self):
+        twice = self.workspace.create_dataset("Twice")
+        self.workspace.add(twice, [{"user": "Same question?", "assistant": f"Answer {n}."} for n in range(5)] + [{"user": "Another?", "assistant": "Yes."}])
+        unanswered = self.workspace.create_dataset("Unanswered")
+        self.workspace.add(unanswered, [{"messages": [{"role": "user", "content": f"Hello {n}?"}]} for n in range(3)])
+        listed = {row["id"]: row for row in self.client.get("/distributed/chat_sets").json()}
+        self.assertEqual(listed[twice]["count"], 2)
+        self.assertNotIn(unanswered, listed)
+        with mock.patch.object(type(self.services), "CHAT_COUNT_CAP", 1):
+            capped = {row["id"]: row for row in self.client.get("/distributed/chat_sets").json()}
+        self.assertEqual(capped[twice]["count"], 1)
 
     def test_a_start_with_no_conversations_is_a_400(self):
         text_only = self.workspace.create_dataset("Plain")

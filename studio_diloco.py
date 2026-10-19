@@ -557,8 +557,10 @@ class Coordinator:
         state = cls._read_state(directory, cfg, settings, digest)
         polish_prompts = eval_prompts = None
         files = [name for name, on in (("prompts.jsonl", settings.polish_every), ("eval_prompts.jsonl", settings.target_win_rate is not None)) if on]
-        # A resume keeps the prompts it wrote: chats deleted or re-marked since must not stop it, and must not change what it is compared on.
-        if conversations is not None and files and not (state and all((directory / name).is_file() for name in files)):
+        # A resume never splits again: it keeps the prompts it wrote (chats deleted or re-marked since must not stop it or change what it is
+        # compared on). A prompt file that went missing turns that option off for the rest of the run.
+        lost = [name for name in files if conversations is not None and state and not (directory / name).is_file()]
+        if conversations is not None and files and not state:
             polish_prompts, eval_prompts = split_prompts(conversations, settings, cfg["seed"])
         if state:
             theta = state["theta"]
@@ -579,9 +581,19 @@ class Coordinator:
             if held.is_file():
                 saved = json.loads(held.read_text(encoding="utf-8"))
                 coordinator.paused, coordinator.rules = bool(saved.get("paused")), drules.State.from_json(saved.get("rules"))
-        if settings.polish_every:  # after _start_files, which clears a new run's prompts
+        if "prompts.jsonl" in lost:
+            coordinator.polish_on = False
+            coordinator._event("polish_off", "", coordinator.next_round,
+                               "The teacher polish ends here: this run's polish prompts are gone from its folder, and splitting the chats again could "
+                               "overlap the prompts it is compared on, so the run goes on without it.")
+        elif settings.polish_every:  # after _start_files, which clears a new run's prompts
             coordinator._write_prompts(training, polish_prompts)
-        if settings.target_win_rate is not None:
+        if "eval_prompts.jsonl" in lost:
+            coordinator.versus_on = False
+            coordinator._event("win_rate_off", "", coordinator.next_round,
+                               "The win-rate stop rule ends here: this run's held-out prompts are gone from its folder, and splitting the chats again "
+                               "could overlap the polish prompts, so the run goes on without it.")
+        elif settings.target_win_rate is not None:
             coordinator._write_eval_prompts(validation, training, eval_prompts)
             if start_from and not state:
                 shutil.copyfile(start_from, directory / "start.npz")  # a restart compares with the weights it started from
@@ -1974,12 +1986,17 @@ IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten
 _LOCK = threading.Lock()
 
 
+def prompt_key(prompt):
+    """What makes two prompts the same question."""
+    return json.dumps(prompt["messages"], sort_keys=True)
+
+
 def unique_prompts(conversations):
     """The prompts the conversations make (those ending in an assistant turn), the same question counted once: what a teacher can be asked."""
     from studio_rlhf import prompts_from
     unique = {}
     for prompt in prompts_from(conversations):
-        unique.setdefault(json.dumps(prompt["messages"], sort_keys=True), prompt)
+        unique.setdefault(prompt_key(prompt), prompt)
     return list(unique.values())
 
 
