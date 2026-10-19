@@ -232,8 +232,9 @@ An NVIDIA box and a MacBook differ several times in speed, so the coordinator de
 instead of `H` for everyone, and all of them finish together.
 
 - It keeps each member's seconds per step, smoothed over the rounds the member contributed to. The member measures it from its
-  own timed steps (the training loop's per-step time), so time paused, the first step of an attempt (warm-up) and the syncs are
-  not in it. Only a finite positive value counts. A restart forgets them.
+  own timed steps (the training loop's per-step time), so time paused, the first step of every round (cold start) and the syncs are
+  not in it; a round too short to time sends no seconds and leaves the member's speed as it was. Only a finite positive value counts.
+  A restart forgets them, and so does a member leaving: when it returns it is a new member.
 - Each round the measured members share the work an equal-`H` round would give them (`H` steps each) in proportion to their
   speed, so predicted finish times (steps times seconds per step) match; the rounding remainder is dealt out so the total stays
   `H` per measured member. A share is kept between `H/10` and `3H`. Equal speeds (all within 5 percent of each other), a run with
@@ -250,7 +251,8 @@ instead of `H` for everyone, and all of them finish together.
   schedule when the round ends, whatever it was dealt. A member's training loop is bounded by `rounds x 3H` steps, so a member
   dealt more than `H` a round does not run out of steps before the run's last round.
 - With `overlap`, a member starts a round's steps before it has that round's assignment (the exchange that brings it runs during
-  the steps), so it runs the deal of the round before; a stable speed makes that the same number.
+  the steps), so it runs the deal of the round before; a stable speed makes that the same number. The deadline covers the larger of a
+  member's two deals, so a share that shrinks does not cut the member that is still running the larger one.
 
 Caveats. When two members differ by more than about 30 times in speed, the `H/10` floor (or the `3H` ceiling) keeps the finish
 times from matching, and the round lasts as long as the slowest clamped member needs. A member from before this change ignores the

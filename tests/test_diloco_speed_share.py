@@ -115,6 +115,39 @@ class Dealing(Fleet):
         self.play(c, nodes=["mid", "fast"])  # the round in flight; slow leaves at its end
         dealt, *_ = self.play(c, nodes=["mid", "fast"])
         self.assertEqual(dealt, {"mid": 67, "fast": 133})  # the two left share the work of two equal-H members
+        self.assertNotIn("slow", c.step_times)  # its speed is forgotten: a returning member is a new one
+
+    def test_a_returning_member_is_dealt_a_probe_round(self):
+        c = self.coordinator({"slow": 4., "fast": 1.})
+        self.play(c)
+        self.play(c)
+        c.settings = dataclasses.replace(c.settings, min_members=1)
+        c.leave("slow", c.generation, 0)
+        self.play(c, nodes=["fast"])  # the round in flight; slow leaves at its end
+        c.join("slow")  # pending until the boundary of the round now open
+        self.play(c, nodes=["fast"])
+        dealt, *_ = self.play(c, nodes=["fast", "slow"])
+        self.assertEqual(dealt["slow"], 25)  # H/4: it is timed again before it is dealt a share
+
+    def test_the_deadline_covers_the_larger_of_this_and_the_previous_deal(self):
+        """An overlapped member runs the previous round's deal, so a share that shrinks must not shrink the window under it."""
+        deals = iter([{"a": 200, "b": 100}, {"a": 100, "b": 100}])
+        with mock.patch.object(studio_diloco, "deal_steps", lambda settings, members, step_times: next(deals)):
+            c = self.coordinator({"a": 1., "b": 1.})  # round 0 opens when the last member joins
+            self.play(c)
+            view = c.round_view(c.next_round, "a")
+        self.assertEqual(view["steps"], 100)
+        self.assertAlmostEqual(view["deadline_s"], 200 * 1. * 1.25 + 30., delta=1)
+
+    def test_a_contribution_without_seconds_keeps_the_member_speed(self):
+        c = self.coordinator({"a": 1., "b": 2.})
+        self.play(c)
+        before = dict(c.step_times)
+        number = c.next_round
+        for node in self.speeds:
+            view = c.round_view(number, node)
+            c.submit(number, node, view["generation"], 0, 8, 1, support.constant_delta(c), 0.)
+        self.assertEqual(c.step_times, before)
 
 
 class Forgetful(dict):
@@ -167,8 +200,25 @@ class Timing(unittest.TestCase):
         for _ in range(4):
             member.stepped(.5)
         self.assertEqual(member._work_seconds(5), 2.5)
-        member.busy, member.timed = 0., 0  # a new round, before any step was timed: the wall time
-        self.assertEqual(member._work_seconds(5), 1000.)
+        member.busy, member.timed = 0., 0  # a new round, before any step was timed: no measurement
+        self.assertEqual(member._work_seconds(5), 0.)
+
+    def test_the_first_step_of_every_round_is_not_timed_when_the_round_is_longer_than_two_steps(self):
+        import random
+        member = studio_diloco.Member.__new__(studio_diloco.Member)
+        member.info = {"inner_steps": 5, "seed": 0}
+        member.entered = mock.Mock(steps=5)
+        member.rank, member.round, member.deadline_s, member.clock, member.sampler = 0, 1, 10., lambda: 0., random.Random(0)
+        member.warm, member.busy, member.timed = True, 0., 0
+        with mock.patch.object(member, "_phase"):
+            member._begin(7, 100)
+            member.stepped(9.)  # the cold step of the round
+            member.stepped(.5)
+            self.assertEqual((member.busy, member.timed), (.5, 1))
+            member.entered = mock.Mock(steps=2)
+            member._begin(12, 200)  # a round of two steps keeps its steps: nothing would be left to time
+            member.stepped(.5)
+        self.assertEqual((member.busy, member.timed), (.5, 1))
 
 
 class Schedule(unittest.TestCase):
@@ -229,7 +279,7 @@ class Rule(unittest.TestCase):
         c.join("a")
         view = c.round_view(0, "a")
         for bad in (math.inf, math.nan, -1.):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "finite and not negative"):
                 c.submit(0, "a", view["generation"], 0, 10, 3, support.constant_delta(c), bad)
         self.assertEqual(c.current.contributions, {})
 
@@ -247,7 +297,7 @@ class RealMembers(unittest.TestCase):
         coordinator = support.build(folder / "c", "uneven", inner_steps=self.H, rounds=self.ROUNDS, min_members=2, outer_lr=.7, outer_momentum=0.)
         studio_diloco.COORDINATORS["uneven"] = coordinator
         self.addCleanup(studio_diloco.COORDINATORS.pop, "uneven", None)
-        opened, errors = [], []
+        opened, errors, self.events = [], [], []
 
         def deal(settings, members, step_times):
             opened.append(len(opened))
@@ -257,7 +307,7 @@ class RealMembers(unittest.TestCase):
             def member(index):
                 try:
                     studio_diloco.run_member(support.Peer(client), "uneven", f"node{index}", 0, folder / f"m{index}", folder / f"out{index}",
-                                             lambda event: None, threading.Event(), wait=.5, overlap=overlap)
+                                             self.events.append, threading.Event(), wait=.5, overlap=overlap)
                 except Exception as exc:  # noqa: BLE001 - reported below
                     errors.append(exc)
             threads = [threading.Thread(target=member, args=(i,)) for i in range(2)]
@@ -268,6 +318,28 @@ class RealMembers(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(coordinator.finished)
         return coordinator
+
+    def test_the_member_reports_the_runs_length_as_its_total_not_its_loop_bound(self):
+        self.run_members(False)
+        totals = {event["total"] for event in self.events if event.get("type") in ("metric", "telemetry")}
+        self.assertEqual(min(totals), self.ROUNDS * self.H)  # not the loop bound, 3 * rounds * H
+        self.assertLessEqual(max(totals), 2 * self.ROUNDS * self.H)  # (this deal gives node0 more steps than rounds * H, and a total is never under the step)
+
+    def test_a_long_run_does_not_push_the_loop_bound_over_the_step_limit(self):
+        import studio_model
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        folder, stop, seen = Path(tmp.name), threading.Event(), []
+        coordinator = support.build(folder / "c", "long", inner_steps=4, rounds=100_000, min_members=1)  # rounds * H is over 333,333
+        studio_diloco.COORDINATORS["long"] = coordinator
+        self.addCleanup(studio_diloco.COORDINATORS.pop, "long", None)
+
+        def train(cfg, *args, **kwargs):
+            seen.append(studio_model.validate_config(cfg)["steps"])  # raises when the member's own config is invalid
+            stop.set()
+        with mock.patch.object(studio_model, "train", train), TestClient(support.app()) as client:
+            studio_diloco.run_member(support.Peer(client), "long", "node0", 0, folder / "m", folder / "out", lambda event: None, stop, wait=.5)
+        self.assertEqual(seen, [1_000_000])
 
     def test_each_member_runs_its_dealt_steps_and_the_run_finishes(self):
         c = self.run_members(False)

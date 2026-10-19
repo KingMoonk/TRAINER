@@ -458,6 +458,7 @@ class Coordinator:
         self.theta = {name: np.array(value, dtype=np.float32) for name, value in theta.items()}
         self.momentum = {name: np.zeros_like(value) for name, value in self.theta.items()}
         self.next_round, self.generation, self.history, self.step_time = 0, 0, [], None
+        self.last_steps = {}  # node -> the steps it was dealt for the round opened last
         self.step_times = {}  # node -> its smoothed seconds per step, from the rounds it contributed to (not kept over a restart)
         self.members, self.pending, self.leaving, self.last_members, self.sequence = {}, {}, set(), [], 0
         self.current, self.finished, self.touched, self.deal = None, False, time.monotonic(), {}
@@ -929,11 +930,16 @@ class Coordinator:
         if active != self.last_members:
             self.generation += 1
             self.last_members = active
+        for node in [node for node in self.step_times if node not in active]:
+            del self.step_times[node]  # a member that left is not timed any more: when it returns it is dealt a probe round
         steps = deal_steps(self.settings, active, self.step_times)
-        finishes = [(steps[node] * self.step_times[node], node) for node in active if self.step_times.get(node, 0) > 0]
-        if finishes:  # the slowest predicted finish, so the deadline is consistent with the steps dealt
+        # a member that overlaps runs the previous round's deal (a round's assignment arrives after its steps), so the deadline covers the larger
+        runs = {node: max(steps[node], self.last_steps.get(node, steps[node])) for node in active}
+        self.last_steps = dict(steps)
+        finishes = [(runs[node] * self.step_times[node], node) for node in active if self.step_times.get(node, 0) > 0]
+        if finishes:  # the slowest predicted finish, so the deadline is consistent with the steps run
             slowest = max(finishes)[1]
-            window = round_seconds(self.settings, self.step_times[slowest], steps[slowest])
+            window = round_seconds(self.settings, self.step_times[slowest], runs[slowest])
         else:
             window = round_seconds(self.settings, self.step_time)
         first, count = self.spans[min(self.rules.source, len(self.spans) - 1)]
@@ -1198,7 +1204,7 @@ class Coordinator:
             if not all(np.isfinite(value).all() for value in delta.values()):
                 raise ValueError("The delta holds a non-finite value.")
             if not math.isfinite(seconds) or seconds < 0:
-                raise ValueError("A contribution's seconds must be a finite number.")
+                raise ValueError("A contribution's seconds must be finite and not negative.")
             if tokens < 0 or steps < 1:
                 raise ValueError("A contribution needs at least one step.")
             current.contributions[node] = (int(tokens), int(steps), float(seconds), loss, delta)
@@ -1826,9 +1832,9 @@ class Member:
         self.busy, self.timed = self.busy + seconds, self.timed + 1
 
     def _work_seconds(self, steps):
-        """Seconds of work for `steps` steps, at the pace of the timed steps of the round (without pauses and warm-up); the wall time
-        since the round began when none was timed."""
-        return self.busy / self.timed * steps if self.timed else self.clock() - self.began
+        """Seconds of work for `steps` steps, at the pace of the timed steps of the round (without pauses and warm-up); 0 (no
+        measurement: the coordinator ignores it) when none was timed."""
+        return self.busy / self.timed * steps if self.timed else 0.
 
     def due(self, step, trained_tokens):
         self.round_step = step - self.first_step  # the reporter thread reads it; nothing here waits on the network
@@ -1858,6 +1864,8 @@ class Member:
         self.sampler.seed(sampler_seed(self.info["seed"], self.rank, self.round))
         self.round_step, self.reported_step = 0, 0
         self.busy, self.timed = 0., 0
+        if self.round_steps > 2:
+            self.warm = False  # the first step of every round is not timed (cold caches after the weights were replaced)
         self.report_round = self.round
         self._phase("training")
 
@@ -1887,7 +1895,9 @@ class Member:
         number, weights = self.round, {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         delta = {name: self.anchor[name] - weights[name] for name in self.anchor}
         params = {"term": self.term, "node": self.node, "generation": entered.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
-                  "steps": step - self.first_step, "seconds": self._work_seconds(step - self.first_step)}
+                  "steps": step - self.first_step}
+        if self.timed:  # none timed (a round of a step or two): no seconds, and the coordinator keeps the member's speed as it was
+            params["seconds"] = self._work_seconds(step - self.first_step)
         if self.loss is not None:
             params["loss"] = self.loss
         self.pending = self.spawn(lambda: self._exchange(number, delta, params))
@@ -2251,7 +2261,9 @@ class Member:
         delta = {name: self.theta[name] - weights[name].astype(np.float32) for name in self.theta}
         body = encode_arrays(delta, self.info["delta_dtype"])
         params = {"term": self.term, "node": self.node, "generation": self.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
-                  "steps": step - self.first_step, "seconds": self._work_seconds(step - self.first_step)}
+                  "steps": step - self.first_step}
+        if self.timed:  # none timed (a round of a step or two): no seconds, and the coordinator keeps the member's speed as it was
+            params["seconds"] = self._work_seconds(step - self.first_step)
         if self.loss is not None:
             params["loss"] = self.loss
         self._post(self.round, body, params)
@@ -2261,7 +2273,7 @@ class Member:
         began = self.clock()
         try:
             self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{number}/delta", body, params, timeout=self.wait + 120))
-            upload, trained = self.clock() - began, params["seconds"]
+            upload, trained = self.clock() - began, params.get("seconds", 0.)
             text = (f"in {upload:.2f} s, while the next round trained." if overlapped
                     else f"in {upload:.2f} s ({upload / max(1e-9, trained + upload):.0%} of the member's {trained + upload:.2f} s round).")
             self.emit({"type": "info", "text": f"Round {number}: sent {len(body)} bytes of {self.info['delta_dtype']} delta {text}"})
@@ -2310,8 +2322,10 @@ class Member:
                 if event.get("type") == "metric" and event.get("step"):
                     self.loss = event.get("loss")
                     self.live = {"loss": self.loss, "tokens_per_second": event.get("tokens_per_second")}
+                if "total" in event:  # the loop bound below is not the run's length: report the run's own
+                    event = {**event, "total": max(self.total_steps, event.get("step") or 0)}
                 emit(event)
-            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": self.info["rounds"] * max(self.info["inner_steps"], int(self.info["inner_steps"] * MAX_SHARE))}  # the loop bound: no member is dealt more than MAX_SHARE of H a round; the schedule length is total_steps
+            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": min(1_000_000, self.info["rounds"] * max(self.info["inner_steps"], int(self.info["inner_steps"] * MAX_SHARE)))}  # the loop bound (train() caps steps at 1,000,000): no member is dealt more than MAX_SHARE of H a round; the schedule length is total_steps
             if self.memory_share:
                 import studio_memory
                 declared = cfg["batch_size"]
@@ -2321,7 +2335,7 @@ class Member:
                                                   f"allows: this member trains with batch size {cfg['batch_size']}."})
             attempt = 0
             while True:  # one attempt of train() per coordinator this member is attached to; a failover or a settled claim ends one
-                self.first_step, found = 0, None
+                self.first_step, found, self.warm = 0, None, False
                 try:
                     studio_model.train(cfg, [], directory if not attempt else Path(f"{directory}_{attempt}"), emit=watch,
                                        stop=Halt(self.stop, self.ended), pause=self.pause, distributed=self, telemetry_every=0)
