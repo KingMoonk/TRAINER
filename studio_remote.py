@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import studio_cluster
+import studio_cluster_watch
 import studio_publish
 import studio_facts
 import studio_failover
@@ -687,6 +688,7 @@ class Cluster:
         for run in list(self.guests.values()):
             self._tick_guest(run)
         self._tick_gangs()
+        studio_cluster_watch.check(self.runner, self.coordinators, self.client_for)  # a run whose driver stopped ends, its members released
         self._land_pending()
         self._sweep_checkpoints()
 

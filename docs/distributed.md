@@ -356,6 +356,17 @@ already written at every round boundary (`diloco.json` and the state file it nam
 A member whose coordinator is gone (no answer for its `patience`, or the coordinator's app answers that it no longer has the run) ends its
 job with a sentence saying so; invited again, it joins the resumed coordinator like a new member.
 
+### The driver stopping (#479)
+
+Without a restart, the run's driver can still die: the owner job's worker is killed, or its training thread crashes. The driver is this
+computer's own member, and every call it makes to the coordinator (join, progress report, waiting for a round, delta) is its heartbeat
+(`Coordinator.heard_ago`). `studio_cluster_watch.check` runs on the cluster tick and ends a run when its owner job failed or stopped while
+the coordinator still goes, or when the job says `running` and the driver has been silent for `DRIVER_TIMEOUT` (900 s, meant to outlast a
+slow round's validation and upload on BEAST). Ending means: the coordinator finishes with "Ended: the driver stopped responding at round N"
+(the members leave at their next call), a worker still holding the job is stopped and the job ends `failed` with that sentence
+(`params["ended_reason"]`), and the machines' member jobs are taken off their queues. The run is not resumed in process: the rounds
+finished stay on disk, and starting it again (or restarting the app) goes through the restart path above.
+
 ### Terms and coordinator failover (#359, #360, #361, #362)
 
 A run has a **term**, starting at 1, that orders its coordinators the way the lease epoch orders a job's runners. A
