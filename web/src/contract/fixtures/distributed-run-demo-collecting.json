@@ -26,6 +26,7 @@
     ],
     "expected": 2,
     "grace_s": 2.0,
+    "handoff": "",
     "history": [],
     "id": "demo-run",
     "inner_steps": 100,

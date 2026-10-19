@@ -8,7 +8,7 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, coordinator: "", ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -39,6 +39,12 @@ describe("the form", () => {
     expect(startBody(form())).not.toHaveProperty("min_members");
     expect(startBody(form({ minMachines: "2", maxMachines: "4" }))).toMatchObject({ min_members: 2, max_members: 4 });
     expect(startBody(form({ maxMachines: "2" }))).not.toHaveProperty("min_members");
+  });
+
+  test("a coordinator is sent only when it is one of the ticked machines", () => {
+    expect(startBody(form({ machines: ["gpu-box"] }))).not.toHaveProperty("coordinator");
+    expect(startBody(form({ machines: ["gpu-box"], coordinator: "gpu-box" }))).toMatchObject({ coordinator: "gpu-box" });
+    expect(startBody(form({ machines: ["other"], coordinator: "gpu-box" }))).not.toHaveProperty("coordinator");
   });
 
   test("overlap is sent as ticked", () => expect(startBody(form({ overlap: true }))?.overlap).toBe(true));

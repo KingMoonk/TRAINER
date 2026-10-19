@@ -112,6 +112,19 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
         ))}
       </fieldset>
 
+      {form.machines.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="training-coordinator" className="text-sm font-medium">{T.coordinator}</label>
+          <select id="training-coordinator" value={form.machines.includes(form.coordinator) ? form.coordinator : ""} onChange={(e) => set({ coordinator: e.target.value })} className={`${FIELD} w-fit max-w-full`}>
+            <option value="">{T.coordinatorHere}</option>
+            {nodes.filter((node) => form.machines.includes(node.address)).map((node) => (
+              <option key={node.address} value={node.address} disabled={!node.online}>{node.hostname || node.address}</option>
+            ))}
+          </select>
+          <p className="max-w-prose text-xs text-muted-foreground">{T.coordinatorHelp}</p>
+        </div>
+      )}
+
       <Roster items={chosen} />
       <Limits items={chosen} cluster={cluster} />
 

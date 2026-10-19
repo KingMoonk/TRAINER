@@ -64,6 +64,7 @@ class Run:
     term: int = 1  # the coordinator's term when its account was kept (archive)
     saved: int | None = None  # the version whose weights this run saved when it finished
     restarted: bool = False  # read back from the workspace while its last account still said it was going
+    handoff: str = ""  # the node the person chose to coordinate: this computer starts the run and hands it over once that node holds a round
 
 
 def machines_of(rows):
@@ -88,6 +89,7 @@ def run_of(job):
             p = job.params
             run = RUNS[job.id] = Run(job.id, job.label, p.get("version"), job.created_at or time.time(), dict(p.get("settings") or {}),
                                      p.get("owner") or socket.gethostname(), machines_of(p.get("machines", [])))
+            run.handoff = next((m.node for m in run.machines if p.get("coordinator") and m.address == p["coordinator"]), "")
             for key in list(RUNS)[:-KEPT]:
                 del RUNS[key]
     if made:
@@ -549,7 +551,7 @@ def view(run, coordinator, job, peers=None):
     ended = state in ("finished", "stopped", "failed") and (state if state != "failed" else "stopped")
     settings = (snap or {}).get("settings") or run.settings
     return {"id": run.id, "label": run.label, "version": run.version, "state": state, "note": note, "started_at": run.started_at,
-            "owner": run.owner, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
+            "owner": run.owner, "handoff": run.handoff, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or "", peers),
             "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,

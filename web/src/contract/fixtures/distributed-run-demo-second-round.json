@@ -42,6 +42,7 @@
     ],
     "expected": 2,
     "grace_s": 2.0,
+    "handoff": "",
     "history": [
       {
         "bytes_down": 8000000,

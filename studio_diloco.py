@@ -197,9 +197,12 @@ def outer_step(theta, momentum, delta, lr, mu):
         theta[name] -= np.float32(lr) * (gradient + np.float32(mu) * momentum[name])
 
 
-def replica_nodes(members, count):
-    """The replicas of a round: the `count` lowest-ranked of its members (a member's rank is its place in the round's list)."""
-    return list(members)[:max(0, count)]
+def replica_nodes(members, count, prefer=()):
+    """The replicas of a round: the `count` lowest-ranked of its members (a member's rank is its place in the round's list), except
+    that the members in `prefer` (the node the person chose to coordinate the run) come first, so it holds the run in time to take it over."""
+    order = list(members)
+    first = [node for node in order if node in prefer]
+    return (first + [node for node in order if node not in first])[:max(0, count)]
 
 
 def deal_shards(seed, round_number, members, shard_count):
@@ -408,6 +411,7 @@ class Coordinator:
         self.reports, self.events, self.timelines = {}, deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT)  # the live view's state
         self.event_seq, self.stage, self._last = 0, "", None  # stage: "outer_step" or "validating" while a round closes (read without the lock)
         self.term, self.superseded, self.on_step_down = 1, 0, on_step_down  # superseded: the higher term this coordinator was told of, else 0
+        self.prefer = ()  # nodes that are replicas before the others: the node chosen to coordinate (prepare)
         self.lock = threading.RLock()
         self.cond = threading.Condition(self.lock)
         if state:
@@ -781,7 +785,7 @@ class Coordinator:
         if number == self.next_round and current is not None and node in current.members and node not in self.leaving:
             rank = current.members.index(node)
             return {**base, "state": "open", "generation": current.generation, "rank": rank,
-                    "replica": node in replica_nodes(current.members, self.settings.replicas),
+                    "replica": node in replica_nodes(current.members, self.settings.replicas, self.prefer),
                     "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members)}
         return {**base, "state": "pending"}
 
@@ -990,6 +994,8 @@ class Coordinator:
         deal = current.deal if current is not None else self.deal
         for node, found in nodes.items():
             report = self.reports.get(node)
+            if report is not None and "round" not in report:
+                report = None  # made by a report that was refused (Stale) before it said anything
             live = bool(report) and report["round"] == self.next_round
             found["progress"] = {
                 "phase": report["phase"] if report else "waiting", "step": report["step"] if live else 0, "steps": self.settings.inner_steps,
@@ -1171,6 +1177,8 @@ def prepare(job, services, directory, port, client_for=None):
         if p.get("resuming"):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None
         raise
+    run = studio_distributed.run_of(job)
+    coordinator.prefer = (run.handoff,) if run.handoff else ()  # the node chosen to coordinate holds the run from the first round on
     register(job.id, coordinator)
     studio_distributed.resumed(job)
     p.update(run=job.id, coordinator_url=f"http://127.0.0.1:{port}", settings=dict(settings.__dict__))
