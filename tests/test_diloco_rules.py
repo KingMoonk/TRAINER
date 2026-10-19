@@ -9,11 +9,11 @@ def settings(**changes):
     return support.settings(rounds=40, inner_steps=3, **changes)
 
 
-def play(s, losses, sources=1, lessons=0):
+def play(s, losses, sources=1):
     """Feed the val_losses to a fresh State one round each; returns (state, verdicts), stopping after a stop."""
     state, verdicts = rules.State(), []
     for number, loss in enumerate(losses):
-        verdict = rules.observe(state, s, number, (number + 1) * s.inner_steps, loss, sources, lessons)
+        verdict = rules.observe(state, s, number, (number + 1) * s.inner_steps, loss, sources)
         verdicts.append(verdict)
         if verdict["action"] == "stop":
             break
@@ -51,15 +51,25 @@ class StopRules(unittest.TestCase):
         self.assertEqual((verdicts[-1]["rule"], state.best_loss), ("target_val_loss", 3.5))
         self.assertIn("target 3.5", verdicts[-1]["text"])
 
-    def test_target_win_rate_stops_when_the_measured_rate_reaches_it(self):
-        s = settings(target_win_rate=.6, teacher="big")
+    def test_a_missing_loss_before_the_first_finite_one_is_not_a_worse_round(self):
+        s = settings(worse_limit=1, pivots=("halve_lr",))
+        state, verdicts = play(s, [None, float("nan"), None, float("nan")])
+        self.assertEqual({v["action"] for v in verdicts}, {"continue"})
+        self.assertEqual((state.best_round, state.best_loss, state.rounds_since_best, state.worse_streak, state.lr_scale), (None, None, 0, 0, 1.))
+        s = settings(patience_rounds=1)
+        self.assertEqual({v["action"] for v in play(s, [None, None, None])[1]}, {"continue"})
+        state, verdicts = play(s, [None, 5., None])  # once there is a best, a missing loss is a worse round
+        self.assertEqual([v["action"] for v in verdicts], ["continue", "continue", "stop"])
+        self.assertEqual(verdicts[-1]["rule"], "patience")
+
+    def test_the_last_round_only_updates_the_best(self):
+        s = settings(worse_limit=1, pivots=("halve_lr",))
         state = rules.State()
-        state.win_rate = .55
-        self.assertEqual(rules.observe(state, s, 0, 3, 5.)["action"], "continue")
-        state.win_rate = .6
-        verdict = rules.observe(state, s, 1, 6, 4.)
-        self.assertEqual((verdict["action"], verdict["rule"]), ("stop", "target_win_rate"))
-        self.assertIn("60%", verdict["text"])
+        rules.observe(state, s, 0, 3, 5.)
+        verdict = rules.observe(state, s, 1, 6, 6., final=True)
+        self.assertEqual((verdict["action"], state.stop_rule, state.lr_scale, state.pivot_index), ("continue", "", 1., 0))
+        self.assertTrue(rules.observe(state, s, 2, 9, 4., final=True)["improved"])
+        self.assertEqual(state.best_round, 2)
 
     def test_max_seconds_counts_only_the_time_with_enough_members(self):
         s, state, clock = settings(max_seconds=100.), rules.State(), Clock()
@@ -103,14 +113,12 @@ class Pivots(unittest.TestCase):
         self.assertEqual(verdict["action"], "pivot")
         self.assertEqual((state.worse_streak, state.rounds_since_best, state.points, state.best_loss), (0, 0, [], 5.))
 
-    def test_next_dataset_without_a_later_source_and_drop_lessons_without_lessons_are_skipped(self):
-        s = settings(worse_limit=1, pivots=("next_dataset", "drop_lessons", "halve_lr"))
+    def test_next_dataset_without_a_later_source_is_skipped(self):
+        s = settings(worse_limit=1, pivots=("next_dataset", "halve_lr"))
         state = rules.State()
-        self.assertEqual(rules.next_pivot(state, s, sources=1, lessons=0), (2, "halve_lr"))
-        self.assertEqual(rules.next_pivot(state, s, sources=2, lessons=0), (0, "next_dataset"))
-        state.pivot_index = 1
-        self.assertEqual(rules.next_pivot(state, s, sources=2, lessons=3), (1, "drop_lessons"))
-        state.pivot_index = 3
+        self.assertEqual(rules.next_pivot(state, s, sources=1), (1, "halve_lr"))
+        self.assertEqual(rules.next_pivot(state, s, sources=2), (0, "next_dataset"))
+        state.pivot_index = 2
         self.assertIsNone(rules.next_pivot(state, s))
 
     def test_a_plateau_triggers_the_pivot_and_without_pivots_it_stops(self):
@@ -156,8 +164,8 @@ class Checks(unittest.TestCase):
 
     def test_bad_values_are_rejected_with_a_sentence(self):
         for changes in ({"max_seconds": 0}, {"max_seconds": -5.}, {"max_seconds": float("nan")}, {"patience_rounds": -1}, {"patience_rounds": 1.5},
-                        {"target_val_loss": 0}, {"target_val_loss": -1.}, {"target_win_rate": 0., "teacher": "t"}, {"target_win_rate": 1.5, "teacher": "t"},
-                        {"target_win_rate": .5}, {"plateau_checks": 1}, {"plateau_checks": -2}, {"plateau_min_improvement": 0.},
+                        {"target_val_loss": 0}, {"target_val_loss": -1.}, {"target_win_rate": .5, "teacher": "t"},
+                        {"target_win_rate": .5}, {"pivots": ("drop_lessons",), "worse_limit": 1}, {"plateau_checks": 1}, {"plateau_checks": -2}, {"plateau_min_improvement": 0.},
                         {"plateau_min_improvement": 1.}, {"worse_limit": -1}, {"keep_checkpoints": -1}, {"pivots": ("warm_restart",), "worse_limit": 1},
                         {"pivots": ("halve_lr",)}, {"worse_limit": 3, "pivots": ("halve_lr",), "patience_rounds": 3}, {"teacher": 5}, {"max_seconds": True}):
             self.rejects(**changes)
@@ -168,10 +176,16 @@ class Checks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Each pivot must be one of"):
             support.settings(pivots=("nope",), worse_limit=1)
 
+    def test_target_win_rate_and_drop_lessons_say_they_arrive_with_508(self):
+        with self.assertRaisesRegex(ValueError, "target_win_rate.*#508"):
+            support.settings(target_win_rate=.6, teacher="big")
+        with self.assertRaisesRegex(ValueError, "drop_lessons.*#508"):
+            support.settings(pivots=("drop_lessons",), worse_limit=1)
+
     def test_good_values_are_accepted_and_the_defaults_set_nothing(self):
-        s = support.settings(max_seconds=60, patience_rounds=3, target_val_loss=2.5, target_win_rate=.7, teacher="big", plateau_checks=3,
-                             plateau_min_improvement=.02, worse_limit=2, pivots=["halve_lr", "next_dataset", "drop_lessons"], keep_checkpoints=2)
-        self.assertEqual(s.pivots, ("halve_lr", "next_dataset", "drop_lessons"))  # a list from JSON becomes a tuple
+        s = support.settings(max_seconds=60, patience_rounds=3, target_val_loss=2.5, plateau_checks=3,
+                             plateau_min_improvement=.02, worse_limit=2, pivots=["halve_lr", "next_dataset"], keep_checkpoints=2)
+        self.assertEqual(s.pivots, ("halve_lr", "next_dataset"))  # a list from JSON becomes a tuple
         plain = support.settings()
         self.assertEqual((plain.max_seconds, plain.patience_rounds, plain.worse_limit, plain.pivots, plain.keep_checkpoints), (None, 0, 0, (), 0))
         self.assertIsNone(rules.stop_reason(rules.State(), plain))

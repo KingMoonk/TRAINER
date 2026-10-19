@@ -235,12 +235,59 @@ class Rounds(unittest.TestCase):
         self.assertTrue(all(4 <= s < 8 for s in view["shards"]), view["shards"])
         for shard in view["shards"]:
             self.assertGreater(len(c.shard_bytes(shard)), 0)
-        self.assertEqual(support.read_json(self.dir / "diloco.json")["layout"], [[0, 4], [4, 4]])
+        self.assertEqual(support.read_json(self.dir / "diloco.json")["layout"], [4, 4])
 
     def test_a_pivot_with_nothing_left_to_move_to_ends_the_run(self):
         c = self.coordinator([5., 6., 7.], worse_limit=2, pivots=("next_dataset",))
         self.play(c, 9)
         self.assertEqual(self.record()["stop_rule"], "pivots")
+
+    # -- a missing loss, the last round, halve_lr's outer step and resuming
+    def test_without_validation_windows_a_patience_rule_never_fires(self):
+        c = self.coordinator([None] * 5, patience_rounds=1, rounds=5)
+        self.play(c, 9)
+        self.assertEqual((c.next_round, c.finished, self.record()["status"]), (5, True, "completed"))
+        self.assertNotIn("stop_rule", self.record())
+        self.assertFalse((self.dir / "best.npz").exists())
+        self.assertEqual(c.final_bytes(), (self.dir / "last.npz").read_bytes())  # no best to hand over: the last round's weights
+
+    def test_a_missing_or_nan_loss_before_the_first_finite_one_does_not_pivot(self):
+        c = self.coordinator([None, float("nan"), 5., 4.], worse_limit=1, pivots=("halve_lr",), rounds=4)
+        self.play(c, 9)
+        self.assertEqual((c.next_round, c.rules.lr_scale, self.events(c, "pivot")), (4, 1., []))
+        self.assertEqual(c.rules.best_round, 3)
+
+    def test_the_round_rounds_ends_anyway_skips_pivots_and_stop_rules(self):
+        c = self.coordinator([5., 4., 6.], worse_limit=1, pivots=("halve_lr",), patience_rounds=2, rounds=3)
+        self.play(c, 9)
+        self.assertEqual((c.next_round, c.rules.lr_scale, self.events(c, "pivot")), (3, 1., []))
+        self.assertNotIn("stop_rule", self.record())
+        self.assertNotIn("pivot", c.history[-1])
+        for name, value in c.theta.items():
+            np.testing.assert_array_equal(value, c.seen[2][name])  # not restored to round 1's
+        self.assertEqual(self.record()["best_round"], 1)  # and the Version still gets round 1's weights from best.npz
+
+    def test_halve_lr_also_halves_the_outer_step(self):
+        c = self.coordinator([5., 6., 7., 8.], worse_limit=1, pivots=("halve_lr",), rounds=4)
+        self.play(c, 4)
+        self.assertEqual(c.rules.lr_scale, .5)
+        sizes = [row["outer_step_norm"] for row in c.history]
+        self.assertAlmostEqual(sizes[2] / sizes[0], .5, places=5)  # round 1 pivoted back; round 2 stepped with half the outer lr
+        self.assertEqual([row["lr"] for row in c.history], [1., 1., .5, .5][:len(c.history)])
+
+    def test_resuming_after_a_next_dataset_pivot_needs_the_later_sources(self):
+        build = studio_diloco.Coordinator.build
+        c = build("run1", self.dir, support.CONFIG, support.EXAMPLES, support.settings(inner_steps=2, rounds=12, worse_limit=1, pivots=("next_dataset",)),
+                  clock=self.clock, later=[support.EXAMPLES])
+        self.script(c, [5., 6.])
+        self.play(c, 2)
+        self.assertEqual(c.rules.source, 1)
+        with self.assertRaisesRegex(ValueError, "data source 2"):
+            build("run1", self.dir, support.CONFIG, support.EXAMPLES, support.settings(inner_steps=2, rounds=12, worse_limit=1, pivots=("next_dataset",)),
+                  clock=self.clock)
+        again = build("run1", self.dir, support.CONFIG, support.EXAMPLES, support.settings(inner_steps=2, rounds=12, worse_limit=1, pivots=("next_dataset",)),
+                      clock=self.clock, later=[support.EXAMPLES])
+        self.assertEqual((again.rules.source, len(again.spans)), (1, 2))
 
     # -- the wire
     def test_the_member_scales_its_learning_rate_by_the_round_it_was_opened_with(self):

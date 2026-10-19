@@ -15,9 +15,8 @@ from dataclasses import dataclass, field, fields
 
 import studio_plateau
 
-PIVOTS = ("halve_lr", "next_dataset", "drop_lessons")
-PIVOT_TEXT = {"halve_lr": "halved the learning rate", "next_dataset": "switched to the next data source",
-              "drop_lessons": "left out the newest lessons"}
+PIVOTS = ("halve_lr", "next_dataset")  # drop_lessons and target_win_rate arrive with teacher polish and lessons (#508)
+PIVOT_TEXT = {"halve_lr": "halved the learning rate", "next_dataset": "switched to the next data source"}
 
 
 def _number(value, label, low=None, high=None, integer=False, allow_none=False, strict_low=False):
@@ -36,9 +35,8 @@ def check(s):
     _number(s.max_seconds, "max_seconds", 0, allow_none=True, strict_low=True)
     _number(s.patience_rounds, "patience_rounds", 0, integer=True)
     _number(s.target_val_loss, "target_val_loss", 0, allow_none=True, strict_low=True)
-    _number(s.target_win_rate, "target_win_rate", 0, allow_none=True, strict_low=True)
-    if s.target_win_rate is not None and s.target_win_rate > 1:
-        raise ValueError("target_win_rate must be at most 1.")
+    if s.target_win_rate is not None:
+        raise ValueError("target_win_rate is not available yet: it arrives with teacher polish in #508.")
     _number(s.plateau_checks, "plateau_checks", 0, integer=True)
     if s.plateau_checks == 1:
         raise ValueError("plateau_checks must be 0 (off) or at least 2.")
@@ -47,8 +45,8 @@ def check(s):
     _number(s.keep_checkpoints, "keep_checkpoints", 0, integer=True)
     if not isinstance(s.teacher, str):
         raise ValueError("teacher must be a model name.")
-    if s.target_win_rate is not None and not s.teacher:
-        raise ValueError("target_win_rate needs a teacher.")
+    if "drop_lessons" in s.pivots:
+        raise ValueError("The drop_lessons pivot is not available yet: lessons arrive with #508.")
     if any(p not in PIVOTS for p in s.pivots):
         raise ValueError("Each pivot must be one of: " + ", ".join(PIVOTS) + ".")
     if s.pivots and not (s.worse_limit or s.plateau_checks):
@@ -69,7 +67,6 @@ class State:
     lr_scale: float = 1.
     source: int = 0                                      # the data source being dealt
     points: list = field(default_factory=list)           # [step, val_loss] of the rounds since the last pivot (the plateau stage)
-    win_rate: float | None = None
     stop_rule: str = ""                                  # which rule ended the run, once one has
     stop_text: str = ""                                  # ... and the sentence for it
     tick: float | None = None
@@ -104,11 +101,11 @@ def plateaued(state, s):
     return plateau.hit is not None
 
 
-def next_pivot(state, s, sources=1, lessons=0):
-    """(index, name) of the next usable pivot in the list, or None. next_dataset needs a source after the current one, drop_lessons a lesson."""
+def next_pivot(state, s, sources=1):
+    """(index, name) of the next usable pivot in the list, or None. next_dataset needs a source after the current one."""
     for index in range(state.pivot_index, len(s.pivots)):
         name = s.pivots[index]
-        if (name == "next_dataset" and state.source + 1 >= sources) or (name == "drop_lessons" and not lessons):
+        if name == "next_dataset" and state.source + 1 >= sources:
             continue
         return index, name
     return None
@@ -118,38 +115,40 @@ def stop_reason(state, s):
     """(rule, sentence) for the first stop rule that holds, or None. The rules are the ones the person set; none set means None."""
     if s.max_seconds is not None and state.active_seconds >= s.max_seconds:
         return "max_seconds", f"Stopped: the run trained for {state.active_seconds:,.0f} seconds, its limit of {s.max_seconds:,.0f}."
-    if s.patience_rounds and state.rounds_since_best >= s.patience_rounds:
+    if s.patience_rounds and state.best_loss is not None and state.rounds_since_best >= s.patience_rounds:
         return "patience", f"Stopped: {state.rounds_since_best} rounds in a row without a better validation loss."
     if s.target_val_loss is not None and state.best_loss is not None and state.best_loss <= s.target_val_loss:
         return "target_val_loss", f"Stopped: the validation loss reached {state.best_loss:.4g}, at or under the target {s.target_val_loss:.4g}."
-    if s.target_win_rate is not None and s.teacher and state.win_rate is not None and state.win_rate >= s.target_win_rate:
-        return "target_win_rate", (f"Stopped: it wins {state.win_rate:.0%} of head-to-head replies against the starting weights, "
-                                  f"the target was {s.target_win_rate:.0%}.")
     return None
 
 
-def observe(state, s, number, step, val_loss, sources=1, lessons=0):
-    """Fold the closed round `number` (its `step` and `val_loss`) into `state` and say what to do next. Returns
+def observe(state, s, number, step, val_loss, sources=1, final=False):
+    """Fold the closed round `number` (its `step` and `val_loss`) into `state` and say what to do next. `final`: the run ends with this
+    round anyway, so only the best is kept and no rule or pivot applies. A round without a finite loss counts as worse only once there
+    is a best to be worse than. Returns
     {"action": "continue" | "stop" | "pivot", "improved": bool, ...}: a stop carries its "rule" and "text"; a pivot its "name",
     "before" (this round's loss), "best" (the loss it goes back to), "best_round" and "why" (what triggered it)."""
     finite = val_loss is not None and math.isfinite(val_loss)
     improved = finite and (state.best_loss is None or val_loss < state.best_loss)
     if improved:
         state.best_round, state.best_loss, state.rounds_since_best, state.worse_streak = number, float(val_loss), 0, 0
-    else:
+    elif state.best_loss is not None:
         state.rounds_since_best += 1
         state.worse_streak += 1
     if finite:
         state.points.append([step, float(val_loss)])
+    if final:
+        return {"action": "continue", "improved": improved}
     found = stop_reason(state, s)
     if found:
         state.stop_rule, state.stop_text = found
         return {"action": "stop", "improved": improved, "rule": found[0], "text": found[1]}
-    why = ("worse" if s.worse_limit and state.worse_streak >= s.worse_limit else "plateau" if plateaued(state, s) else "")
+    why = ("" if state.best_loss is None else "worse" if s.worse_limit and state.worse_streak >= s.worse_limit
+           else "plateau" if plateaued(state, s) else "")
     if not why:
         return {"action": "continue", "improved": improved}
     streak = state.worse_streak
-    move = next_pivot(state, s, sources, lessons)
+    move = next_pivot(state, s, sources)
     if move is None:
         if why == "plateau" and not s.pivots:
             rule, text = "plateau", (f"Stopped: the validation loss improved by less than {s.plateau_min_improvement:.2%} "

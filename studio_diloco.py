@@ -160,12 +160,12 @@ class Settings:
     max_seconds: float | None = None   # active wall-clock; time with fewer than min_members does not count
     patience_rounds: int = 0           # rounds without a better val_loss
     target_val_loss: float | None = None
-    target_win_rate: float | None = None  # teacher head-to-head of theta against the starting weights; needs `teacher`
-    teacher: str = ""                  # the teacher model's name; empty: no teacher
+    target_win_rate: float | None = None  # not available yet (#508): rejected
+    teacher: str = ""                  # the teacher model's name (#508)
     plateau_checks: int = 0            # rounds the val_loss must have improved within, else it is a plateau (0: off)
     plateau_min_improvement: float = .01
     worse_limit: int = 0               # rounds in a row worse than the best before the coordinator goes back to the best and pivots (0: off)
-    pivots: tuple = ()                 # what to try, in order: halve_lr, next_dataset, drop_lessons
+    pivots: tuple = ()                 # what to try, in order: halve_lr (also the outer learning rate), next_dataset
     keep_checkpoints: int = 0          # per-round checkpoints (round_<n>.npz) kept in the run folder; 0: none besides last.npz and best.npz
 
     def __post_init__(self):
@@ -422,7 +422,7 @@ class Coordinator:
         self.shard_count = max(1, min(settings.shards, len(train)))
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
         self.spans, self.later = [(0, self.shard_count)], []  # per data source: its first shard id and shard count; the (windows, bounds) of the sources after the first
-        self.rules, self.judge = drules.State(), None  # judge(theta) -> the teacher's head-to-head win rate of theta against the starting weights, or None
+        self.rules = drules.State()
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
@@ -486,6 +486,9 @@ class Coordinator:
         coordinator.model_spec = model.spec
         for number, more in enumerate(later, 1):
             coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, directory / "windows" / f"source{number}"))
+        if coordinator.rules.source >= len(coordinator.spans):
+            raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "
+                             f"{'is' if len(coordinator.spans) == 1 else 'are'} supplied (later_examples); training on the first would be a different run.")
         if not state:
             coordinator._start_files(model)
         return coordinator
@@ -536,10 +539,16 @@ class Coordinator:
         coordinator.deal = record.get("shard_deal") or {}
         coordinator._start_files(model)
         if coordinator.history:  # only the latest round's weights came over: they are the best this coordinator can keep
-            last = coordinator.history[-1]
-            if coordinator.rules.best_round != last["round"]:
-                coordinator.rules.best_round, coordinator.rules.best_loss = last["round"], last.get("val_loss")
-            coordinator._write_best()
+            last, rules = coordinator.history[-1], coordinator.rules
+            loss = last.get("val_loss")
+            if rules.best_round != last["round"]:
+                # The replica holds one round's weights, so that round is the only best this coordinator can claim (run.json and the
+                # saved Version name it): relabel it, and restart the streaks the old best's rounds counted against.
+                finite = loss is not None and loss == loss and abs(loss) != float("inf")
+                rules.best_round, rules.best_loss = (last["round"], float(loss)) if finite else (None, None)
+                rules.rounds_since_best, rules.worse_streak, rules.points = 0, 0, []
+            if rules.best_round is not None:
+                coordinator._write_best()
         last = coordinator.history[-1] if coordinator.history else {}
         with (directory / "metrics.jsonl").open("a", encoding="utf-8") as stream:
             for row in coordinator.history:
@@ -788,8 +797,9 @@ class Coordinator:
         delta = token_average([(tokens, d) for tokens, _, _, _, d in sent.values()])
         norm = 0.
         if delta is not None:
-            outer_step(self.theta, self.momentum, delta, self.settings.outer_lr, self.settings.outer_momentum)
-            norm = step_size(delta, self.momentum, self.settings.outer_lr, self.settings.outer_momentum)
+            outer_lr = self.settings.outer_lr * self.rules.lr_scale  # halve_lr scales the outer step too
+            outer_step(self.theta, self.momentum, delta, outer_lr, self.settings.outer_momentum)
+            norm = step_size(delta, self.momentum, outer_lr, self.settings.outer_momentum)
             self._event("outer_step", "", current.number, f"Outer step applied for round {current.number}: size {norm:.4g}, "
                                                           f"from {len(sent)} of {len(current.members)} members.")
         self.stage = "validating"
@@ -813,7 +823,7 @@ class Coordinator:
                "theta_bytes": sum(value.nbytes for value in self.theta.values()) * len(current.members),  # what the members downloaded
                "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
-               "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
+               "lr": self.settings.outer_lr * self.rules.lr_scale, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
                "outer_step_norm": norm}
         self.history.append(row)
         self.deal = current.deal
@@ -835,13 +845,12 @@ class Coordinator:
         next pivot when the loss kept getting worse or stopped improving, or end the run with the rule's reason. Returns the verdict."""
         rules = self.rules
         drules.accrue(rules, self.clock(), len(self.members) >= self.settings.min_members)
-        if self.judge is not None and self.settings.target_win_rate is not None:
-            rules.win_rate = self.judge(self.theta)
-        verdict = drules.observe(rules, self.settings, current.number, row["step"], row["val_loss"], sources=len(self.spans))
+        verdict = drules.observe(rules, self.settings, current.number, row["step"], row["val_loss"], sources=len(self.spans),
+                                 final=self.finished)  # the round `rounds` ends anyway: keep the best, no restore or stop reason
         row["best"] = rules.best_round == current.number
         if verdict["improved"]:
             self._write_best()
-        if verdict["action"] == "pivot":
+        if verdict["action"] == "pivot" and rules.best_round is not None:
             self._restore_best()
             row["pivot"] = verdict["name"]
             before = f"{verdict['before']:.4g}" if verdict["before"] is not None else "no number"
@@ -1201,7 +1210,7 @@ class Coordinator:
             "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
             "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
             "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash,
-            "rules": self.rules.to_json(), "layout": self.spans})
+            "rules": self.rules.to_json(), "layout": [count for _, count in self.spans]})
         if old and old != self.state_file:
             (self.directory / old).unlink(missing_ok=True)
         return step
