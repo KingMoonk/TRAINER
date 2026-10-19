@@ -5,6 +5,7 @@ export type Plan = components["schemas"]["PretrainPlan"];
 export type TextSet = components["schemas"]["TextSet"];
 export type Preview = components["schemas"]["PreviewModel"];
 export type RangeResult = components["schemas"]["RangeResult"];
+export type StepRate = components["schemas"]["StepRate"];
 
 export const ROWS = ["8", "16", "32"] as const;
 export const HOLD = ["2%", "5%", "10%"] as const;
@@ -16,7 +17,17 @@ export const PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--v
 export const END = "var(--viz-end)";
 
 /** The request /pretraining/plan takes for these choices; its answer carries the job to post to /queue/jobs. */
-export function planBody(c: { version: number | null; datasetIds: string[]; mode: "catch_up" | "from_scratch"; rows: (typeof ROWS)[number]; hold: (typeof HOLD)[number]; length: Length }) {
+export function planBody(c: {
+  version: number | null;
+  datasetIds: string[];
+  mode: "catch_up" | "from_scratch";
+  rows: (typeof ROWS)[number];
+  hold: (typeof HOLD)[number];
+  length: Length;
+  hours?: Hours;
+  steps?: number | null; // a step count chosen from the suggestion, instead of the length
+  stopWhenFlat?: StopWhenFlat;
+}) {
   return {
     version: c.version,
     dataset_ids: c.datasetIds,
@@ -25,6 +36,54 @@ export function planBody(c: { version: number | null; datasetIds: string[]; mode
     hold: Number(c.hold.slice(0, -1)) / 100,
     passes: LENGTHS[c.length],
     preview_rows: PREVIEW_ROWS,
+    hours: HOURS[c.hours ?? DEFAULT_HOURS],
+    steps: c.steps ?? null,
+    plateau: STOP_WHEN_FLAT[c.stopWhenFlat ?? "Auto"],
+  };
+}
+
+/** End the run when its validation loss goes flat: by length (runs over an hour), always, or never. */
+export const STOP_WHEN_FLAT = { Auto: null, Always: true, Never: false } as const;
+export type StopWhenFlat = keyof typeof STOP_WHEN_FLAT;
+
+export const HOURS = { "1 h": 1, "4 h": 4, "12 h": 12, "24 h": 24, "3 days": 72 } as const; // the time the person gives the run
+export type Hours = keyof typeof HOURS;
+export const DEFAULT_HOURS: Hours = "4 h";
+export type Sizing = NonNullable<Plan["sizing"]>;
+
+/** Hours in plain words, as the server writes them (studio_ia.sizing.hours_text). */
+export function hoursText(hours: number): string {
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min`;
+  if (hours >= 48) return `${(hours / 24).toFixed(1)} days`;
+  return hours < 10 ? `${hours.toFixed(1)} h` : `${Math.round(hours)} h`;
+}
+
+/** The lines of the "Is it worth the time?" card for a plan: what the run costs here, where the curve goes flat, what to use instead. */
+export function sizingView(plan: Plan | undefined): {
+  verdict: Sizing["verdict"];
+  warning: string;
+  time: string;
+  expected: string;
+  suggestion: { text: string; steps: number; designChange: boolean; useSteps: boolean } | null;
+  gpu: string;
+} | null {
+  const s = plan?.sizing;
+  if (!plan || !s) return null;
+  const device = s.device ? fill(T.sizingDevice, { device: s.device.toUpperCase() }) : "";
+  const time = s.measured && s.run_hours != null ? fill(T.sizingTime, { steps: n(plan.steps ?? 0), time: hoursText(s.run_hours), device }) : T.sizingTiming;
+  const e = s.expected;
+  const expected =
+    e?.basis === "fit" && e.loss_planned != null && e.loss_flat != null && e.flat_steps != null
+      ? fill(T.sizingFit, { flat: n(e.flat_steps), atFlat: e.loss_flat.toFixed(2), atEnd: e.loss_planned.toFixed(2) })
+      : "";
+  const found = s.suggestion;
+  return {
+    verdict: s.verdict,
+    warning: s.warning,
+    time,
+    expected,
+    suggestion: found ? { text: found.text, steps: found.steps, designChange: !found.same_design, useSteps: found.same_design && found.steps !== plan.steps } : null,
+    gpu: s.gpu_note,
   };
 }
 

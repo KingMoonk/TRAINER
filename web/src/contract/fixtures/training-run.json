@@ -13,6 +13,7 @@
       "steps": [],
       "total": 0
     },
+    "ended": null,
     "gate_vs": null,
     "job_id": null,
     "parent": null,
