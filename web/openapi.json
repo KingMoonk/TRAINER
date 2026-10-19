@@ -2662,6 +2662,53 @@
         "title": "LeaveRequest",
         "type": "object"
       },
+      "Leftover": {
+        "properties": {
+          "belongs_to": {
+            "description": "the job it came from, or why nothing needs it",
+            "title": "Belongs To",
+            "type": "string"
+          },
+          "bytes": {
+            "description": "what removing it frees",
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "id": {
+            "description": "what to send back to remove it; a path under the workspace",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "interrupted",
+              "failed",
+              "snapshot"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shared": {
+            "description": "bytes it holds that other runs still link to (not freed)",
+            "title": "Shared",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "belongs_to",
+          "bytes",
+          "shared"
+        ],
+        "title": "Leftover",
+        "type": "object"
+      },
       "LessonChange": {
         "additionalProperties": false,
         "properties": {
@@ -7199,6 +7246,24 @@
           "address"
         ],
         "title": "RemoteStop",
+        "type": "object"
+      },
+      "RemoveLeftovers": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "RemoveLeftovers",
         "type": "object"
       },
       "Renewal": {
@@ -16638,6 +16703,74 @@
           }
         },
         "summary": "Free Space",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/leftovers": {
+      "get": {
+        "description": "What training left in runs/ that no result needs, largest first: attempts moved aside by a restart, failed runs, and dataset\nsnapshots no run uses. A running job's folder, the checkpoint a waiting job continues from and a version's runs are never listed.",
+        "operationId": "leftovers_storage_leftovers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Leftover"
+                  },
+                  "title": "Response Leftovers Storage Leftovers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Leftovers",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/leftovers/remove": {
+      "post": {
+        "description": "Delete the listed leftovers. An id that is not listed any more (already gone, or protected since) is ignored.",
+        "operationId": "remove_leftovers_storage_leftovers_remove_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveLeftovers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Leftovers",
         "tags": [
           "storage"
         ]
