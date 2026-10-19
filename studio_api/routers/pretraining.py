@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from studio_api.app import get_services
 from studio_api.models_queue_data import JobRecordModel, Model, submit
 from studio_ia import pretraining_plan as plan
+from studio_ia import sizing
 from studio_ia.services import if_added
 
 router = APIRouter(prefix="/pretraining", tags=["pretraining"])
@@ -109,6 +110,81 @@ class PlanRequest(BaseModel):
     hold: float = Field(0.05, ge=0.0, lt=0.5)  # fraction of the text held back for testing
     passes: int = Field(2, ge=1, le=100)  # passes over the chosen text: Short 1, Medium 2, Long 4
     preview_rows: int = Field(6, ge=1, le=256)  # rows of the size preview the page draws; the cached preview is read with this
+    hours: float = Field(sizing.DEFAULT_HOURS, gt=0, le=24 * 60)  # the time the person can give; the suggested design and steps fit it
+    steps: int | None = Field(None, ge=1, le=10_000_000)  # a step count chosen instead of `passes` (the suggestion's "use these steps")
+    plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
+
+
+class PlateauRule(BaseModel):
+    """studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window."""
+
+    window_steps: int | None = None
+    window_seconds: float | None = None
+    min_gain: float
+    min_steps: int = 0
+
+
+class StepRate(Model):
+    """studio_scaling.measure_step_rate: what a step of the design costs on this computer, on the device a run would use."""
+
+    seconds_per_step: float
+    tokens_per_second: float
+    device: str  # cpu | cuda | mps
+    device_name: str
+    note: str = ""  # why the backend chose it, when it chose
+    rows: int
+    context: int
+
+
+class StepRateRequest(BaseModel):
+    version: int | None = None  # None: the current version
+    dataset_ids: list[str] = []  # the chosen sets; their cached size preview gives the word list size
+    rows: int = Field(16, ge=1, le=256)
+    preview_rows: int = Field(6, ge=1, le=256)
+
+
+class StepRateJob(JobRecordModel):
+    result: StepRate | None = None
+
+
+class Suggestion(BaseModel):
+    """The design and step count that fit the hours given (studio_ia.sizing.suggest_design)."""
+
+    width: int
+    layers: int
+    params: int
+    steps: int
+    hours: float  # what those steps take here
+    tokens_per_param: float
+    same_design: bool  # the current design already is the best fit: only the steps change
+    text: str
+
+
+class Expected(BaseModel):
+    """What the plan can expect of the validation error. `fit`: drawn from this design's own earlier run; `rule`: no run to read."""
+
+    basis: Literal["fit", "rule"]
+    loss_planned: float | None = None  # at the last planned step
+    loss_flat: float | None = None  # where the curve goes flat
+    flat_steps: int | None = None
+    curve: list[list[float]] = []  # [step, fitted validation loss] points
+
+
+class Sizing(BaseModel):
+    """Does the model fit the text and the time? (studio_ia.sizing.sizing)"""
+
+    verdict: Literal["model_too_small", "data_too_small", "balanced"]
+    warning: str
+    tokens_per_param: float  # word pieces the planned steps read, per parameter
+    measured: bool  # False: this computer has not timed the design yet (POST /pretraining/step_rate)
+    seconds_per_step: float | None = None
+    tokens_per_second: float | None = None
+    device: str | None = None  # what the run will really use
+    run_hours: float | None = None  # the planned steps, at the measured rate
+    hours: float  # the time the person gave
+    expected: Expected | None = None
+    suggestion: Suggestion | None = None
+    gpu_note: str = ""
 
 
 class EnoughText(BaseModel):
@@ -145,8 +221,9 @@ class PretrainPlan(BaseModel):
     pieces_per_step: int
     passes_over_text: int | None = None  # steps in one pass over the chosen text
     steps: int | None = None
-    minutes: int | None = None  # null until a run has shown this computer's speed
+    minutes: int | None = None  # null until this computer has timed the design (POST /pretraining/step_rate)
     lr: float | None = None
+    sizing: Sizing | None = None  # null until the size of the text is known
     enough: EnoughText | None = None
     expectation: Expectation | None = None
     config: dict | None = None  # the engine config the run will use
@@ -154,16 +231,33 @@ class PretrainPlan(BaseModel):
     reason: str = ""  # why it may not
     job: NewPretrainJob | None = None  # post this to /queue/jobs
     outlook: str = ""  # when a job added now would start
+    plateau: PlateauRule | None = None  # the rule that ends the run when its validation loss goes flat; null: none
+    plateau_line: str = ""
 
 
 def _sets(services):
-    return plan.sets_of(services.data("text"))
+    return services.text_sets()
 
 
 def _parent(services, v):
     if v is None or v.parent is None:
         return None
     return next((p for p in services.versions() if p.number == v.parent), None)
+
+
+def _sizing(services, v, mode, preview, steps, body, measured):
+    """The plan's size section: the earlier run's curve is read only when this run starts from step 0 (a catch-up starts lower)."""
+    from studio_spec import validate_spec
+    try:
+        spec = validate_spec(v.spec)
+    except (ValueError, KeyError, TypeError):
+        return None
+    evidence = services.loss_evidence(v) if mode == "from_scratch" or v.parent is None else None
+    gpu = services.device_facts() if measured else None
+    found = sizing.sizing(spec, preview.get("vocab") or 256, body.rows, 1, preview["pieces"], preview["params"], steps, body.hours,
+                          measured, evidence, gpu)
+    found["measured"] = measured is not None
+    return Sizing.model_validate(found)
 
 
 @router.get("/text_sets")
@@ -195,8 +289,9 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     preview = known or {}
     pieces, params, context = preview.get("pieces"), preview.get("params"), preview.get("context", 256)
     per_step = body.rows * context
-    steps = None if estimating else plan.steps_for(pieces, per_step, body.passes)
-    tps = preview.get("tokens_per_second")
+    steps = None if estimating or not ids else body.steps or plan.steps_for(pieces, per_step, body.passes)
+    measured = services.cached_step_rate(v.spec, body.rows) if v is not None and v.spec else None
+    size = _sizing(services, v, mode, preview, steps, body, measured) if v is not None and steps and pieces and params else None
     enough = None
     if not estimating and pieces and params:
         ratio = pieces / params
@@ -212,16 +307,18 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     config = job = None
     if v is not None and steps:
         config = plan.pretrain_config(v.spec, steps, body.rows, body.hold)
+    rule = plan.plateau_rule(steps, steps * measured["seconds_per_step"] / 3600 if steps and measured else None, body.plateau)
     if not reason:
         label, job_params = plan.job_params(v, parent, ids, mode, body.rows, body.hold, steps, pieces,
-                                            plan.user_text(_sets(services), ids))
+                                            plan.user_text(_sets(services), ids), rule)
         job = NewPretrainJob(label=label, params=job_params)
     lr = (((v.spec if v else None) or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
     return PretrainPlan(
         version=v.number if v else None, parent=parent.number if parent else None, mode=mode, can_continue=ok, continue_blocked=blocked,
         estimating=estimating, pieces=pieces, estimated=bool(preview.get("estimated")), params=params, context=context,
         pieces_per_step=per_step, passes_over_text=max(1, round(pieces / per_step)) if pieces else None, steps=steps,
-        minutes=max(1, round(steps * per_step / tps / 60)) if steps and tps else None, lr=lr, enough=enough, expectation=expect,
+        minutes=max(1, round(steps * measured["seconds_per_step"] / 60)) if steps and measured else None, lr=lr, sizing=size,
+        enough=enough, expectation=expect, plateau=PlateauRule.model_validate(rule) if rule else None, plateau_line=plan.plateau_line(rule),
         config=config, can_add=not reason, reason=reason, job=job, outlook=if_added(services.queue_outlook()))
 
 
@@ -251,6 +348,21 @@ def cached_preview(services: Services, dataset_ids: Annotated[list[str], Query()
 def pretrain_preview(body: PreviewRequest, request: Request, services: Services) -> PreviewJob:
     """Services.pretrain_preview as a job."""
     return submit(request, "pretrain_preview", lambda stop: services.pretrain_preview(body.dataset_ids, body.rows), PreviewJob)
+
+
+@router.post("/step_rate", status_code=202)
+def step_rate(body: StepRateRequest, request: Request, services: Services) -> StepRateJob:
+    """Time a few steps of the version's design on the device a run of it would use, as a job. The plan reads the answer
+    (`sizing.measured`) for the time a run takes and the design that fits the hours given. 409 while the size of the chosen text is
+    still unknown (the word list size comes from it)."""
+    v = services.current_version() if body.version is None else _version(services, body.version)
+    if v is None or not v.spec:
+        raise HTTPException(409, "Save a design in the Network designer first.")
+    preview = services.cached_preview(list(dict.fromkeys(body.dataset_ids)), body.preview_rows) if body.dataset_ids else {}
+    if preview is None:
+        raise HTTPException(409, "The size of the text is still being worked out.")
+    vocab = preview.get("vocab") or 256
+    return submit(request, "step_rate", lambda stop: services.measure_step_rate(v.spec, body.rows, vocab, stop=stop), StepRateJob)
 
 
 @router.post("/word_lists", status_code=202)

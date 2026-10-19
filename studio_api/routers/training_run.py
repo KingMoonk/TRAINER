@@ -28,6 +28,29 @@ class SwitchNote(Model):
     need: int | None = None
 
 
+class Ended(Model):
+    """Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau)."""
+
+    reason: str
+    text: str
+    step: int | None = None
+
+
+def _ended(services, state, version):
+    """The finished run's own reason for ending, when it wrote one; None while a job runs or for a run that simply finished."""
+    if state.job is not None or version is None:
+        return None
+    from pathlib import Path
+
+    from studio_core import read_json
+    try:
+        path = Path(_run_of_version(services, version.number)) / "run.json"
+        found = read_json(path).get("ended") if path.exists() else None
+    except (HTTPException, OSError, ValueError):
+        return None
+    return Ended.model_validate(found) if isinstance(found, dict) and found.get("text") else None
+
+
 class RunPageModel(Model):
     version: int | None = None  # the version being trained (the newest)
     parent: int | None = None  # the version it continues from, if one exists
@@ -43,6 +66,7 @@ class RunPageModel(Model):
     chat_version: int | None = None  # the version Chat uses
     gate_vs: int | None = None  # the version the finished run was weighed against
     switch: SwitchNote
+    ended: Ended | None = None  # why the finished run ended itself, when it did
 
 
 def _current(services):
@@ -96,5 +120,5 @@ def training_run(services: Services) -> RunPageModel:
         running=running, job_id=state.job.id if running else None, step=step, total=state.total if running else curve.get("total") or 0,
         phase=phase, status=studio_eval.run_status(history) if history else None, curve=CurveModel.model_validate(curve),
         references=ReferencesModel.model_validate(references), chat_version=(chat.number if chat else parent.number if parent else None),
-        gate_vs=gate["vs"] if gate else None, switch=SwitchNote(key=key, **extra),
+        gate_vs=gate["vs"] if gate else None, switch=SwitchNote(key=key, **extra), ended=_ended(services, state, version),
     )
