@@ -7,6 +7,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -232,9 +233,9 @@ class WinRate(unittest.TestCase):
         self.send(c)
         self.assertTrue(versus.started.wait(10))
         c.stop()
+        self.assertTrue(versus.halts[0].wait(10))  # the comparison is told to halt, whether or not it has returned
         gate.set()
         self.settle(c)
-        self.assertTrue(versus.halts[0].is_set())  # the comparison is told to halt
         self.assertIsNone(c.rules.win_rate)
         self.assertEqual(c.rules.stop_rule, "")
 
@@ -249,8 +250,27 @@ class WinRate(unittest.TestCase):
         self.assertLess(time.monotonic() - begun, 5)
         self.assertTrue(versus.halts[0].is_set())
         self.assertEqual((c.rules.win_round, c.rules.win_rate, c.rules.win_hits, c.finished), (1, None, 0, False))
-        self.assertIn("took longer than the 0 seconds allowed", self.events(c, "win_rate")[0])
+        self.assertIn("took longer than the 0.3 seconds allowed", self.events(c, "win_rate")[0])
         self.assertEqual(c.round_view(2, "a")["state"], "open")  # the rounds go on
+
+    def test_a_comparison_whose_worker_cannot_start_still_opens_the_gate(self):
+        real = threading.Thread
+
+        class NoRoom(real):
+            def start(self):
+                if self.name == "diloco-versus-call":
+                    raise RuntimeError("can't start new thread")
+                super().start()
+        versus = Versus([.9])
+        c = self.coordinator(versus, [5., 4., 3.])
+        c.join("a")
+        with mock.patch.object(studio_diloco.threading, "Thread", NoRoom):
+            self.send(c)
+            self.send(c)
+            self.settle(c)
+        self.assertEqual((versus.calls, c.judging, c.rules.win_round, c.rules.win_hits), ([], False, 1, 0))
+        self.assertIn("could not start", self.events(c, "win_rate")[0])
+        self.assertEqual(c.round_view(2, "a")["state"], "open")
 
     def test_the_time_allowed_is_a_positive_number_of_seconds(self):
         self.assertEqual(support.settings().versus_seconds, 600.)

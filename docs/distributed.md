@@ -353,9 +353,11 @@ started from, as an Ollama judge sees it. The settings are in `Settings`; only a
 - **When.** After a round that made a new best (a polish, if one runs, comes first and its result is what is compared), once per new best.
   The run holds the next round open while the teacher judges (phase `judging`, event `judging`); a comparison that fails, or takes longer than
   `versus_seconds` (600 by default, wall clock), is skipped, journaled in a `win_rate` event, and the rounds go on. A stop or step-down
-  discards it. **The final round is never compared**: the run ends there anyway, and its comparison would hold nothing back.
+  discards it. A comparison that timed out leaves its worker behind: it is told to halt, but keeps its two models loaded until its next check
+  of that flag (and an Ollama request already sent ends only by its own timeout). **The final round is never compared**: the run ends there anyway, and its comparison would hold nothing back.
 - **The rule.** Twelve prompts make a noisy reading, so the run stops only after **two comparisons in a row** (two successive new bests) each
-  win the target share (a tie counts half). A reading under the target, or a comparison that gave no number, starts the count again.
+  win the target share (a tie counts half). The prompt set can shrink between two readings as lessons grow (prompts a lesson teaches are
+  dropped), so the two readings need not use identical prompts. A reading under the target, or a comparison that gave no number, starts the count again.
   `rules.win_rate` and `rules.win_hits` are kept in `diloco.json`.
 - **A coordinator made from a replica** (a failover) has neither the prompts nor the starting weights: it journals `win_rate_off` and goes on
   without the rule.

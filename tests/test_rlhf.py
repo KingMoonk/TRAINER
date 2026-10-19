@@ -505,13 +505,13 @@ class RLHFChecks(unittest.TestCase):
                 raise studio_rlhf.TeacherError("down", fatal=True)
         with tempfile.TemporaryDirectory() as directory:
             a, b = pretrained(directory, "a", 30), pretrained(directory, "b", 3)
-            with patch.object(studio_rlhf, "LocalModel", remember), patch.object(studio_rlhf, "empty_cache") as emptied:
+            freed = []  # whether both models were gone when the cache was emptied, i.e. while the failure was still propagating
+            with patch.object(studio_rlhf, "LocalModel", remember), \
+                    patch.object(studio_rlhf, "empty_cache", side_effect=lambda device: freed.append((device, [ref() is None for ref in made]))):
                 with self.assertRaises(studio_rlhf.TeacherError):
                     compare_checkpoints(a, b, prompts_from(EXAMPLES)[:2], Broken(), samples=1, max_tokens=4, temperature=1.2, device="cpu")
             gc.collect()
-            self.assertEqual(len(made), 2)
-            self.assertTrue(all(ref() is None for ref in made))
-            emptied.assert_called_once_with("cpu")
+            self.assertEqual(freed, [("cpu", [True, True])])
 
     def test_gate_accepts_and_rejects_by_win_rate(self):
         with tempfile.TemporaryDirectory() as directory:

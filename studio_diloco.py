@@ -1586,15 +1586,19 @@ class Coordinator:
             except Exception as exc:  # the teacher is optional: a failed comparison is skipped and the run goes on
                 outcome["error"] = (str(exc) or type(exc).__name__)[:300]
 
-        worker = threading.Thread(target=compare, daemon=True, name="diloco-versus-call")
-        worker.start()
-        end = time.monotonic() + self.settings.versus_seconds  # real time: the coordinator's clock is injectable
-        while worker.is_alive() and time.monotonic() < end and not stop.is_set():
-            worker.join(.05)
-        if worker.is_alive():
-            halt.set()  # a call that does not return is left behind: it ends at its next check of halt
-            if not stop.is_set():
-                outcome["rate"], outcome["error"] = None, f"it took longer than the {self.settings.versus_seconds:,.0f} seconds allowed"
+        try:
+            worker = threading.Thread(target=compare, daemon=True, name="diloco-versus-call")
+            worker.start()
+            end = time.monotonic() + self.settings.versus_seconds  # real time: the coordinator's clock is injectable
+            while worker.is_alive() and time.monotonic() < end and not stop.is_set():
+                worker.join(.05)
+            timed_out = worker.is_alive() and not stop.is_set()
+            if timed_out:
+                outcome["rate"], outcome["error"] = None, f"it took longer than the {self.settings.versus_seconds:g} seconds allowed"
+        except Exception as exc:  # no thread to be had: the gate must still open
+            outcome["rate"], outcome["error"] = None, "the comparison could not start: " + (str(exc) or type(exc).__name__)[:300]
+        finally:
+            halt.set()  # always: a call still running is left behind and ends at its next check of halt (its models stay loaded until then)
         with self.cond:
             try:
                 self._versus_done(job, outcome, stop)
