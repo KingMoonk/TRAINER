@@ -12,7 +12,7 @@ import { useApiEvents } from "../your-data/events";
 import { runJob, type JobLike } from "../your-data/jobs";
 import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
-import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate } from "./logic";
+import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate, type StopWhenFlat } from "./logic";
 import { LrCard } from "./lr-card";
 import { SizingCard } from "./sizing-card";
 import { TrainCard } from "./train-card";
@@ -27,13 +27,14 @@ export default function PretrainingPage() {
   const [hold, setHold] = useState<(typeof HOLD)[number]>("5%");
   const [length, setLength] = useState<Length>("Medium");
   const [hours, setHours] = useState<Hours>(DEFAULT_HOURS);
+  const [stopWhenFlat, setStopWhenFlat] = useState<StopWhenFlat>("Auto");
   const [chosenSteps, setChosenSteps] = useState<number | null>(null); // from the sizing suggestion; a length chosen afterwards clears it
 
   const versions = useQuery({ queryKey: ["versions"], queryFn: () => unwrap(api.GET("/versions")) });
   const sets = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: () => unwrap(api.GET("/pretraining/text_sets")) });
   const ids = useMemo(() => chosenIds(sets.data, use), [sets.data, use]);
 
-  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps });
+  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps, stopWhenFlat });
   const plan = useQuery({
     queryKey: ["pretraining", "plan", body],
     queryFn: () => unwrap(api.POST("/pretraining/plan", { body })),
@@ -137,6 +138,8 @@ export default function PretrainingPage() {
         mode={mode}
         onMode={setMode}
         length={length}
+        stopWhenFlat={stopWhenFlat}
+        onStopWhenFlat={setStopWhenFlat}
         onLength={(next) => {
           setChosenSteps(null);
           setLength(next);

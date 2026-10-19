@@ -112,11 +112,49 @@ def pretrain(job, context, emit, stop, pause):
     options = dict(emit=emit, stop=stop, pause=pause, wall_seconds=p.get("wall_seconds"), token_budget=p.get("token_budget"),
                    snapshot_every=p.get("snapshot_every", 50),  # feeds the 3D page's scrubber; newest 20 kept
                    offload_optimizer=offload)
+    options, watcher = _watched(job, options, stop)
     if p.get("resume"):
         resumed = _resume(job, cfg, out, init, options)
         if resumed is not None:
-            return resumed
-    return studio_model.train(cfg, _examples(job, context), out, init_from=init, **options)
+            return _plateau_end(job, out, watcher, resumed)
+    return _plateau_end(job, out, watcher, studio_model.train(cfg, _examples(job, context), out, init_from=init, **options))
+
+
+def _watched(job, options, stop):
+    """`options` for studio_model.train with the plateau rule (`params["plateau"]`, studio_plateau) watching the events it emits and
+    ending the stage through the stop event it polls. Returns (options, the watcher or None when the job has no rule)."""
+    rule = job.params.get("plateau")
+    if not rule:
+        return options, None
+    import studio_plateau
+    watcher = studio_plateau.Plateau(rule)
+    watcher.flag = studio_plateau.Flagged(stop, watcher)
+    emit = watcher.emit = options["emit"]
+
+    def relay(event):
+        emit(event)  # the metric is reported (and its checkpoints saved) before the rule can end the stage
+        watcher.feed(event)
+    return {**options, "emit": relay, "stop": watcher.flag}, watcher
+
+
+def _plateau_end(job, out, watcher, record):
+    """When the plateau rule ended the stage (not a stop the person asked for): say why on the job (`params["ended"]`), in the run's
+    own `run.json` and as an info event, and mark the run completed, not stopped. The best checkpoint was kept by training."""
+    if watcher is None or watcher.hit is None or watcher.flag.user_stopped():
+        return record
+    import studio_plateau
+    from studio_core import atomic_json, read_json
+    ended = {"reason": "plateau", "text": studio_plateau.reason_text(watcher.hit), **watcher.hit}
+    job.params["ended"] = ended
+    watcher.emit({"type": "info", "text": ended["text"]})
+    if isinstance(record, dict):
+        record.update(status="completed", budget_reached="plateau", ended=ended)
+        path = Path(out) / "run.json"
+        try:
+            atomic_json(path, {**read_json(path), **{k: record[k] for k in ("status", "budget_reached", "ended")}})
+        except (OSError, ValueError):
+            pass  # the run page then lacks the reason; the job still has it
+    return record
 
 
 def _resume(job, cfg, out, init, options):

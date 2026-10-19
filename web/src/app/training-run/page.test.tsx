@@ -35,7 +35,10 @@ const curve = (n: number) => ({
   prompt: "Once upon",
 });
 
-const runPage = (n: number, running: boolean) => ({
+const ENDED = { reason: "plateau", text: "Stopped at step 30 because the best validation loss (1.595) improved by only 0.19% over the last 6 steps.", step: 30 };
+
+const runPage = (n: number, running: boolean, ended: typeof ENDED | null = null) => ({
+  ended,
   version: 2,
   parent: 1,
   change: "6 blocks (was 4)",
@@ -104,6 +107,24 @@ describe("Training run page", () => {
     // Rates of 0.00015-0.0003 sit on their own right-hand scale, not on the loss axis whose references reach 8 bits.
     expect(svg.querySelectorAll(".recharts-yAxis")).toHaveLength(2);
     expect(within(svg as unknown as HTMLElement).getByText("Learning rate")).toBeInTheDocument();
+  });
+
+  test("a run that ended itself on a plateau says why, and a run in progress does not", async () => {
+    mockApi({
+      "GET /training-run": () => ({ body: runPage(6, false, ENDED) }),
+      "GET /queue": () => ({ body: queue(0) }),
+    });
+    renderPage(<TrainingRunPage />);
+    const ended = await screen.findByTestId("ended");
+    expect(ended).toHaveTextContent("Why this run ended");
+    expect(ended).toHaveTextContent("Stopped at step 30 because the best validation loss (1.595) improved by only 0.19%");
+  });
+
+  test("a run in progress shows no ending", async () => {
+    server();
+    renderPage(<TrainingRunPage />);
+    await screen.findByTestId("progress");
+    expect(screen.queryByTestId("ended")).not.toBeInTheDocument();
   });
 
   test("a run in progress links to its Run view by the queue job id", async () => {

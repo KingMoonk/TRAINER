@@ -275,6 +275,18 @@ class PlanSizingTests(ApiCase):
         self.call("POST", "/pretraining/plan", 422, json={"dataset_ids": ["a"], "steps": 0})
         self.assertIsNone(self.call("POST", "/pretraining/plan", json={"dataset_ids": [], "steps": 5})["steps"])
 
+    def test_a_long_run_gets_the_plateau_rule_and_a_short_one_does_not(self):
+        plan = self.plan_for()
+        rule = plan["job"]["params"]["plateau"]
+        self.assertEqual(rule, plan["plateau"])
+        self.assertEqual((rule["window_steps"], rule["min_gain"]), (int(plan["steps"] * .05), .01))
+        self.assertIn("Stops by itself", plan["plateau_line"])
+        short = self.plan_for(steps=100)  # 100 steps at .2275 s: well under an hour
+        self.assertEqual((short["plateau"], short["plateau_line"], "plateau" in short["job"]["params"]), (None, "", False))
+        forced = self.plan_for(steps=100, plateau=True)
+        self.assertIsNotNone(forced["job"]["params"]["plateau"])
+        self.assertNotIn("plateau", self.plan_for(plateau=False)["job"]["params"])
+
     def test_without_a_measure_the_verdict_stands_and_the_time_waits(self):
         plan = self.plan_for(rate=None)
         size = plan["sizing"]

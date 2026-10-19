@@ -26,6 +26,7 @@ export function planBody(c: {
   length: Length;
   hours?: Hours;
   steps?: number | null; // a step count chosen from the suggestion, instead of the length
+  stopWhenFlat?: StopWhenFlat;
 }) {
   return {
     version: c.version,
@@ -37,8 +38,13 @@ export function planBody(c: {
     preview_rows: PREVIEW_ROWS,
     hours: HOURS[c.hours ?? DEFAULT_HOURS],
     steps: c.steps ?? null,
+    plateau: STOP_WHEN_FLAT[c.stopWhenFlat ?? "Auto"],
   };
 }
+
+/** End the run when its validation loss goes flat: by length (runs over an hour), always, or never. */
+export const STOP_WHEN_FLAT = { Auto: null, Always: true, Never: false } as const;
+export type StopWhenFlat = keyof typeof STOP_WHEN_FLAT;
 
 export const HOURS = { "1 h": 1, "4 h": 4, "12 h": 12, "24 h": 24, "3 days": 72 } as const; // the time the person gives the run
 export type Hours = keyof typeof HOURS;

@@ -112,6 +112,16 @@ class PlanRequest(BaseModel):
     preview_rows: int = Field(6, ge=1, le=256)  # rows of the size preview the page draws; the cached preview is read with this
     hours: float = Field(sizing.DEFAULT_HOURS, gt=0, le=24 * 60)  # the time the person can give; the suggested design and steps fit it
     steps: int | None = Field(None, ge=1, le=10_000_000)  # a step count chosen instead of `passes` (the suggestion's "use these steps")
+    plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
+
+
+class PlateauRule(BaseModel):
+    """studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window."""
+
+    window_steps: int | None = None
+    window_seconds: float | None = None
+    min_gain: float
+    min_steps: int = 0
 
 
 class StepRate(Model):
@@ -221,6 +231,8 @@ class PretrainPlan(BaseModel):
     reason: str = ""  # why it may not
     job: NewPretrainJob | None = None  # post this to /queue/jobs
     outlook: str = ""  # when a job added now would start
+    plateau: PlateauRule | None = None  # the rule that ends the run when its validation loss goes flat; null: none
+    plateau_line: str = ""
 
 
 def _sets(services):
@@ -295,9 +307,10 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     config = job = None
     if v is not None and steps:
         config = plan.pretrain_config(v.spec, steps, body.rows, body.hold)
+    rule = plan.plateau_rule(steps, steps * measured["seconds_per_step"] / 3600 if steps and measured else None, body.plateau)
     if not reason:
         label, job_params = plan.job_params(v, parent, ids, mode, body.rows, body.hold, steps, pieces,
-                                            plan.user_text(_sets(services), ids))
+                                            plan.user_text(_sets(services), ids), rule)
         job = NewPretrainJob(label=label, params=job_params)
     lr = (((v.spec if v else None) or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
     return PretrainPlan(
@@ -305,7 +318,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         estimating=estimating, pieces=pieces, estimated=bool(preview.get("estimated")), params=params, context=context,
         pieces_per_step=per_step, passes_over_text=max(1, round(pieces / per_step)) if pieces else None, steps=steps,
         minutes=max(1, round(steps * measured["seconds_per_step"] / 60)) if steps and measured else None, lr=lr, sizing=size,
-        enough=enough, expectation=expect,
+        enough=enough, expectation=expect, plateau=PlateauRule.model_validate(rule) if rule else None, plateau_line=plan.plateau_line(rule),
         config=config, can_add=not reason, reason=reason, job=job, outlook=if_added(services.queue_outlook()))
 
 

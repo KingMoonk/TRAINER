@@ -36,7 +36,7 @@ const preview = {
   tokens_per_second: null,
 };
 
-type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null };
+type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null; plateau: boolean | null };
 
 const SIZING = {
   verdict: "model_too_small",
@@ -103,6 +103,8 @@ function server({ known = true, sizing = SIZING as unknown } = {}) {
           steps,
           minutes: null,
           sizing: state.known && ids.length ? state.sizing : null,
+          plateau: null,
+          plateau_line: sent.plateau === false || !ids.length ? "" : "Stops by itself, keeping its best, once the best validation loss improves by less than 1% over 49 steps (not before step 98).",
           lr: 0.0006,
           enough: state.known && ids.length ? { ratio: 2, ratio_text: "2.00", headline: "This model could use about 10.0× more text than you have", verdict: "little" } : null,
           expectation: state.known && ids.length ? { headline: "Expect the error to fall to about 3.1 bits per character", details: "Based on the size of the model and the text." } : null,
@@ -193,6 +195,17 @@ describe("Pretraining page", () => {
 
     await user.click(screen.getByRole("radio", { name: "12 h" }));
     await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ hours: 12 }));
+  });
+
+  test("the plan says when the run will stop itself, and the person can turn that off", async () => {
+    const state = server();
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("plateau-line")).toHaveTextContent("Stops by itself, keeping its best");
+    expect(state.plans.at(-1)).toMatchObject({ plateau: null });
+    await user.click(screen.getByRole("radio", { name: "Never" }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ plateau: false }));
+    await waitFor(() => expect(screen.queryByTestId("plateau-line")).not.toBeInTheDocument());
   });
 
   test("a same-design suggestion can be taken as the step count, and choosing a length gives it back", async () => {

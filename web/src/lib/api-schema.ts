@@ -4057,6 +4057,18 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * Ended
+         * @description Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).
+         */
+        Ended: {
+            /** Reason */
+            reason: string;
+            /** Step */
+            step?: number | null;
+            /** Text */
+            text: string;
+        };
         /** EnoughText */
         EnoughText: {
             /** Headline */
@@ -5538,6 +5550,8 @@ export interface components {
              * @default 2
              */
             passes: number;
+            /** Plateau */
+            plateau?: boolean | null;
             /**
              * Preview Rows
              * @default 6
@@ -5576,6 +5590,23 @@ export interface components {
             steps?: number | null;
             /** Variant */
             variant: number;
+        };
+        /**
+         * PlateauRule
+         * @description studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.
+         */
+        PlateauRule: {
+            /** Min Gain */
+            min_gain: number;
+            /**
+             * Min Steps
+             * @default 0
+             */
+            min_steps: number;
+            /** Window Seconds */
+            window_seconds?: number | null;
+            /** Window Steps */
+            window_steps?: number | null;
         };
         /** PostTrainingJobOut */
         PostTrainingJobOut: {
@@ -5723,6 +5754,12 @@ export interface components {
             pieces?: number | null;
             /** Pieces Per Step */
             pieces_per_step: number;
+            plateau?: components["schemas"]["PlateauRule"] | null;
+            /**
+             * Plateau Line
+             * @default
+             */
+            plateau_line: string;
             /**
              * Reason
              * @default
@@ -6791,6 +6828,7 @@ export interface components {
             /** Chat Version */
             chat_version?: number | null;
             curve: components["schemas"]["CurveModel"];
+            ended?: components["schemas"]["Ended"] | null;
             /** Gate Vs */
             gate_vs?: number | null;
             /** Job Id */

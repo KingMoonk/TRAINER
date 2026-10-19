@@ -160,6 +160,13 @@ export default function Page() {
             </Link>
           )}
 
+          {run?.ended && (
+            <div className="rounded-lg border border-warning/50 bg-warning/10 p-4" data-testid="ended">
+              <div className="font-semibold">{T.endedTitle}</div>
+              <p className="mt-1 text-sm text-muted-foreground">{run.ended.text}</p>
+            </div>
+          )}
+
           <Card>
             <CardContent className="flex flex-col gap-3">
               <div className="grid gap-4 sm:grid-cols-3" title={T.bitsPerCharNote}>

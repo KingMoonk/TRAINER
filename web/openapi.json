@@ -1485,6 +1485,36 @@
         "title": "DraftsJob",
         "type": "object"
       },
+      "Ended": {
+        "description": "Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "text"
+        ],
+        "title": "Ended",
+        "type": "object"
+      },
       "EnoughText": {
         "properties": {
           "headline": {
@@ -4978,6 +5008,17 @@
             "title": "Passes",
             "type": "integer"
           },
+          "plateau": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau"
+          },
           "preview_rows": {
             "default": 6,
             "maximum": 256.0,
@@ -5085,6 +5126,47 @@
           "parameters"
         ],
         "title": "PlanRow",
+        "type": "object"
+      },
+      "PlateauRule": {
+        "description": "studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.",
+        "properties": {
+          "min_gain": {
+            "title": "Min Gain",
+            "type": "number"
+          },
+          "min_steps": {
+            "default": 0,
+            "title": "Min Steps",
+            "type": "integer"
+          },
+          "window_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Seconds"
+          },
+          "window_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Steps"
+          }
+        },
+        "required": [
+          "min_gain"
+        ],
+        "title": "PlateauRule",
         "type": "object"
       },
       "PostTrainingJobOut": {
@@ -5508,6 +5590,21 @@
           "pieces_per_step": {
             "title": "Pieces Per Step",
             "type": "integer"
+          },
+          "plateau": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlateauRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plateau_line": {
+            "default": "",
+            "title": "Plateau Line",
+            "type": "string"
           },
           "reason": {
             "default": "",
@@ -8104,6 +8201,16 @@
           },
           "curve": {
             "$ref": "#/components/schemas/CurveModel"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ended"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "gate_vs": {
             "anyOf": [
