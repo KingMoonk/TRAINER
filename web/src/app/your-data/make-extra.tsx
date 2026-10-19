@@ -1,39 +1,25 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
-import { Suspense, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 import { awaitJob } from "@/lib/job-result";
-import { CollectionCard } from "../your-data/collection-card";
-import { useApiEvents } from "../your-data/events";
-import { errorText } from "../your-data/logic";
-import type { Kind } from "../your-data/copy";
-import { MAKE as T } from "./copy";
-import { Review, refreshData } from "./review";
-import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { useApiEvents } from "./events";
+import { errorText } from "./logic";
+import type { Kind } from "./copy";
+import { MAKE as T } from "./make-copy";
+import { Review, refreshData } from "./make-review";
 import { optionBox } from "@/components/option-box";
 
 type Report = components["schemas"]["GenerateReport"];
 type Rules = components["schemas"]["ProblemRules"];
 const KINDS: Kind[] = ["problems", "conversations", "text"];
 
-export default function Page() {
-  return <Suspense fallback={<Skeleton className="m-8 h-48" />}><LinkedGenerator /></Suspense>;
-}
-
-function LinkedGenerator() {
-  const requested = useSearchParams().get("kind");
-  const kind = KINDS.find((kind) => kind === requested) ?? "problems";
-  return <MakeData key={kind} initialKind={kind} />;
-}
-
-function MakeData({ initialKind }: { initialKind: Kind }) {
+export function MakeExtraData({ initialKind }: { initialKind: Kind }) {
   const [kind, setKind] = useState<Kind>(initialKind);
   const [making, setMaking] = useState(false);
   const cache = useQueryClient();
@@ -42,9 +28,7 @@ function MakeData({ initialKind }: { initialKind: Kind }) {
   useApiEvents((event) => {
     if (event.kind === "data" || event.kind === "downloads_finished") void refreshData(cache);
   });
-  return <main className={PAGE_MAIN}>
-    <div className="flex flex-wrap items-start justify-between gap-3"><PageHeader title={T.title} lead={T.lead} />
-      <Link href="/your-data/" className={buttonVariants({ variant: "outline" })}>{T.yourData}</Link></div>
+  return <div className="space-y-6">
     <div role="group" aria-label="What to make" className="grid gap-3 md:grid-cols-3">
       {KINDS.map((value) => <button key={value} type="button" disabled={making} aria-pressed={kind === value} onClick={() => setKind(value)}
         className={optionBox(kind === value, "p-4 disabled:opacity-50")}>
@@ -55,8 +39,7 @@ function MakeData({ initialKind }: { initialKind: Kind }) {
       <Card><CardContent role="alert">{errorText(rules.error)} <Button onClick={() => void rules.refetch()}>{T.retry}</Button></CardContent></Card> :
       <Generator key={kind} kind={kind} rules={rules.data} onMaking={setMaking} />}
     {kind !== "problems" && <Review kind={kind} count={count.data?.count} />}
-    <CollectionCard kind={kind} description="Recommended sources add real examples alongside the data you make." />
-  </main>;
+  </div>;
 }
 
 function Generator({ kind, rules, onMaking }: { kind: Kind; rules: Rules; onMaking: (value: boolean) => void }) {

@@ -573,6 +573,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/weights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Weights
+         * @description A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left.
+         */
+        get: operations["weights_collective__run__weights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -2038,6 +2058,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/step_rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Step Rate
+         * @description Time a few steps of the version's design on the device a run of it would use, as a job. The plan reads the answer
+         *     (`sizing.measured`) for the time a run takes and the design that fits the hours given. 409 while the size of the chosen text is
+         *     still unknown (the word list size comes from it).
+         */
+        post: operations["step_rate_pretraining_step_rate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/text_sets": {
         parameters: {
             query?: never;
@@ -2824,6 +2866,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/versions/{number}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Version
+         * @description Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the
+         *     queued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a
+         *     design its weights cannot go into) fails the job with a sentence.
+         */
+        post: operations["continue_version_versions__number__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/versions/{number}/export": {
         parameters: {
             query?: never;
@@ -3323,6 +3387,52 @@ export interface components {
             /** V */
             v: number;
         };
+        /** ContinueBody */
+        ContinueBody: {
+            /**
+             * Dataset Ids
+             * @description the text to continue on (new_data; grow, default the run's own)
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @description grow: fraction of the text held back
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Kind
+             * @description same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights
+             * @enum {string}
+             */
+            kind: "same" | "new_data" | "grow";
+            /** Layers */
+            layers?: number | null;
+            /**
+             * Rows
+             * @description grow: rows per step
+             * @default 16
+             */
+            rows: number;
+            /**
+             * Spec
+             * @description grow: the bigger design itself
+             */
+            spec?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Steps
+             * @description steps to add (same, new_data), or to train the grown design for (grow)
+             */
+            steps: number;
+            /**
+             * Width
+             * @description grow: the design's width (with layers), when no spec is given
+             */
+            width?: number | null;
+        };
         /** CorrectionRequest */
         CorrectionRequest: {
             /** Correction */
@@ -3495,6 +3605,18 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * Ended
+         * @description Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).
+         */
+        Ended: {
+            /** Reason */
+            reason: string;
+            /** Step */
+            step?: number | null;
+            /** Text */
+            text: string;
+        };
         /** EnoughText */
         EnoughText: {
             /** Headline */
@@ -3548,6 +3670,28 @@ export interface components {
             headline: string;
             /** Lines */
             lines: string[];
+        };
+        /**
+         * Expected
+         * @description What the plan can expect of the validation error. `fit`: drawn from this design's own earlier run; `rule`: no run to read.
+         */
+        Expected: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "fit" | "rule";
+            /**
+             * Curve
+             * @default []
+             */
+            curve: number[][];
+            /** Flat Steps */
+            flat_steps?: number | null;
+            /** Loss Flat */
+            loss_flat?: number | null;
+            /** Loss Planned */
+            loss_planned?: number | null;
         };
         /** Experiment */
         Experiment: {
@@ -4974,6 +5118,11 @@ export interface components {
              */
             hold: number;
             /**
+             * Hours
+             * @default 4
+             */
+            hours: number;
+            /**
              * Mode
              * @default catch_up
              * @enum {string}
@@ -4984,6 +5133,8 @@ export interface components {
              * @default 2
              */
             passes: number;
+            /** Plateau */
+            plateau?: boolean | null;
             /**
              * Preview Rows
              * @default 6
@@ -4994,6 +5145,8 @@ export interface components {
              * @default 16
              */
             rows: number;
+            /** Steps */
+            steps?: number | null;
             /** Version */
             version?: number | null;
         };
@@ -5020,6 +5173,23 @@ export interface components {
             steps?: number | null;
             /** Variant */
             variant: number;
+        };
+        /**
+         * PlateauRule
+         * @description studio_plateau: the run ends (keeping its best) once the best validation loss improves by under `min_gain` over the window.
+         */
+        PlateauRule: {
+            /** Min Gain */
+            min_gain: number;
+            /**
+             * Min Steps
+             * @default 0
+             */
+            min_steps: number;
+            /** Window Seconds */
+            window_seconds?: number | null;
+            /** Window Steps */
+            window_steps?: number | null;
         };
         /** PostTrainingJobOut */
         PostTrainingJobOut: {
@@ -5167,11 +5337,18 @@ export interface components {
             pieces?: number | null;
             /** Pieces Per Step */
             pieces_per_step: number;
+            plateau?: components["schemas"]["PlateauRule"] | null;
+            /**
+             * Plateau Line
+             * @default
+             */
+            plateau_line: string;
             /**
              * Reason
              * @default
              */
             reason: string;
+            sizing?: components["schemas"]["Sizing"] | null;
             /** Steps */
             steps?: number | null;
             /** Version */
@@ -6225,6 +6402,7 @@ export interface components {
             /** Chat Version */
             chat_version?: number | null;
             curve: components["schemas"]["CurveModel"];
+            ended?: components["schemas"]["Ended"] | null;
             /** Gate Vs */
             gate_vs?: number | null;
             /** Job Id */
@@ -6355,6 +6533,40 @@ export interface components {
             };
             /** V */
             v: number;
+        };
+        /**
+         * Sizing
+         * @description Does the model fit the text and the time? (studio_ia.sizing.sizing)
+         */
+        Sizing: {
+            /** Device */
+            device?: string | null;
+            expected?: components["schemas"]["Expected"] | null;
+            /**
+             * Gpu Note
+             * @default
+             */
+            gpu_note: string;
+            /** Hours */
+            hours: number;
+            /** Measured */
+            measured: boolean;
+            /** Run Hours */
+            run_hours?: number | null;
+            /** Seconds Per Step */
+            seconds_per_step?: number | null;
+            suggestion?: components["schemas"]["Suggestion"] | null;
+            /** Tokens Per Param */
+            tokens_per_param: number;
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "model_too_small" | "data_too_small" | "balanced";
+            /** Warning */
+            warning: string;
         };
         /** SlotInfo */
         SlotInfo: {
@@ -6562,6 +6774,77 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /**
+         * StepRate
+         * @description studio_scaling.measure_step_rate: what a step of the design costs on this computer, on the device a run would use.
+         */
+        StepRate: {
+            /** Context */
+            context: number;
+            /** Device */
+            device: string;
+            /** Device Name */
+            device_name: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Rows */
+            rows: number;
+            /** Seconds Per Step */
+            seconds_per_step: number;
+            /** Tokens Per Second */
+            tokens_per_second: number;
+        };
+        /** StepRateJob */
+        StepRateJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["StepRate"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /** StepRateRequest */
+        StepRateRequest: {
+            /**
+             * Dataset Ids
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Preview Rows
+             * @default 6
+             */
+            preview_rows: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
+            /** Version */
+            version?: number | null;
+        };
         /** Stop */
         Stop: {
             /** Epoch */
@@ -6573,6 +6856,28 @@ export interface components {
             bytes: number;
             /** Items */
             items: number;
+        };
+        /**
+         * Suggestion
+         * @description The design and step count that fit the hours given (studio_ia.sizing.suggest_design).
+         */
+        Suggestion: {
+            /** Hours */
+            hours: number;
+            /** Layers */
+            layers: number;
+            /** Params */
+            params: number;
+            /** Same Design */
+            same_design: boolean;
+            /** Steps */
+            steps: number;
+            /** Text */
+            text: string;
+            /** Tokens Per Param */
+            tokens_per_param: number;
+            /** Width */
+            width: number;
         };
         /** SummaryJob */
         SummaryJob: {
@@ -8069,6 +8374,41 @@ export interface operations {
         };
     };
     validation_collective__run__validation_get: {
+        parameters: {
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    weights_collective__run__weights_get: {
         parameters: {
             query: {
                 /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
@@ -10437,6 +10777,39 @@ export interface operations {
             };
         };
     };
+    step_rate_pretraining_step_rate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StepRateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepRateJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     text_sets_pretraining_text_sets_get: {
         parameters: {
             query?: never;
@@ -11564,6 +11937,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_version_versions__number__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueBody"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {

@@ -10,7 +10,7 @@ import { api, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Choice } from "./cards";
 import { T, fill } from "./copy";
-import { LENGTHS, errorText, lrLine, modeTexts, queueNote, stepsLine, type Length, type Plan } from "./logic";
+import { LENGTHS, STOP_WHEN_FLAT, errorText, lrLine, modeTexts, queueNote, stepsLine, type Length, type Plan, type StopWhenFlat } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** Continue or start over, how long, and Add to the queue: the job is the one the server's plan built. */
@@ -21,6 +21,8 @@ export function TrainCard({
   onMode,
   length,
   onLength,
+  stopWhenFlat,
+  onStopWhenFlat,
 }: {
   plan: Plan | undefined;
   estimating: boolean;
@@ -28,6 +30,8 @@ export function TrainCard({
   onMode: (m: "catch_up" | "from_scratch") => void;
   length: Length;
   onLength: (l: Length) => void;
+  stopWhenFlat: StopWhenFlat;
+  onStopWhenFlat: (s: StopWhenFlat) => void;
 }) {
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -92,6 +96,12 @@ export function TrainCard({
         <p className="text-sm text-muted-foreground" data-testid="steps-line">
           {stepsLine(plan, estimating)}
         </p>
+        <Choice label={T.stopFlat} hint={T.stopFlatHint} value={stopWhenFlat} items={Object.keys(STOP_WHEN_FLAT) as StopWhenFlat[]} onChange={onStopWhenFlat} />
+        {plan?.plateau_line && (
+          <p className="text-sm text-muted-foreground" data-testid="plateau-line">
+            {plan.plateau_line}
+          </p>
+        )}
         <p className="text-sm">{lrLine(plan?.lr)}</p>
         <p className="text-sm" title={T.scheduleDesc}>
           {T.scheduleLabel} {T.scheduleValue} {T.scheduleNote}

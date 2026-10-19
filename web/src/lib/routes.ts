@@ -19,7 +19,6 @@ export const ROUTES: Route[] = [
   { route: "quicktest", href: "/quick-test", area: "models", title: "Quick test", lead: "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real." },
   { route: "compare", href: "/compare", area: "models", title: "Compare runs", lead: "Change one thing, hold the rest equal, run several seeds." },
   { route: "your_data", href: "/your-data", area: "data", title: "Your data", lead: "Three kinds, because each one trains a different stage." },
-  { route: "make_data", href: "/make-data", area: "data", title: "Make extra data", lead: "Optional. Generate more, then keep what passes review." },
   { route: "pretraining", href: "/pretraining", area: "data", title: "Pretraining", lead: "Feed it text. It learns by predicting the next word, over and over." },
   { route: "storage", href: "/storage", area: "data", title: "Storage", lead: "What the app keeps on this computer's disk, and what you can delete to free space." },
   { route: "runs", href: "/runs", area: "runs", title: "Runs", lead: "Every training run on this computer and the cluster: what it is doing now and how the last ones ended." },

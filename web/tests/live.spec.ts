@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 
 test("Make data loads real rules, previews without saving, and stores checked problems", async ({ page, request }) => {
   const before = await (await request.get("/data/problems/rows?limit=1000")).json();
-  await page.goto("/make-data/");
+  await page.goto("/your-data/?kind=problems");
+  await page.getByText("Make extra data", { exact: true }).click();
   await page.getByLabel("Rule", { exact: true }).selectOption("reverse");
   await page.getByRole("button", { name: "Try 5 first" }).click();
   await expect(page.getByText("Preview, nothing saved")).toBeVisible();
