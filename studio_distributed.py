@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import studio_run_health as run_health
 from studio_peer import PeerClient, PeerError
 
 KEPT = 20  # runs remembered, newest last
@@ -584,7 +585,7 @@ def view(run, coordinator, job, peers=None):
             "owner": run.owner, "handoff": run.handoff, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or "", peers),
-            "history": round_rows((snap or {}).get("history", []), rules.get("best_round")), "can_stop": state in ACTIVE, "reviewed_only": bool(run.params.get("reviewed_only")),
+            "history": round_rows((snap or {}).get("history", []), rules.get("best_round")), "health": run_health.summarize((snap or {}).get("history", [])), "can_stop": state in ACTIVE, "reviewed_only": bool(run.params.get("reviewed_only")),
             "lessons": sum(e["rows"] for e in lessons if e["status"] == "live"), "lessons_left_out": sum(e["rows"] for e in lessons if e["status"] != "live"),
             "paused": paused, "can_pause": state in ("waiting", "running") and not paused and coordinator is not None, "can_resume": paused,
             "can_restart": state in ENDED and not restart_blocker(run, getattr(coordinator, "term", run.term)),

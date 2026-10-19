@@ -43,6 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
+import studio_run_health as run_health
 import studio_diloco_rules as drules
 
 FORMAT = 1
@@ -1128,6 +1129,8 @@ class Coordinator:
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
                "lr": self.settings.outer_lr * self.rules.lr_scale, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
                "outer_step_norm": norm}
+        arrived = {n: current.marks[n]["delta_received"] - current.opened for n in sent if "delta_received" in current.marks.get(n, {})}
+        row["health"] = run_health.record(row, {n: v[3] for n, v in sent.items()}, arrived, self.theta_nbytes)  # what this round measured
         self.history.append(row)
         self.deal = current.deal
         self.next_round += 1
