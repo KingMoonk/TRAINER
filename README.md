@@ -247,6 +247,24 @@ Push a `v*` tag (for example `git tag v1.0.0 && git push origin v1.0.0`) and `.g
 
 The builds are unsigned, so macOS Gatekeeper (right-click the app, Open) and Windows SmartScreen (More info, Run anyway) will warn on first launch. A packaged app keeps `data/` and `runs/` in your user data folder (`~/Library/Application Support/Groundwork` on macOS, `%APPDATA%\Groundwork` on Windows) so they survive an upgrade.
 
+## Agent PRs
+
+`.github/workflows/agent.yml` hands a GitHub issue to Claude Code and opens a pull request with the result. Start it from Actions, Agent PR, Run workflow, or from the command line:
+
+```
+gh workflow run agent.yml -f issue=123
+gh workflow run agent.yml -f issue=123 -f instructions="Keep the change to studio_queue.py" -f base=wedd-compute-cluster -f draft=true
+```
+
+`model` (default `opus`) and `max_budget_usd` (default 20) are inputs too. The run assigns the issue to whoever started it and comments the run link on it; it refuses an issue assigned to someone else. Claude Code then works on a fresh `agent/issue-<N>-<run id>` branch on an Ubuntu runner with a `.venv` holding the CPU build of PyTorch, following `CLAUDE.md` and `.claude/rules/` with the CI exceptions in `.github/agent/prompt.md`: it reads the issue, related issues, PRs and CI logs with `gh`, uses web fetch and search, runs the affected tests with `tasks.py test`, commits, and merges the base branch. The publish job then pushes the branch, files the agent's follow-up issues, opens the PR (`Closes #N`) and links it on the issue. If the agent makes no commits, writes no valid Conventional Commit title, or stops on the budget, the run posts that on the issue and hands the issue back. The job log shows the agent's messages and tool calls; the full transcript is in the run's `agent-out` artifact.
+
+Setup, once:
+
+- Model access: a repository secret `ANTHROPIC_API_KEY` (an API key; give it a spend limit in the Claude Console), or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` to bill a Claude subscription.
+- CI on the agent's PRs: a PR opened with the workflow's own `GITHUB_TOKEN` starts no other workflow, so CI and the title lint would not run on it (close and reopen the PR to start them). Give the publish job its own identity instead: a GitHub App installed on this repository with Contents, Pull requests and Issues read/write (repository variable `AGENT_APP_CLIENT_ID`, secret `AGENT_APP_PRIVATE_KEY`), or a fine-grained token with the same permissions (secret `AGENT_GH_TOKEN`).
+
+How it is contained: the job that runs the model has a read-only `GITHUB_TOKEN`, so the agent cannot push, merge, or post anything, whatever an issue, comment or web page tells it. Its commits leave that job as a git bundle, and only the publish job, which runs no repository code and no model, holds a token that writes. That job refuses commits that change `.github/workflows/`, because a workflow changed on a branch of this repository runs with its secrets once the PR opens. The model key is visible to commands the agent runs, which is why it should be a key with a spend limit used for nothing else.
+
 ## Codebase structure
 
 Entry points and engine services sit in the repository root; swappable model/training modules live in `studio_modules/`, tests in `tests/`, and packaging hooks in `packaging/`.

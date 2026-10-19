@@ -56,7 +56,7 @@ export const NEW_RUN = {
   busyBodyOne: "{names} is busy with another job, so the run starts without it. It will join a later round if it frees up.",
   busyBodyMany: "{names} are busy with other jobs, so the run starts without them. They will join a later round if they free up.",
   launchAnyway: "Launch anyway",
-  notAnswering: "Not answering",
+  notAnswering: "Unreachable",
   localRequired: "This computer coordinates every run over several machines, so it always takes part.",
   noMachines: "No machine is listed. Add machines on the Machines page.",
 

@@ -84,12 +84,12 @@ test("jobs of both machines appear with their node, a pin moves a row, and a sto
     await page.reload();
     await expect(page.getByTestId(`place-${created[0]}`)).toHaveText(`Pinned to ${peerName}: it runs there or waits`);
 
-    // Stop the other machine: its rows stay, greyed and labelled, and the page says it is not answering.
+    // Stop the other machine: its rows stay, greyed and labelled, and the page says it is unreachable.
     peer?.kill();
     await expect(other.getByTestId(`other-${peerJob}`)).toHaveAttribute("data-stale", "true", { timeout: 30_000 });
     await expect(other.getByTestId(`other-${peerJob}`)).toContainText("Cluster live peer job");
     await expect(other.getByTestId(`other-${peerJob}`)).toContainText("last known");
-    await expect(other.getByRole("status")).toContainText("is not answering");
+    await expect(other.getByRole("status")).toContainText("is unreachable");
     await expect(other.getByTestId(`node-${PEER}`)).toHaveClass(/opacity-60/);
   } finally {
     await request.put("/cluster/nodes", { data: { addresses: [] } });

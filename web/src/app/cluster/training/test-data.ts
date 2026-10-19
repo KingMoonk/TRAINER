@@ -3,7 +3,7 @@ import type { Lane, RoundTimeline, RunEvent } from "@/app/runs/view/live";
 import type { Member, Round, Run } from "./logic";
 
 export const member = (name: string, over: Partial<Member> = {}): Member => ({
-  node: name, address: name, local: false, device: "cuda", device_name: "RTX 4090", state: "training", note: "", missed: 0, sent: false, rounds_done: 0, steps: 0,
+  node: name, address: name, local: false, device: "cuda", device_name: "RTX 4090", state: "training", note: "", reason: "", blocking_job: null, missed: 0, sent: false, rounds_done: 0, steps: 0,
   tokens_per_second: null, last_delta_bytes: null, last_delta_dtype: "", can_stop: true,
   phase: null, step_in_round: 0, round_steps: 100, loss: null, live_tokens_per_second: null, reported_ago: null, shards: 0, samples: [], ...over,
 });
