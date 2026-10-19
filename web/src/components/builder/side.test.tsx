@@ -53,13 +53,13 @@ describe("model controls", () => {
     const user = userEvent.setup();
     const onKnob = vi.fn();
     const { rerender } = render(<Controls registry={registry} cur={choices} draft={{ ...choices, H: 1 }} knobs={{ H: true, W: true }} onKnob={onKnob} />);
-    expect(screen.getByRole("button", { name: "Decrease Look-back heads" })).toBeDisabled();
-    screen.getByRole("button", { name: "Increase Look-back heads" }).focus();
+    expect(screen.getByRole("button", { name: "Decrease Attention heads" })).toBeDisabled();
+    screen.getByRole("button", { name: "Increase Attention heads" }).focus();
     await user.keyboard("{Enter}");
     expect(onKnob).toHaveBeenLastCalledWith("H", 3);
     rerender(<Controls registry={registry} cur={choices} draft={{ ...choices, H: 8, W: 2 }} knobs={{ H: true, W: true }} onKnob={onKnob} />);
-    expect(screen.getByRole("button", { name: "Increase Look-back heads" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Increase Thinking room" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Increase Attention heads" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Increase MLP width" })).toBeDisabled();
   });
 
   test("keeps unavailable knobs disabled across sliders, steps and choices", () => {
