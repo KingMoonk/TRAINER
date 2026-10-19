@@ -5,6 +5,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -217,8 +218,11 @@ class Training(Directory):
 
     def test_two_overlapped_members_beat_one_after_the_same_steps_per_member(self):
         shape = dict(inner_steps=4, rounds=6, outer_lr=.7, outer_momentum=.9, min_members=1, delta_dtype="float16")
-        one = self.train(1, "one", **shape)
-        two = self.train(2, "two", **{**shape, "min_members": 2})
+        # deal_steps hands out steps by each member's measured wall-clock speed, so two threads that differ by a few percent get 5 and 3
+        # steps in some rounds and the losses move from run to run. "The same steps per member" is the claim here (balancing has its own tests).
+        with mock.patch.object(studio_diloco, "deal_steps", lambda settings, members, step_times: {node: settings.inner_steps for node in members}):
+            one = self.train(1, "one", **shape)
+            two = self.train(2, "two", **{**shape, "min_members": 2})
         self.assertEqual([len(r["contributed"]) for r in two.history], [2] * 6)
         losses = (one.history[-1]["val_loss"], two.history[-1]["val_loss"])
         print(f"overlapped, final validation loss after 6 rounds x 4 steps per member: 1 member {losses[0]:.4f}, 2 members {losses[1]:.4f}")

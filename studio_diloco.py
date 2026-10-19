@@ -51,6 +51,7 @@ LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
 STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
 GONE_RUN = "No distributed run"  # the start of the 404 detail of a run the coordinator's app does not hold (routers.collective.coordinator)
+FINISHED = "The run is finished."  # the 409 detail of a join to a run that has ended
 STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
@@ -843,7 +844,7 @@ class Coordinator:
             self._touch(node)
             self._advance()
             if self.finished:
-                raise Stale("The run is finished.")
+                raise Stale(FINISHED)
             if node in self.banned:
                 raise Stale(f"{node} was stopped by the run's owner.")
             self.gone.pop(node, None)
@@ -1236,6 +1237,9 @@ class Coordinator:
         with self.cond:
             self._touch(node)
             self._advance()
+            if self.superseded:  # the route admitted the term before this coordinator stepped down and released its theta (below, an empty one fails the shape check as a 400)
+                raise StaleTerm(f"{TERM_STALE} {self.term if term is None else term}: the run is at term {self.superseded}, so this node no longer coordinates it.",
+                                self.superseded)
             current = self.current
             try:
                 self._admit(current, number, node, generation, epoch, term)
@@ -2202,7 +2206,9 @@ class Member:
             except PeerError as exc:
                 self._refused(exc)
                 if exc.status == 404 and exc.detail.startswith(GONE_RUN):
-                    found = self._relocated()  # a coordinator that stepped down is gone from its node, and the run is coordinated elsewhere now
+                    # a coordinator that stepped down is gone from its node, and the run is coordinated elsewhere now; the claim that says where
+                    # may still be on its way to this node's store, so it is waited for (a restarted app never answers: that ends after `patience`)
+                    found = self._relocated_within() if self.locate is not None else None
                     if found is not None:
                         raise Rebound(found) from None
                     raise PeerError(f"The coordinator no longer has run {self.run} (its app restarted), so this member left. "
@@ -2259,7 +2265,14 @@ class Member:
         self.fenced = self.finished = self.started = self.moved = False
         self.entered = self.anchor = None
         self.ended.clear()
-        self.join()
+        from studio_peer import PeerError
+        try:
+            self.join()
+        except PeerError as exc:
+            if exc.status != 409 or FINISHED not in exc.detail:
+                raise
+            self.finished = True  # the run ended on the coordinator in charge while this member was still leaving the old one: nothing is left to do
+            return
         self._enter(self.info["round"])
 
     def join(self):
