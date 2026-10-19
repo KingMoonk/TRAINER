@@ -1548,7 +1548,9 @@ export interface paths {
          *     machines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`
          *     every listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,
          *     each with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the
-         *     pretrain job leaves the queue.
+         *     pretrain job leaves the queue. With `coordinator` (one of the invited machines, which must answer on this app version: else 400
+         *     or 409 with the reason) this computer starts the run and hands the coordinator role to that machine once it holds a finished
+         *     round (studio_failover, "handoff"); without it this computer coordinates throughout.
          */
         post: operations["start_run_distributed_runs_post"];
         delete?: never;
@@ -6630,6 +6632,11 @@ export interface components {
             expected: number;
             /** Grace S */
             grace_s: number;
+            /**
+             * Handoff
+             * @default
+             */
+            handoff: string;
             /** History */
             history: components["schemas"]["Round"][];
             /** Id */
@@ -7024,11 +7031,13 @@ export interface components {
         };
         /**
          * StartRun
-         * @description What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part.
+         * @description What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.
          */
         StartRun: {
             /** All Machines */
             all_machines?: boolean | null;
+            /** Coordinator */
+            coordinator?: string | null;
             /** Dataset Ids */
             dataset_ids: string[];
             /**

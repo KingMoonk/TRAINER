@@ -43,7 +43,7 @@ class Defaults(BaseModel):
 
 
 class StartRun(BaseModel):
-    """What the Training tab's form sends. The design is a version's; this computer always coordinates and takes part."""
+    """What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator."""
 
     version: int | None = None  # None: the current version
     dataset_ids: list[str] = Field(min_length=1)
@@ -56,6 +56,7 @@ class StartRun(BaseModel):
     outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
     min_members: int | None = Field(None, ge=1, le=64)  # the run waits in the queue until this many machines (this one included) are free at once
     max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
+    coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     overlap: bool = False  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs
 
 
@@ -154,7 +155,8 @@ class Run(BaseModel):
     state: Literal["queued", "starting", "waiting", "running", "finished", "stopped", "failed"]
     note: str
     started_at: float
-    owner: str  # the computer that coordinates
+    owner: str  # the computer that started the run (its queue record is here)
+    handoff: str = ""  # the machine chosen to coordinate: this computer hands the run to it once it holds a finished round; "" for this computer
     saved_version: int | None  # the version whose weights this run saved when it finished; None while it runs, and for a stopped or failed run
     term: int = 1  # the coordinator's term
     coordinator: str = ""  # the origin whose account of the run this is
@@ -334,13 +336,30 @@ def _answering(peers, own):
     return joining, left_out
 
 
+def _check_coordinator(address, chosen, peers, own):
+    """The machine chosen to coordinate a run must be one the run invites that answers on this app version; anything else is a 400 (not
+    chosen) or 409 (not usable) with the reason, so a run never starts on a coordinator it cannot hand the run to. "" is this computer."""
+    if not address:
+        return
+    if address not in chosen:
+        raise HTTPException(400, f"{address} cannot coordinate the run: it is not one of the machines chosen for it.")
+    peer = next((p for p in peers if p.address == address), None)
+    name = (peer.hostname or address) if peer is not None else address
+    if peer is None or not peer.online:
+        raise HTTPException(409, f"{name} cannot coordinate the run: " + ((peer.error if peer is not None else "") or f"{name} did not answer."))
+    if peer.version and own.version and peer.version != own.version:
+        raise HTTPException(409, f"{name} cannot coordinate the run: it runs app version {peer.version}; this computer runs {own.version}.")
+
+
 @router.post("/runs", status_code=201)
 def start_run(body: StartRun, request: Request, services: Services) -> Run:
     """Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen
     machines are invited when the run starts, and the form's settings are checked here (400 with a sentence). With `all_machines`
     every listed machine that answers on this app version is invited and the rest are left out (`left_out` in the job's params,
     each with a reason); with `replaces` the run takes a waiting pretrain job's version, text and place in the queue, and the
-    pretrain job leaves the queue."""
+    pretrain job leaves the queue. With `coordinator` (one of the invited machines, which must answer on this app version: else 400
+    or 409 with the reason) this computer starts the run and hands the coordinator role to that machine once it holds a finished
+    round (studio_failover, "handoff"); without it this computer coordinates throughout."""
     replaced, index = _replaced(services, body.replaces) if body.replaces else (None, None)
     number = replaced.params.get("version") if replaced is not None else body.version
     dataset_ids = list(replaced.params.get("datasets") or []) if replaced is not None else body.dataset_ids
@@ -361,6 +380,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
             raise HTTPException(400, f"{address} is not on the Machines tab.")
     chosen = listed if body.all_machines else [a for a in listed if a in body.machines]
     peers = studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
+    _check_coordinator(body.coordinator, chosen, peers, own)
     left_out = []
     if body.all_machines:
         peers, left_out = _answering(peers, own)
@@ -376,7 +396,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
         "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
-        "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
+        **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)
     if replaced is not None:

@@ -16,7 +16,7 @@ const queue = (over: Partial<Queue> = {}): Queue => ({
 const round = (n: number, loss: number | null, val: number | null, seconds = 600) => ({ round: n, loss, val_loss: val, seconds, step: n * 100, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0 });
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id, label: "from scratch", version: 5, saved_version: null, state: "running", note: "", started_at: 100, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9,
-  delta_dtype: "float16", term: 1, coordinator: "", origin: "", age_s: 0, origin_down: false, can_stop: true, history: [round(6, 3.5, 3.6), round(7, 3.41, 3.47)],
+  delta_dtype: "float16", term: 1, coordinator: "", handoff: "", origin: "", age_s: 0, origin_down: false, can_stop: true, history: [round(6, 3.5, 3.6), round(7, 3.41, 3.47)],
   phase: "training", deadline_s: null, grace_s: 2, window_s: null, contributed: 0, expected: 2, theta_bytes: 0, now_s: 0, timeline: [], events: [],
   members: [
     { node: "mac", address: "local", local: true, state: "training" },

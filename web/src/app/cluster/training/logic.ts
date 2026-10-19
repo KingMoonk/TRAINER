@@ -12,7 +12,7 @@ export type TextSet = components["schemas"]["TextSet"];
 export type ClusterNode = components["schemas"]["ClusterNode"];
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; coordinator: string };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -32,6 +32,7 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     minMachines: "",
     maxMachines: "",
     overlap: false,
+    coordinator: "",
   };
 }
 
@@ -71,6 +72,7 @@ export function startBody(form: Form): StartRun | null {
     version: form.version === "" ? null : Number(form.version),
     dataset_ids: form.datasets,
     machines: form.machines,
+    ...(form.coordinator !== "" && form.machines.includes(form.coordinator) ? { coordinator: form.coordinator } : {}),
     rounds,
     inner_steps: innerSteps,
     outer_lr: outerLr,

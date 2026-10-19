@@ -422,6 +422,15 @@ follows it: a member rejoins the new coordinator, an old coordinator stops closi
   `Failover` tells the host (`finished_under_successor`) at each poll and `ClusterHost` ends the job again for the services, which
   fetch the weights the same way (at most `SAVE_TRIES` polls). A run the person stopped saves nothing.
 - Not done: a failed takeover is not retried on another node except by the same rule on the next poll.
+- Choosing the coordinator (#335): `StartRun.coordinator` names one of the ticked machines (an address from the Machines list;
+  default, empty: this computer). The API checks it at start: it must be among the machines chosen, answer, and run this app's
+  version, or the start fails (400 / 409). It is a planned handoff over the failover path, not a second mechanism: the owner builds
+  the coordinator at term 1 as usual (the data and tokenization live on the owner), invites the chosen machine as a member and
+  ranks it first among the replica holders (`Coordinator.prefer`), and the run row publishes `handoff` (the chosen node). Once the
+  chosen node holds a whole replica at the coordinator's round or later, `Failover` claims term+1 at once, without the
+  "coordinator lost" wait (`Failover._handed`); the owner then steps down and members follow through the where-file as in any
+  takeover. The round in flight at the handoff is lost. If the chosen machine never becomes a ready replica, the owner keeps
+  coordinating.
 
 ## Failures
 

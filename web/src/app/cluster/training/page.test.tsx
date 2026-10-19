@@ -93,6 +93,20 @@ describe("Training tab: the start form", () => {
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");
   });
 
+  test("offers the ticked machines as coordinator and sends the choice", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    expect(screen.queryByLabelText("Coordinator")).not.toBeInTheDocument(); // nothing ticked: this computer coordinates
+    await user.click(await screen.findByRole("checkbox", { name: /gpu-box/ }));
+    const pick = screen.getByLabelText("Coordinator");
+    expect(pick).toHaveValue("");
+    await user.selectOptions(pick, "gpu-box");
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0]).toMatchObject({ machines: ["gpu-box"], coordinator: "gpu-box" });
+  });
+
   test("cannot start with no text ticked", async () => {
     server();
     renderPage(<TrainingPage />, { route: "/cluster/training" });

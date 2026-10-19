@@ -157,6 +157,51 @@ class Driver(unittest.TestCase):
         self.assertEqual(self.host.did("withdraw"), [])
         self.assertIn(("point", "b", 2, False), self.host.log)
 
+    def chosen(self, round=5, ready=True, hands_to="b", silent=0., down=()):
+        """a is up and coordinating at term 1 round `round`; the person chose `hands_to` to coordinate the run."""
+        self.host.seen["r"] = [Seen(Claim("r", "a", 1, round), silent, "running", hands_to)]
+        self.host.held["r"] = [Held("b", round, 1, ready), Held("a", round, 0)]
+        self.host.down = set(down)
+
+    def test_the_chosen_node_takes_over_from_a_coordinator_that_is_up_once_it_holds_the_last_round(self):
+        self.chosen()
+        self.step()
+        self.assertEqual(self.host.did("claim"), [("claim", Claim("r", "b", 2, 5, 1))])
+        self.assertEqual(len(self.host.did("take_over")), 1)
+
+    def test_the_chosen_node_waits_until_its_replica_is_whole_and_current(self):
+        for round, ready in ((5, False), (0, True)):
+            self.chosen(round=round, ready=ready)
+            self.step()
+        self.chosen()
+        self.host.held["r"] = [Held("b", 4, 1), Held("a", 5, 0)]  # a round behind the coordinator's last
+        self.step()
+        self.chosen(round=0)  # nothing to continue from before a round has closed
+        self.host.held["r"] = [Held("b", 0, 1)]
+        self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_only_the_chosen_node_hands_over_and_a_run_with_no_choice_waits_for_a_loss(self):
+        self.chosen(hands_to="c")
+        self.step()
+        self.chosen(hands_to="")
+        self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_a_run_that_ended_is_not_handed_over(self):
+        for state in failover.ENDED:
+            self.chosen()
+            self.host.seen["r"] = [Seen(Claim("r", "a", 1, 5), 0., state, "b")]
+            self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
+    def test_the_chosen_node_that_already_coordinates_does_not_claim_again(self):
+        self.chosen()
+        self.host.mine = Claim("r", "b", 2, 5, 1)
+        self.host.seen["r"] = [Seen(Claim("r", "a", 1, 5), 0., "running", "b"), Seen(Claim("r", "b", 2, 5, 1), 0.)]
+        self.step()
+        self.assertEqual(self.host.did("claim"), [])
+
     def test_a_run_that_finished_under_a_successor_is_reported_at_every_poll(self):
         self.host.seen["r"] = [Seen(Claim("r", "a", 2, 5), 0., "finished")]
         self.step()
