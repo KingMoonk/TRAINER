@@ -40,6 +40,8 @@ from pathlib import Path
 
 import numpy as np
 
+import studio_run_health as run_health
+
 FORMAT = 1
 TERM_HEADER = "X-Run-Term"  # every answer on /collective/{run} carries the coordinator's term here and in its JSON body
 TERM_STALE = "Stale term"  # the start of the 409 message for a term that is not the coordinator's
@@ -756,6 +758,8 @@ class Coordinator:
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
                "lr": self.settings.outer_lr, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
                "outer_step_norm": norm}
+        arrived = {n: current.marks[n]["delta_received"] - current.opened for n in sent if "delta_received" in current.marks.get(n, {})}
+        row["health"] = run_health.record(row, {n: v[3] for n, v in sent.items()}, arrived, self.theta_nbytes)  # what this round measured
         self.history.append(row)
         self.deal = current.deal
         self.next_round += 1

@@ -11,6 +11,7 @@ import threading
 import time
 from collections import deque
 
+import studio_run_health as run_health
 from studio_diloco import EVENTS_KEPT, SAMPLES_KEPT, TIMELINES_KEPT, Stale
 
 BYTES = 4_000_000  # made-up size of the weights
@@ -128,14 +129,17 @@ class FakeCoordinator:
         size = BYTES * DELTA_SCALE.get(self.dtype, .5)
         self.timelines.append(self._timeline(number, plan, closes, True, math.inf))
         done = closes + OUTER + CHECK
-        self.history.append({
+        row = {
             "round": number, "step": (number + 1) * self.steps, "generation": 1, "members": list(self.roster), "contributed": counted,
             "dropped": dropped, "tokens": sum(node_tokens.values()), "steps": {m: self.steps for m in counted},
             "loss": loss, "val_loss": round(loss + .08, 4), "seconds": done * self.unit,
             "delta_bytes": int(size) * len(counted), "theta_bytes": BYTES * len(self.roster), "delta_dtype": self.dtype,
             "node_tokens": node_tokens, "node_seconds": {m: profiles[m]["train"] * self.unit for m in counted},
             "node_bytes": {m: int(size) for m in counted}, "outer_step_norm": round(.6 / (number + 3), 4),
-            "tokens_per_second": sum(node_tokens.values()) / max(1e-9, done * self.unit)})
+            "tokens_per_second": sum(node_tokens.values()) / max(1e-9, done * self.unit), "lr": self.settings.get("outer_lr", 0.), "tokens": sum(node_tokens.values())}
+        arrived = {m: plan[m][3] * self.unit for m in counted}
+        row["health"] = run_health.record(row, {m: loss_at(number, self.steps, self.steps, profiles[m]["index"]) for m in counted}, arrived, BYTES)
+        self.history.append(row)
         self.opened += done
         self.logged.discard(("outer", number))
         self.drops = {}

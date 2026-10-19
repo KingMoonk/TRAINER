@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import studio_run_health as run_health
 from studio_peer import PeerClient, PeerError
 
 KEPT = 20  # runs remembered, newest last
@@ -412,7 +413,7 @@ def view(run, coordinator, job):
             "owner": run.owner, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or ""),
-            "history": round_rows((snap or {}).get("history", [])), "can_stop": state in ACTIVE,
+            "history": round_rows((snap or {}).get("history", [])), "health": run_health.summarize((snap or {}).get("history", [])), "can_stop": state in ACTIVE,
             "phase": phase_of(snap, state), "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
             "window_s": (snap or {}).get("window_s"), "contributed": (snap or {}).get("contributed", 0), "expected": (snap or {}).get("expected", 0),
             "theta_bytes": (snap or {}).get("theta_bytes", 0), "now_s": (snap or {}).get("now_s", 0.),
