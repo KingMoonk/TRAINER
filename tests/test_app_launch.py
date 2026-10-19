@@ -45,5 +45,43 @@ class Launch(unittest.TestCase):
         opened.assert_not_called()
 
 
+class Smoke(unittest.TestCase):
+    def test_smoke_flag_is_taken_out_of_the_arguments(self):
+        self.assertEqual(app.split_smoke(["--smoke", "r.txt", "--allow-cpu"]), ("r.txt", ["--allow-cpu"]))
+        self.assertEqual(app.split_smoke(["--allow-cpu"]), (None, ["--allow-cpu"]))
+        with self.assertRaises(SystemExit):
+            app.split_smoke(["--smoke"])
+
+    def test_a_module_that_fails_to_import_is_named(self):
+        real = app.importlib.import_module
+
+        def fake(name):
+            if name == "studio_worker":
+                raise ModuleNotFoundError("No module named 'x'")
+            return real(name)
+
+        with mock.patch.object(app.importlib, "import_module", fake), mock.patch.object(app, "HIDDEN", ("studio_worker",)):
+            lines = app.missing_modules()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("studio_worker: ModuleNotFoundError", lines[0])
+
+    def test_smoke_starts_the_api_without_a_browser_and_reports_ok(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("webbrowser.open") as opened, \
+                mock.patch.object(app, "missing_modules", return_value=[]), redirect_stdout(io.StringIO()):
+            report = Path(tmp) / "report.txt"
+            code = app.main(["--smoke", str(report)])
+            self.assertEqual(report.read_text(encoding="utf-8"), "OK\n")
+        self.assertEqual(code, 0)
+        opened.assert_not_called()
+
+    def test_smoke_fails_loudly_on_a_missing_module(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(app, "missing_modules", return_value=["import studio_worker: boom"]), \
+                redirect_stdout(io.StringIO()):
+            report = Path(tmp) / "report.txt"
+            code = app.main(["--smoke", str(report)])
+            self.assertEqual(report.read_text(encoding="utf-8"), "import studio_worker: boom\nFAIL\n")
+        self.assertEqual(code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

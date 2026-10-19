@@ -28,6 +28,23 @@ jobs:
       - run: python -m unittest tests.test_module_packaging -v
       # studio_brain3d is only ever launched by name (the 3D viewer), so the import scan cannot see it
       - run: python -m PyInstaller app.py --name Groundwork --windowed --noconfirm --clean --additional-hooks-dir packaging --hidden-import studio_brain3d --hidden-import studio_worker
+      # Launches the frozen build with no window: it must import the hidden imports and every studio_modules submodule, serve FakeServices on a free port and answer /node.
+      # The report file is the only output of a --windowed build, so it is printed here; a missing module or a timeout fails the build before anything is zipped.
+      - name: Smoke test the frozen app
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          exe = {"macos": "dist/Groundwork.app/Contents/MacOS/Groundwork", "windows": "dist/Groundwork/Groundwork.exe"}["${{ matrix.name }}"]
+          report = pathlib.Path("smoke-report.txt")
+          report.unlink(missing_ok=True)
+          try:
+              code = subprocess.run([exe, "--smoke", str(report)], timeout=180).returncode
+          except subprocess.TimeoutExpired:
+              code = "timed out after 180s"
+          text = report.read_text(encoding="utf-8") if report.exists() else "(no report written: the app crashed before it could)"
+          print(text)
+          if code != 0 or not text.endswith("OK\n"):
+              sys.exit(f"smoke test failed (exit {code})")
       - name: Zip (macOS)
         if: matrix.name == 'macos'
         run: ditto -c -k --keepParent dist/Groundwork.app Groundwork-macos.zip

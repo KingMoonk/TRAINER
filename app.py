@@ -1,6 +1,12 @@
 """python app.py [--fake | --workspace DIR] [--port N] ...: start the Groundwork API on this machine and open the web UI in the default browser.
 
-Takes the flags of `python -m studio_api` (which starts the API alone, for development and for a node without a screen)."""
+Takes the flags of `python -m studio_api` (which starts the API alone, for development and for a node without a screen).
+
+python app.py --smoke REPORT: the release check on the frozen build. Imports the modules PyInstaller cannot see, serves FakeServices on a free port,
+waits for /node to answer, stops, and writes what it found to REPORT; the exit code is 0 only when everything came up. No browser, no web build needed."""
+import importlib
+import pkgutil
+import socket
 import sys
 import threading
 import time
@@ -12,13 +18,83 @@ OPEN_WITHIN = 60.  # seconds to wait for the server to answer before giving up o
 BUILD_HINT = "The web UI is not built yet: run .venv/bin/python tasks.py web:build, then start the app again."
 
 
+HIDDEN = ("studio_brain3d", "studio_worker")  # the --hidden-import list in .github/workflows/release.yml: launched by name, so the import scan misses them
+
+
+def split_smoke(argv):
+    """(report path or None, the other arguments): --smoke REPORT is app.py's own, so it is taken out before studio_api parses the rest."""
+    argv = list(argv)
+    if "--smoke" not in argv:
+        return None, argv
+    at = argv.index("--smoke")
+    if at + 1 >= len(argv):
+        raise SystemExit("--smoke needs a report file")
+    report = argv[at + 1]
+    return report, argv[:at] + argv[at + 2:]
+
+
+def missing_modules():
+    """Lines naming each module that fails to import in this build: the hidden imports and every studio_modules submodule."""
+    import studio_modules
+
+    names = list(HIDDEN) + [m.name for m in pkgutil.walk_packages(studio_modules.__path__, "studio_modules.")]
+    lines = []
+    for name in names:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - any failure to load is the finding
+            lines.append(f"import {name}: {type(exc).__name__}: {exc}")
+    return lines
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def smoke(argv, report):
+    """Returns the exit code: 0 when every module imported and /node answered. The report holds one line per finding."""
+    import uvicorn
+
+    from studio_api.__main__ import build, parse
+
+    lines = missing_modules()
+    if not lines:
+        args = parse(argv + ["--fake", "--port", str(free_port())], prog="python app.py --smoke")
+        server = uvicorn.Server(uvicorn.Config(build(args), host=args.bind, port=args.port, proxy_headers=False))
+        done, answered = threading.Event(), []
+
+        def stop():
+            answered.append(True)
+            server.should_exit = True
+
+        def watch():
+            open_when_up(url_of(args), done, stop, browser=False)
+            server.should_exit = True  # also when /node never answered, so the run ends
+
+        threading.Thread(target=watch, name="smoke", daemon=True).start()
+        try:
+            server.run()
+        finally:
+            done.set()
+        if not (answered and server.started):
+            lines.append(f"/node did not answer on port {args.port} within {OPEN_WITHIN:.0f}s")
+    failed = bool(lines)
+    text = "\n".join(lines + ["FAIL" if failed else "OK"]) + "\n"
+    with open(report, "w", encoding="utf-8") as f:  # a windowed build has no console, so the report file is the only output
+        f.write(text)
+    print(text, end="")
+    return 1 if failed else 0
+
+
 def url_of(args):
     host = "127.0.0.1" if args.bind in ("0.0.0.0", "::") else args.bind
     return f"http://[{host}]:{args.port}/" if ":" in host else f"http://{host}:{args.port}/"
 
 
-def open_when_up(url, done, after_open=None):
-    """Open the browser at `url` once /node answers; stop waiting when `done` is set or after OPEN_WITHIN seconds."""
+def open_when_up(url, done, after_open=None, browser=True):
+    """Open the browser at `url` once /node answers (browser=False: only wait); stop waiting when `done` is set or after OPEN_WITHIN seconds."""
     deadline = time.monotonic() + OPEN_WITHIN
     while not done.is_set() and time.monotonic() < deadline:
         try:
@@ -27,7 +103,8 @@ def open_when_up(url, done, after_open=None):
         except (urllib.error.URLError, OSError):
             done.wait(.1)
             continue
-        webbrowser.open(url)
+        if browser:
+            webbrowser.open(url)
         if after_open:
             after_open()
         return
@@ -40,7 +117,10 @@ def main(argv=None, after_open=None):
     from studio_api import app as api_app
     from studio_api.__main__ import build, parse
 
-    args = parse(sys.argv[1:] if argv is None else list(argv), prog="python app.py")
+    report, argv = split_smoke(sys.argv[1:] if argv is None else argv)
+    if report:
+        return smoke(argv, report)
+    args = parse(argv, prog="python app.py")
     if args.reload or args.dump_openapi:
         print("--reload and --dump-openapi belong to python -m studio_api.")
         return 2
