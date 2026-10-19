@@ -1611,8 +1611,14 @@ def _passive_best(session):
 
 
 def _passive_saved(rows):
-    """{checkpoint path: version number} for the versions made from a passive session's checkpoint."""
-    return {r["passive"]["checkpoint"]: r["number"] for r in rows if isinstance(r.get("passive"), dict) and r["passive"].get("checkpoint")}
+    """{checkpoint path: version number} for the versions made from a passive session's checkpoint. Rows saved before the key was
+    renamed keep it as `passive`."""
+    found = {}
+    for r in rows:
+        source = r.get("source") or r.get("passive")
+        if isinstance(source, dict) and source.get("session") and source.get("checkpoint"):
+            found[source["checkpoint"]] = r["number"]
+    return found
 
 
 class _Pending(Exception):
@@ -2763,6 +2769,8 @@ class WorkspaceServices(Services):
         from studio_core import read_json
         record, ckpt = out / "run.json", out / "last.npz"
         done = status == "done" and ckpt.exists() and record.exists() and read_json(record).get("status") == "completed"
+        if done and (out / "best.npz").exists():
+            ckpt = out / "best.npz"  # the best round's weights, not the last round's (#487)
         if not done and status in ("done", "failed", "stopped") and not studio_distributed.run_of(job).stopped:
             ckpt = self._successor_weights(job.id, out)
             done = ckpt is not None
@@ -2776,6 +2784,10 @@ class WorkspaceServices(Services):
                 self.store.set_scorecard(number, card)
             self._note_devices(number, ckpt, scores is not None)
             self.store.set_change(number, f"{self.store.get(number)['change']} (trained in distributed run {job.id} on {', '.join(machines)})")
+            ran = read_json(record) if record.exists() else {}
+            self.store.set_source(number, {"kind": "distributed", "run": job.id, "checkpoint": str(ckpt), "best_round": ran.get("best_round"),
+                                           "val_loss": ran.get("best_val_loss"), "stop_rule": ran.get("stop_rule", ""),
+                                           "stop_reason": ran.get("stop_reason", "")})
             studio_distributed.note_saved(job.id, number)
         self._to(number, "trained" if done else "saved")
         self.emit("versions", None)

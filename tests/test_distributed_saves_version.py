@@ -51,18 +51,47 @@ class RunSavesVersion(unittest.TestCase):
     def test_the_queued_version_is_training_while_the_run_goes(self):
         self.assertEqual(self.svc.store.get(1)["status"], "training")
 
-    def test_a_finished_run_leaves_a_trained_version_holding_the_final_weights(self):
+    def test_a_finished_run_leaves_a_trained_version_holding_the_best_weights(self):
         self.train(2)
         self.assertTrue(self.coordinator.finished)
         row = self.end("done")
         self.assertEqual((row["status"], row["runs"], len(self.svc.store.versions())), ("trained", [str(self.out)], 1))
-        self.assertEqual(Path(row["best_checkpoint"]), self.out / "last.npz")
-        with np.load(row["best_checkpoint"], allow_pickle=False) as archive:
-            for name, value in self.coordinator.theta.items():
-                np.testing.assert_array_equal(archive["weight::" + name], value)
+        self.assertEqual(Path(row["best_checkpoint"]), self.out / "best.npz")  # the best round's weights (#487), which may not be the last round's
+        with np.load(row["best_checkpoint"], allow_pickle=False) as archive, np.load(self.out / "best.npz", allow_pickle=False) as best:
+            for name in self.coordinator.theta:
+                np.testing.assert_array_equal(archive["weight::" + name], best["weight::" + name])
+        self.assertEqual(row["source"]["kind"], "distributed")
+        self.assertEqual((row["source"]["run"], row["source"]["best_round"]), ("run1", self.coordinator.rules.best_round))
         self.assertIn("distributed run run1 on mac, box", row["change"])
         self.assertEqual(runs.RUNS["run1"].saved, 1)
         self.assertEqual(runs.view(runs.RUNS["run1"], self.coordinator, self.job)["saved_version"], 1)
+
+    def test_the_saved_version_holds_the_best_round_s_weights_not_the_last_round_s(self):
+        seen, losses = [], iter([3., 5.])
+
+        def evaluate(theta):
+            seen.append({name: value.copy() for name, value in theta.items()})
+            return next(losses)
+        self.coordinator.evaluate = evaluate
+        self.train(2)
+        row = self.end("done")
+        self.assertEqual((row["status"], self.coordinator.rules.best_round), ("trained", 0))
+        with np.load(row["best_checkpoint"], allow_pickle=False) as archive:
+            for name, value in seen[0].items():
+                np.testing.assert_array_equal(archive["weight::" + name], value)
+        self.assertFalse(np.array_equal(seen[0][name], seen[1][name]))
+        self.assertEqual((row["source"]["best_round"], row["source"]["val_loss"]), (0, 3.))
+
+    def test_a_run_a_rule_ended_saves_its_best_weights_and_says_why(self):
+        losses = iter([3., 5.])
+        self.coordinator.evaluate = lambda theta: next(losses)
+        self.coordinator.settings = studio_diloco.Settings(**{**self.coordinator.settings.__dict__, "patience_rounds": 1, "rounds": 6})
+        self.train(2)
+        self.assertTrue(self.coordinator.finished)
+        row = self.end("done")
+        self.assertEqual(row["status"], "trained")
+        self.assertEqual((row["source"]["stop_rule"], Path(row["best_checkpoint"]).name), ("patience", "best.npz"))
+        self.assertIn("without a better validation loss", row["source"]["stop_reason"])
 
     def test_a_stopped_run_saves_nothing_even_after_a_round(self):
         self.train(1)
@@ -135,9 +164,9 @@ class FinishedAfterFailover(unittest.TestCase):
         self.assertEqual(self.asked, [self.URL])
         self.assertEqual((row["status"], row["runs"]), ("trained", [str(self.out)]))
         self.assertEqual(Path(row["best_checkpoint"]), self.out / "last_term2.npz")
-        with np.load(row["best_checkpoint"], allow_pickle=False) as archive:
-            for name, value in self.successor.theta.items():
-                np.testing.assert_array_equal(archive["weight::" + name], value)
+        with np.load(row["best_checkpoint"], allow_pickle=False) as archive, np.load(self.successor.directory / "best.npz", allow_pickle=False) as best:
+            for name in self.successor.theta:  # the successor serves its best round's weights
+                np.testing.assert_array_equal(archive["weight::" + name], best["weight::" + name])
         self.assertIn("distributed run run1 on mac, box", row["change"])
         self.assertEqual(runs.RUNS["run1"].saved, 1)
 

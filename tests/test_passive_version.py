@@ -46,7 +46,7 @@ class Saved(unittest.TestCase):
         self.assertEqual(saved, {"version": 1, "created": True})
         row = self.services.store.get(1)
         self.assertEqual((row["status"], row["best_checkpoint"], row["runs"]), ("trained", entries[1]["path"], [str(Path(entries[1]["path"]).parent)]))
-        self.assertEqual((row["passive"]["session"], row["passive"]["rounds"], row["passive"]["round"], row["passive"]["error"]), (self.id, 3, 2, 2.0))
+        self.assertEqual((row["source"]["session"], row["source"]["rounds"], row["source"]["round"], row["source"]["error"]), (self.id, 3, 2, 2.0))
         for part in (self.id, "best of 3 rounds", "round 2", "test error 2"):
             self.assertIn(part, row["change"])
         self.assertEqual((row["scorecard"]["bpc"], row["scorecard"]["bpc_method"]), (studio_eval.corpus_bpc(np.array([[3., 10.]])), studio_eval.SCORE_METHOD))
