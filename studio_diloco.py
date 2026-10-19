@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import copy
 import gc
 import hashlib
 import io
@@ -42,6 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
+import studio_run_health as run_health
 import studio_diloco_rules as drules
 
 FORMAT = 1
@@ -480,6 +482,7 @@ class Coordinator:
         self.bounds = np.linspace(0, len(train), self.shard_count + 1).astype(int)
         self.spans, self.later = [(0, self.shard_count)], []  # per data source: its first shard id and shard count; the (windows, bounds) of the sources after the first
         self.rules = drules.State()
+        self.stages = None  # studio_stages.Policy: where next_dataset goes (the pool of sets, ranked by held-out loss), replay, the journal of switches
         self.paused = False  # the owner paused the run: no round opens until resume (a round in flight finishes)
         self.polishing = False  # the teacher is polishing theta, on a thread off the lock: like paused, no round opens meanwhile
         self.polisher, self.teacher_settings, self.polish_on = default_polish, {}, True  # polish_on: off on a coordinator made from a replica
@@ -632,7 +635,7 @@ class Coordinator:
         directory.mkdir(parents=True, exist_ok=True)
         val = install_shard(directory / "windows", "val", validation, vocabulary)
         cfg = info["config"]
-        model = sm.ScratchTransformer(cfg, vocabulary)
+        model = sm.ScratchTransformer(cfg, vocabulary, probe=True)
         state = {"term": term, "momentum": momentum, "round": int(record["round"]), "generation": int(record["generation"]),
                  "history": record["history"], "step_time": record.get("step_time"), "state_file": None, "rules": record.get("rules"), "paused": record.get("paused"),
                  "lessons": record.get("lessons")}
@@ -1089,6 +1092,8 @@ class Coordinator:
             window = round_seconds(self.settings, self.step_time)
         first, count = self.spans[min(self.rules.source, len(self.spans) - 1)]
         ids = [*range(first, first + count), *(entry["shard"] for entry in self.live_lessons())]  # the source's shards, then the lessons
+        if self.stages is not None:
+            ids += self.stages.replay_ids(self, self.next_round)  # a share of the earlier sources, so the new text does not make it forget them
         self.current = Round(self.next_round, self.generation, active, deal_ids(self.cfg["seed"], self.next_round, active, ids),
                              now, now + window, window, steps=steps)
         return True
@@ -1137,6 +1142,8 @@ class Coordinator:
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
                "lr": self.settings.outer_lr * self.rules.lr_scale, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
                "outer_step_norm": norm}
+        arrived = {n: current.marks[n]["delta_received"] - current.opened for n in sent if "delta_received" in current.marks.get(n, {})}
+        row["health"] = run_health.record(row, {n: v[3] for n, v in sent.items()}, arrived, self.theta_nbytes)  # what this round measured
         self.history.append(row)
         self.deal = current.deal
         self.next_round += 1
@@ -1166,7 +1173,13 @@ class Coordinator:
         better = loss is not None and math.isfinite(loss) and (rules.best_loss is None or loss < rules.best_loss)
         since = current.number if better else rules.best_round  # the best round once this one is folded in: the lessons written after it are the ones a drop_lessons pivot leaves out
         lessons = len(self.live_lessons(since)) if since is not None else 0
-        verdict = drules.observe(rules, self.settings, current.number, row["step"], row["val_loss"], sources=len(self.spans),
+        if self.stages is not None:
+            def would(sources):  # the verdict the rules would give with `sources` data sources, on a copy of their state
+                return drules.observe(copy.deepcopy(rules), self.settings, current.number, row["step"], row["val_loss"], sources=sources,
+                                      final=self.finished, lessons=lessons)
+            self.stages.before_observe(self, row, would)
+        verdict = drules.observe(rules, self.settings, current.number, row["step"], row["val_loss"],
+                                 sources=len(self.spans) if self.stages is None else self.stages.sources(self),
                                  final=self.finished, lessons=lessons)  # the round `rounds` ends anyway: keep the best, no restore or stop reason
         row["best"] = rules.best_round == current.number
         if verdict["improved"]:
@@ -1184,6 +1197,8 @@ class Coordinator:
             self._event("pivot", "", current.number,
                         f"Round {current.number}: {why} ({before}, best {verdict['best']:.4g} at round {verdict['best_round']}). "
                         f"Went back to round {verdict['best_round']}'s weights and {drules.PIVOT_TEXT[verdict['name']]}.")
+        if self.stages is not None:
+            self.stages.after_observe(self, row, verdict)
         return verdict
 
     def _write_best(self):
@@ -2066,7 +2081,12 @@ def prepare(job, services, directory, port, client_for=None):
     config = dict(p["config"])
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
-    examples = p["examples"] if "examples" in p else services.examples(p)
+    policy = None
+    if p.get("stages"):  # next_dataset goes to the workspace's unseen text sets, worst first, with replay (studio_stages)
+        import studio_stages
+        policy, examples = studio_stages.Policy.for_job(p, services)
+    else:
+        examples = p["examples"] if "examples" in p else services.examples(p)
     conversations = services.conversations(p) if p.get("conversations") else None  # the teacher's prompts: kept apart from what the members train on
     if not examples and p.get("reviewed_only"):
         raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
@@ -2087,6 +2107,7 @@ def prepare(job, services, directory, port, client_for=None):
     run = studio_distributed.run_of(job)
     if teacher is not None:
         coordinator.teacher_settings = teacher
+    coordinator.stages = policy
     coordinator.prefer = (run.handoff,) if run.handoff else ()  # the node chosen to coordinate holds the run from the first round on
     register(job.id, coordinator)
     run.folder = str(directory)
