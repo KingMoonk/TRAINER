@@ -20,7 +20,8 @@ from tests import diloco_support as support
 # Final val loss, int8 vs float16. Two members race in one process (and share its random number generator), so a run is not bit-exact: even
 # with the same steps dealt, float16 alone ends anywhere from 3.75 to 3.84 and the gap to int8 measured -0.05 to +0.09 over 25 runs (-0.14
 # to +0.02 before the steps were pinned). .25 is about twice that spread, and a broken int8 does not train at all: it stays near the
-# starting loss of 4.7, 0.9 away.
+# starting loss of 4.7, 0.9 away. This is a smoke check that int8 still trains; how precise int8 is, is guarded by the quantization test
+# in tests/test_diloco.py (test_int8_arrays_are_a_quarter_of_fp32_and_within_half_a_step_of_the_original), not by this margin.
 MARGIN = .25
 
 

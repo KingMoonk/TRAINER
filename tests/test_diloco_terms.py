@@ -153,6 +153,29 @@ class Persistence(Calls):
         self.assertEqual(support.build(self.dir / "old", "old", inner_steps=2, rounds=3).term, 1)
 
 
+class Races(Calls):
+    """Two races of a failover, called on the coordinator directly."""
+
+    def test_a_delta_admitted_before_the_coordinator_stepped_down_is_a_409_not_a_400(self):
+        coordinator = support.build(self.dir / "c", "c", inner_steps=2, rounds=3)
+        coordinator.join("a", 0)
+        delta = support.constant_delta(coordinator)
+        coordinator.defer(2)  # stepped down and released its theta after the route had checked the term, before submit took the lock
+        with self.assertRaises(studio_diloco.StaleTerm) as raised:
+            coordinator.submit(0, "a", coordinator.generation, 0, 10, 2, delta)
+        self.assertEqual(raised.exception.term, 2)
+        self.assertEqual(coordinator.next_round, 0)  # nothing was folded in
+
+    def test_a_join_to_a_run_that_is_finished_is_refused_with_the_finished_detail(self):
+        coordinator = support.build(self.dir / "f", "f", inner_steps=2, rounds=1)
+        coordinator.join("a", 0)
+        coordinator.submit(0, "a", coordinator.generation, 0, 10, 2, support.constant_delta(coordinator))
+        self.assertTrue(coordinator.finished)
+        with self.assertRaises(studio_diloco.Stale) as raised:
+            coordinator.join("b", 0)
+        self.assertEqual(str(raised.exception), studio_diloco.FINISHED)
+
+
 class MemberTerms(Calls):
     def member(self, **changes):
         calls = []
