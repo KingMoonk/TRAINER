@@ -69,8 +69,8 @@ export function useTextSets() {
 }
 
 /** The Ollama models that can teach (GET /post-training/judges): the form's teacher choice. */
-export function useTeachers() {
-  return useQuery({ queryKey: ["post-training", "judges"], queryFn: ({ signal }) => withTimeout(signal, (s) => unwrap(api.GET("/post-training/judges", { signal: s }))), retry: false });
+export function useTeachers(enabled: boolean) {
+  return useQuery({ enabled, queryKey: ["post-training", "judges"], queryFn: ({ signal }) => withTimeout(signal, (s) => unwrap(api.GET("/post-training/judges", { signal: s }))), retry: false });
 }
 
 /** The machines on the Machines tab (GET /cluster/nodes): the ones a run can ask to join. */

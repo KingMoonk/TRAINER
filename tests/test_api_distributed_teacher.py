@@ -1,5 +1,6 @@
 """A cluster run started with a teacher (polish, win-rate target): the real route over a real workspace, then the real coordinator the queue
 builds from the job it stored, with the teacher check and the teacher itself replaced (nothing here contacts Ollama or the network)."""
+import json
 import tempfile
 import unittest
 from dataclasses import asdict
@@ -71,9 +72,9 @@ class Reaches(Base):
     def start(self, **body):
         return self.client.post("/distributed/runs", json={"dataset_ids": [self.set], "rounds": 3, "inner_steps": 2, **body})
 
-    def coordinator_of(self, job):
+    def coordinator_of(self, job, folder="run"):
         with mock.patch.object(studio_diloco, "check_teacher") as check:  # the model is "there"; no Ollama is asked
-            coordinator = studio_diloco.prepare(job, self.services, self.root / "run", 8787)
+            coordinator = studio_diloco.prepare(job, self.services, self.root / folder, 8787)
         self.addCleanup(coordinator.release)
         self.checked = check
         return coordinator
@@ -108,26 +109,92 @@ class Reaches(Base):
                 self.assertEqual(self.checked.call_args.args[0]["teacher_model"], "judge:1b")
                 studio_diloco.COORDINATORS.clear()
 
-    def test_the_coordinator_gets_the_conversations_with_the_text(self):
+    def prompts_of(self, coordinator, name):
+        lines = (coordinator.directory / name).read_text(encoding="utf-8").splitlines()
+        return [json.dumps(json.loads(line)["messages"], sort_keys=True) for line in lines if line.strip()]
+
+    def test_the_coordinator_gets_the_conversations_apart_from_the_text(self):
         self.assertEqual(self.start(teacher="judge:1b", polish_every=1, target_win_rate=.5).status_code, 201)
-        coordinator = self.coordinator_of(self.queued[0])
-        polish = [line for line in coordinator.prompt_window(1)]
+        self.assertEqual(self.start().status_code, 201)
+        teaching, plain = self.coordinator_of(self.queued[0]), None
+        studio_diloco.COORDINATORS.clear()
+        plain = studio_diloco.prepare(self.queued[1], self.services, self.root / "plain", 8787)
+        self.addCleanup(plain.release)
+        # what the members train on is what a run without a teacher trains on: the text, the same split, the same windows
+        self.assertEqual([e for e in self.services.examples(self.queued[0].params)], [e for e in self.services.examples(self.queued[1].params)])
+        self.assertTrue(all(e.get("text") for e in self.services.examples(self.queued[0].params)))
+        self.assertEqual(teaching.split_hash, plain.split_hash)
+        self.assertEqual(teaching.tokenizer.serialize(), plain.tokenizer.serialize())
+        self.assertEqual([len(teaching.train), len(teaching.val)], [len(plain.train), len(plain.val)])
+        polish, versus = self.prompts_of(teaching, "prompts.jsonl"), self.prompts_of(teaching, "eval_prompts.jsonl")
         self.assertGreater(len(polish), 0)
-        self.assertTrue(all(p["messages"][-1]["role"] == "user" for p in polish))
-        evals = (coordinator.directory / "eval_prompts.jsonl").read_text(encoding="utf-8").splitlines()
-        self.assertGreater(len(evals), 0)
-        text = "".join(coordinator.tokenizer.decode(inputs) for windows in (coordinator.train, coordinator.val) for inputs, _ in windows)
-        self.assertIn("quick brown fox", text)  # the text the members pretrain on is still there
+        self.assertEqual(len(versus), studio_diloco.EVAL_PROMPTS)
+        self.assertEqual(set(polish) & set(versus), set())  # a held-out prompt is never a polish prompt
+        self.assertEqual(len(polish) + len(versus), len(GOOD_CHATS) + len(PENDING_CHATS))
+        text = "".join(teaching.tokenizer.decode(inputs) for windows in (teaching.train, teaching.val) for inputs, _ in windows)
+        self.assertIn("quick brown fox", text)
+        self.assertNotIn("plus", text)  # no conversation was trained on
+
+    def test_one_option_alone_uses_all_the_conversations_for_itself(self):
+        self.assertEqual(self.start(teacher="judge:1b", polish_every=1).status_code, 201)
+        coordinator = self.coordinator_of(self.queued[0])
+        self.assertEqual(len(self.prompts_of(coordinator, "prompts.jsonl")), len(GOOD_CHATS) + len(PENDING_CHATS))
+        self.assertFalse((coordinator.directory / "eval_prompts.jsonl").exists())
+        studio_diloco.COORDINATORS.clear()
+        self.assertEqual(self.start(teacher="judge:1b", target_win_rate=.5).status_code, 201)
+        other = self.coordinator_of(self.queued[1], "run2")
+        self.assertEqual(len(self.prompts_of(other, "eval_prompts.jsonl")), studio_diloco.EVAL_PROMPTS)
+        self.assertFalse((other.directory / "prompts.jsonl").exists())
 
     def test_a_reviewed_only_run_takes_the_good_conversations_only(self):
         self.assertEqual(self.start(teacher="judge:1b", polish_every=1, reviewed_only=True).status_code, 201)
         coordinator = self.coordinator_of(self.queued[0])
-        prompts = [p["messages"][-1]["content"] for p in coordinator.prompt_window(1)]
-        self.assertGreater(len(prompts), 0)
+        prompts = self.prompts_of(coordinator, "prompts.jsonl")
+        self.assertEqual(len(prompts), len(GOOD_CHATS))
         self.assertTrue(all("plus" in p for p in prompts), prompts)
-        rows = self.services.examples(self.queued[0].params)
-        self.assertEqual({e["quality"] for e in rows}, {"Good"})
-        self.assertEqual(len([e for e in rows if not e.get("text")]), len(GOOD_CHATS))
+
+    def test_the_prompts_are_the_same_every_time_for_one_seed(self):
+        chats = GOOD_CHATS + PENDING_CHATS
+        settings = studio_diloco.Settings(rounds=4, polish_every=1, target_win_rate=.5, teacher="t")
+        first = studio_diloco.split_prompts(chats, settings, 7)
+        self.assertEqual(first, studio_diloco.split_prompts(list(chats), settings, 7))
+        self.assertNotEqual(first, studio_diloco.split_prompts(chats, settings, 8))
+
+    def test_a_lone_conversation_cannot_serve_both_options(self):
+        lone = self.workspace.create_dataset("One chat")
+        self.workspace.add(lone, [{"text": t} for t in TEXT] + GOOD_CHATS[:1])
+        response = self.start(dataset_ids=[lone], teacher="judge:1b", polish_every=1, target_win_rate=.5)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("only one", response.json()["detail"])
+        self.assertEqual(self.queued, [])
+        for body in ({"polish_every": 1}, {"target_win_rate": .5}):  # one option alone can use it
+            self.assertEqual(self.start(dataset_ids=[lone], teacher="judge:1b", **body).status_code, 201)
+        with self.assertRaisesRegex(ValueError, "each need conversations of their own"):
+            studio_diloco.split_prompts(GOOD_CHATS[:1], studio_diloco.Settings(rounds=4, polish_every=1, target_win_rate=.5, teacher="t"), 1)
+
+    def test_a_set_of_conversations_only_can_be_the_source_of_the_prompts(self):
+        chats = self.workspace.create_dataset("Only chats")
+        self.workspace.add(chats, GOOD_CHATS)
+        text = self.workspace.create_dataset("Plain")
+        self.workspace.add(text, [{"text": t} for t in TEXT])
+        self.assertEqual(self.start(dataset_ids=[chats], teacher="judge:1b", polish_every=1).status_code, 400)  # no text at all
+        self.assertEqual(self.start(dataset_ids=[chats]).status_code, 400)  # and without a teacher it is not a text set
+        self.assertEqual(self.start(dataset_ids=[text, chats], teacher="judge:1b", polish_every=1).status_code, 201)
+        coordinator = self.coordinator_of(self.queued[0])
+        self.assertEqual(len(self.prompts_of(coordinator, "prompts.jsonl")), len(GOOD_CHATS))
+        self.assertTrue(all(e.get("text") for e in self.services.examples(self.queued[0].params)))
+
+    def test_a_conversation_that_cannot_make_a_prompt_does_not_count(self):
+        ends_on_user = self.workspace.create_dataset("Unanswered")
+        self.workspace.add(ends_on_user, [{"text": t} for t in TEXT] + [{"messages": [{"role": "user", "content": f"Hello {n}?"}]} for n in range(5)])
+        self.assertFalse(self.services.has_conversations([ends_on_user]))
+        response = self.start(dataset_ids=[ends_on_user], teacher="judge:1b", polish_every=1)
+        self.assertEqual(response.status_code, 400, response.text)
+
+    def test_another_coordinator_with_a_teacher_is_a_400(self):
+        response = self.start(coordinator="gpu-box", machines=["gpu-box"], teacher="judge:1b", polish_every=1)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("only on the computer that starts the run", response.json()["detail"])
 
     def test_a_start_with_no_conversations_is_a_400(self):
         text_only = self.workspace.create_dataset("Plain")

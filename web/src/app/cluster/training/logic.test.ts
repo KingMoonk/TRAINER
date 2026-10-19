@@ -25,7 +25,7 @@ describe("the form", () => {
   });
 
   test("sends the teacher only with a use for it, the win-rate as a share", () => {
-    expect(startBody(form({ teacher: "judge:1b" }))).not.toHaveProperty("teacher"); // a teacher with nothing to do is left out
+    expect(startBody(form())).not.toHaveProperty("teacher"); // no teacher, nothing sent
     expect(startBody(form({ teacher: "judge:1b", polishEvery: "3" }))).toMatchObject({ teacher: "judge:1b", polish_every: 3 });
     expect(startBody(form({ teacher: "judge:1b", polishEvery: "3" }))).not.toHaveProperty("target_win_rate");
     expect(startBody(form({ teacher: "judge:1b", targetWinRate: "60" }))).toMatchObject({ teacher: "judge:1b", target_win_rate: 0.6 });
@@ -34,6 +34,8 @@ describe("the form", () => {
   });
 
   test.each([
+    ["a teacher with neither a polish nor a target", { teacher: "t" }],
+    ["a teacher with a coordinator that is another computer", { teacher: "t", polishEvery: "2", machines: ["gpu-box"], coordinator: "gpu-box" }],
     ["a polish with no teacher", { polishEvery: "2" }],
     ["a win-rate target with no teacher", { targetWinRate: "50" }],
     ["a polish every 0 rounds", { teacher: "t", polishEvery: "0" }],

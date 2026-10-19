@@ -507,11 +507,14 @@ class Coordinator:
 
     # -- building and resuming
     @classmethod
-    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None):
+    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None, conversations=None):
         """Tokenize `examples` once the way studio_model.train does, cut the windows, start theta from the config's seeded
         initialization, and continue from diloco.json if the folder has one. `later` are the example lists of the data sources
         the next_dataset pivot moves on to, in order: cut with the first source's tokenizer, never part of the validation. `start_from`, the
-        path of a checkpoint (best.npz or last.npz of an earlier run), is where theta starts when the folder holds no run yet (a restart)."""
+        path of a checkpoint (best.npz or last.npz of an earlier run), is where theta starts when the folder holds no run yet (a restart).
+        `conversations`, when given (a list, possibly empty), are the teacher's: the polish and the head-to-head take their prompts from them, split
+        by the run's seed into polish prompts and held-out ones, and they are never trained on, tokenized or part of the digest or the split. When
+        None the prompts come from the conversations among `examples` (the training split, the validation split)."""
         import studio_model as sm
         from studio_core import fingerprint
         from studio_planning import merge_duplicate_lineage
@@ -545,6 +548,9 @@ class Coordinator:
         if settings.target_win_rate is not None and not val:
             raise ValueError("target_win_rate needs a validation split: without one no round has a validation loss, so no round is ever the best "
                              "to compare. Hold some of the text out (validation above 0), or leave target_win_rate unset.")
+        polish_prompts = eval_prompts = None
+        if conversations is not None and (settings.polish_every or settings.target_win_rate is not None):
+            polish_prompts, eval_prompts = split_prompts(conversations, settings, cfg["seed"])
         model = sm.ScratchTransformer(cfg, tokenizer.vocab_size)
         theta = {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         state = cls._read_state(directory, cfg, settings, digest)
@@ -568,9 +574,9 @@ class Coordinator:
                 saved = json.loads(held.read_text(encoding="utf-8"))
                 coordinator.paused, coordinator.rules = bool(saved.get("paused")), drules.State.from_json(saved.get("rules"))
         if settings.polish_every:  # after _start_files, which clears a new run's prompts
-            coordinator._write_prompts(training)
+            coordinator._write_prompts(training, polish_prompts)
         if settings.target_win_rate is not None:
-            coordinator._write_eval_prompts(validation, training)
+            coordinator._write_eval_prompts(validation, training, eval_prompts)
             if start_from and not state:
                 shutil.copyfile(start_from, directory / "start.npz")  # a restart compares with the weights it started from
         if settings.polish_every or settings.target_win_rate is not None:
@@ -695,13 +701,14 @@ class Coordinator:
         self.shard_count += count
 
     # -- prompts and lessons (teacher polish)
-    def _write_prompts(self, training):
-        """prompts.jsonl: the conversations of the training split the teacher is asked to answer (never a validation one), once per run."""
+    def _write_prompts(self, training, prompts=None):
+        """prompts.jsonl: the prompts the teacher is asked to answer, once per run: `prompts` (the polish share of the teacher's own
+        conversations), else the conversations of the training split (never a validation one)."""
         path = self.directory / "prompts.jsonl"
         if path.is_file():
             return
         from studio_rlhf import prompts_from
-        prompts = prompts_from(training)
+        prompts = prompts_from(training) if prompts is None else prompts
         if not prompts:
             raise ValueError("polish_every is set, but the training text has no conversations for the teacher to answer: "
                              "use a chat dataset, or turn polish_every off.")
@@ -711,7 +718,7 @@ class Coordinator:
                 stream.write(json.dumps(prompt, ensure_ascii=False) + "\n")
         temporary.replace(path)
 
-    def _write_eval_prompts(self, validation, training):
+    def _write_eval_prompts(self, validation, training, held_out=None):
         """eval_prompts.jsonl: EVAL_PROMPTS conversations for the head-to-head against the starting weights, from the validation split
         (topped up from the END of the training split when it has fewer: the teacher's polish windows start at its front), once per run.
         Each line says where its prompt came from. The prompts the polish turned into lessons are left out when the comparison runs."""
@@ -719,9 +726,12 @@ class Coordinator:
         if path.is_file():
             return
         from studio_rlhf import prompts_from
-        prompts = [{**p, "from": "validation"} for p in prompts_from(validation)[:EVAL_PROMPTS]]
-        spare = EVAL_PROMPTS - len(prompts)
-        prompts += [{**p, "from": "training"} for p in (prompts_from(training)[::-1][:spare] if spare > 0 else [])]
+        if held_out is not None:  # the teacher's own conversations: none of these is a polish prompt or a training example
+            prompts = [{**p, "from": "held_out"} for p in held_out]
+        else:
+            prompts = [{**p, "from": "validation"} for p in prompts_from(validation)[:EVAL_PROMPTS]]
+            spare = EVAL_PROMPTS - len(prompts)
+            prompts += [{**p, "from": "training"} for p in (prompts_from(training)[::-1][:spare] if spare > 0 else [])]
         if not prompts:
             raise ValueError("target_win_rate is set, but the text has no conversations for the teacher to compare the weights on: "
                              "use a chat dataset, or leave target_win_rate unset.")
@@ -1695,7 +1705,8 @@ class Coordinator:
         """The held phase is now the head-to-head (lock held): the phase and the journal say so, with where the prompts came from."""
         self.judging = True
         sources = [p.get("from") for p in job["prompts"]]
-        said = f"{sources.count('validation')} from the validation split, {sources.count('training')} from the training split"
+        said = ", ".join(f"{sources.count(kind)} {label}" for kind, label in (("validation", "from the validation split"), ("training", "from the training split"),
+                                                                              ("held_out", "held-out conversations")) if kind in sources)
         logging.getLogger(__name__).info("head-to-head of round %d: %d prompts (%s)", job["round"], len(sources), said)
         self._event("judging", "", number, f"Round {number}: the teacher ({self.settings.teacher}) is comparing round {job['round']}'s weights with "
                                            f"the starting weights on {len(sources)} prompts ({said}). No round opens until it is done "
@@ -1945,6 +1956,27 @@ IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten
 _LOCK = threading.Lock()
 
 
+def split_prompts(conversations, settings, seed):
+    """(polish prompts, head-to-head prompts) from the teacher's conversations: the prompts they make (a conversation ending in an assistant
+    turn, twice the same one counted once), shuffled by the run's seed, then dealt so the two never share one. With both rules on the
+    head-to-head gets up to EVAL_PROMPTS of them but never more than half; with one on, that rule gets them all (the head-to-head up to
+    EVAL_PROMPTS). ValueError, in a sentence, when the rules are on and there are too few to give each its own."""
+    from studio_rlhf import prompts_from
+    unique = {}
+    for prompt in prompts_from(conversations):
+        unique.setdefault(json.dumps(prompt["messages"], sort_keys=True), prompt)
+    prompts = list(unique.values())
+    random.Random(seed).shuffle(prompts)
+    polish, versus = bool(settings.polish_every), settings.target_win_rate is not None
+    if polish and versus:
+        if len(prompts) < 2:
+            raise ValueError("polish_every and target_win_rate each need conversations of their own, and the chosen data has "
+                             f"{'one' if prompts else 'none'}: add conversations, or turn one of them off.")
+        held = min(EVAL_PROMPTS, len(prompts) // 2)
+        return prompts[held:], prompts[:held]
+    return (prompts, []) if polish else ([], prompts[:EVAL_PROMPTS])
+
+
 def teacher_settings(settings, root=None):
     """The Ollama teacher a run polishes with: the workspace's RLHF settings (address, rubric, judge model) with the run's own teacher model."""
     from studio_rlhf import SETTINGS_DEFAULTS, load_settings
@@ -2018,6 +2050,7 @@ def prepare(job, services, directory, port, client_for=None):
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
     examples = p["examples"] if "examples" in p else services.examples(p)
+    conversations = services.conversations(p) if p.get("conversations") else None  # the teacher's prompts: kept apart from what the members train on
     if not examples and p.get("reviewed_only"):
         raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
     try:
@@ -2029,7 +2062,7 @@ def prepare(job, services, directory, port, client_for=None):
                 except RuntimeError as exc:
                     raise ValueError(f"The run {'polishes' if settings.polish_every else 'judges'} with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
-                                       start_from=p.get("restart_from"))
+                                       start_from=p.get("restart_from"), conversations=conversations)
     except ValueError as exc:
         if p.get("resuming"):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None

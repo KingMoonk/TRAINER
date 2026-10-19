@@ -70,17 +70,32 @@ function positive(text: string): number | null {
   return text.trim() !== "" && Number.isFinite(n) && n > 0 ? n : null;
 }
 
-/** The teacher's part of the request: nothing while blank, `null` when it is not usable (a polish that never runs, a target out of range, no teacher). */
-function teaching(form: Form, rounds: number): Pick<StartRun, "teacher" | "polish_every" | "target_win_rate"> | null | undefined {
+/** Why the teacher options cannot be started with, in a sentence, or "" when they can (or are not used). Every case that keeps Start off says so here. */
+export function teacherProblem(form: Form): string {
   const polishBlank = form.polishEvery.trim() === "";
   const winBlank = form.targetWinRate.trim() === "";
-  if (polishBlank && winBlank) return undefined;
-  const polish = polishBlank ? undefined : whole(form.polishEvery);
-  const percent = winBlank ? undefined : Number(form.targetWinRate);
-  if (polish === null || (polish !== undefined && polish >= rounds)) return null;
-  if (percent !== undefined && !(percent > 0 && percent <= 100)) return null;
-  if (form.teacher === "") return null;
-  return { teacher: form.teacher, ...(polish !== undefined ? { polish_every: polish } : {}), ...(percent !== undefined ? { target_win_rate: percent / 100 } : {}) };
+  if (polishBlank && winBlank) return form.teacher === "" ? "" : T.teacherNoUse;
+  if (!polishBlank) {
+    const polish = whole(form.polishEvery);
+    if (polish === null || polish < 1) return T.polishBad;
+    const rounds = whole(form.rounds);
+    if (rounds !== null && polish >= rounds) return T.polishTooLate;
+  }
+  if (!winBlank) {
+    const percent = Number(form.targetWinRate);
+    if (!(percent > 0 && percent <= 100)) return T.winBad;
+  }
+  if (form.teacher === "") return T.teacherNeeded;
+  if (form.coordinator !== "" && form.machines.includes(form.coordinator)) return T.teacherCoordinator;
+  return "";
+}
+
+/** The teacher's part of the request: nothing while the options are blank. Only called when `teacherProblem` is empty. */
+function teaching(form: Form): Pick<StartRun, "teacher" | "polish_every" | "target_win_rate"> | undefined {
+  const polish = whole(form.polishEvery);
+  const win = form.targetWinRate.trim();
+  if (polish === null && win === "") return undefined;
+  return { teacher: form.teacher, ...(polish !== null ? { polish_every: polish } : {}), ...(win !== "" ? { target_win_rate: Number(win) / 100 } : {}) };
 }
 
 /** The request the form makes, or null while it is not complete (a setting is not a number, or no text is ticked). */
@@ -96,8 +111,8 @@ export function startBody(form: Form): StartRun | null {
   const most = limit(form.maxMachines);
   if (least === null || most === null) return null;
   if (least !== undefined && most !== undefined && least > most) return null;
-  const teacher = teaching(form, rounds);
-  if (teacher === null) return null;
+  if (teacherProblem(form) !== "") return null;
+  const teacher = teaching(form);
   return {
     version: form.version === "" ? null : Number(form.version),
     dataset_ids: form.datasets,

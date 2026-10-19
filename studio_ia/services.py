@@ -477,8 +477,8 @@ class Services:
         """True when a run that trains on reviewed examples only would have text to train on in these sets."""
         raise NotImplementedError
 
-    def has_conversations(self, dataset_ids, reviewed_only=False):
-        """True when these sets hold a conversation a run's teacher can answer (only the ones marked Good with `reviewed_only`)."""
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        """True when these sets hold `at_least` conversations a run's teacher can answer (only the ones marked Good with `reviewed_only`)."""
         raise NotImplementedError
 
     def text_sets(self):
@@ -755,7 +755,7 @@ class FakeServices(Services):
         self.probe_path = None  # what viewer_probe_step returns
         self.heldout_docs: list = []  # the held-back text viewer_summarize reads
         self.reviewed_text = True  # whether the text sets hold an example marked Good
-        self.conversations_in_text = True  # whether the text sets hold a conversation a cluster run's teacher can answer
+        self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
 
     def viewer_status(self):
         return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
@@ -821,8 +821,11 @@ class FakeServices(Services):
     def has_reviewed_text(self, dataset_ids):
         return self.reviewed_text
 
-    def has_conversations(self, dataset_ids, reviewed_only=False):
-        return self.conversations_in_text
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        return self.conversations_in_text >= at_least
+
+    def conversations(self, params):
+        return [{"user": f"Question {n}?", "assistant": f"Answer {n}."} for n in range(int(self.conversations_in_text))]
 
     def versions(self):
         return list(self._versions)
@@ -2109,20 +2112,27 @@ class WorkspaceServices(Services):
             path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
         held = set(self._heldout())
         good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
-        text = [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
-        # a run with a teacher (polish, win-rate) also takes the conversations of its sets: the coordinator makes the teacher's prompts from them
-        return text + list(self._conversation_rows(params.get("datasets"), good_only)) if params.get("conversations") else text
+        return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
+
+    def conversations(self, params):
+        """The conversations of params["datasets"] (default: every set) that can make a teacher's prompt: a run with a teacher takes its
+        polish and head-to-head prompts from them, and never trains on them. Drafts are left out, and with params["reviewed_only"] so is
+        everything not marked Good. A set may hold only conversations."""
+        return list(self._conversation_rows(params.get("datasets"), bool(params.get("reviewed_only"))))
 
     def _conversation_rows(self, dataset_ids, good_only):
-        """The conversations of these sets (default: every set) a run may train on and ask a teacher about: not drafts, and only the ones
-        marked Good when `good_only`."""
+        """The conversations of these sets a teacher can answer: not drafts, ending in an assistant turn (what studio_rlhf.prompts_from
+        keeps), and only the ones marked Good when `good_only`."""
         import studio_data_kinds
+        from studio_core import messages_of
         ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
         return (e for i in ids for e in self.workspace.iter_kind(i, "conversations")
-                if not studio_data_kinds.is_draft(e) and (not good_only or e.get("quality") == "Good"))
+                if not studio_data_kinds.is_draft(e) and (not good_only or e.get("quality") == "Good")
+                and (messages_of(e) or [{}])[-1].get("role") == "assistant")
 
-    def has_conversations(self, dataset_ids, reviewed_only=False):
-        return next(iter(self._conversation_rows(list(dataset_ids), reviewed_only)), None) is not None
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        import itertools
+        return len(list(itertools.islice(self._conversation_rows(list(dataset_ids), reviewed_only), at_least))) >= at_least
 
     def has_reviewed_text(self, dataset_ids):
         """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held

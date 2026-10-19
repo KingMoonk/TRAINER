@@ -19,7 +19,7 @@ import { JOIN } from "@/lib/copy/join";
 import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
@@ -42,8 +42,10 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
   const versions = useVersions().data ?? [];
   const nodes = otherMachines(useMachines().data);
   const cluster = useCluster().data;
-  const teachers = useTeachers();
+  const [teacherOpen, setTeacherOpen] = useState(false);
+  const teachers = useTeachers(teacherOpen);
   const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
+  const teacherWhy = teacherProblem(form);
   const [failure, setFailure] = useState("");
   const [asking, setAsking] = useState(false);
   const start = useStart((run) => {
@@ -159,7 +161,7 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
         <p className="max-w-prose text-xs text-muted-foreground">{T.overlapHelp}</p>
       </fieldset>
 
-      <details className="flex flex-col gap-2">
+      <details className="flex flex-col gap-2" onToggle={(e) => e.currentTarget.open && setTeacherOpen(true)}>
         <summary className="cursor-pointer text-sm font-medium">{T.teacherTitle}</summary>
         <div className="mt-2 flex flex-col gap-3">
           <p className="max-w-prose text-xs text-muted-foreground">{T.teacherLead}</p>
@@ -179,12 +181,12 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
             <Setting id="training-polish-every" label={T.polishEvery} help={T.polishEveryHelp} value={form.polishEvery} onChange={(polishEvery) => set({ polishEvery })} step="1" min="1" />
             <Setting id="training-win-rate" label={T.targetWinRate} help={T.targetWinRateHelp} value={form.targetWinRate} onChange={(targetWinRate) => set({ targetWinRate })} step="1" min="1" />
           </div>
-          {!body && form.teacher === "" && (form.polishEvery.trim() !== "" || form.targetWinRate.trim() !== "") && <p className="text-xs text-destructive">{T.teacherNeeded}</p>}
         </div>
       </details>
 
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" disabled={!body || start.isPending}>{start.isPending ? T.starting : T.start}</Button>
+        {teacherWhy && <p role="status" className="text-sm text-destructive">{teacherWhy}</p>}
         {failure && <p role="alert" className="text-sm text-destructive">{failure}</p>}
       </div>
 

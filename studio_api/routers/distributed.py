@@ -383,21 +383,32 @@ def _answering(peers, own):
     return joining, left_out
 
 
+def _teaches(body):
+    """Whether the start asks for a teacher polish or a win-rate target."""
+    return bool(body.polish_every) or body.target_win_rate is not None
+
+
 def _teacher_options(body, services, dataset_ids):
     """(Settings fields, job params) for the teacher options of a start: nothing when none is set. 400 with a sentence when a teacher is
     named without a use for it, or a polish or win-rate target is set without a teacher or without conversations in the chosen sets (the
     coordinator takes its prompts from them, so the run would end at its start). The job then carries the conversations with the text."""
     teacher = (body.teacher or "").strip()
-    if not body.polish_every and body.target_win_rate is None:
+    if not _teaches(body):
         if teacher:
             raise HTTPException(400, "A teacher does nothing on its own: set how often it polishes, a win-rate target, or both, or leave the teacher out.")
         return {}, {}
     if not teacher:
         raise HTTPException(400, "Teacher polish and the win-rate target need a teacher: choose one of the models Ollama has.")
-    if not services.has_conversations(dataset_ids, body.reviewed_only):
-        raise HTTPException(400, "The teacher answers conversations from the chosen data, and "
-                                 + ("none of them is marked Good" if body.reviewed_only else "it holds none")
-                                 + ". Choose data with conversations in it, or leave the teacher out.")
+    if body.coordinator:
+        raise HTTPException(400, "The teacher runs only on the computer that starts the run, so another computer cannot coordinate a run with a teacher. "
+                                 "Leave the coordinator as this computer, or leave the teacher out.")
+    both = bool(body.polish_every) and body.target_win_rate is not None
+    if not services.has_conversations(dataset_ids, body.reviewed_only, 2 if both else 1):
+        have = "none of them is marked Good" if body.reviewed_only else "it holds none"
+        if both and services.has_conversations(dataset_ids, body.reviewed_only):
+            raise HTTPException(400, "Polishing and the win-rate target each need conversations of their own, and the chosen data has only one. "
+                                     "Add conversations, or use only one of the two.")
+        raise HTTPException(400, f"The teacher answers conversations from the chosen data, and {have}. Choose data with conversations in it, or leave the teacher out.")
     fields = {"teacher": teacher, "polish_every": body.polish_every or 0, **({"target_win_rate": body.target_win_rate} if body.target_win_rate is not None else {})}
     return fields, {**fields, "conversations": True}
 
@@ -433,8 +444,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     if version is None:
         raise HTTPException(409, "Save a design in the Network designer first.")
     known = {s["id"] for s in plan.sets_of(services.data("text"))}
-    unknown = [d for d in dataset_ids if d not in known]
-    if unknown or not dataset_ids:
+    chats = {s["id"] for s in plan.sets_of(services.data("conversations"))} if _teaches(body) else set()  # only the teacher's prompts come from these
+    unknown = [d for d in dataset_ids if d not in known and d not in chats]
+    if unknown or not dataset_ids or not any(d in known for d in dataset_ids):
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
     if body.reviewed_only and not services.has_reviewed_text(dataset_ids):
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
