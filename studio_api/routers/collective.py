@@ -153,6 +153,12 @@ def validation(found: "studio_diloco.Coordinator" = Depends(member_call)):
     return binary(found, found.validation_bytes())
 
 
+@router.get("/weights", response_class=Response, responses=BINARY)
+def weights(found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left."""
+    return binary(found, found.final_bytes())
+
+
 @router.post("/rounds/{round}/delta", status_code=202, response_model=Accepted,
              openapi_extra={"requestBody": {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}})
 async def delta(request: Request, round: int, node: str, generation: int, epoch: int, tokens: int, steps: int,
