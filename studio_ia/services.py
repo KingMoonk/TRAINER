@@ -367,6 +367,9 @@ class Services:
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
 
+    def resume_queue_at_start(self):
+        """Carry on the queue the last run of the app left going (no-op where there is no real queue)."""
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
