@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ctaLabel, defaultSftVersion, localForced, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, nameList, runningText, localForced, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node } from "./logic";
 
 const node = (address: string, over: Partial<Node> = {}): Node => ({
   address, busy: false, device: "cuda", device_name: "", dtypes: [], error: "", hostname: address, local: false, memory_bytes: 0, online: true, tailnet_name: "", origin: "", origin_down: false, version: "", ...over,
@@ -56,4 +56,24 @@ test("SFT starts from the best trained version, else the latest", () => {
 
 test("a run's page is a query parameter", () => {
   expect(runHref("run 1")).toBe("/runs/view/?id=run%201");
+});
+
+describe("busy machines", () => {
+  const some = [node("local", { local: true, busy: true }), node("beast", { busy: true }), node("lab"), node("off", { busy: true, online: false })];
+  const rows = [{ status: "running", node: "beast", label: "Post-training", kind: "sft", eta_s: 90 }, { status: "waiting", node: "lab", label: "Later", kind: "sft", eta_s: null }] as Parameters<typeof runningText>[1];
+
+  test("only the picked peers that answer and are busy are left out; this computer is never counted", () => {
+    expect(busyPeers(["local", "beast", "lab", "off"], some).map((n) => n.address)).toEqual(["beast"]);
+    expect(busyPeers(["local", "lab"], some)).toEqual([]);
+  });
+
+  test("the names read as a sentence part", () => {
+    expect([nameList([]), nameList(["A"]), nameList(["A", "B"]), nameList(["A", "B", "C"])]).toEqual(["", "A", "A and B", "A, B and C"]);
+  });
+
+  test("what a machine runs: its running job with the time left, else nothing", () => {
+    expect(runningText("beast", rows)).toBe("Post-training · about 2 min left");
+    expect(runningText("lab", rows)).toBe("");
+    expect(runningText("beast", [{ ...rows[0], eta_s: 3 * 3600 }])).toBe("Post-training · about 3 hours left");
+  });
 });
