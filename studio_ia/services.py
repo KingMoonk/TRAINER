@@ -668,6 +668,21 @@ class Services:
         """Rows for a post_round job: conversations | problems | pairs | heldout_docs | heldout_problems."""
         raise NotImplementedError
 
+    def post_loops(self) -> list:
+        """The automated RLHF loops (studio_loop.summary dicts), newest first: id, version, status, stop_reason, config, anchor, current,
+        kept, rounds [the journal's records], and so on."""
+        raise NotImplementedError
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None) -> dict:
+        """Queue an `rlhf_loop` job for `version` (None = the current one): {"job", "loop_id", "label"}. `judge_model` is the Ollama model
+        that grades (None = the workspace's teacher, or no judge: checked problems only). `resume` is the id of an earlier
+        loop to carry on, from its last kept round. Raises ValueError with a sentence when it cannot start."""
+        raise NotImplementedError
+
+    def adopt_loop(self, loop_id) -> dict:
+        """Check a loop's best on all the held-back data and, if the gate passes, make it the version's checkpoint: the gate result."""
+        raise NotImplementedError
+
     # 3D viewer (S11): a separate Panda3D process; Services only starts, stops and talks to it -------------------
     def viewer_status(self) -> dict:
         """{'available': bool, 'running': bool, 'connected': bool}. available False = the viewer cannot be launched here."""
@@ -1334,6 +1349,31 @@ class FakeServices(Services):
 
     def post_rows(self, kind):
         return []
+
+    def post_loops(self):
+        return list(getattr(self, "_loops", []))
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None):
+        loops = self.__dict__.setdefault("_loops", [])
+        v = next((x for x in self._versions if x.number == version), None) if version else (self._versions[-1] if self._versions else None)
+        if v is None or not v.best_checkpoint:
+            raise NoCheckpoint(getattr(v, "number", None))
+        loop_id = resume or uuid.uuid4().hex[:8]
+        if any(j.kind == "rlhf_loop" and j.params.get("loop_id") == loop_id for j in [self._queue.job, *self._queue.up_next] if j):
+            raise ValueError("This loop is already queued or running.")
+        if not resume:
+            loops.insert(0, {"id": loop_id, "version": v.number, "status": "running", "stop_reason": "", "config": dict(config or {}),
+                             "anchor": v.best_checkpoint, "current": v.best_checkpoint, "kept": 0, "failed_streak": 0, "audit_flagged": 0,
+                             "elapsed_s": 0., "created": "", "updated": "", "phase": "", "note": "", "anchor_eval": None,
+                             "current_eval": None, "rounds": [], "round": 1})
+        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds",
+                  params={"version": v.number, "checkpoint": v.best_checkpoint, "config": dict(config or {}), "loop_id": loop_id,
+                          "judge_model": judge_model})
+        self.enqueue(job)
+        return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def adopt_loop(self, loop_id):
+        return {"round": 5, "ok": False, "checks": [], "verdict": "Nothing to adopt: the fake services run no loops.", "checkpoint": ""}
 
     # inspect stubs: small synthetic arrays, 2 blocks x 4 heads, 9 pieces, vocab 12 ---------------------------------
     def inspect_forward(self, version, text, hooks=True):
@@ -2664,6 +2704,46 @@ class WorkspaceServices(Services):
             out, report = studio_decontam.exclude_overlap(out, self._train_index(), lambda row: row["prompt"])
             self._note_overlap("problems", report)
         return out
+
+    def post_loops(self):
+        import studio_loop
+        return studio_loop.list_loops(self.workspace.run_dir)
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None):
+        import studio_loop
+        from studio_core import uid
+        v = self._as_version(version) if version else self.current_version()
+        if v is None:
+            raise ValueError("There is no version yet. Build one first.")
+        if not v.best_checkpoint:
+            raise NoCheckpoint(v.number)
+        loop_id = resume or uid("loop")
+        folder = Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}"
+        if resume:
+            if studio_loop.load_state(folder) is None:
+                raise ValueError(f"There is no loop {resume} to carry on.")
+        else:
+            studio_loop.clean_config(config)  # a refused setting is told now, not when the job starts
+        with self.runner.lock:
+            busy = [j for j in self.runner.jobs if j.kind == "rlhf_loop" and j.status in ("waiting", "held", "running")
+                    and (j.params.get("loop_id") == loop_id or (not resume and j.params.get("version") == v.number))]
+        if busy:
+            raise ValueError("A loop is already queued or running for this version. Stop it first.")
+        params = {"version": v.number, "checkpoint": str(v.best_checkpoint), "config": dict(config or {}), "loop_id": loop_id,
+                  "output_dir": str(folder), "budget_token": uid("budget") if resume else None, "judge_model": judge_model}
+        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds", params=params)
+        self.enqueue(job)
+        return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def adopt_loop(self, loop_id):
+        import studio_loop
+        state = studio_loop.load_state(Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}")
+        if state is None:
+            raise ValueError(f"There is no loop {loop_id}.")
+        result = studio_loop.adoption(state, {kind: self.post_rows(kind) for kind in ("heldout_docs", "heldout_problems")})
+        if result["ok"]:
+            self.record_round(result["round"], state["version"], result)
+        return result
 
     def teach_correction(self, version, messages, correction, whole_answer=False):
         """A whole new answer becomes a conversation for round 1 (dataset "From Chat"); anything else is a correction the
