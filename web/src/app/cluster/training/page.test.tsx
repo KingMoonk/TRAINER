@@ -82,12 +82,14 @@ describe("Training tab: the start form", () => {
     await user.selectOptions(screen.getByLabelText("Design"), "2");
     expect(screen.getByRole("checkbox", { name: /Overlap communication/ })).not.toBeChecked();
     await user.click(screen.getByRole("checkbox", { name: /Overlap communication/ }));
+    expect(screen.getByRole("checkbox", { name: /Reviewed examples only/ })).not.toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: /Reviewed examples only/ }));
     await user.type(screen.getByLabelText("At least"), "2");
     await user.type(screen.getByLabelText("At most"), "3");
     await user.click(screen.getByRole("button", { name: "Start run" }));
     await waitFor(() => expect(state.started).toHaveLength(1));
     expect(state.started[0]).toEqual({
-      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: true,
+      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: true, reviewed_only: true,
     });
     expect(await screen.findByTestId("run-r1")).toHaveTextContent("Version 2 across machines");
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");

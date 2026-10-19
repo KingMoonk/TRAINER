@@ -9,7 +9,7 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, coordinator: "", ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, reviewedOnly: false, coordinator: "", ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -19,7 +19,7 @@ describe("the form", () => {
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {
     expect(startBody(form({ machines: ["gpu-box"] }))).toEqual({
-      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false,
+      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false, reviewed_only: false,
     });
     expect(startBody(form({ version: "3" }))?.version).toBe(3);
   });
@@ -49,6 +49,8 @@ describe("the form", () => {
   });
 
   test("overlap is sent as ticked", () => expect(startBody(form({ overlap: true }))?.overlap).toBe(true));
+
+  test("reviewed only is sent as ticked", () => expect(startBody(form({ reviewedOnly: true }))?.reviewed_only).toBe(true));
 
   test("momentum may be zero", () => expect(startBody(form({ outerMomentum: "0" }))?.outer_momentum).toBe(0));
 

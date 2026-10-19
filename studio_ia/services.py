@@ -473,6 +473,10 @@ class Services:
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
 
+    def has_reviewed_text(self, dataset_ids):
+        """True when a run that trains on reviewed examples only would have text to train on in these sets."""
+        raise NotImplementedError
+
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
@@ -746,6 +750,7 @@ class FakeServices(Services):
         self.snapshot_paths: list = []  # what viewer_snapshots returns
         self.probe_path = None  # what viewer_probe_step returns
         self.heldout_docs: list = []  # the held-back text viewer_summarize reads
+        self.reviewed_text = True  # whether the text sets hold an example marked Good
 
     def viewer_status(self):
         return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
@@ -807,6 +812,9 @@ class FakeServices(Services):
 
     def _heldout(self):
         return self.heldout_docs
+
+    def has_reviewed_text(self, dataset_ids):
+        return self.reviewed_text
 
     def versions(self):
         return list(self._versions)
@@ -2092,7 +2100,13 @@ class WorkspaceServices(Services):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
         held = set(self._heldout())
-        return [e for e in rows if e["text"] not in held]
+        good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
+        return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
+
+    def has_reviewed_text(self, dataset_ids):
+        """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held
+        back for scoring does not count."""
+        return bool(self.examples({"datasets": list(dataset_ids), "reviewed_only": True}))
 
     def _once(self, key):
         """The lock held while one cache entry is made: other entries are not held up, and an entry both shell lanes ask for is made once."""
