@@ -10,7 +10,7 @@ export const T = {
   coordinatorRole: "c",
   workerRole: "w",
   nodeOnline: "Online.",
-  nodeOffline: "Not answering.",
+  nodeOffline: "Unreachable.",
   nodeIdle: "Not in a run.",
   nodeCoordinator: "Coordinator",
   nodeWorker: "Worker",

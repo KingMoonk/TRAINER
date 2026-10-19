@@ -6,7 +6,10 @@ can only be approximate (a framework keeps workspace of its own), so the out-of-
 the backstop for a batch the estimate accepted."""
 from __future__ import annotations
 
+import os
+import sys
 import threading
+from pathlib import Path
 
 import torch
 
@@ -88,8 +91,54 @@ def device_of(cfg):
     return get_backend(cfg["device"], work=cfg["batch_size"] * d[1] * d[0] * max(1, d[2])).device
 
 
+def process_memory():
+    """Bytes this process uses now. Falls back to the peak only where the current figure cannot be read."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [(n, ctypes.c_size_t) for n in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+        counters = Counters()
+        counters.cb = ctypes.sizeof(counters)
+        kernel, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        psapi.GetProcessMemoryInfo(kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb)
+        return int(counters.WorkingSetSize)
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+            info = (ctypes.c_uint64 * 12)()  # rusage_info_v0: 16-byte uuid, user and system time, two wakeup counts, pageins, wired size, resident size, ...
+            if ctypes.CDLL("/usr/lib/libproc.dylib").proc_pid_rusage(os.getpid(), 0, info) == 0:
+                return int(info[8])
+        except (OSError, AttributeError):
+            pass
+    try:
+        return int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return peak if sys.platform == "darwin" else peak * 1024  # bytes on macOS, kilobytes on Linux
+
+
+def total_memory():
+    if sys.platform == "win32":
+        import ctypes
+
+        class Status(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [(n, ctypes.c_ulonglong) for n in (
+                "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
+        status = Status()
+        status.dwLength = ctypes.sizeof(status)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+        return int(status.ullTotalPhys)
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
 def physical_memory():
-    from studio_passive import total_memory  # has the Windows path; os.sysconf is POSIX-only
     return total_memory()
 
 

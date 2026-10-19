@@ -124,7 +124,7 @@ describe("Cluster page", () => {
     expect(gpu.getByTestId("seen-gpu-box")).toHaveTextContent("Last answered");
     const down = text("machine-old-laptop");
     expect(down).toHaveAttribute("data-online", "false");
-    expect(down).toHaveTextContent("Not answering");
+    expect(down).toHaveTextContent("Unreachable");
     expect(text("machine-error-old-laptop")).toHaveTextContent(/^old-laptop did not answer within 2 seconds\.$/);
     expect(within(down).getByTestId("seen-old-laptop")).toHaveTextContent(/^Has not answered yet$/);
     expect(screen.queryByTestId("machine-refused")).toBeNull();

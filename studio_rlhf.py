@@ -13,13 +13,16 @@ A new checkpoint is only kept if it beats the previous one head-to-head.
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import math
 import random
 import re
+import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -895,7 +898,21 @@ def compare_checkpoints(a, b, prompts, judge, samples=2, max_tokens=120, tempera
     stop = stop or threading.Event()
     emit = emit or (lambda event: None)
     rng = rng or random.Random(17)
-    model_a, model_b = LocalModel(a, seed=21, device=device), LocalModel(b, seed=22, device=device)
+    models = [LocalModel(a, seed=21, device=device)]
+    try:
+        models.append(LocalModel(b, seed=22, device=device))
+        return _compare(models[0], models[1], a, b, prompts, judge, samples, max_tokens, temperature, both_orders, tie_eps, stop, emit, rng, examples)
+    finally:  # both models are big: hand their memory back before the next thing (a round) needs it
+        where = str(models[0].device).split(":")[0]
+        models.clear()
+        failure = sys.exc_info()[2]
+        if failure is not None:
+            traceback.clear_frames(failure)  # a failure's traceback keeps _compare's frame, and with it both models
+        gc.collect()
+        empty_cache(where)
+
+
+def _compare(model_a, model_b, a, b, prompts, judge, samples, max_tokens, temperature, both_orders, tie_eps, stop, emit, rng, examples):
     wins = ties = losses = errors = 0
     shown, total, done = [], len(prompts) * max(1, int(samples)), 0
     failures = 0

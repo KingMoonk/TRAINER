@@ -2,6 +2,7 @@
 It answers what studio_diloco.Coordinator answers to studio_distributed (snapshot, drop, stop), and the invitations to the other
 machines are the real ones (studio_distributed.invite), so an unreachable or refusing machine reads the way it does for real.
 
+A pause freezes the whole schedule at its beat (a round in flight does not finish, unlike a real run), and a resume carries on from there.
 The run is simulated on a clock, not on a thread: nothing moves until it is asked, and then it is brought up to the clock. Every
 member goes through a round the way a real one does: download theta, train H inner steps (its loss and speed reported as it goes),
 upload its change, wait for the others; then the outer step and the check on the held-back text, and the next round. A CUDA machine
@@ -10,6 +11,8 @@ import math
 import threading
 import time
 from collections import deque
+
+import numpy as np
 
 import studio_run_health as run_health
 from studio_diloco import EVENTS_KEPT, SAMPLES_KEPT, TIMELINES_KEPT, Stale
@@ -36,7 +39,8 @@ class FakeCoordinator:
         self.rounds = int(self.settings.get("rounds", 10))
         self.steps = int(self.settings.get("inner_steps", 100))
         self.dtype = self.settings.get("delta_dtype", "float16")
-        self.finished = self.stopped = False
+        self.finished = self.stopped = self.paused = False
+        self.paused_at = None  # the clock reading when it was paused
         self.touched = time.monotonic()
         self.history, self.members, self.gone = [], [], {}
         self.events, self.timelines, self.seq = deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT), 0
@@ -61,6 +65,8 @@ class FakeCoordinator:
     def _beat(self):
         if self.frozen is not None:
             return self.frozen
+        if self.paused_at is not None and self.begun is not None:
+            return (self.paused_at - self.begun) / self.unit
         return 0. if self.begun is None else (self.clock() - self.begun) / self.unit
 
     def _profile(self, node):
@@ -136,17 +142,26 @@ class FakeCoordinator:
             "delta_bytes": int(size) * len(counted), "theta_bytes": BYTES * len(self.roster), "delta_dtype": self.dtype,
             "node_tokens": node_tokens, "node_seconds": {m: profiles[m]["train"] * self.unit for m in counted},
             "node_bytes": {m: int(size) for m in counted}, "outer_step_norm": round(.6 / (number + 3), 4),
-            "tokens_per_second": sum(node_tokens.values()) / max(1e-9, done * self.unit), "lr": self.settings.get("outer_lr", 0.), "tokens": sum(node_tokens.values())}
+            "tokens_per_second": sum(node_tokens.values()) / max(1e-9, done * self.unit), "lr": self.settings.get("outer_lr", 0.)}
         arrived = {m: plan[m][3] * self.unit for m in counted}
         row["health"] = run_health.record(row, {m: loss_at(number, self.steps, self.steps, profiles[m]["index"]) for m in counted}, arrived, BYTES)
         self.history.append(row)
         self.opened += done
+        self._keep_weights()
         self.logged.discard(("outer", number))
         self.drops = {}
         self._event(self.opened, "checkpoint", "", number, f"Round {number} checkpoint written.")
         self.finished = self.round >= self.rounds
         if self.finished:
             self._event(self.opened, "finished", "", number, f"The run finished after {self.round} rounds.")
+
+    def _keep_weights(self):
+        """last.npz and best.npz as stubs in the run's folder (when it has one): a restart looks for them."""
+        folder = getattr(self.run, "folder", "")
+        if folder:
+            for name in ("last.npz", "best.npz"):
+                with open(f"{folder}/{name}", "wb") as stream:
+                    np.savez(stream, **{"weight::stub": np.zeros(1, dtype=np.float32)})
 
     def _timeline(self, number, plan, closes, closed, offset):
         """The swimlanes of the open round as of `offset` beats after it opened (every moment later than that is not known yet)."""
@@ -229,13 +244,17 @@ class FakeCoordinator:
                     "grace_s": 2. * self.unit, "window_s": window,
                     "contributed": sum(1 for n in nodes.values() if n["sent"]) if not self.finished else 0,
                     "expected": len(live) if not self.finished else 0, "theta_bytes": BYTES, "now_s": now * self.unit,
-                    "timeline": [*self.timelines, *shown], "events": [dict(event) for event in self.events]}
+                    "timeline": [*self.timelines, *shown], "events": [dict(event) for event in self.events], "paused": self.paused,
+                    "rules": {"best_round": self.history[-1]["round"] if self.history else None, "best_loss": self.history[-1]["val_loss"] if self.history else None,
+                              "stop_rule": "", "stop_text": ""}}
 
     def _phase(self, plan, offset, closes, states, live):
         if self.stopped:
             return "stopped"
         if self.finished:
             return "finished"
+        if self.paused:
+            return "paused"
         if not live or closes is None:
             return "waiting"
         if offset >= closes + OUTER:
@@ -256,6 +275,27 @@ class FakeCoordinator:
             self.gone[node] = ("stopped", "Stopped by you.")
             self.drops[node] = now
             self._event(now, "left", node, self.round, f"{node} was stopped by you.")
+
+    def pause(self):
+        with self.lock:
+            if self.finished:
+                raise Stale("The run is over; there is nothing to pause.")
+            if self.paused:
+                return
+            self._catch_up(self._beat())
+            self.paused, self.paused_at = True, self.clock()
+            self._event(self._beat(), "paused", "", self.round, "The run was paused by you. No new round opens until you resume it.")
+
+    def resume(self):
+        with self.lock:
+            if self.finished:
+                raise Stale("The run is over; there is nothing to resume.")
+            if not self.paused:
+                return
+            if self.begun is not None:
+                self.begun += self.clock() - self.paused_at  # the schedule carries on from the beat it stopped at
+            self.paused, self.paused_at = False, None
+            self._event(self._beat(), "resumed", "", self.round, "The run was resumed by you.")
 
     def stop(self):
         with self.lock:

@@ -666,7 +666,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
 
     rebase=True (with resume) continues a checkpoint on different data: the weights, tokenizer, optimizer state and step carry over,
     and cfg["steps"] is the number of steps to add. The dataset, split, seed, learning rate and batch size may differ from the
-    checkpoint's; the sampler, the best score and its best.npz start fresh. Passive training's rounds use it (studio_passive.py).
+    checkpoint's; the sampler, the best score and its best.npz start fresh.
 
     The run folder keeps the deduplicated examples as dataset.jsonl, which a resume rebuilds the split from. The bytes are stored
     once under their hash in snapshot_dir (default: .snapshots in the `runs` folder holding the run; elsewhere none) and the folder holds a hard link to them,
@@ -920,7 +920,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
             if distributed is not None:
-                rate = schedule.rate(distributed.rate_step(next_step), distributed.total_steps, cfg["learning_rate"])
+                rate = schedule.rate(distributed.rate_step(next_step), distributed.total_steps, cfg["learning_rate"]) * getattr(distributed, "rate_scale", 1.)
             else:
                 rate = (schedule.rate(schedule_window[0] + next_step, schedule_window[1], cfg["learning_rate"]) if schedule_window
                         else schedule.rate(next_step, planned, cfg["learning_rate"]))
@@ -987,6 +987,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     with (directory / "samples.jsonl").open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps({"step": step, "text": text, "prompt": cfg["sample_prompt"]}) + "\n")
                     emit({"type": "sample", "step": step, "text": text, "prompt": cfg["sample_prompt"]})
+            if distributed is not None and getattr(distributed, "stepped", None):
+                distributed.stepped(time.monotonic() - tick)  # the step's own time: the pause wait is before `tick`
             if distributed is not None and distributed.due(step, trained_tokens):
                 prefetcher.discard()  # a batch drawn ahead (CUDA) came from this round's windows; sync swaps them and reseeds the sampler
                 distributed.sync(step, trained_tokens, model)

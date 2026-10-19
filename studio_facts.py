@@ -15,6 +15,7 @@ kind        key       written by          value
 heartbeat   node      every origin        {"beat": n}
 node        node      every origin        the NodeInfo payload, plus {"peers": n answering}
 queue       jobs      every origin        the running and waiting jobs queued here, as GET /queue/jobs lists them
+queue       limits    every origin        the queue plan and what holds it now: {"plan", "blocked", "paused"} (studio_cluster_queue.limits_of)
 leases      granted   every origin        the leases this node granted, with seconds since the runner was heard
 events      node      every origin        the last EVENTS_KEPT cluster events
 runs        index     a coordinator       {"ids": the runs it publishes, "live": those it coordinates now}
@@ -42,10 +43,19 @@ QUEUE_STATES = ("running", "waiting", "held")
 def _queue_rows(runner):
     with runner.lock:
         jobs = list(runner.jobs)
+        running, eta = getattr(runner, "running", None), (getattr(runner, "progress", None) or {}).get("eta_s")
     return [{"id": j.id, "kind": j.kind, "label": j.label or "", "status": j.status, "node": getattr(j, "node", "") or "",
-             "owner": getattr(j, "owner", "") or "", "note": j.note or "",
+             "owner": getattr(j, "owner", "") or "", "note": j.note or "", "eta_s": eta if j is running else None,
              "params": {"pinned": j.params.get("pinned")} if j.params.get("pinned") else {}}
             for j in jobs if j.status in QUEUE_STATES]
+
+
+def queue_limits(runner):
+    """This node's queue plan and what holds its jobs now, as studio_cluster_queue.limits_of reads a GET /queue."""
+    import studio_cluster_queue
+    with runner.lock:
+        state = {"plan": dataclasses.asdict(runner.plan), "blocked": getattr(runner, "blocked", None), "paused": bool(runner.user_paused)}
+    return studio_cluster_queue.limits_of(state)
 
 
 def run_summary(row):
@@ -62,6 +72,7 @@ def publish(cluster):
         lambda: replica.put("node", "node", {**dataclasses.asdict(dataclasses.replace(cluster.own(), busy=cluster.busy())),
                                              "dtypes": list(cluster.own().dtypes), "peers": sum(1 for i in cluster._known.values() if i.online)}),
         lambda: replica.put("queue", "jobs", _queue_rows(cluster.runner)),
+        lambda: replica.put("queue", "limits", queue_limits(cluster.runner)),
         lambda: replica.put("leases", "granted", [{**lease.as_dict(), "silent_s": silent} for lease, silent in cluster.owner.leases.held()]),
         lambda: replica.put("events", "node", [{**{k: v for k, v in e.items() if k != "at"}, "ago": max(0., now - e["at"])}
                                                for e in list(cluster.events)[-EVENTS_KEPT:]]),
@@ -82,7 +93,7 @@ def _publish_runs(cluster):
     for run, coordinator, job in cluster.local_runs():
         if coordinator is None and run.final is None and job is None:
             continue  # the app no longer holds this run (a later term may coordinate it elsewhere): not this node's fact
-        row = runs.view(run, coordinator, job)
+        row = runs.view(run, coordinator, job, runs.peer_facts(run, cluster))
         ids.append(run.id)
         if coordinator is not None:
             live.append(run.id)
@@ -194,3 +205,9 @@ def queue_facts(cluster, origin):
     """(jobs, age_s) of the queue entry an origin wrote, or ([], None)."""
     found = cluster.state.get(origin, "queue", "jobs")
     return (list(found["value"]), found["age"]) if found else ([], None)
+
+
+def limits_facts(cluster, origin):
+    """The queue limits an origin wrote ({"plan", "blocked", "paused"}), or None when the replica holds none."""
+    found = cluster.state.get(origin, "queue", "limits")
+    return found["value"] if found else None

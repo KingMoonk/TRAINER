@@ -1,26 +1,18 @@
 "use client";
 
 // The side panel a click on a part opens (builder.py _paint_explain, design.explain): what the part does, the module it
-// runs now, what it does to the example sentence, and the look-inside pages that show it work. The words are the
-// server's; the example sentence is cut by the draft's word list, which the first read fits on your text (a job).
+// runs now, and what it does to the example sentence. The words are the server's; the example sentence is cut by the
+// draft's word list, which the first read fits on your text (a job).
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWordLists } from "@/components/builder/pieces";
 import { design, detailOf, type Choices, type Explaining } from "@/lib/builder";
 import { BUILDER } from "@/lib/copy/builder";
-import { routeFor } from "@/lib/routes";
 
 type Props = { draft: Choices; explaining: Explaining | null; onClose: () => void };
-
-/** Inside a head opens at the block the part was clicked in. */
-function hrefFor(route: string, block: number) {
-  const { href } = routeFor(route);
-  return route === "head_zoom" ? `${href}/?block=${block}&head=0` : `${href}/`;
-}
 
 export function Explain({ draft, explaining, onClose }: Props) {
   const listsQ = useWordLists(explaining !== null);
@@ -75,16 +67,6 @@ export function Explain({ draft, explaining, onClose }: Props) {
             <p className="text-xs" data-testid="explain-example">
               {said.example}
             </p>
-            {said.links.length > 0 && (
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs text-muted-foreground">{BUILDER.explain_see}</span>
-                {said.links.map((link) => (
-                  <Link key={link.route} href={hrefFor(link.route, link.block)} className="text-sm text-highlight underline-offset-4 hover:underline">
-                    {link.label} ›
-                  </Link>
-                ))}
-              </div>
-            )}
           </>
         )}
       </CardContent>

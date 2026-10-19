@@ -1,0 +1,321 @@
+name: Agent PR
+
+# Hand a GitHub issue to Claude Code and get a pull request back.
+#   Actions > Agent PR > Run workflow, or: gh workflow run agent.yml -f issue=123 -f instructions="..."
+# Three jobs, so the model never holds a token that can write:
+#   claim    assigns the issue to whoever started the run (refuses if someone else has it) and comments the run link
+#   agent    runs Claude Code on a branch with a read-only token; uploads the commits as a git bundle plus the PR text
+#   publish  pushes the branch, files follow-up issues, opens the PR and links it on the issue; on failure says so there
+# Setup and the token options are in README.md, "Agent PRs".
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number"
+        required: true
+        type: string
+      instructions:
+        description: "Extra instructions for the agent (optional)"
+        required: false
+        type: string
+      base:
+        description: "Branch to start from and open the PR against"
+        required: false
+        type: string
+        default: master
+      model:
+        description: "Claude model (alias such as opus or sonnet, or a full model ID)"
+        required: false
+        type: string
+        default: opus
+      max_budget_usd:
+        description: "Stop the agent once its estimated API spend reaches this (USD)"
+        required: false
+        type: string
+        default: "20"
+      draft:
+        description: "Open the PR as a draft"
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+# one run per issue at a time; a second dispatch for the same issue waits
+concurrency:
+  group: agent-issue-${{ inputs.issue }}
+  cancel-in-progress: false
+
+env:
+  CLAUDE_CODE_VERSION: stable  # the native installer's channel or an exact version such as 2.1.300
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    outputs:
+      branch: ${{ steps.claim.outputs.branch }}
+      assigned: ${{ steps.claim.outputs.assigned }}
+    steps:
+      - id: claim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue }}
+          BASE: ${{ inputs.base }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [[ $ISSUE =~ ^[0-9]+$ ]] || { echo "::error::issue must be an issue number, got '$ISSUE'"; exit 1; }
+          git check-ref-format --branch "$BASE" >/dev/null 2>&1 || { echo "::error::'$BASE' is not a valid branch name"; exit 1; }
+          gh api "repos/$GH_REPO/branches/$BASE" --silent || { echo "::error::base branch '$BASE' does not exist"; exit 1; }
+          issue=$(gh api "repos/$GH_REPO/issues/$ISSUE") || { echo "::error::issue #$ISSUE not found"; exit 1; }
+          if jq -e '.pull_request' <<<"$issue" >/dev/null; then echo "::error::#$ISSUE is a pull request, not an issue"; exit 1; fi
+          [ "$(jq -r .state <<<"$issue")" = open ] || { echo "::error::issue #$ISSUE is closed"; exit 1; }
+          # .claude/rules/github-issues.md: never start on an issue someone else has claimed
+          others=$(jq -r --arg me "$ACTOR" '[.assignees[].login | select(. != $me)] | join(", ")' <<<"$issue")
+          [ -z "$others" ] || { echo "::error::#$ISSUE is assigned to $others. Ask them, or unassign them, then run again."; exit 1; }
+          assigned=false
+          if ! jq -e --arg me "$ACTOR" 'any(.assignees[]; .login == $me)' <<<"$issue" >/dev/null; then
+            gh issue edit "$ISSUE" --add-assignee "$ACTOR"
+            assigned=true
+          fi
+          gh issue comment "$ISSUE" --body "Agent run started by $ACTOR on \`$BASE\`: $RUN_URL"
+          { echo "branch=agent/issue-$ISSUE-$GITHUB_RUN_ID"; echo "assigned=$assigned"; } >> "$GITHUB_OUTPUT"
+          echo "### #$ISSUE: $(jq -r .title <<<"$issue")" >> "$GITHUB_STEP_SUMMARY"
+
+  agent:
+    needs: claim
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # read-only: the agent can read code, issues, PRs and CI logs but cannot push or post anything
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    env:
+      ISSUE: ${{ inputs.issue }}
+      BASE: ${{ inputs.base }}
+      BRANCH: ${{ needs.claim.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base }}
+          fetch-depth: 0  # the agent reads history and merges the base branch before it finishes
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      # the .venv CLAUDE.md expects; the CPU build of PyTorch, since PyPI's Linux wheel pulls in gigabytes of CUDA
+      - run: |
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements-dev.txt --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_CODE_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Prepare branch and prompt
+        env:
+          REPO: ${{ github.repository }}
+          INSTRUCTIONS: ${{ inputs.instructions }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          OUT_DIR="$RUNNER_TEMP/agent-out"
+          mkdir -p "$OUT_DIR"
+          echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+          export OUT_DIR
+          envsubst '$REPO $ISSUE $BASE $BRANCH $OUT_DIR' < .github/agent/prompt.md > "$OUT_DIR/prompt.md"
+          if [ -n "${INSTRUCTIONS//[[:space:]]/}" ]; then
+            printf '\n# Instructions from %s for this run\n\n%s\n' "$GITHUB_ACTOR" "$INSTRUCTIONS" >> "$OUT_DIR/prompt.md"
+          fi
+          claude --version
+      - name: Run Claude Code
+        id: run
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          MODEL: ${{ inputs.model }}
+          BUDGET: ${{ inputs.max_budget_usd }}
+          DISABLE_AUTOUPDATER: "1"
+          BASH_DEFAULT_TIMEOUT_MS: "600000"  # a full tasks.py test can take a few minutes
+        run: |
+          set -euo pipefail
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::Set the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN repository secret (README.md, Agent PRs)."
+            exit 1
+          fi
+          [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
+          # The token above is the boundary (it cannot write). These lists keep the agent on the path the workflow
+          # expects and fail its publishing attempts fast instead of letting it retry them.
+          allowed=(
+            Read Edit Write Glob Grep WebFetch WebSearch Agent
+            "Bash(git *)" "Bash(gh *)" "Bash(.venv/bin/python *)" "Bash(.venv/bin/pip *)"
+            "Bash(ls *)" "Bash(mkdir *)" "Bash(mv *)" "Bash(cp *)" "Bash(rm *)" "Bash(jq *)"
+          )
+          denied=(
+            "Bash(git push *)" "Bash(gh pr create *)" "Bash(gh pr edit *)" "Bash(gh pr merge *)" "Bash(gh pr comment *)"
+            "Bash(gh pr review *)" "Bash(gh issue create *)" "Bash(gh issue edit *)" "Bash(gh issue comment *)"
+            "Bash(gh issue close *)" "Bash(gh workflow *)" "Edit(.github/workflows/**)" "Write(.github/workflows/**)"
+          )
+          join() { local IFS=,; echo "$*"; }
+          claude -p "$(cat "$OUT_DIR/prompt.md")" \
+            --model "$MODEL" \
+            --max-budget-usd "$BUDGET" \
+            --permission-mode dontAsk \
+            --permission-prompts none \
+            --allowedTools "$(join "${allowed[@]}")" \
+            --disallowedTools "$(join "${denied[@]}")" \
+            --add-dir "$OUT_DIR" \
+            --output-format stream-json --verbose \
+            | tee "$OUT_DIR/transcript.jsonl" \
+            | jq -R -r --unbuffered -f .github/agent/log.jq
+      - name: Check the result
+        if: always() && steps.run.outcome != 'skipped'
+        env:
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+        run: |
+          set -uo pipefail
+          jq -R -c 'fromjson? | select(.type == "result")' "$OUT_DIR/transcript.jsonl" 2>/dev/null | tail -n 1 > "$OUT_DIR/result.json" || true
+          if [ -s "$OUT_DIR/result.json" ]; then
+            jq -r '"Agent: \(.subtype), \(.num_turns) turns, $\((.total_cost_usd // 0) * 100 | round / 100)"' "$OUT_DIR/result.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          fail() { echo "::error::$1"; printf '\n**Not published:** %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ -f "$OUT_DIR/pr-body.md" ] && { echo; cat "$OUT_DIR/pr-body.md"; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$RUN_OUTCOME" = success ] || fail "Claude Code stopped with an error (budget, turn limit, auth or crash; see its log)"
+          ahead=$(git rev-list --count "origin/$BASE..HEAD")
+          [ "$ahead" -gt 0 ] || fail "the agent made no commits"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::warning::uncommitted changes left behind, not published:"
+            git status --short
+          fi
+          title=$(head -n 1 "$OUT_DIR/pr-title.txt" 2>/dev/null | tr -d '\r') || true
+          re='^(feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(\([^)]+\))?!?: .+'  # same as commitlint.yml
+          [[ $title =~ $re ]] || fail "pr-title.txt is missing or not a Conventional Commit: '$title'"
+          [ -s "$OUT_DIR/pr-body.md" ] || fail "pr-body.md is missing"
+          if [ -f "$OUT_DIR/follow-ups.json" ] && ! jq -e 'type == "array"' "$OUT_DIR/follow-ups.json" >/dev/null; then
+            fail "follow-ups.json is not a JSON array"
+          fi
+          git bundle create "$OUT_DIR/agent.bundle" "$BRANCH" "^origin/$BASE"
+          git log --oneline "origin/$BASE..HEAD"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    needs: [claim, agent]
+    if: always() && needs.claim.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      ISSUE: ${{ inputs.issue }}
+      BASE: ${{ inputs.base }}
+      BRANCH: ${{ needs.claim.outputs.branch }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # A PR opened with the workflow's own GITHUB_TOKEN does not start other workflows, so CI and the title lint would
+      # not run on it. A GitHub App token (preferred) or a fine-grained token avoids that; see README.md, Agent PRs.
+      - id: app
+        if: vars.AGENT_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - id: token
+        env:
+          APP: ${{ steps.app.outputs.token }}
+          PAT: ${{ secrets.AGENT_GH_TOKEN }}
+        run: |
+          if [ -n "$APP" ]; then echo "source=app"; elif [ -n "$PAT" ]; then echo "source=pat"; else echo "source=github"; fi >> "$GITHUB_OUTPUT"
+      - if: needs.agent.result == 'success'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token || secrets.AGENT_GH_TOKEN || github.token }}
+      - if: needs.agent.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+      - name: Push the branch and open the PR
+        if: needs.agent.result == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.AGENT_GH_TOKEN || github.token }}
+          TOKEN_SOURCE: ${{ steps.token.outputs.source }}
+          ACTOR: ${{ github.actor }}
+          MODEL: ${{ inputs.model }}
+          DRAFT: ${{ inputs.draft }}
+          INSTRUCTIONS: ${{ inputs.instructions }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/agent-out"
+          git bundle verify -q "$out/agent.bundle"
+          git fetch -q "$out/agent.bundle" "refs/heads/$BRANCH:refs/heads/$BRANCH"
+          # A workflow changed on a branch of this repository runs with its secrets as soon as the PR opens, so the
+          # agent's output never carries workflow changes. Make those by hand.
+          touched=$(git diff --name-only "origin/$BASE...$BRANCH" -- .github/workflows)
+          if [ -n "$touched" ]; then echo "::error::the agent changed workflow files, not publishing: $touched"; exit 1; fi
+          git push -q origin "refs/heads/$BRANCH:refs/heads/$BRANCH"
+
+          links=()
+          if [ -f "$out/follow-ups.json" ]; then
+            while IFS= read -r item; do
+              labels=$(jq -r '(.labels // []) | join(",")' <<<"$item")
+              args=(--title "$(jq -r .title <<<"$item")" --body "$(jq -r '.body // ""' <<<"$item")")
+              [ -z "$labels" ] || args+=(--label "$labels")
+              if url=$(gh issue create "${args[@]}"); then links+=("$url"); else echo "::warning::could not file follow-up: $item"; fi
+            done < <(jq -c '.[:5][] | select(.title)' "$out/follow-ups.json")
+          fi
+
+          body="$RUNNER_TEMP/pr-body.md"
+          {
+            cat "$out/pr-body.md"
+            grep -qiE "(close[sd]?|fix(e[sd])?|resolve[sd]?) #$ISSUE\b" "$out/pr-body.md" || printf '\nCloses #%s\n' "$ISSUE"
+            if [ ${#links[@]} -gt 0 ]; then printf '\n### Follow-ups\n'; printf -- '- %s\n' "${links[@]}"; fi
+            printf '\n<details><summary>Agent run</summary>\n\n'
+            printf -- '- Started by %s, model `%s`: %s\n' "$ACTOR" "$MODEL" "$RUN_URL"
+            jq -r '"- \(.num_turns) turns, about $\((.total_cost_usd // 0) * 100 | round / 100), \(((.duration_ms // 0) / 60000) | floor) min"' "$out/result.json" 2>/dev/null || true
+            if [ -n "${INSTRUCTIONS//[[:space:]]/}" ]; then printf -- '- Instructions:\n\n%s\n' "$INSTRUCTIONS" | sed '3,$s/^/  > /'; fi
+            if [ "$TOKEN_SOURCE" = github ]; then
+              printf -- '- Opened with GITHUB_TOKEN, so CI did not start on its own: close and reopen this PR to run it.\n'
+            fi
+            printf '\n</details>\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n'
+          } > "$body"
+
+          draft=(); [ "$DRAFT" = true ] && draft=(--draft)
+          pr=$(gh pr create --base "$BASE" --head "$BRANCH" --title "$(head -n 1 "$out/pr-title.txt" | tr -d '\r')" --body-file "$body" "${draft[@]}")
+          gh issue comment "$ISSUE" --body "Agent opened $pr"
+          echo "PR: $pr" >> "$GITHUB_STEP_SUMMARY"
+      - name: Report a failed run on the issue
+        if: failure() || needs.agent.result != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSIGNED: ${{ needs.claim.outputs.assigned }}
+          ACTOR: ${{ github.actor }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+        run: |
+          gh issue comment "$ISSUE" --body "Agent run did not open a PR (agent: $AGENT_RESULT). The reason is in the run summary, and the transcript in its \`agent-out\` artifact: $RUN_URL"
+          # hand the issue back if this run is what claimed it
+          [ "$ASSIGNED" != true ] || gh issue edit "$ISSUE" --remove-assignee "$ACTOR"

@@ -1,7 +1,9 @@
 """Coordinator failover end to end in one process (docs/distributed.md, "Terms and coordinator failover"): three nodes, each with its own app
 (the real /collective routes over a TestClient), its own Cluster and observation store, and a member of the run training in a thread.
-The network between the nodes is fake and cut by hand; the Cluster's clock is a fake one the test moves, so the failure detector and the
-members' leases lapse without sleeping. Nothing opens a window or a socket."""
+The member runs the worker's own code (studio_jobs.diloco_member), so after a failover it finds the new coordinator by the where-file
+the app wrote, with studio_peer.PeerClient replaced by one that maps each node's URLs to its TestClient: a where-file naming the wrong
+address fails the test. The network between the nodes is fake and cut by hand; the Cluster's clock is a fake one the test moves, so
+the failure detector and the members' leases lapse without sleeping. Nothing opens a window or a socket."""
 import dataclasses
 import json
 import tempfile
@@ -9,6 +11,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -16,6 +20,7 @@ import studio_diloco
 import studio_distributed
 import studio_failover
 import studio_facts
+import studio_jobs
 from studio_peer import PeerError
 from studio_queue import Runner
 from studio_remote import Cluster
@@ -28,6 +33,16 @@ RUN = "run1"
 ROUNDS = 40
 CUT_AT = 3  # the cable to the coordinator is pulled when it opens this round
 NAMES = ("n0", "n1", "n2")
+PORTS = {"n0": 9100, "n1": 9101, "n2": 9102}  # not studio_peer.DEFAULT_PORT: the where-file must name the port the API listens on
+
+
+def peer_url(name):
+    """How the peers reach `name` (its tailnet name, where `tailscale serve` listens): not the bare name the workspace lists."""
+    return f"https://{name}.tail.ts.net"
+
+
+def local_url(name):
+    return f"http://127.0.0.1:{PORTS[name]}"
 
 
 class Cable(support.Peer):
@@ -74,10 +89,11 @@ class Node:
         info = dataclasses.replace(own_node(), hostname=name)
         self.net = fleet.nets[name]
         self.runner = Runner(self.root / "data" / "queue.json", {}, tick=.01, cluster=lambda r: Cluster(
-            r, client_for=self.net.client_for, store=lambda: None, own=lambda: info, clock=fleet.clock, address=name, threads=False,
+            r, client_for=self.net.client_for, store=lambda: None, own=lambda: info, clock=fleet.clock, address=peer_url(name), threads=False,
             hostname=name, coordinators=self.registry))
         fleet.case.addCleanup(self.runner.shutdown)
         self.cluster = self.runner.cluster
+        self.cluster.serve_at(PORTS[name])
         app = support.app()
         app.state.coordinators = self.registry
         self.client = fleet.case.enterContext(TestClient(app))
@@ -91,28 +107,29 @@ class Node:
             return self.cluster.state.handle_sync(json.loads(json.dumps(body)))
         raise PeerError(f"answered 404: {path}", status=404, detail=path)
 
-    def locate(self, run):
-        """What the worker's file_locator does, with the TestClient of the node the app on this node wrote down."""
-        try:
-            found = json.loads(studio_diloco.where_file(self.root, run).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        return found["node"], int(found["term"]), support.Peer(self.fleet.nodes[found["node"]].client)
+    def where(self):
+        """The where-file the app on this node wrote for the run, or None."""
+        path = studio_diloco.where_file(self.root, RUN)
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
     def replica(self):
         return dict(self.cluster.replicas.get(RUN) or {})
 
-    def start_member(self, client, index):
+    def start_member(self, url):
         def emit(event):
             if event.get("type") == "info" and not event.get("text", "").startswith(("Round", "Holding")):
                 self.notes.append(event.get("text"))
             if event.get("type") in ("diloco_member", "diloco_replica"):
                 self.cluster._on_event("train", event)
 
+        job = SimpleNamespace(id=f"member_{self.name}", params={"coordinator_url": url, "run": RUN, "node": self.name, "epoch": 0,
+                                                              "output_dir": str(self.root / "out"),
+                                                              "member_options": {"wait": .5, "sleep": lambda seconds: time.sleep(.05)}})
+        context = SimpleNamespace(root=self.root, run_dir=self.root / "runs")
+
         def work():
             try:
-                studio_diloco.run_member(client, RUN, self.name, 0, self.root, self.root / "out", emit, self.stop, wait=.5,
-                                         sleep=lambda seconds: time.sleep(.05), locate=self.locate)
+                studio_jobs.diloco_member(job, context, emit, self.stop, threading.Event())
             except Exception as exc:  # noqa: BLE001 - reported by the test
                 self.error = exc
         self.thread = threading.Thread(target=work, name=f"member {self.name}", daemon=True)
@@ -122,28 +139,36 @@ class Node:
 class Fleet:
     """Three nodes whose coordinator, n0, runs the run until its cable is pulled."""
 
-    def __init__(self, case, **settings):
+    def __init__(self, case, handoff="", **settings):
         self.case, self.clock = case, Clock()
         self.handlers, self.nets = {}, {name: Net() for name in NAMES}
         for net in self.nets.values():
             net.handlers = self.handlers  # one set of handlers, one `down` set per caller: a partition can be between two nodes only
         self.nodes = {name: Node(self, name) for name in NAMES}
         self.cut = threading.Event()
+        self.line = Cable(self.nodes["n0"].client, self.cut, lambda: not handoff and self.first.next_round >= CUT_AT and self.ready("n1", "n2"))
+        self.urls = {url(name): name for name in NAMES for url in (peer_url, local_url)}
+        case.enterContext(mock.patch("studio_peer.PeerClient", self.client_for))  # the worker's PeerClient, in studio_jobs and file_locator
         studio_distributed.RUNS.clear()
         case.addCleanup(studio_distributed.RUNS.clear)
-        studio_distributed.RUNS[RUN] = studio_distributed.Run(RUN, "Version 1 across 3 machines", 1, 100., {"rounds": ROUNDS}, "n0")
+        studio_distributed.RUNS[RUN] = studio_distributed.Run(RUN, "Version 1 across 3 machines", 1, 100., {"rounds": ROUNDS}, "n0", handoff=handoff)
         self.first = support.build(self.nodes["n0"].root / "run", RUN, inner_steps=2, rounds=ROUNDS, outer_lr=.7, outer_momentum=.9,
                                    min_members=1, max_members=3, replicas=3, delta_dtype="float32", **settings)
+        self.first.prefer = (handoff,) if handoff else ()  # (studio_diloco.prepare)
         self.nodes["n0"].registry[RUN] = self.first
         case.addCleanup(self.stop)
 
     def ready(self, *names):
         return all(self.nodes[n].replica().get("ready") and self.nodes[n].replica().get("round", 0) >= 1 for n in names)
 
+    def client_for(self, url, **options):
+        """studio_peer.PeerClient for the workers: n0's URLs go through the cable to the first coordinator, the others to their node."""
+        name = self.urls[url]  # KeyError: a URL no node serves at
+        return self.line if name == "n0" else support.Peer(self.nodes[name].client)
+
     def start_members(self):
-        line = Cable(self.nodes["n0"].client, self.cut, lambda: self.first.next_round >= CUT_AT and self.ready("n1", "n2"))
-        for index, node in enumerate(self.nodes.values()):
-            node.start_member(line, index)
+        for name, node in self.nodes.items():
+            node.start_member(local_url("n0") if name == "n0" else peer_url("n0"))
             time.sleep(.2)  # joins in order: n0 has rank 0
 
     def sync(self, *names, seconds=0.):
@@ -225,6 +250,10 @@ class Failover(unittest.TestCase):
         # the other node saw the claim in its store and follows it
         other = "n2" if winner == "n1" else "n1"
         fleet.wait_for("the other node to hold the claim", lambda: (fleet.nodes[other].cluster.state.get(winner, "claim", RUN) or {}).get("value", {}).get("term") == 2)
+        # the where-files the members read: the successor's own API port on its node, its published address on the other
+        self.assertEqual(fleet.nodes[winner].where(), {"node": winner, "term": 2, "url": local_url(winner)})
+        fleet.wait_for("the other node's where-file", lambda: fleet.nodes[other].where() is not None)
+        self.assertEqual(fleet.nodes[other].where(), {"node": winner, "term": 2, "url": peer_url(winner)})
 
         fleet.wait_for("the run to finish under term 2", lambda: coordinator.finished and not fleet.nodes["n1"].thread.is_alive() and not fleet.nodes["n2"].thread.is_alive())
         self.assertEqual([n.error for n in (fleet.nodes["n1"], fleet.nodes["n2"])], [None, None])
@@ -232,6 +261,8 @@ class Failover(unittest.TestCase):
         self.assertEqual(rounds, list(range(ROUNDS)))  # continued from the last completed round: none repeated, none skipped
         self.assertLess(coordinator.history[-1]["val_loss"], coordinator.history[0]["val_loss"])  # and kept converging
         self.assertEqual(coordinator.snapshot()["round"], ROUNDS)
+        self.assertTrue((coordinator.directory / "best.npz").is_file())  # it holds a best of its own: the replica's round, or a later one
+        self.assertGreaterEqual(coordinator.rules.best_round, last_round - 1)
 
         # the old coordinator comes back with its coordinator still in its registry: its first poll shows the higher claim
         old = fleet.first
@@ -248,6 +279,35 @@ class Failover(unittest.TestCase):
         self.assertEqual(list(fleet.live()), [winner])  # one coordinator of the run, one theta
         row = fleet.nodes["n0"].cluster.state.get(winner, "run", RUN)["value"]
         self.assertEqual(row["term"], 2)
+
+
+class Handoff(unittest.TestCase):
+    """A run started with another machine chosen to coordinate it: n0 starts it, n1 is chosen, and n0 stays up throughout."""
+
+    def setUp(self):
+        self.fleet = Fleet(self, handoff="n1")
+        self.addCleanup(studio_diloco.COORDINATORS.clear)
+
+    def test_the_chosen_node_takes_the_run_over_while_the_starter_is_up_and_the_members_follow_it(self):
+        fleet = self.fleet
+        fleet.start_members()
+        self.assertEqual(studio_diloco.replica_nodes(["n0", "n1", "n2"], 1, fleet.first.prefer), ["n1"])
+        fleet.wait_for("n1 to coordinate at term 2", lambda: RUN in fleet.nodes["n1"].registry and fleet.nodes["n1"].registry[RUN].term == 2)
+        self.assertEqual(fleet.nodes["n1"].cluster.claims[RUN]["term"], 2)
+        self.assertGreaterEqual(fleet.nodes["n1"].cluster.claims[RUN]["round"], 1)  # from a round it held, never from nothing
+        self.assertFalse(fleet.first.finished)  # n0 was up: nobody waited for it to be lost
+        fleet.wait_for("n0 to step down", lambda: RUN not in fleet.nodes["n0"].registry)
+        self.assertGreaterEqual(fleet.first.superseded, 2)
+        self.assertEqual(fleet.nodes["n0"].cluster.claims[RUN], {"released": True})
+        fleet.wait_for("n0's where-file", lambda: fleet.nodes["n0"].where() is not None)
+        self.assertEqual(fleet.nodes["n0"].where(), {"node": "n1", "term": 2, "url": peer_url("n1")})  # the starter's member finds the chosen node
+        self.assertEqual(fleet.nodes["n1"].where(), {"node": "n1", "term": 2, "url": local_url("n1")})
+        coordinator = fleet.nodes["n1"].registry[RUN]
+        fleet.wait_for("the run to finish under n1", lambda: coordinator.finished and not any(n.thread.is_alive() for n in fleet.nodes.values()))
+        self.assertEqual([n.error for n in fleet.nodes.values()], [None, None, None])
+        self.assertEqual([row["round"] for row in coordinator.history], list(range(ROUNDS)))
+        self.assertEqual(list(fleet.live()), ["n1"])  # one coordinator, and the starter's member trained in it to the end
+        self.assertIn("n0", {node for row in coordinator.history[-3:] for node in row["contributed"]})
 
 
 class Conflict(unittest.TestCase):

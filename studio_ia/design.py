@@ -834,12 +834,6 @@ def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
 
 # ---------------------------------------------------------------------------------------------- learn the parts (#83)
 
-PART_LINKS = dict(embedding=("trace", "inside3d"), position=("trace", "inside3d"), mixer=("head_zoom", "value_map", "head_lab", "inside3d"),
-                  channel=("inside3d", "trace"), norm=("trace",), final_norm=("trace",), head=("loss", "trace"))  # part -> pages that show it work
-HEAD_PAGES = ("head_zoom", "value_map", "head_lab")  # about attention heads: only for a look-back that has them
-LINK_LABELS = dict(trace="trace", head_zoom="inside_head", value_map="value_map", loss="loss", head_lab="head_lab", inside3d="3d")
-
-
 def example_pieces(v, lists):
     """The example sentence cut by word list v ([label]), or None while the lists are read or that list is not built."""
     tok = lists["tokenizers"][v] if lists else None
@@ -884,9 +878,9 @@ def example_for(part, s, short, pieces, sentence):
 
 
 def explain(part, s, block=None, lists=None):
-    """What the side panel says about one part of the draft `s`: {title, what, module, module_text, example, links}. `part` is a
-    PART_LINKS key; `block` is the block a sub-layer was clicked in (None: a model-wide part or the all-blocks choice).
-    `lists` is services.word_lists() (None while it is read). links are [(route, label, block)] to the pages that show it work."""
+    """What the side panel says about one part of the draft `s`: {title, what, module, module_text, example}. `part` is a
+    part key (embedding, position, mixer, channel, norm, final_norm, head); `block` is the block a sub-layer was clicked in (None: a model-wide part or the all-blocks choice).
+    `lists` is services.word_lists() (None while it is read)."""
     return explain_for(part, s, block, example_pieces(s["V"], lists), lists["sentence"] if lists else None)
 
 
@@ -898,10 +892,8 @@ def explain_for(part, s, block=None, pieces=None, sentence=None):
     if block is not None:
         title = T["explain_in_block"].format(part=title, n=block + 1)
     what = f"{T['final_norm_tip']}\n\n{part_tip('norm')}" if part == "final_norm" else part_tip(slot)
-    links = [(route, T[LINK_LABELS[route]], block or 0) for route in PART_LINKS[part]
-             if route not in HEAD_PAGES or "heads" in fields_of(slot, short)]
     return dict(title=title, what=what, module=T["explain_now"].format(name=module_name(slot, short)), module_text=module_tip(slot, short),
-                example=example_for(part, s, short, pieces, sentence), links=links)
+                example=example_for(part, s, short, pieces, sentence))
 
 
 EXPERIMENTS = (("heads", "exp_heads"), ("words", "exp_words"), ("depth", "exp_depth"), ("width", "exp_depth"))  # depth and width ask one question
