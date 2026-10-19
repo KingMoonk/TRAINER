@@ -228,10 +228,26 @@ With one member, `η = 1` and `μ = 0`, a round is exactly `H` steps of ordinary
 
 ### Heterogeneous nodes
 
-An NVIDIA box and a MacBook differ several times in speed. A round has a deadline set from the fastest member's measured step
-time times `H`, plus slack. Slower members send whatever they have done by then. A member that has not sent anything by the
-deadline plus a grace period is dropped from the round, and its contribution would be refused if it arrived later; it rejoins
-at the next round with the new `θ`.
+An NVIDIA box and a MacBook differ several times in speed, so the coordinator deals each member its own number of inner steps
+instead of `H` for everyone, and all of them finish together.
+
+- It keeps each member's seconds per step, smoothed over the rounds the member contributed to (from the contribution's own steps
+  and seconds). A restart forgets them.
+- Each round the measured members share the work an equal-`H` round would give them (`H` steps each) in proportion to their
+  speed, so predicted finish times (steps times seconds per step) match. A share is kept between `H/10` and `3H`. Equal speeds,
+  and a run with one member, therefore get `H` each, as before. Same work as before, in less time: with speeds 1, 2 and 4 the
+  members get about `0.43H`, `0.86H` and `1.71H` and the round takes about 40 percent of the time the slowest member alone would need
+  for `H` steps.
+- A member nobody has timed yet (a new one, or every member in the run's first round) gets `H/4` steps in a group that has
+  measured members, so it is timed without holding the others up, and a measured share afterwards. While nobody is measured
+  everyone gets `H`.
+- The deadline comes from the slowest predicted finish (dealt steps times that member's seconds per step) times
+  `1 + slack_ratio`, plus `slack_seconds`; with no measurement at all, `first_round_seconds`. A member that is slower than
+  predicted sends whatever it has done at the deadline. A member that has not sent anything by the deadline plus a grace period is
+  dropped from the round, and its contribution would be refused if it arrived later; it rejoins at the next round with the new `θ`.
+- The outer average stays weighted by target tokens, which now follows the work each member did. The learning-rate schedule keeps
+  `H` positions per round: a member's steps are spread over the round's positions, so every member is at the same point of the
+  schedule when the round ends, whatever it was dealt.
 
 ### Elastic membership and rendezvous
 
