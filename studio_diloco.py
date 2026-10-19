@@ -758,7 +758,7 @@ class Coordinator:
         for entry in self.lessons:
             if entry["status"] not in ("live", "dropped"):
                 continue  # a dropped lesson keeps its windows, so Keep can deal it again
-            mine =[row for row in rows if row.get("shard") == entry["shard"]]
+            mine = [row for row in rows if row.get("shard") == entry["shard"]]
             windows = self._lesson_windows(mine) if mine else []
             if len(windows):
                 self.lesson_windows[entry["shard"]] = windows
@@ -773,23 +773,29 @@ class Coordinator:
     def lesson_list(self):
         """Every lesson, oldest first, with what the teacher gave (the question, the model's reply, the better answer) as lessons.jsonl
         holds it: [{id, round, rows, status, items, more}]. A lesson is one polish's rewrites (one shard); `items` shows the first
-        LESSON_ITEMS_SHOWN of them and `more` counts the rest. A coordinator made from a replica has no rows to show."""
+        LESSON_ITEMS_SHOWN of them and `more` counts the rest. `keepable` says Keep can deal it again: it is not dealt now and this node
+        holds its rows (a coordinator made from a replica holds none). Only a snapshot of the statuses is taken under the lock; the
+        file is read and parsed outside it."""
         with self.lock:
             entries = [dict(entry) for entry in self.lessons]
-            shown = {}
-            path = self.directory / "lessons.jsonl"
-            for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                shown.setdefault(row.get("shard"), []).append(row)
+        shown = {}
+        path = self.directory / "lessons.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+        except OSError:
+            lines = []
+        for line in lines:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            shown.setdefault(row.get("shard"), []).append(row)
         out = []
         for entry in entries:
             rows = shown.get(entry["shard"], [])
             items = [{"prompt": _prompt_of(row["messages"]), "reply": str(row.get("rejected") or ""), "answer": str(row["chosen"])}
                      for row in rows[:LESSON_ITEMS_SHOWN]]
             out.append({"id": entry["shard"], "round": entry["round"], "rows": entry["rows"], "status": entry["status"],
-                        "items": items, "more": max(0, len(rows) - len(items))})
+                        "keepable": entry["status"] != "live" and bool(rows), "items": items, "more": max(0, len(rows) - len(items))})
         return out
 
     def drop_lesson(self, shard):

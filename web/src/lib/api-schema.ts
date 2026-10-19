@@ -4392,6 +4392,8 @@ export interface components {
             id: number;
             /** Items */
             items: components["schemas"]["LessonItem"][];
+            /** Keepable */
+            keepable: boolean;
             /** More */
             more: number;
             /** Round */

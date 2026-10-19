@@ -11,9 +11,11 @@ from fastapi.testclient import TestClient
 
 import studio_distributed as runs
 import studio_diloco
+import studio_peer
 from studio_api import app as api_app
 from studio_api.app import create_app
 from studio_api.hosts import ANY
+from studio_api.routers import distributed as router
 from studio_api.routers.distributed import Run
 from studio_ia.services import FakeServices
 from tests import diloco_support as support
@@ -130,8 +132,13 @@ class LessonReview(unittest.TestCase):
         self.play(c, 2)
         c.lessons[0]["status"] = "left_out"
         c.lesson_windows.pop(4)
+        self.assertTrue(self.client.get(self.url).json()[0]["keepable"])  # left out, and its rows are on this node
         self.assertEqual(self.statuses(self.client.post(f"{self.url}/4/keep").json()), {4: "live"})
         self.assertIn(4, c.lesson_windows)
+        self.assertFalse(self.client.get(self.url).json()[0]["keepable"])  # dealt now
+        c.lessons[0]["status"] = "left_out"
+        (c.directory / "lessons.jsonl").write_text("", encoding="utf-8")
+        self.assertFalse(self.client.get(self.url).json()[0]["keepable"])  # no rows here, as after a failover: Keep cannot work
 
     def test_the_errors_say_what_is_wrong(self):
         self.assertEqual(self.client.get("/distributed/runs/nope/lessons").status_code, 404)
@@ -146,6 +153,36 @@ class LessonReview(unittest.TestCase):
         studio_diloco.COORDINATORS.clear()
         idle = self.client.get(self.url)
         self.assertEqual((idle.status_code, idle.json()["detail"]), (409, "The run is not going."))
+
+    def test_a_forwarded_choice_keeps_the_owners_refusal(self):
+        class Owner:
+            def __init__(self, status):
+                self.status = status
+
+            def post_json(self, path, body=None):
+                if self.status is None:
+                    raise studio_peer.PeerError("box did not answer", status=None)
+                raise studio_peer.PeerError(f"box answered {self.status}", status=self.status, detail=f"owner said {self.status}")
+
+        class Cluster:
+            status = 404
+
+            def address_of(self, node):
+                return "box"
+
+            def client_for(self, address, **options):
+                return Owner(self.status)
+
+        cluster = Cluster()
+        row = {"id": RUN, "origin": "box"}
+        url = f"{self.url}/99/drop"
+        with mock.patch.object(router, "_remote", return_value=row), mock.patch.object(router, "_cluster", return_value=cluster):
+            for status, expected in ((404, 404), (409, 409), (500, 502), (None, 502)):
+                cluster.status = status
+                answer = self.client.post(url)
+                self.assertEqual(answer.status_code, expected, (status, answer.json()))
+            cluster.status = 404
+            self.assertEqual(self.client.post(url).json()["detail"], "owner said 404")
 
 
 if __name__ == "__main__":

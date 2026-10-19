@@ -2929,6 +2929,10 @@
             "title": "Items",
             "type": "array"
           },
+          "keepable": {
+            "title": "Keepable",
+            "type": "boolean"
+          },
           "more": {
             "title": "More",
             "type": "integer"
@@ -2956,6 +2960,7 @@
           "round",
           "rows",
           "status",
+          "keepable",
           "items",
           "more"
         ],

@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { problem } from "@/lib/cluster";
 import { TRAINING as T } from "@/lib/copy/training";
 import { lessonAction, lessonFrom, type Lesson, type Run } from "./logic";
 import { useChangeLesson, useLessons } from "./use-training";
@@ -41,13 +40,7 @@ function Answers({ lesson }: { lesson: Lesson }) {
 export function Lessons({ run }: { run: Run }) {
   const lessons = useLessons(run.id, true);
   const change = useChangeLesson(run.id);
-  if (lessons.isError) {
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {T.lessonsFailed} {problem(lessons.error)}
-      </p>
-    );
-  }
+  if (!lessons.data && lessons.isError) return <p className="text-xs text-muted-foreground">{T.lessonsFailed}</p>;
   if (!lessons.data || lessons.data.length === 0) return null;
   return (
     <section className="flex flex-col gap-2" aria-label={T.lessonsTitle}>
@@ -64,9 +57,13 @@ export function Lessons({ run }: { run: Run }) {
                 </span>
                 <Answers lesson={lesson} />
               </div>
-              <Button variant="outline" size="sm" disabled={change.isPending} onClick={() => change.mutate({ lesson: lesson.id, verb: action.verb })}>
-                {action.label}
-              </Button>
+              {action.verb === "keep" && !lesson.keepable ? (
+                <span className="max-w-48 text-right text-xs text-muted-foreground">{T.lessonNotKeepable}</span>
+              ) : (
+                <Button variant="outline" size="sm" disabled={change.isPending} onClick={() => change.mutate({ lesson: lesson.id, verb: action.verb })}>
+                  {action.label}
+                </Button>
+              )}
             </li>
           );
         })}

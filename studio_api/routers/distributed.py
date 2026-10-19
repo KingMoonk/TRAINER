@@ -167,6 +167,7 @@ class Lesson(BaseModel):
     round: int  # the round the polish that wrote it followed
     rows: int  # how many answers it holds
     status: Literal["live", "dropped", "left_out"]  # dealt to the members, dropped by you, or left out by a step back or a new coordinator
+    keepable: bool  # Keep can deal it again: it is not dealt now and this computer still holds its answers
     items: list[LessonItem]  # the first few of its answers
     more: int  # ... and how many are not shown
 
@@ -316,7 +317,9 @@ def _ask(services, row, path, read=False):
     try:
         return client.get_json(path) if read else client.post_json(path, {})
     except studio_peer.PeerError as exc:
-        raise HTTPException(502, str(exc)) from None
+        if exc.status is not None and 400 <= exc.status < 500:  # the owner refused: say what it said (404 no lesson, 409 run over)
+            raise HTTPException(exc.status, exc.detail or str(exc)) from None
+        raise HTTPException(502, str(exc)) from None  # not reached, or the owner failed
 
 
 def _forward(services, row, path):
