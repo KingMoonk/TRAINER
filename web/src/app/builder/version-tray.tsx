@@ -19,8 +19,6 @@ type Version = components["schemas"]["Version"];
 type Queue = components["schemas"]["QueueStateModel"];
 type Curve = { steps: number[][]; smooth: number[][]; heldout: number[][]; total: number };
 
-const INSPECTORS = ["trace", "head_lab", "head_zoom", "loss", "value_map", "inside3d"] as const;
-
 export function versionState(version: Version, queue?: Queue, editingVersion?: number) {
   if (queue?.job?.params.version === version.number) return queue.paused ? T.stateTrainingPaused : T.stateTraining;
   const waiting = queue?.up_next.find((job) => job.params.version === version.number);
@@ -131,13 +129,6 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
               return <p key={version.number}>{T.version} {version.number} · {T.heldBackError} {held == null ? T.notMeasured : `${held.toFixed(3)} ${T.bitsPerCharacter}`}</p>; })}
           </div>
           <Link href={routeFor("queue").href} className="text-sm underline underline-offset-4">{T.openQueue}</Link>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader><CardTitle>{T.lookInside} {selected.number}</CardTitle><CardDescription>{T.inspectDescription}</CardDescription></CardHeader>
-        <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {INSPECTORS.map((key) => { const route = routeFor(key); return <Link key={key} href={`${route.href}/?version=${selected.number}`}
-            className="rounded-xl border border-border bg-surface-faint px-4 py-3 text-sm transition-colors hover:bg-surface-overlay">{route.title}<span aria-hidden className="float-right text-muted-foreground">↗</span></Link>; })}
         </CardContent>
       </Card>
     </>}

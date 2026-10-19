@@ -8,7 +8,6 @@ export const T = {
   queueUnavailable: "Queue state is unavailable. Saved versions remain visible.",
   curvesFailed: "Could not read the training curves. They will be checked again when training updates.",
   noCurve: "No error curve yet: it appears once training logs its first steps.",
-  inspectDescription: "Open an inspector on this same saved version.",
   openQueue: "Open the queue",
   version: "Version",
   versionHistory: "Version history",
@@ -35,7 +34,6 @@ export const T = {
   heldBackError: "held-back error:",
   notMeasured: "not measured",
   bitsPerCharacter: "bits per character",
-  lookInside: "Look inside version",
   trainingStep: "Training step",
   errorAxis: "Error (bits per character)",
 } as const;
