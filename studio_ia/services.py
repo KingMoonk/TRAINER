@@ -1562,14 +1562,16 @@ class WorkspaceServices(Services):
 
         super().__init__()
         self._reads(workspace)
+        import studio_distributed
+        studio_distributed.load(self.root)  # the Training tab's runs from before a restart (the queue's restart handling reads them)
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
                                           prepare=lambda job: studio_jobs.prepare(job, self),
                                           ledger=self.ledger, make_room=self.evict_oldest_chat,
                                           on_start=self.chat_job_started, on_end=self.chat_job_ended)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
-        import studio_distributed
-        studio_distributed.load(self.root)  # the Training tab's runs from before a restart
+        for job in self.runner.ended_on_load:  # a distributed run the restart could not resume: its version is not training any more
+            self._record_job("job", {"job": job.id, "status": job.status})
         workspace.progress = self.note
         # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
         self._schema = start_thread(workspace.ensure_schema) if workspace.schema_pending() else None

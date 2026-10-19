@@ -46,6 +46,7 @@ TERM_STALE = "Stale term"  # the start of the 409 message for a term that is not
 LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
 STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
+GONE_RUN = "No distributed run"  # the start of the 404 detail of a run the coordinator's app does not hold (routers.collective.coordinator)
 STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
@@ -1136,18 +1137,25 @@ def register(run, coordinator):
         COORDINATORS[run] = coordinator
 
 
-def prepare(job, services, directory, port):
+def prepare(job, services, directory, port, client_for=None):
     """App side, before the owner's job starts its worker: build the coordinator (tokenizing the data once), register it for the
-    routes, and tell the worker where it is. A folder with diloco.json continues that run."""
+    routes, and tell the worker where it is. A folder with diloco.json continues that run from its last completed round, which is how a
+    run resumes after the app restarted; the machines chosen are invited again. `client_for` reaches a peer (default PeerClient)."""
     import studio_distributed
     p = job.params
     config = dict(p["config"])
     settings = Settings.from_params(p, steps=config.get("steps"))
     examples = p["examples"] if "examples" in p else services.examples(p)
-    coordinator = Coordinator.build(job.id, directory, config, examples, settings)
+    try:
+        coordinator = Coordinator.build(job.id, directory, config, examples, settings)
+    except ValueError as exc:
+        if p.get("resuming"):
+            raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None
+        raise
     register(job.id, coordinator)
+    studio_distributed.resumed(job)
     p.update(run=job.id, coordinator_url=f"http://127.0.0.1:{port}", settings=dict(settings.__dict__))
-    studio_distributed.invite(job)  # the peers the person chose: a member job on each, which joins at the coordinator
+    studio_distributed.invite(job, **({"client_for": client_for} if client_for else {}))  # the peers the person chose: a member job on each, which joins at the coordinator
     return coordinator
 
 
@@ -1364,7 +1372,13 @@ class Member:
                 return self._seen(call())
             except PeerError as exc:
                 self._refused(exc)
+                if exc.status == 404 and exc.detail.startswith(GONE_RUN):
+                    raise PeerError(f"The coordinator no longer has run {self.run} (its app restarted), so this member left. "
+                                    f"It joins again if it is invited again.", status=404, detail=exc.detail) from None
                 if exc.status is not None or self.clock() >= end or self.stop.is_set():
+                    if exc.status is None and not self.stop.is_set():
+                        raise PeerError(f"The coordinator of run {self.run} did not answer for {self.patience:.0f} seconds, so this member "
+                                        f"left. It joins again if it is invited again.") from None
                     raise
                 found = self._relocated()
                 if found is not None:
