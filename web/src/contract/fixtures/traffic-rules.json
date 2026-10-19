@@ -1,0 +1,138 @@
+{
+  "body": {
+    "rules": [
+      {
+        "enabled": true,
+        "equals": "done",
+        "id": "run.finished",
+        "kind": "job",
+        "label": "Run finished",
+        "method": null,
+        "new_min": false,
+        "path": null,
+        "severity": "success",
+        "source": "event",
+        "status": null,
+        "where": "status"
+      },
+      {
+        "enabled": true,
+        "equals": "closed",
+        "id": "round.closed",
+        "kind": null,
+        "label": "Outer step applied",
+        "method": "GET",
+        "new_min": false,
+        "path": "/collective/*/rounds/*",
+        "severity": "success",
+        "source": "traffic",
+        "status": "200",
+        "where": "response.body.json.state"
+      },
+      {
+        "enabled": true,
+        "equals": null,
+        "id": "val_loss.best",
+        "kind": "train",
+        "label": "New best L_val",
+        "method": null,
+        "new_min": true,
+        "path": null,
+        "severity": "success",
+        "source": "event",
+        "status": null,
+        "where": "val_loss"
+      },
+      {
+        "enabled": true,
+        "equals": null,
+        "id": "member.joined",
+        "kind": null,
+        "label": "Worker joined",
+        "method": "POST",
+        "new_min": false,
+        "path": "/collective/*/join",
+        "severity": "info",
+        "source": "traffic",
+        "status": "2xx",
+        "where": null
+      },
+      {
+        "enabled": true,
+        "equals": null,
+        "id": "member.left",
+        "kind": null,
+        "label": "Worker left",
+        "method": "POST",
+        "new_min": false,
+        "path": "/collective/*/leave",
+        "severity": "info",
+        "source": "traffic",
+        "status": "2xx",
+        "where": null
+      },
+      {
+        "enabled": true,
+        "equals": null,
+        "id": "delta.refused",
+        "kind": null,
+        "label": "\u0394 refused (stale round, generation or epoch)",
+        "method": "POST",
+        "new_min": false,
+        "path": "/collective/*/rounds/*/delta",
+        "severity": "warning",
+        "source": "traffic",
+        "status": "409",
+        "where": null
+      },
+      {
+        "enabled": true,
+        "equals": null,
+        "id": "lease.fenced",
+        "kind": null,
+        "label": "Lease renewal refused: the job moved",
+        "method": "POST",
+        "new_min": false,
+        "path": "/cluster/jobs/*/renew",
+        "severity": "warning",
+        "source": "traffic",
+        "status": "409",
+        "where": null
+      },
+      {
+        "enabled": true,
+        "equals": "5xx",
+        "id": "api.5xx",
+        "kind": "api_error",
+        "label": "Server error (5xx)",
+        "method": null,
+        "new_min": false,
+        "path": null,
+        "severity": "destructive",
+        "source": "event",
+        "status": null,
+        "where": "status"
+      },
+      {
+        "enabled": false,
+        "equals": "done",
+        "id": "checkpoint.written",
+        "kind": "checkpoint",
+        "label": "Checkpoint written",
+        "method": null,
+        "new_min": false,
+        "path": null,
+        "severity": "info",
+        "source": "event",
+        "status": null,
+        "where": "phase"
+      }
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/traffic/rules"
+  },
+  "status": 200
+}

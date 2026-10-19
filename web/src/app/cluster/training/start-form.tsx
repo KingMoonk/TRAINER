@@ -1,0 +1,145 @@
+"use client";
+
+import Link from "next/link";
+import { useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { problem } from "@/lib/cluster";
+import { deviceText } from "../machines/logic";
+import { TRAINING as T } from "@/lib/copy/training";
+import { initialForm, otherMachines, startBody, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { useDefaults, useMachines, useStart, useTextSets, useVersions } from "./use-training";
+
+const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
+
+function Setting({ id, label, help, value, onChange, step, min = "0" }: { id: string; label: string; help: string; value: string; onChange: (value: string) => void; step: string; min?: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-sm font-medium">{label}</label>
+      <input id={id} inputMode="decimal" type="number" min={min} step={step} value={value} onChange={(e) => onChange(e.target.value)} className={`${FIELD} w-32`} />
+      <p className="max-w-prose text-xs text-muted-foreground">{help}</p>
+    </div>
+  );
+}
+
+/** The form fills itself from the server once the defaults and text sets have arrived, then belongs to the person. */
+function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextSet[]; onStarted: (run: Run) => void }) {
+  const versions = useVersions().data ?? [];
+  const nodes = otherMachines(useMachines().data);
+  const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
+  const [failure, setFailure] = useState("");
+  const start = useStart((run) => {
+    setFailure("");
+    onStarted(run);
+  }, setFailure);
+  const set = (patch: Partial<Form>) => {
+    setForm((f) => ({ ...f, ...patch }));
+    setFailure("");
+  };
+  const body = startBody(form);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (body) start.mutate(body);
+  };
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-5" aria-label={T.startTitle}>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="training-design" className="text-sm font-medium">{T.design}</label>
+        {versions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{T.noDesign}</p>
+        ) : (
+          <select id="training-design" value={form.version} onChange={(e) => set({ version: e.target.value })} className={`${FIELD} w-fit max-w-full`}>
+            <option value="">{T.designLatest}</option>
+            {versions.map((v) => (
+              <option key={v.number} value={String(v.number)}>{[T.version.replace("{number}", String(v.number)), v.name].filter(Boolean).join(" · ")}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      <fieldset className="flex flex-col gap-1">
+        <legend className="text-sm font-medium">{T.data}</legend>
+        <p className="text-xs text-muted-foreground">{T.dataLead}</p>
+        {sets.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {T.noData} <Link href="/your-data" className="underline underline-offset-2">{T.yourData}</Link>
+          </p>
+        ) : (
+          sets.map((s) => (
+            <label key={s.id} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.datasets.includes(s.id)} onChange={(e) => set({ datasets: toggled(form.datasets, s.id, e.target.checked) })} />
+              <span>{s.name}</span>
+              <span className="text-xs text-muted-foreground">{s.count.toLocaleString("en-US")}</span>
+            </label>
+          ))
+        )}
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-1">
+        <legend className="text-sm font-medium">{T.machines}</legend>
+        <p className="text-xs text-muted-foreground">{T.machinesLead}</p>
+        {nodes.length === 0 && <p className="text-sm text-muted-foreground">{T.noMachines}</p>}
+        {nodes.map((node) => (
+          <label key={node.address} className="flex flex-wrap items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.machines.includes(node.address)} onChange={(e) => set({ machines: toggled(form.machines, node.address, e.target.checked) })} />
+            <span>{node.hostname || node.address}</span>
+            {deviceText(node) && <span className="text-xs text-muted-foreground">{deviceText(node)}</span>}
+            {!node.online && <span className="text-xs text-muted-foreground" title={node.error || undefined}>{T.notAnswering}</span>}
+          </label>
+        ))}
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium">{T.shape}</legend>
+        <p className="text-xs text-muted-foreground">{T.shapeLead}</p>
+        <div className="flex flex-wrap gap-x-6 gap-y-3">
+          <Setting id="training-min-machines" label={T.minMachines} help={T.minMachinesHelp} value={form.minMachines} onChange={(minMachines) => set({ minMachines })} step="1" min="1" />
+          <Setting id="training-max-machines" label={T.maxMachines} help={T.maxMachinesHelp} value={form.maxMachines} onChange={(maxMachines) => set({ maxMachines })} step="1" min="1" />
+        </div>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium">{T.settings}</legend>
+        <p className="text-xs text-muted-foreground">{T.settingsLead}</p>
+        <div className="flex flex-wrap gap-x-6 gap-y-3">
+          <Setting id="training-rounds" label={T.rounds} help={T.roundsHelp} value={form.rounds} onChange={(rounds) => set({ rounds })} step="1" />
+          <Setting id="training-steps" label={T.innerSteps} help={T.innerStepsHelp} value={form.innerSteps} onChange={(innerSteps) => set({ innerSteps })} step="1" />
+          <Setting id="training-lr" label={T.outerLr} help={T.outerLrHelp} value={form.outerLr} onChange={(outerLr) => set({ outerLr })} step="0.1" />
+          <Setting id="training-momentum" label={T.outerMomentum} help={T.outerMomentumHelp} value={form.outerMomentum} onChange={(outerMomentum) => set({ outerMomentum })} step="0.1" />
+        </div>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={form.overlap} onChange={(e) => set({ overlap: e.target.checked })} />
+          <span>{T.overlap}</span>
+        </label>
+        <p className="max-w-prose text-xs text-muted-foreground">{T.overlapHelp}</p>
+      </fieldset>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={!body || start.isPending}>{start.isPending ? T.starting : T.start}</Button>
+        {failure && <p role="alert" className="text-sm text-destructive">{failure}</p>}
+      </div>
+    </form>
+  );
+}
+
+export function StartForm({ onStarted }: { onStarted: (run: Run) => void }) {
+  const defaults = useDefaults();
+  const sets = useTextSets();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{T.startTitle}</CardTitle>
+        <CardDescription>{T.startLead}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {defaults.data && sets.data ? (
+          <Fields defaults={defaults.data} sets={sets.data} onStarted={onStarted} />
+        ) : (
+          <p className="text-sm text-muted-foreground" role={defaults.isError || sets.isError ? "alert" : undefined}>
+            {defaults.isError || sets.isError ? T.couldNotLoad.replace("{why}", problem(defaults.error ?? sets.error)) : T.loading}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

@@ -1,0 +1,83 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, test } from "vitest";
+import { mockApi } from "@/test/network";
+import { renderPage } from "@/test/render";
+import RunsPage from "./page";
+
+// The Runs page against a mocked API: GET /queue, /cluster/jobs, /distributed/runs and /cluster/nodes, merged into three sections.
+
+const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
+const job = (id: string, label: string, over: Record<string, unknown> = {}) => ({ id, kind: "pretrain", label, note: "", params: {}, status: "waiting", eta_s: null, created_at: 0, error: "", ...over });
+const node = (address: string, hostname: string, over: Record<string, unknown> = {}) => ({
+  address, local: address === "local", hostname, version: "1", device: "mps", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,
+});
+const member = (name: string, address: string) => ({ node: name, address, local: address === "local", device: "", device_name: "", state: "training", note: "", can_stop: false, steps: 0, rounds_done: 0, missed: 0, sent: true, last_delta_bytes: null, last_delta_dtype: "", tokens_per_second: null });
+const diloco = (over: Record<string, unknown> = {}) => ({
+  id: "v5run", label: "from scratch", version: 5, saved_version: null, state: "running", note: "", started_at: 5, owner: "mac", round: 7, rounds: 40, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", can_stop: true,
+  history: [{ round: 7, loss: 3.41, val_loss: 3.47, seconds: 600, step: 700, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0 }],
+  members: [member("mac", "local"), member("beast", "beast:8000")],
+  ...over,
+});
+
+function server(runs: unknown[] = [diloco()]) {
+  const up_next = [job("w1", "v4 post", { kind: "post_training" }), job("w2", "v6 long", { params: { pinned: "beast:8000" } })];
+  return mockApi({
+    "GET /queue": () => ({ body: { job: job("v5run", "v5", { kind: "pretrain_distributed", status: "running" }), step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next, plan: PLAN } }),
+    "GET /queue/jobs/*/outlook": { body: { outlook: "after v5" } },
+    "GET /cluster/jobs": { body: [] },
+    "GET /distributed/runs": () => ({ body: runs }),
+    "GET /cluster/nodes": { body: [node("local", "mac"), node("beast:8000", "beast", { device: "cuda" })] },
+    "POST /queue/jobs/*/hold": ({ body }) => ({ body: { job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { supported: true }, up_next: up_next.map((j) => (j.id === "w1" ? { ...j, status: (body as { held: boolean }).held ? "held" : "waiting" } : j)), plan: PLAN } }),
+  });
+}
+
+describe("Runs page", () => {
+  test("lists the active DiLoCo run with its roles, losses and a link to its view", async () => {
+    server();
+    renderPage(<RunsPage />);
+    const card = await screen.findByTestId("active-v5run");
+    expect(card).toHaveAttribute("href", expect.stringMatching(/^\/runs\/view\/?\?id=v5run$/));
+    expect(within(card).getByText(/round 7\/40/)).toBeInTheDocument();
+    expect(within(card).getByText("mac · c, w")).toBeInTheDocument();
+    expect(within(card).getByText("beast · w")).toBeInTheDocument();
+    expect(within(card).getByText("train 3.41")).toBeInTheDocument();
+    expect(within(card).getByText("val 3.47")).toBeInTheDocument();
+    expect(within(card).getByText(/ETA 5h 30m/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New run" })).toHaveAttribute("href", expect.stringMatching(/^\/runs\/new\/?$/));
+  });
+
+  test("node chips show the device and the role in the active run", async () => {
+    server();
+    renderPage(<RunsPage />);
+    expect(await screen.findByTestId("chip-local")).toHaveTextContent("mac · mps · c, w v5");
+    expect(screen.getByTestId("chip-beast:8000")).toHaveTextContent("beast · cuda · w v5");
+  });
+
+  test("the scheduled table reads W and c from the pin, and Hold calls the queue", async () => {
+    const calls = server();
+    renderPage(<RunsPage />);
+    const row = await screen.findByTestId("scheduled-w2");
+    expect(within(row).getAllByText("beast")).toHaveLength(2);
+    expect(within(screen.getByTestId("scheduled-w1")).getAllByText("any idle node")).toHaveLength(2);
+    expect(await within(row).findByText("after v5")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hold: v4 post" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs/w1/hold")).toBe(true));
+    expect(calls.find((c) => c.path === "/queue/jobs/w1/hold")?.body).toEqual({ held: true });
+  });
+
+  test("a finished run is completed with its val loss, a failed one with its reason", async () => {
+    server([diloco(), diloco({ id: "done", label: "v1", state: "finished", started_at: 1 }), diloco({ id: "bad", label: "ablation", state: "failed", note: "out of memory", started_at: 2 })]);
+    renderPage(<RunsPage />);
+    const done = await screen.findByTestId("completed-done");
+    expect(done).toHaveTextContent("val 3.47");
+    expect(screen.getByTestId("completed-bad")).toHaveTextContent("failed: out of memory");
+  });
+
+  test("Allowed hours opens the plan in a sheet", async () => {
+    server();
+    renderPage(<RunsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Allowed hours" }));
+    expect(await screen.findByTestId("plan-card")).toBeInTheDocument();
+  });
+});

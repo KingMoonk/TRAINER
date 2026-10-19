@@ -1,0 +1,34 @@
+{
+  "body": {
+    "next_cursor": null,
+    "rows": [
+      {
+        "a": "Short stories",
+        "b": "The lamp was lit before the tide came in.",
+        "dataset": "Your files",
+        "id": "t1",
+        "status": "In use"
+      },
+      {
+        "a": "Short stories",
+        "b": "Nobody asked the heron.",
+        "dataset": "Your files",
+        "id": "t2",
+        "status": "Held back"
+      },
+      {
+        "a": "Your files",
+        "b": "A first line of text.\nAnd a second.",
+        "dataset": "Your data",
+        "id": "t3-Your fil",
+        "status": "In use"
+      }
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/data/text/rows"
+  },
+  "status": 200
+}

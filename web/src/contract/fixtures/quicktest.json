@@ -1,0 +1,17 @@
+{
+  "body": {
+    "current": {
+      "description": "2 blocks \u00b7 4 look-back heads \u00b7 normal thinking room",
+      "title": "Current version"
+    },
+    "draft": null,
+    "last": null,
+    "next_number": 1
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/quicktest"
+  },
+  "status": 200
+}

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "delta_dtype": "float16",
+    "inner_steps": 100,
+    "outer_lr": 0.7,
+    "outer_momentum": 0.9,
+    "rounds": 10
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/distributed/defaults"
+  },
+  "status": 200
+}

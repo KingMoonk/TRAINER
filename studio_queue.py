@@ -14,15 +14,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import studio_passive_watch as platform_helpers  # battery + keep-awake live there; never duplicated
-from studio_core import atomic_json
+from studio_core import atomic_json, read_json
+from studio_failures import explain
 from studio_passive import PassiveStore
 from studio_timing import timed
 
-KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now", "import_pretrained")
+KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now", "import_pretrained",
+         "pretrain_distributed", "diloco_member", "rlhf_loop")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
+FAILED_SHOWN = 5
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
-PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine
+PASSIVE = "passive training is running"  # the gate's reason while a passive session holds the machine; "(session <id>)" follows it
 
 
 @dataclass
@@ -48,13 +51,17 @@ class Job:
     eta_s: float | None = None
     created_at: float = field(default_factory=time.time)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    error: str = ""
+    error: str = ""                 # a failed job's reason as one sentence (studio_failures)
+    details: str = ""               # the raw text behind it, "" when the sentence is the error's own text
+    node: str = ""                  # the peer it runs (or ran) on; "" for a job that runs here
+    epoch: int = 0                  # the lease epoch it was last placed at (studio_scheduler); a write carrying another epoch is refused
+    owner: str = ""                 # for a job another node owns and this one runs: how to reach that node
 
 
 @dataclass(frozen=True)
 class Gate:
     """Whether the plan lets the machine train right now. Frozen, so two readings compare with == (the runner announces a change)."""
-    reason: str | None = None            # PASSIVE | "outside hours" | "on battery" | "computer in use" | None (may train)
+    reason: str | None = None            # PASSIVE + " (session <id>)" | "outside hours" | "on battery" | "computer in use" | None (may train)
     resumes_at: datetime | None = None   # for "outside hours": when the next window opens; None for every other reason
     supported: bool = True               # False when idle_only is on but this computer cannot report idle time (the plan then ignores it)
 
@@ -73,6 +80,7 @@ class QueueState:
     stopping: bool = False         # stop_after_cooldown in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)  # asdict(Plan)
+    failed: list = field(default_factory=list)  # jobs that ended failed (the last FAILED_SHOWN), with their sentence in .error; removing one dismisses it
 
 
 def _idle_macos():
@@ -122,15 +130,42 @@ def disk_need(root):
     return max(MIN_FREE, 3 * largest)
 
 
-def passive_running(root):
-    """True while a passive training session (studio_passive) under `root` is queued, running or paused. It trains in its own
-    process and a paused one still holds its model in memory, so the queue waits for it rather than compete for the machine."""
+def passive_session(root):
+    """The id of the passive training session (studio_passive) under `root` that is queued, running or paused, else None. It trains
+    in its own process and a paused one still holds its model in memory, so the queue waits for it rather than compete for the machine."""
     if not (Path(root) / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
-        return False
+        return None
     try:
-        return PassiveStore(root).active() is not None
+        session = PassiveStore(root).active()
     except sqlite3.Error:
-        return False  # an unreadable record cannot hold the queue forever; Resources › Passive training shows the session
+        return None  # an unreadable record cannot hold the queue forever; Resources › Passive training shows the session
+    return session and session["id"]
+
+
+def passive_running(root):
+    """True while a passive training session is queued, running or paused (see passive_session)."""
+    return passive_session(root) is not None
+
+
+def run_folders(root, job):
+    """Where a job wrote (or would have): its `output_dir` when the app had picked one, else the folder the app names after it."""
+    runs = Path(root) / "runs"
+    found = [Path(job.params["output_dir"])] if job.params.get("output_dir") else []
+    return found + [runs / f"{name}_{job.id}" for name in ("queue", "compare")]
+
+
+def reconcile_run(folder):
+    """A run whose process has died must not say it is training: mark its run.json "stopped" (and `interrupted`, so a page can say the
+    app stopped under it). True when it changed one. Only a record still saying "training" is touched."""
+    record = Path(folder) / "run.json"
+    try:
+        data = read_json(record)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("status") != "training":
+        return False
+    atomic_json(record, {**data, "status": "stopped", "interrupted": True})
+    return True
 
 
 def in_window(plan, hour):
@@ -162,7 +197,8 @@ class Runner:
     start, before its share is worked out, and `on_end(job)` once it has ended: chat leaves the GPU for the one and may return for
     the other. All three run on the runner thread, never the Tk one, and a failing hook never stops the queue."""
 
-    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, ledger=None, make_room=None, on_start=None, on_end=None):
+    def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, ledger=None, make_room=None, on_start=None, on_end=None,
+                 cluster=None):
         self.path, self.handlers, self.prepare, self.tick, self.clock = Path(path), handlers, prepare, tick, clock
         self.ledger, self.make_room, self.on_start, self.on_end = ledger, make_room, on_start, on_end
         self.root = self.path.parent.parent
@@ -170,7 +206,11 @@ class Runner:
         self.lock = threading.RLock()
         self.subscribers = []
         self.jobs, self.plan = [], Plan()
+        self.ended_on_load = []        # jobs the restart ended (a distributed run that cannot resume), for whoever keeps records of them
         self.user_paused = False       # a user intent: restored from queue.json, so a pause survives a restart
+        self.stopping_job = ""         # the id of a running job the person stopped: persisted, so a restart does not run it again
+        self.reap_grace = 35.          # seconds a worker an earlier app left gets to leave by itself (studio_worker.EXIT_GRACE and a margin)
+        self.dead_runs = []            # jobs whose process an earlier app left running: their run.json is reconciled once it is stopped
         self._load()
         self.running = None            # Job on the runner thread
         self.progress = {}
@@ -184,6 +224,8 @@ class Runner:
         self._sync_pause()
         self.closed = threading.Event()
         self.thread = None
+        import studio_remote
+        self.cluster = (cluster or studio_remote.Cluster)(self)  # inert until peers are listed in the workspace config; `cluster(runner)` for tests
 
     # ---- persistence
     def _load(self):
@@ -194,15 +236,35 @@ class Runner:
         self.plan = Plan(**{k: v for k, v in data.get("plan", {}).items() if k in Plan.__dataclass_fields__})
         self.jobs = [Job(**j) for j in data.get("jobs", [])]
         self.user_paused = bool(data.get("user_paused", False))
+        self.stopping_job = str(data.get("stopping") or "")
         for job in self.jobs:          # a run cut short by a restart goes back to the front
-            if job.status == "running":
+            if job.status == "running" and not job.owner and not job.node:
+                self.dead_runs.append(job)
+            if job.status == "running" and job.id == self.stopping_job and not job.owner and not job.node:
+                job.status, job.error = "stopped", ""  # the person stopped it; the app went before it ended
+            elif job.owner and job.status in ("running", "waiting", "held"):  # another node's job cannot renew its lease now: its owner places it again
+                job.status, job.error = "stopped", "This machine restarted while it ran the job for another machine, which will place it again."
+            elif job.status == "running" and job.kind == "pretrain_distributed":  # its coordinator went with this process
+                import studio_distributed
+                job.error = studio_distributed.recover(job)
+                job.status = "failed" if job.error else "waiting"  # resumes from its last completed round, or ends saying why
+                if job.error:
+                    self.ended_on_load.append(job)
+            elif job.status == "running" and job.node:  # running on a peer: placed again, at the next epoch, so the peer's copy is fenced
+                import studio_scheduler
+                studio_scheduler.interrupt(job)  # from its last checkpoint, with the steps left and the offset that go with it
+            elif job.status == "running":
                 job.status = "waiting"
+        self.stopping_job = ""
 
     def _save(self):
         done = [j for j in self.jobs if j.status not in ("waiting", "running", "held")][-50:]
         live = [j for j in self.jobs if j.status in ("waiting", "running", "held")]
+        dropped = [j for j in self.jobs if j.status not in ("waiting", "running", "held") and not any(j is d for d in done)]
+        if dropped and getattr(self, "cluster", None) is not None:
+            self.cluster.trimmed(dropped)  # (no I/O: it only remembers their result keys, which a sweep must not delete)
         self.jobs = done + live
-        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused,
+        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused, "stopping": self.stopping_job,
                                 "jobs": [dataclasses.asdict(j) for j in self.jobs]})
 
     # ---- events
@@ -262,14 +324,33 @@ class Runner:
         self.wake.set()
         self._emit("queue", {"job": job_id})
 
+    def pin(self, job_id, pinned=None):
+        """Keep a waiting job on one machine (its address or hostname): it runs there or waits, and is never moved. None lets it
+        go to any machine again. The placement pass that follows reads the new pin."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id), None)
+            if job is not None:
+                job.params = {**{k: v for k, v in job.params.items() if k != "pinned"}, **({"pinned": pinned} if pinned else {})}
+                self._save()
+        self.wake.set()
+        self._emit("queue", {"job": job_id})
+
     def remove(self, job_id):
+        remote = None
         with self.lock:
             job = next((j for j in self.jobs if j.id == job_id), None)
             if job is self.running:
+                self.stopping_job = job.id  # saved first: an app that goes before the job ends must not run it again
+                self._save()
                 self.stop_event.set()  # the running job is stopped (the runner thread tells its worker); the runner marks it
+            elif job and job.node and job.status == "running":
+                remote = job           # running on a peer: it is told to stop, and the record is kept as stopped
             elif job:
                 self.jobs.remove(job)
                 self._save()
+                self.cluster.removed(job)  # (under the lock, so a sweep never sees it gone before its result key is remembered; no I/O)
+        if remote:
+            self.cluster.cancel(remote)
         self.wake.set()
         self._emit("queue", {"job": job_id})
 
@@ -312,7 +393,7 @@ class Runner:
                 handle.done.wait()
                 error = handle.error
             except Exception as exc:  # noqa: BLE001
-                error = str(exc) or type(exc).__name__
+                error = explain(exc)[0]
             if error:
                 self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": error})
                 return
@@ -338,11 +419,13 @@ class Runner:
             return QueueState(
                 job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
-                up_next=self._queued(), plan=dataclasses.asdict(self.plan))
+                up_next=self._queued(), plan=dataclasses.asdict(self.plan),
+                failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
 
     def start(self):
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
+        self.cluster.start()
 
     def shutdown(self, timeout=10):
         """Stop the running job and wait up to `timeout` for it to save. A worker still saving then is left to finish: it exits by
@@ -354,6 +437,7 @@ class Runner:
             handle.stop()
         if self.thread:
             self.thread.join(timeout)
+        self.cluster.close()
 
     # ---- runner thread
     def _sync_pause(self):
@@ -368,8 +452,9 @@ class Runner:
         idle = idle_seconds() if plan.idle_only else None
         supported = not (plan.idle_only and idle is None)
         now = self.clock()
-        if passive_running(self.path.parent.parent):  # first: it is why nothing trains, whatever the plan says
-            return Gate(PASSIVE, None, supported)
+        session = passive_session(self.path.parent.parent)
+        if session is not None:  # first: it is why nothing trains, whatever the plan says
+            return Gate(f"{PASSIVE} (session {session})", None, supported)
         if not in_window(plan, now.hour):
             return Gate("outside hours", next_start(plan, now), supported)
         if plan.pause_on_battery and platform_helpers.on_battery():
@@ -406,12 +491,18 @@ class Runner:
         threading.Thread(target=work, daemon=True).start()
 
     def _reap(self):
-        """Workers an app that crashed left behind: their jobs went back to waiting in _load, so stop them before those run again."""
+        """Workers an app that crashed left behind: their jobs went back to waiting in _load. A worker whose app went away is already
+        saving its checkpoint and leaving by itself, so each gets up to the worker's own grace to finish before it is stopped; then the
+        runs they left saying "training" are marked stopped."""
         import studio_worker
         try:
-            studio_worker.reap(self.root / "data" / "workers")
+            studio_worker.reap(self.root / "data" / "workers", grace=self.reap_grace)
         except OSError:
             pass
+        dead, self.dead_runs = self.dead_runs, []
+        for job in dead:
+            for folder in run_folders(self.root, job):
+                reconcile_run(folder)
 
     def _start(self, job, handler, emit, on_end=None):
         """Start `job` in a worker process; the handle is tracked until the process ends."""
@@ -433,12 +524,31 @@ class Runner:
         while not self.closed.is_set():
             self.wake.clear()  # before looking: whatever sets it from here on is seen by the next pass
             self._watch()
-            with self.lock:
-                job = next((j for j in self.jobs if j.status == "waiting"), None)
+            self._place_waiting()
+            job = self._next_local()
             if not job or self.blocked or self.user_paused:
                 self.wake.wait(self.tick)
                 continue
             self._run(job)
+
+    def _next_local(self):
+        """The first waiting job that belongs on this machine: a job pinned to, or better placed on, a peer is skipped, not waited for."""
+        with self.lock:
+            waiting = [j for j in self.jobs if j.status == "waiting"]
+        return next((j for j in waiting if self.cluster.place(j).where == "local"), None)
+
+    def _place_waiting(self):
+        """Hand each waiting job that belongs on a peer to it. Runs between jobs and while one runs, so a free peer is used at once. The
+        plan's hours still apply (they say when to train) and so does a pause; this machine's battery and keyboard do not, because they
+        say nothing about the peer."""
+        if self.user_paused or self.blocked == "outside hours":
+            return
+        with self.lock:
+            waiting = [j for j in self.jobs if j.status == "waiting"]
+        for job in waiting:
+            placement = self.cluster.place(job)
+            if placement.where == "remote":
+                self.cluster.dispatch(job, placement.node)
 
     def _disk_problem(self):
         """A sentence when the disk holding the queue and the checkpoints cannot fit a run, else ''. A failed job names the
@@ -480,6 +590,26 @@ class Runner:
                 break
         return max(0., share - held / total)
 
+    def follow_up(self, job):
+        """Queue what a job that ended leaves to do (the caller holds the lock and saves): after a pretrain on new text, the
+        restore_answers round that teaches it its old manner again. The cluster calls it for a pretrain that ran on a peer, once its
+        version is here."""
+        if job.status == "done" and job.kind == "pretrain" and job.params.get("user_text"):
+            self.jobs.append(Job("restore_answers", "Restore how it answers", params={"round": 3, "teacher": job.params.get("previous_best")},
+                                 note="added automatically after new text; a short lesson from the previous version restores how it answers"))
+
+    def _resume_note(self, job, event):
+        """Say on the job which way a restart went: on from its own checkpoint, or from step 0 because training refused the file."""
+        if event["type"] == "resumed":
+            text = (f"The app stopped while this ran; it continued from its own checkpoint at step "
+                    f"{event.get('base', 0) + event.get('step', 0)}, with the optimizer state it had.")
+        else:
+            text = (f"The app stopped while this ran; it could not continue from its own checkpoint ({event.get('reason') or 'unusable'}), "
+                    "so it started again from step 0.")
+        with self.lock:
+            job.note = f"{job.note} {text}".strip()
+            self._save()
+
     def _run(self, job):
         handler = self.handlers.get(job.kind)
         short = self._disk_problem()
@@ -492,26 +622,35 @@ class Runner:
             self._save()
         started = time.monotonic()
 
+        resumed_at = [0]  # the step this run began at (a resume), so the time per step ignores the steps an earlier run did
+
         def emit(event):
+            if event.get("type") in ("resumed", "resume_refused"):
+                self._resume_note(job, event)
             if event.get("total"):
                 step, total = event.get("step", 0), event["total"]
+                if event.get("type") == "resumed":  # progress starts from the checkpoint's step, not 0
+                    step = resumed_at[0] = event.get("base", 0) + step
                 self.progress.update(step=step, total=total, lr=event.get("lr", self.progress.get("lr")),
                                      phase=event.get("phase", self.progress.get("phase", "")))
-                if step:
-                    self.progress["eta_s"] = (time.monotonic() - started) / step * (total - step)
+                if step > resumed_at[0]:
+                    self.progress["eta_s"] = (time.monotonic() - started) / (step - resumed_at[0]) * (total - step)
             self._emit("train", {"job": job.id, **event})
 
         awake = platform_helpers.keep_awake(os.getpid()) if self.plan.keep_awake else None
-        error, handle = short, None
+        error, details, handle = short, "", None
         if not short:
             try:
                 handle = self._start(job, handler, emit, self.wake.set)
+                with self.lock:
+                    self._save()  # prepare filled in the job's output folder and resume point: a restart now finds them
             except Exception as exc:  # noqa: BLE001 - prepare or the spawn failed: the job fails with the reason
-                error = str(exc) or type(exc).__name__
+                error, details = explain(exc)
         self._emit("job", {"job": job.id, "status": "running"})
         while handle and not handle.done.is_set():
             self.wake.clear()
             self._watch()
+            self._place_waiting()
             handle.sync(self.stop_event, self.pause_event)  # whatever set them also set wake
             if not handle.done.is_set():
                 self.wake.wait(self.tick)
@@ -519,14 +658,13 @@ class Runner:
         with self.lock:
             if handle:
                 job.params.update(handle.params)
-                error = handle.error
+                error, details = handle.error, handle.details
             job.status = "failed" if error else "stopped" if self.stop_event.is_set() else "done"
-            job.error = error
+            job.error, job.details = error, details if error else ""
             self.running = None
             self.stopping = False
-            if job.status == "done" and job.kind == "pretrain" and job.params.get("user_text"):
-                self.jobs.append(Job("restore_answers", "Restore how it answers", params={"round": 3, "teacher": job.params.get("previous_best")},
-                                     note="added automatically after new text; a short lesson from the previous version restores how it answers"))
+            self.stopping_job = ""
+            self.follow_up(job)
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start
             self._save()

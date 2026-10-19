@@ -2,48 +2,113 @@
 
 A native Python desktop studio for creating datasets and training your own language model from random weights.
 
-**PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** Python's built-in Tkinter supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
+**PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** A web UI in your browser, served by a local API, supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
 
 ## Quickstart
 
-Requires Python 3.12 or newer with Tkinter (the pinned NumPy 2.5 and pandas 3.0 need 3.12).
+From nothing to the web UI in your browser, on this machine and on any device on your tailnet.
 
-macOS / Linux:
+With Claude Code, `/setup` (`.claude/skills/setup/`) runs these steps, starts the API and lists anything missing in the
+Tailscale setup (login, HTTPS certificates, `serve`, tags, the workspace node list).
+
+**1. Install the tools.**
+
+- Python 3.12 or newer (the pinned NumPy 2.5 and pandas 3.0 need 3.12). On macOS, `python3` from Xcode is 3.9 and will not
+  do: install one from python.org or Homebrew (`brew install python@3.13`).
+- Node 24 and pnpm (`npm install -g pnpm`).
+- [Tailscale](https://tailscale.com/download), only to reach the UI from other devices or to join a cluster.
+
+**2. Get the code and set up this machine.**
+
+| Machine | Setup (once) | Live dev | `/api/node` reports |
+| --- | --- | --- | --- |
+| Apple Silicon Mac (zsh) | `make setup` | `make dev` | `mps` |
+| Windows with an NVIDIA GPU (PowerShell) | `make setup` | `make dev` | `cuda` |
+| Linux with an NVIDIA GPU | `make setup` | `make dev` | `cuda` |
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-dev.txt
-python app.py
+git clone https://github.com/KingMoonk/TRAINER.git && cd TRAINER
+make setup                  # no make? python3 tasks.py setup (Windows: py -3 tasks.py setup)
 ```
 
-Windows (PowerShell):
+macOS ships `make` with the Xcode command line tools; on Windows install it once with `winget install ezwinports.make`.
+`make help` lists every target; each one calls `tasks.py`, which also works on its own.
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe app.py
+`setup` creates `.venv`, installs the right PyTorch (the default wheel on a Mac, the CUDA wheel when `nvidia-smi` lists a GPU),
+the requirements and the web packages, prints the device PyTorch sees, and fails if the machine has a GPU PyTorch cannot use.
+The API refuses to start on the CPU when a GPU is present unless you pass `--allow-cpu`. `make dev` is the hot-reloading
+loop and `make run` the built app; when Tailscale is running, each points `tailscale serve` at itself as it starts
+(`docs/node.md`, "Setup and development, per machine").
+
+**3. Build the web UI and start the API.**
+
+```bash
+make web-build                                              # writes web/out, which the API serves
+.venv/bin/python -m studio_api --bind 127.0.0.1 --port 8787
 ```
 
-On Windows you can instead double-click `start_studio.bat`. The details below cover GPU support, the workflow and the command line.
+Open `http://127.0.0.1:8787`. The status strip says **Connected** when the event stream is up. Always use the `.venv` interpreter:
+a bare `python3` lacks the packages (`No module named 'uvicorn'`). The API reads `web/out` when it starts, so restart it after a
+rebuild. `[Errno 48] address already in use` means an API is already running on that port; stop it or use it.
+
+**4. Optional: open it from other devices on your tailnet.**
+
+Sign in to Tailscale on this machine (`tailscale status` should show it online), then bind the API to every interface and publish
+it over HTTPS:
+
+```bash
+.venv/bin/python -m studio_api --bind 0.0.0.0 --port 8787
+tailscale serve --bg 8787
+```
+
+The UI is at `https://<machine>.<tailnet>.ts.net/` (`tailscale serve status` prints it). The first `serve` may ask you to enable
+HTTPS certificates for the tailnet; follow its link. A `502` there means the API is not running. While the tailnet is only you,
+no tags or ACL are needed; `docs/cluster.md` covers adding machines and other people, `docs/node.md` running the API as a
+service so it survives reboots.
+
+**Troubleshooting Tailscale.** `requested tags [tag:trainer] are invalid or not permitted` means the tag is not in the
+policy's `tagOwners` (`docs/cluster.md`, ACL). The request stays pending and leaves the machine logged out (the `.ts.net` name
+stops resolving); `sudo tailscale up --reset` clears it and logs in again. `tailscale set` has no `--advertise-tags`; tag a
+machine with `tailscale up --advertise-tags=...` or from the admin console's **Machines** page.
+
+`make run` (`.venv/bin/python app.py`) starts the API on this machine and opens the web UI in your browser (build it once with
+`make web-build`). The details below cover GPU support, the workflow and the command line.
 
 
 ## Lint and tests
 
-`tasks.py` is the one entry point. Each level includes the one before it:
+`tasks.py` is the one entry point; the Makefile wraps it. Each level includes the one before it:
 
 ```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python tasks.py test                    # ruff + every window-free unit test (the local command)
-.venv/bin/python tasks.py test tests.test_queue   # ruff + only the named modules
-python tasks.py test:ci                           # + compileall + the window tests (tests/gui_*.py); CI only
-python tasks.py test:ci:e2e                       # + a real training run (tests.e2e_train); CI only
+make test                                         # ruff + every window-free unit test (the local command)
+make test T=tests.test_queue                      # ruff + only the named modules
+make test-ci                                      # + compileall; every pull request runs it (Linux)
+.venv/bin/python tasks.py test:ci:e2e             # + a real training run (tests.e2e_train); nightly on macOS and Windows
 ```
 
-CI runs `test:ci:e2e` on each push and pull request. `test:ci` and `test:ci:e2e` refuse to run unless `CI` is set (GitHub Actions does), because the window tests open real Tk and 3D windows. Those tests live in `gui_*.py` and skip themselves unless `CI` is set or you opt in with `GROUNDWORK_GUI_TESTS=1` (see `tests/windows.py`). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
+CI runs `test:ci` on Linux for each push and pull request, and `test:ci:e2e` on macOS and Windows every night (and on demand: Actions, Nightly, Run workflow). The ruff rules are in `ruff.toml`: syntax errors, undefined names, unused imports and variables. Style is not enforced.
 
+## Web UI development
+
+`web/` is the browser front end that will replace the Tk app, phase by phase (`docs/rewrite.md`). It needs Node and pnpm:
+
+```bash
+cd web && pnpm install && pnpm dev          # http://localhost:3000
+make web-lint                               # eslint + tsc
+make web-build                              # the static export, web/out
+```
+
+The API (`studio_api/`) is the server the web UI talks to. `make dev` runs it (with `--reload`) and the Next.js dev server
+together on the machine's GPU. By hand, over empty in-memory data:
+
+```bash
+.venv/bin/python -m studio_api --fake --port 8787     # terminal 1: the API over empty in-memory data (drop --fake for your workspace)
+cd web && NEXT_PUBLIC_API_URL=http://127.0.0.1:8787 pnpm dev   # terminal 2: http://localhost:3000, talking to it
+```
+
+`NEXT_PUBLIC_API_URL` is the API's origin; the dev page is on another origin, so it needs the API to allow it. For a single
+origin instead, build the export (`make web-build`) and open the API's own URL, `http://127.0.0.1:8787`, which serves
+`web/out`. The status strip says **Connected** when the event stream is up. To keep the API running on a machine, see `docs/node.md`.
 ## Finding hot spots
 
 Measure before optimizing. Both tools are opt-in and work the same on macOS and Windows.
@@ -53,9 +118,7 @@ Measure before optimizing. Both tools are opt-in and work the same on macOS and 
 
 ## Launch
 
-On Windows, double-click **start_studio.bat**. It creates a virtual environment if needed, installs the two dependencies, and opens the desktop window.
-
-Or run from this directory:
+Run from this directory (build the web UI once first with `python tasks.py web:build`):
 
 ```powershell
 python -m venv .venv
@@ -63,7 +126,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-Use the `.venv` interpreter in PyCharm. Python must include Tkinter (included with the standard Windows installer). The old web server and JavaScript version have been removed.
+Use the `.venv` interpreter in PyCharm. `app.py` starts the API and opens the web UI in your browser. The old web server and JavaScript version have been removed.
 
 ## GPU acceleration
 
@@ -99,7 +162,7 @@ The window has four areas in the sidebar, then Queue and Resources, and a machin
 
 **Queue** (or the machine strip) opens the queue. Every Train or Run button adds a job to it; one job runs at a time. The plan sets the allowed hours, the share of memory, and whether to pause while you use the computer or run on battery.
 
-**Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it, and **Passive training**, which lists the sessions that train on their own outside the queue, with their trainer and watchdog status, a Stop button, and a way to stop the watchdog starting when you sign in.
+**Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it, and **Passive training**, which lists the sessions that train on their own outside the queue, with their trainer and watchdog status, New session, Resume and Stop buttons, and a way to stop the watchdog starting when you sign in.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
@@ -172,7 +235,11 @@ Passive training keeps training on its own: it trains until the test error settl
 
 A small watchdog (`studio_passive_watch.py`) checks the trainer's heartbeat. After 60 seconds of silence, or if the process is gone, it starts the trainer again from the last saved step; after 5 restarts in 10 minutes it gives up and records why. It also registers itself to start at sign-in (a LaunchAgent on macOS, a Task Scheduler task on Windows) and removes that entry when the session ends. The plan can keep the computer awake (`caffeinate` on macOS, a keep-awake request on Windows) and pause on battery.
 
-The record lives in `data/passive.sqlite` (plan, state, process ids, heartbeat) and `runs/<session id>/` (journal, checkpoints, `trainer.log`). To stop a session, press Stop on the Training page; the watchdog then exits by itself.
+A session's best checkpoint can become a version: the **Save best as a version** button on Resources > Passive training (`POST /passive/{id}/save`) makes a trained version from it, scored on the held-back text like a pretrain, and its description names the session, its rounds and its best error. Saving the same best again returns the same version. A session that has ended with at least one checkpoint is saved this way by itself the next time the app looks at the list. Passive training itself runs only on the machine that started it; a saved version can be pulled or published like any other.
+
+Each round that carries on from the last checkpoint resumes it: the weights, Adam's moments and the step count (so the learning-rate schedule goes on) come across, and the round trains on its own data with its own seed, learning rate and batch size. The first round, and a round after a step back to an earlier best, start with a fresh optimizer from the weights alone; so does a round whose checkpoint has no optimizer state (a polished one). The journal's `round` event says `resumed` or `fresh`, and an `optimizer` event gives the reason when a resume was refused. On CUDA the optimizer state moves to host memory when it cannot fit the GPU, as in the queue.
+
+The record lives in `data/passive.sqlite` (plan, state, process ids, heartbeat) and `runs/<session id>/` (journal, checkpoints, `trainer.log`). To start one, press New session on Resources > Passive training: pick the version to train, the text to train on (all of it, or chosen sets), when to stop (time limit, rounds without a better checkpoint, an optional target error), whether the teacher polishes each checkpoint, the memory share, keep awake and pause on battery. Only one session is active at a time. To stop a session, press Stop; the watchdog then exits by itself. Details on a row opens the session: its phase, round and best test error, a chart of the test error of each checkpoint, the plan, the lessons the teacher gave it (Drop leaves one out of the next round's training, Keep puts it back), and the trainer's journal (newest first, with the reason for each step back or restart). A failed or stopped session has a Resume button: it goes back in the queue, the watchdog starts again and the trainer carries on from the last checkpoint it saved.
 
 ## Releases
 
@@ -206,10 +273,9 @@ Entry points and engine services sit in the repository root; swappable model/tra
 
 | Layer | Modules | Role |
 |---|---|---|
-| Entry points | `app.py`, `train.py`, `start_studio.bat` | Launch the desktop GUI, run training from the command line, or set up and launch on Windows. |
-| GUI shell | `studio_ia/shell.py` | `Studio` (Tk window, sidebar, page router). |
-| GUI pages | `studio_ia/pages/` | One page per route; pages talk only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
-| GUI helpers | `studio_ia/widgets.py`, `studio_ia/theme.py`, `studio_ia/copy.py`, `studio_ux.py`, `studio_glossary.py` | Shared widgets, colours and fonts, every string on screen, time estimates, plain-English glossary. |
+| Entry points | `app.py`, `train.py` | Start the API and open the web UI, or run training from the command line. |
+| API | `studio_api/` | The web UI's server; it talks only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
+| UI helpers | `studio_ia/copy.py`, `studio_glossary.py` | Every string on screen, plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
@@ -221,7 +287,7 @@ Entry points and engine services sit in the repository root; swappable model/tra
 ### Dependency flow
 
 ```
-app.py ──► studio_ia.shell ──► studio_ia.pages ──► studio_ia.services ──► engine modules, studio_queue
+app.py ──► studio_api ──► studio_ia.services ──► engine modules, studio_queue
 train.py ─┐
           ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
           │        ▲
@@ -245,7 +311,7 @@ Created at run time and git-ignored:
 `tests/` contains focused `unittest` modules for the engine, modules, data, architecture, inspection services, viewer bridge and GUI integration. GPU and display-dependent tests may skip when that hardware or display is unavailable.
 
 ```powershell
-.\.venv\Scripts\python.exe tasks.py test
+make test
 ```
 
 Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, module estimates and checkpoint resumption. CUDA tests compare supported GPU operations against CPU and skip when CUDA is unavailable. The PyInstaller hook `packaging/hook-studio_modules.py` collects all discovered modules so registry lookup also works in packaged builds.

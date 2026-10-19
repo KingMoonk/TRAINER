@@ -148,6 +148,22 @@ def plan_summary(plan):
             "worse": f"After {_plural(worse['limit'], 'checkpoint')} in a row worse than the best: go back to the best, then " + (", then ".join(steps) if steps else "stop") + ". When the list runs out it stops." + hidden}
 
 
+def progress_summary(state, plan):
+    """The trainer's state as the detail view shows it: phase, round, best and current error, the checkpoints with their errors, the
+    learning rate and batch size, the time used against the limit. Missing keys (a session that has not set up yet) are None or empty."""
+    checkpoints = [{"n": c["n"], "round": c.get("round", c["n"]), "error": c["error"], "elapsed": c.get("elapsed"), "at": c.get("at"), "parent": c.get("parent"),
+                    "kept": c.get("kept", True), "discarded": c.get("discarded", False), "pivot": c.get("pivot"),
+                    "polished": bool((c.get("teacher") or {}).get("polished")), "win_rate": (c.get("teacher") or {}).get("win_rate"),
+                    "lessons": (c.get("teacher") or {}).get("lessons", 0), "best": c["n"] == state.get("best")} for c in state.get("checkpoints", [])]
+    best, current = _checkpoint(state, state.get("best")) if state.get("checkpoints") else None, _checkpoint(state, state.get("current")) if state.get("checkpoints") else None
+    return {"phase": state.get("phase") or "", "round": state.get("round", 0), "best": state.get("best"), "best_error": best and best["error"],
+            "current": state.get("current"), "current_error": current and current["error"], "learning_rate": state.get("learning_rate"),
+            "batch_size": state.get("batch_size"), "win_rate": state.get("win_rate"), "stop_reason": state.get("stop_reason"),
+            "active_seconds": state.get("active_seconds", 0.0), "limit_seconds": duration_seconds(plan), "worse_streak": state.get("worse_streak", 0),
+            "rounds_since_best": state.get("rounds_since_best", 0), "restarts": state.get("restart_count", 0), "teacher": state.get("teacher") or None,
+            "checkpoints": checkpoints}
+
+
 # --------------------------------------------------------------------------- pure decisions
 
 def plateaued(losses, plan):
@@ -209,6 +225,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 """
 COLUMNS = ("status", "command", "plan", "state", "trainer_pid", "watchdog_pid", "heartbeat", "restarts", "error")
 COMMANDS = ("pause", "resume", "stop")
+LESSON_STATUSES = ("pending", "dropped")  # what the page can set; "left_out" is the drop_lessons step's own
+
+
+class AlreadyActive(RuntimeError, ValueError):
+    """Another session is queued, running or paused. A RuntimeError first, so the API answers 409; still a ValueError for older callers."""
 
 
 # Switching to WAL takes an exclusive lock that the busy timeout does not wait for, so two threads opening the
@@ -247,7 +268,7 @@ class PassiveStore:
             db.execute("BEGIN IMMEDIATE")
             try:
                 if db.execute(f"SELECT 1 FROM sessions WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchone():
-                    raise ValueError("A passive training session is already running. Stop it before starting another.")
+                    raise AlreadyActive("A passive training session is already running. Stop it before starting another.")
                 db.execute("INSERT INTO sessions(id, status, plan, state, created_at, updated_at) VALUES (?, 'queued', ?, '{}', ?, ?)",
                            (session_id, json.dumps(plan), stamp, stamp))
                 db.execute("COMMIT")
@@ -256,6 +277,36 @@ class PassiveStore:
                 raise
         self.directory(session_id)
         return session_id
+
+    def requeue(self, session_id):
+        """Put a failed or stopped session back in the queue so a watchdog starts its trainer again, which carries on from the last
+        checkpoint it saved (the state keeps `started`). Forgets the old process ids, the restart count and the watchdog's memory of
+        fruitless restarts, or a session that gave up would give up again at once. Returns the status it had; None for an unknown
+        session; raises RuntimeError for one that is not failed or stopped, and AlreadyActive while another session is active."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.decode(db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone())
+                if row is None:
+                    db.execute("ROLLBACK")
+                    return None
+                if row["status"] not in ("failed", "stopped"):
+                    raise RuntimeError(f"Passive session {session_id} is {row['status']}, so it cannot be resumed.")
+                if db.execute(f"SELECT 1 FROM sessions WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchone():
+                    raise AlreadyActive("A passive training session is already running. Stop it before resuming another.")
+                state = {**row["state"], "stop_reason": None, "paused": False, "phase": "idle"} if row["state"] else {}
+                db.execute("UPDATE sessions SET status = 'queued', command = '', error = '', trainer_pid = NULL, watchdog_pid = NULL, heartbeat = NULL,"
+                           " restarts = '[]', state = ?, updated_at = ? WHERE id = ?", (json.dumps(state), now(), session_id))
+                db.execute("COMMIT")
+            except BaseException:
+                try:
+                    db.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass  # already rolled back above
+                raise
+        (self.directory(session_id) / "watchdog.json").unlink(missing_ok=True)
+        self.append(session_id, {"type": "resume", "reason": "requeued", "from": row["status"]})
+        return row["status"]
 
     def _one(self, sql, args=()):
         with self.connect() as db:
@@ -312,12 +363,33 @@ class PassiveStore:
     def journal(self, session_id):
         return _read_jsonl(self.directory(session_id) / "journal.jsonl")
 
+    def journal_page(self, session_id, limit=50, before=None):
+        """(events, total, first): up to `limit` journal events that come before event number `before` (the newest ones when None), oldest
+        first, each with its `index`; `first` is the index of the first one returned, which is the next page's `before`."""
+        rows = self.journal(session_id)
+        end = len(rows) if before is None else max(0, min(before, len(rows)))
+        start = max(0, end - max(1, limit))
+        return [{**rows[i], "index": i} for i in range(start, end)], len(rows), start
+
     def append(self, session_id, event):
         with (self.directory(session_id) / "journal.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({**event, "at": now()}, ensure_ascii=False) + "\n")
 
     def lessons(self, session_id):
         return _read_jsonl(self.directory(session_id) / "lessons.jsonl")
+
+    def set_lesson_status(self, session_id, lesson_id, status):
+        """Drop a lesson (status "dropped": the next round's training leaves it out) or keep it ("pending": it is trained on again; this also
+        brings back one the drop_lessons step had left out). Returns the changed lesson, or None for an unknown lesson."""
+        if status not in LESSON_STATUSES:
+            raise ValueError("A lesson is either dropped or kept.")
+        rows = self.lessons(session_id)
+        row = next((r for r in rows if r.get("id") == lesson_id), None)
+        if row is None:
+            return None
+        row["status"] = status
+        self.set_lessons(session_id, rows)
+        return row
 
     def set_lessons(self, session_id, rows):
         # ponytail: read-modify-write; the app and the trainer rarely touch it at the same moment. Add a lock file if that changes.
@@ -428,9 +500,27 @@ def default_evaluate(path, examples):
     return evaluate_checkpoint(path, examples, limit=len(examples))["loss"]
 
 
-def default_train(config, examples, output_dir, emit, stop, pause, init_from=None):
-    from studio_model import train
-    return train(config, examples, output_dir, emit, stop, pause, init_from=init_from)
+def default_train(config, examples, output_dir, emit, stop, pause, init_from=None, resume=None):
+    """Train one round. `resume` is the last round's checkpoint: the round continues it with the optimizer state and the step count
+    (config["steps"] is how many steps to add), on the round's own data. A checkpoint training refuses before its first step (a polished
+    one has no optimizer state, say) emits "resume_refused" and the round starts from its weights alone, as `init_from` does."""
+    import studio_memory
+    import studio_model
+    options = dict(offload_optimizer=studio_memory.offload_wanted(studio_model.validate_config(config), 1.0))  # CUDA, and only when the state cannot fit
+    if not resume:
+        return studio_model.train(config, examples, output_dir, emit, stop, pause, init_from=init_from, **options)
+    started = []
+
+    def relay(event):
+        started.append(True)
+        emit(event)
+    try:
+        return studio_model.train(config, examples, output_dir, relay, stop, pause, resume=resume, rebase=True, **options)
+    except (OSError, ValueError, KeyError) as exc:
+        if started:
+            raise
+        emit({"type": "resume_refused", "reason": str(exc) or type(exc).__name__})
+        return studio_model.train(config, examples, output_dir, emit, stop, pause, init_from=resume, **options)
 
 
 def _teacher(settings):
@@ -632,8 +722,17 @@ class _Trainer:
                        for row in self.store.lessons(self.id) if row.get("status") not in ("dropped", "left_out")]
 
     # -- one round
+    def continues(self):
+        """True when the next round carries the optimizer over: it starts from the checkpoint the last round saved. A first round, and a
+        round after a step back to an earlier best, start with a fresh optimizer."""
+        state = self.state
+        last = state["checkpoints"][-1] if state["checkpoints"] else None
+        return bool(last and state["current"] == last["n"] and state["pending_pivot"] is None)
+
     def on_event(self, event):
         self.guard()
+        if event.get("type") == "resume_refused":
+            self.journal("optimizer", round=self.state["round"], mode="fresh", reason=str(event.get("reason", ""))[:300])
         if event.get("type") == "metric" and event.get("val_loss") is not None:
             error = float(event["val_loss"])
             self.state["live"].append([round(self.state["active_seconds"], 1), error])
@@ -647,8 +746,9 @@ class _Trainer:
         init = state["current"]
         init_from = self.plan["base_checkpoint"] if init is None else _checkpoint(state, init)["path"]
         examples = self.training_examples()
-        # Each round (and each restart) draws its batches in a different order. The optimizer state and the warmup/cosine schedule
-        # still start fresh every round: init_from copies weights only. Carrying them over needs an engine change (studio_model.train).
+        # Each round (and each restart) draws its batches in a different order. A round that carries on from the last checkpoint resumes
+        # it (weights, Adam's moments and the step count, so the schedule goes on); the first round and a step back start from weights only.
+        resume = _checkpoint(state, init)["path"] if init is not None and self.continues() else None
         seed = (int(self.plan["config"].get("seed", 42)) + n + state.get("restart_count", 0)) % 2147483648
         try:
             while True:
@@ -660,7 +760,10 @@ class _Trainer:
                 state["training_batch"] = state["batch_size"]  # still here after a restart only if this process was killed outright: see setup()
                 self.save()
                 try:
-                    self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, init_from=init_from)
+                    if resume:
+                        self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, resume=resume)
+                    else:
+                        self.train(config, examples, run_dir, self.on_event, self.stop, self.pause, init_from=init_from)
                 except InterruptedError:
                     if not (self.user or self.interrupt.is_set()):
                         raise
@@ -768,7 +871,8 @@ class _Trainer:
             except Exception as exc:  # killed while writing it, say
                 self.journal("error", message=f"The checkpoint the last run left for round {n} could not be read ({str(exc)[:200]}), so the round trains again.", round=n)
                 path = None
-        self.journal("round", round=n, parent=state["current"], learning_rate=state["learning_rate"], batch_size=state["batch_size"], **({"recovered": True} if path else {}))
+        self.journal("round", round=n, parent=state["current"], learning_rate=state["learning_rate"], batch_size=state["batch_size"],
+                     optimizer="resumed" if self.continues() else "fresh", **({"recovered": True} if path else {}))
         self.save()
         if path is None:
             try:

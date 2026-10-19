@@ -203,17 +203,18 @@ class QueueTests(unittest.TestCase):
     def test_queue_waits_while_a_passive_session_is_active(self):
         root = self.path.parent.parent
         self.assertFalse(studio_queue.passive_running(root))
+        self.assertIsNone(studio_queue.passive_session(root))
         self.assertFalse((root / "data" / "passive.sqlite").exists())  # asking never creates the record
         store = PassiveStore(root)
         session = store.create({})
         r = self.runner()
         r.enqueue(self.job("a"))
         r.start()
-        self.assertTrue(wait(lambda: r.state().gate.reason == PASSIVE))
+        self.assertTrue(wait(lambda: r.state().gate.reason == f"{PASSIVE} (session {session})"))
         for status in ("running", "paused"):  # a paused trainer still holds its model in memory
             store.update(session, status=status)
             time.sleep(.1)
-            self.assertEqual((self.fake.ran, r.state().blocked), ([], PASSIVE))
+            self.assertEqual((self.fake.ran, r.state().blocked), ([], f"{PASSIVE} (session {session})"))
         store.update(session, status="stopped")
         self.assertTrue(wait(lambda: self.fake.ran == ["a"]))
         self.assertIsNone(r.state().gate.reason)
@@ -225,7 +226,7 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(wait(lambda: self.fake.steps > 3))
         store = PassiveStore(self.path.parent.parent)
         session = store.create({})
-        self.assertTrue(wait(lambda: r.state().blocked == PASSIVE))
+        self.assertTrue(wait(lambda: r.state().blocked == f"{PASSIVE} (session {session})"))
         time.sleep(.05)
         frozen = self.fake.steps
         time.sleep(.1)
@@ -307,22 +308,26 @@ class QueueTests(unittest.TestCase):
             self.fake.gate.set()
 
     def test_gate_is_read_once_per_tick_not_per_pass(self):
-        reads = []
-
-        def idle():
-            reads.append(1)
-            return 120.
-        with mock.patch.object(studio_queue, "idle_seconds", idle):
-            r = Runner(self.path, self.handlers, tick=.3)
+        # Worker startup and wall-clock sleeps vary with CI load. Drive the same
+        # watcher used by both runner loops at exact monotonic times instead.
+        with mock.patch.object(studio_queue.time, "monotonic", return_value=0.) as clock, \
+                mock.patch.object(studio_queue, "idle_seconds", return_value=120.) as idle:
+            r = Runner(self.path, self.handlers, tick=1.)
             r.set_plan(Plan(hours="any", idle_only=True, pause_on_battery=False))
-            r.subscribe(self.fake.listen)
             self.addCleanup(r.shutdown)
-            r.enqueue(self.job("long", "pretrain"))
-            r.start()
-            self.assertTrue(wait(lambda: self.fake.steps > 3))
-            time.sleep(.5)
-            self.assertLessEqual(len(reads), 4)  # the old 50 ms poll made this about 20 in the same time
-            self.fake.gate.set()
+            for tick in range(3):
+                for fraction in (0., .125, .25, .5, .75, .875):
+                    clock.return_value = tick + fraction
+                    r._watch()
+                    self.assertEqual(idle.call_count, tick + 1, f"gate reads at {clock.return_value}")
+
+            # A changed plan must take effect even before the next tick.
+            r.set_plan(Plan(hours="any", idle_only=True, idle_after_s=180., pause_on_battery=False))
+            r._watch()
+            self.assertEqual(idle.call_count, 4)
+            self.assertEqual(r.blocked, "computer in use")
+            r._watch()
+            self.assertEqual(idle.call_count, 4)
 
     def test_enqueue_and_resume_wake_the_runner_at_once(self):
         r = self.runner(tick=30)  # no polling to fall back on within the test

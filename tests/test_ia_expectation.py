@@ -3,8 +3,8 @@ import unittest
 
 from studio_ia.copy import EXPECTATION as T
 from studio_ia.expectation import expectation as both, table_params
-from studio_ia.pages import builder as B
-from studio_ia.pages.pretraining import version_expectation
+from studio_ia import design as D
+from studio_ia.pretraining_plan import version_expectation
 from studio_spec import default_spec, validate_spec
 from studio_estimate import estimate
 
@@ -16,12 +16,12 @@ def expectation(*args, **kw):
 
 def design(s):
     """The Builder's expectation for the choices `s` made on the starting design."""
-    return B.design_expectation(s, B.write_spec(default_spec(), s))
+    return D.design_expectation(s, D.write_spec(default_spec(), s))
 
 
 class Tiers(unittest.TestCase):
     def test_default_design_is_letter_patterns(self):
-        c = B.sizes(default_spec(), 0)
+        c = D.sizes(default_spec(), 0)
         text = expectation(c["params"], "byte", embedding_params=c["table"])
         self.assertIn(T["letters"], text)
         self.assertIn(T["guide"], text)
@@ -66,7 +66,7 @@ class WordLists(unittest.TestCase):
         self.assertIn("3 to 4 times", T["bpe_custom"])
 
     def test_gpt2_at_a_small_width_is_all_word_table(self):
-        s = dict(B.read_spec(default_spec()), V=2)
+        s = dict(D.read_spec(default_spec()), V=2)
         self.assertEqual(s["d"], 64)
         text = design(s)[1]
         self.assertIn(T["bpe_gpt2"], text)
@@ -88,7 +88,7 @@ class WordLists(unittest.TestCase):
         self.assertNotIn(T["custom_pieces"], expectation(5_000_000, "word", tokens_seen=10_000_000))
         self.assertIsNone(table_params("word", 64))
         self.assertEqual(table_params("word", 64, vocab=3000), 3000 * 64)
-        self.assertEqual(design(dict(B.read_spec(default_spec()), V=3))[0].split(":")[0], "Expect")
+        self.assertEqual(design(dict(D.read_spec(default_spec()), V=3))[0].split(":")[0], "Expect")
 
     def test_table_size(self):
         self.assertEqual(table_params("bpe_gpt2", 64), 50257 * 64)
@@ -116,7 +116,7 @@ class Headline(unittest.TestCase):
 
 class Pages(unittest.TestCase):
     def test_builder_line_follows_the_draft_word_list(self):
-        s = B.read_spec(default_spec())
+        s = D.read_spec(default_spec())
         lines = [design(dict(s, V=v))[1] for v in range(4)]
         self.assertEqual(len(set(lines)), 4)
 

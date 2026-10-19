@@ -5,3 +5,8 @@ pandas>=3.0.6,<4
 pyarrow>=26.0.0
 panda3d>=1.10.16,<2
 orjson>=3.11,<4
+boto3>=1.36,<2
+fastapi
+uvicorn
+python-multipart
+httpx

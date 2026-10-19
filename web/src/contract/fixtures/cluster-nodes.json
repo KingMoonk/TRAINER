@@ -1,0 +1,29 @@
+{
+  "body": [
+    {
+      "address": "local",
+      "age_s": null,
+      "busy": false,
+      "device": "cpu",
+      "device_name": "CPU",
+      "dtypes": [
+        "float32"
+      ],
+      "error": "",
+      "hostname": "this-computer",
+      "local": true,
+      "memory_bytes": 17179869184,
+      "online": true,
+      "origin": "",
+      "origin_down": false,
+      "tailnet_name": "",
+      "version": "v0.0.0"
+    }
+  ],
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/cluster/nodes"
+  },
+  "status": 200
+}

@@ -2,7 +2,9 @@
 
 Kept independent of studio_archdb (that store is keyed by architecture revisions); a version only
 references run directories and checkpoint paths. Version = {number, name, change, parent, spec, created_at,
-runs, best_checkpoint, status, scorecard, verdict, prediction}. prediction is the guess made on saving ({dimension: direction}, Build your model).
+runs, best_checkpoint, status, scorecard, verdict, prediction, published, train_device, score_device}. prediction is the guess made on saving ({dimension: direction}, Build your model).
+train_device is the device kind (cuda, mps, cpu) that trained the best checkpoint, score_device the one that scored it on the held-back text;
+both are absent until known. published (absent until used) lists the version-store keys this version was published under, or was pulled from (studio_publish).
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+from studio_core import replace_file
 from studio_spec import block_at, structure_key, validate_spec
 
 STATUSES = ("draft", "saved", "queued", "training", "trained")
@@ -88,7 +91,7 @@ class VersionStore:
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
         with os.fdopen(fd, "w") as handle:
             json.dump({"versions": versions}, handle, indent=1)
-        os.replace(tmp, self.path)
+        replace_file(tmp, self.path)  # a reader with the file open fails a bare os.replace on Windows
 
     def get(self, number):
         for v in self.versions():
@@ -121,6 +124,37 @@ class VersionStore:
             self._write(versions + [version])
             return copy.deepcopy(version)
 
+    def add_pulled(self, spec, name, change, checkpoint, key, train_device=None):
+        """A version another machine published, as a trained version here: its design, and `checkpoint` (the pulled file) as its weights.
+        Its scorecard stays empty, because the numbers measured there were on that machine's held-back text. Returns the new row."""
+        spec = validate_spec(spec)
+        with self._lock:
+            versions = self.versions()
+            version = dict(number=len(versions) + 1, name=name, change=change, parent=None, spec=spec,
+                           created_at=time.strftime("%Y-%m-%dT%H:%M:%S"), runs=[], best_checkpoint=str(checkpoint),
+                           status="trained", scorecard={}, verdict=None, prediction={}, published=[key],
+                           **({"train_device": train_device} if train_device else {}))
+            self._write(versions + [version])
+            return copy.deepcopy(version)
+
+    def add_trained(self, spec, change, checkpoint, run_dir, source):
+        """A version trained outside the queue (a passive session): its design, `checkpoint` as its weights and `run_dir` as its run. `source`
+        says where the weights came from, as a dict kept on the row. Its scorecard starts empty; the caller scores it. Returns the new row."""
+        spec = validate_spec(spec)
+        with self._lock:
+            versions = self.versions()
+            version = dict(number=len(versions) + 1, name=f"Version {len(versions) + 1}", change=change, parent=None, spec=spec,
+                           created_at=time.strftime("%Y-%m-%dT%H:%M:%S"), runs=[str(run_dir)], best_checkpoint=str(checkpoint),
+                           status="trained", scorecard={}, verdict=None, prediction={}, passive=dict(source))
+            self._write(versions + [version])
+            return copy.deepcopy(version)
+
+    def add_published(self, number, key):
+        """Remember that version `number` is in the version store under `key`."""
+        with self._lock:
+            keys = self.get(number).get("published") or []
+            return self._update(number, published=keys if key in keys else [*keys, key])
+
     def _update(self, number, **fields):
         with self._lock:
             versions = self.versions()
@@ -144,6 +178,14 @@ class VersionStore:
     def set_change(self, number, change):
         return self._update(number, change=change)
 
+    def leave_saved(self, number, note):
+        """A version whose job ended without weights: back to "saved" (when its status can go there) with `note` added to its
+        description, in one write, so a failure between two writes cannot leave the status changed and the note missing."""
+        with self._lock:
+            row = self.get(number)
+            status = "saved" if "saved" in NEXT.get(row["status"], ()) else row["status"]
+            return self._update(number, status=status, change=f"{row['change']}{note}")
+
     def set_status(self, number, status):
         now = self.get(number)["status"]
         if status not in NEXT.get(now, ()):
@@ -155,6 +197,11 @@ class VersionStore:
 
     def set_best_checkpoint(self, number, path):
         return self._update(number, best_checkpoint=str(path))
+
+    def set_devices(self, number, train=None, score=None):
+        """Record the device kind that trained the version's checkpoint and/or the one that scored it; None leaves that one as it was."""
+        fields = {k: v for k, v in (('train_device', train), ('score_device', score)) if v}
+        return self._update(number, **fields) if fields else self.get(number)
 
     def set_scorecard(self, number, scorecard):
         return self._update(number, scorecard=dict(scorecard))

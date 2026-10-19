@@ -1,0 +1,19 @@
+{
+  "body": {
+    "busy": false,
+    "device": "cpu",
+    "device_name": "CPU",
+    "dtypes": [
+      "float32"
+    ],
+    "hostname": "this-computer",
+    "memory_bytes": 17179869184,
+    "version": "v0.0.0"
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/node"
+  },
+  "status": 200
+}

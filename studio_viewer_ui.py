@@ -3,7 +3,14 @@ layout, where the block labels go and how the camera frames each level. Nothing 
 Sizes are aspect2d units (the window is 2 units tall); control frames are in text units (multiples of TEXT)."""
 from __future__ import annotations
 
-from studio_ia.theme import C
+
+# The viewer's colours (the web UI's theme tokens; studio_scene_json.THEME keeps its subset equal to these)
+C = dict(
+    bg="#0e1014", panel="#15181e", panel2="#1b1f27", border="#2a2f3a", border2="#20242c",
+    text="#e6e8ec", text2="#c3c8d1", muted="#8f97a6", dim="#7f879a",
+    violet="#9f8cff", amber="#e5b567", coral="#ef8a7a", blue="#6cb4ee", pink="#e58fb0", sage="#9fd36b",
+    amber_bg="#211c12", coral_bg="#26171a", blue_bg="#121a22", violet_bg="#1a1730",
+)
 
 # Run needs measured loss paths, which the studio no longer sends, so the viewer offers the four levels it can draw
 LEVELS = ('Model', 'Window', 'Head', 'Weights')

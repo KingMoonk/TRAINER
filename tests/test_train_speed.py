@@ -158,6 +158,8 @@ class Checkpointing(unittest.TestCase):
 
 class MixedPrecision(unittest.TestCase):
     def setUp(self):
+        if policy.cpu_bf16_crashes():
+            self.skipTest("this machine's bfloat16 matrix multiplies die with an illegal instruction (Windows with AMX switched on)")
         # Whether this machine's CPU has fast half-precision kernels varies (Apple CPUs do not); the logic is tested as if it did.
         patcher = mock.patch.object(policy, "autocast_works", return_value=True)
         patcher.start()
@@ -295,6 +297,19 @@ class MixedPrecision(unittest.TestCase):
         deeper, deeper_saving = estimate(deep, vocab=12), estimate({**deep, "train": {**deep["train"], "run": {"checkpointing": True}}}, vocab=12)
         self.assertGreater(deeper["activation_bytes_per_token"] / deeper_saving["activation_bytes_per_token"],
                            full["activation_bytes_per_token"] / saving["activation_bytes_per_token"])
+
+
+class CrashingCpu(unittest.TestCase):
+    def setUp(self):
+        policy.autocast_works.cache_clear()
+        self.addCleanup(policy.autocast_works.cache_clear)
+
+    def test_a_cpu_whose_bfloat16_multiplies_crash_is_never_probed(self):
+        with mock.patch.object(policy, "cpu_bf16_crashes", return_value=True), \
+                mock.patch.object(policy, "_cpu_half_is_fast", side_effect=AssertionError("probed")) as probe:
+            self.assertFalse(policy.autocast_works("cpu", torch.bfloat16))
+            self.assertIn("float32 instead", policy.plan(registry.get("precision", "bf16"), "cpu")[1])
+        probe.assert_not_called()
 
 
 if __name__ == "__main__":

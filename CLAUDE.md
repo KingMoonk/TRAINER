@@ -1,9 +1,10 @@
 # Agent rules
 
-- Test with `.venv/bin/python tasks.py test` (all window-free tests and ruff) or `.venv/bin/python tasks.py test tests.test_x tests.test_y` (just those modules). That is the only test command you run. Details: `.claude/rules/testing.md`.
-- Only run `tasks.py test:ci` or `test:ci:e2e`, `tests/gui_*.py`, or `tests.e2e_train` if trying to debug CI issues. 
-- A new test that opens a window goes in `gui_*.py` with that import as its first import; `test_*.py` must stay window-free.
+- Use the `Makefile` for every command it covers (`make help` lists them); call `tasks.py` or `pnpm` directly only for what it lacks. Test with `make test` (ruff and all unit tests) or `make test T="tests.test_x tests.test_y"` (just those modules). Worktrees get `.venv` as a symlink to the main checkout's (`.claude/rules/git-workflow.md`). For work in `web/`, also run `make web-check` (Vitest, lint, typecheck, build) and `pnpm gen:api` from `web/`. Nothing else runs locally. Details: `.claude/rules/testing.md`.
+- Only run `make test-ci`, `tasks.py test:ci:e2e` or `tests.e2e_train` if trying to debug CI issues.
+- Never run Playwright (`pnpm test:e2e`, `web:e2e`) locally: it is CI-only. Never open an app window locally (no `app.py`, `studio_ia.shell`, Panda3D viewer, `tk.Tk()`); `tests/test_*.py` must stay window-free, and Vitest tests run in jsdom, never a real browser.
 - While iterating, run just the affected tests (see `.claude/rules/affected-tests.md`).
-- Git: every task in its own worktree, cut from origin/master; the sync-master hook keeps master current. Details: `.claude/rules/git-workflow.md`.
+- Git: each issue or task gets a new branch off origin/wedd-compute-cluster in a new worktree (the base branch; PRs target it; never check out wedd-compute-cluster itself). `master` is legacy: only when the user asks. The sync-base hook keeps wedd-compute-cluster current. Details: `.claude/rules/git-workflow.md`.
 - No placeholders, fake features or dead ends: leave unfinished work out and open a GitHub issue for it, and for any bug you cannot fix. Details: `.claude/rules/no-placeholders.md`.
-- Work from GitHub issues: every feature, bug and open question is an issue with acceptance criteria. Format and labels: `.claude/rules/github-issues.md`.
+- Work from GitHub issues: features, bug fixes and open questions are issues (small fixes and tweaks need none), whether the main session or a subagent does the work, with acceptance criteria. Format and labels: `.claude/rules/github-issues.md`.
+- Delegate significant, well-defined work to a subagent when briefing and review cost less than doing it here; small work stays on the main thread (`implementer` on Sonnet for moderate or difficult work, `grunt` on Haiku for repetitive or read-heavy work). Each one claims a GitHub issue, works on its own branch and worktree, opens a PR that closes the issue, and reports back limitations and risks honestly. Details: `.claude/rules/subagents.md`.

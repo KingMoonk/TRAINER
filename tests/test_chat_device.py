@@ -40,7 +40,7 @@ class FakeModel:
         self.log.append(("move", device))
         return self
 
-    def generate(self, messages, on_text=None, stop=None):
+    def generate(self, messages, on_text=None, stop=None, ablate=None):
         start = self.device
         self.started.set()
         if self.hold is not None:

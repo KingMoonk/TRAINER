@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import errno
+import io
 import logging
 import queue
 import socket
 import threading
+import time
 import urllib.error
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -29,6 +31,24 @@ class Version:
     scorecard: dict = field(default_factory=dict)
     verdict: str = ""
     prediction: dict = field(default_factory=dict)  # the guess made on saving: {"error": "lower", "step": "slower", "memory": "more"}
+    train_device: str | None = None  # cuda | mps | cpu: what trained best_checkpoint
+    score_device: str | None = None  # what scored it on the held-back text
+
+
+def passive_row(store, s, saved=None):
+    """One passive session as passive() lists it: its status, plan summary, the trainer's and watchdog's facts, how many checkpoints
+    it saved and the version its best one became. `saved`: {checkpoint path: version number} (_passive_saved)."""
+    import studio_passive_watch as watch
+    from studio_passive import ACTIVE, plan_summary
+    facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
+    best = _passive_best(s)
+    return {"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"], "error": s["error"], **facts,
+            "checkpoints": len((s["state"] or {}).get("checkpoints", [])), "version": (saved or {}).get(str(best["path"])) if best else None}
+
+
+def passive_lesson(row):
+    """A stored lesson as the API shows it: without the raw chat messages the trainer feeds on."""
+    return {key: row.get(key) for key in ("id", "round", "checkpoint", "prompt", "reply", "answer", "status", "at")}
 
 
 @dataclass
@@ -63,6 +83,7 @@ class QueueState:
     stopping: bool = False  # stop after cool-down in progress
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
+    failed: list = field(default_factory=list)  # jobs that ended failed, newest last; see studio_queue.QueueState
 
 
 _log = logging.getLogger(__name__)
@@ -141,6 +162,8 @@ class Services:
         self._subscribers: list[Callable[[str, Any], None]] = []
         self._ui = None  # a Tk widget; set by the shell so events hop onto the Tk thread
         self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
+        self._raw: list[Callable[[str, Any], None]] = []  # watchers that take events on the emitting thread (the API)
+        self._raw_lock = threading.Lock()
         self._settings = {}
         from studio_ia.snapshots import Snapshots
         self.snapshots = Snapshots(self)  # what the Tk thread reads instead of calling slow services; inert until the shell starts it
@@ -158,9 +181,28 @@ class Services:
         self._subscribers.append(callback)
         return lambda: self._subscribers.remove(callback) if callback in self._subscribers else None
 
+    def watch(self, callback):
+        """callback(kind, payload) runs synchronously on whichever thread emits, never through Tk; safe to call from any
+        thread. For code with no Tk loop (the API server). Keep the callback quick: it runs inside emit(), on the worker
+        that emitted. Returns an unsubscribe function."""
+        with self._raw_lock:
+            self._raw.append(callback)
+
+        def off():
+            with self._raw_lock:
+                if callback in self._raw:
+                    self._raw.remove(callback)
+        return off
+
     def emit(self, kind, payload=None):
         """Safe from any thread. On the Tk thread delivery is scheduled with `after`; another thread only queues the event
-        for pump(), because a Tk call from a worker can reach an app that is already destroyed and crash the process."""
+        for pump(), because a Tk call from a worker can reach an app that is already destroyed and crash the process.
+        Watchers (watch()) are told first, right here on the emitting thread; the Tk path below is unchanged by them."""
+        with self._raw_lock:
+            raw = list(self._raw)
+        for callback in raw:
+            callback(kind, payload)
+
         def deliver():
             for callback in list(self._subscribers):
                 callback(kind, payload)
@@ -233,6 +275,36 @@ class Services:
         """prediction: what the person guessed the change would do ({dimension: direction}), stored with the version."""
         raise NotImplementedError
 
+    # sharing versions between machines (studio_publish; docs/cluster.md). All of it is disk or network: call it off the Tk thread.
+    def version_store(self):
+        """The version store this machine shares versions through (a studio_publish.RemoteStore). Raises RuntimeError with a plain
+        sentence when none is set up, and ValueError naming what is missing when a bucket is half set."""
+        raise NotImplementedError
+
+    def publish_version(self, number):
+        """Upload version `number`'s weights (half precision, no optimizer state) and metadata to the version store. Returns
+        {key, number, origin}. Publishing the same weights again uploads nothing. Raises studio_publish.StoreError, a sentence that
+        says what to do, when the version has no weights or the store cannot be used."""
+        raise NotImplementedError
+
+    def published_versions(self):
+        """What the version store holds, newest first: [{key, number, name, change, origin, device, step, published_at, size, scorecard,
+        mine (published by this machine), local (this workspace has it), local_number}]. Raises like publish_version."""
+        raise NotImplementedError
+
+    def pull_version(self, number, origin=None):
+        """Download published version `number` (from the machine `origin` when more than one published a version with that number)
+        and add it here as a trained version. Pulling what is already here returns that version. The node that published it is asked
+        first (when the workspace lists it and it answers; given `origin`, the store is not read at all); otherwise, or when it
+        cannot send it, the store is used. `note` says which, and why. Returns the Version."""
+        raise NotImplementedError
+
+    def share_version(self, number):
+        """(path, metadata) of version `number`'s weights-only half-precision copy, as `publish_version` would upload it, for a peer
+        that pulls it from this machine. Made on the first call, then reused until the version changes. Raises NoCheckpoint when the
+        version has no weights, studio_publish.StoreError when its checkpoint cannot be read."""
+        raise NotImplementedError
+
     def setting(self, key, default=None):
         """A choice the person made that the app remembers (the Builder's Advanced toggle). Read from memory: safe on Tk."""
         return self._settings.get(key, default)
@@ -297,6 +369,9 @@ class Services:
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
 
+    def resume_queue_at_start(self):
+        """Carry on the queue the last run of the app left going (no-op where there is no real queue)."""
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
@@ -344,10 +419,10 @@ class Services:
         has not trained, and ValueError (already in plain words) for a design or tokenizer that format cannot hold."""
         raise NotImplementedError
 
-    def import_pretrained(self, name="gpt2"):
+    def import_pretrained(self, name="gpt2", lora=None):
         """Start from a pretrained open model ("gpt2": OpenAI's 124M, about 548 MB to download once). Saves its design as a new version
         and queues the download and conversion in the background; the version becomes trained (with a checkpoint) when the job ends.
-        Returns the new Version."""
+        lora: settings dict ({} for the defaults) to fine-tune small adapters instead of every weight. Returns the new Version."""
         raise NotImplementedError
 
     def passive(self):
@@ -355,8 +430,51 @@ class Services:
         trainer, watchdog, restarts, heard, error}; signin is True while its watchdog is set to start when you sign in."""
         raise NotImplementedError
 
+    def start_passive(self, plan, version=None):
+        """Create a passive session and start its watchdog. `plan`: overrides of studio_passive.DEFAULT_PLAN (stop, limits, teacher,
+        data); an empty data.sources means every set of text. `version`: the number to train (the current one when None), whose
+        design and best checkpoint become the plan's config and base_checkpoint. Returns the new session's id. ValueError (in
+        plain words) for a bad plan or version; RuntimeError while another session is queued, running or paused."""
+        raise NotImplementedError
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        """{session, plan, progress, journal}: one passive session as the detail view shows it, or None for an unknown one. session = the
+        row passive() lists; plan = studio_passive.plan_summary's lines; progress = studio_passive.progress_summary; journal =
+        {events, total, first}: up to `limit` events before event number `before` (the newest when None), oldest first, each with its `index`."""
+        raise NotImplementedError
+
+    def passive_lessons(self, session_id):
+        """The lessons the teacher gave a passive session, oldest first: [{id, round, checkpoint, prompt, reply, answer, status, at}], status
+        pending (trained on), dropped (you left it out) or left_out (a step back left it out). None for an unknown session."""
+        raise NotImplementedError
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        """Drop ("dropped") or keep ("pending") one lesson; the next round's training follows it. Returns the lesson, or None when the
+        session or the lesson is unknown."""
+        raise NotImplementedError
+
     def stop_passive(self, session_id):
         """Ask a passive session to stop. Returns its status afterwards."""
+        raise NotImplementedError
+
+    def command_passive(self, session_id, command):
+        """Ask a passive session to "pause" or "resume"; the trainer takes it at its next check and journals it. Returns the
+        session's status now (still the old one until the trainer has taken the command), or None for an unknown session. A
+        session that is finished, or that is being stopped, raises RuntimeError, and so does "pause" for a stopped or failed one.
+        "resume" for a stopped or failed session puts it back in the queue and starts its watchdog (status "queued"): the trainer
+        carries on from its last checkpoint; RuntimeError while another session is active."""
+        raise NotImplementedError
+
+    def keep_passive_going(self, session_id=None):
+        """Start the watchdog again for an active passive session whose watchdog is gone (it then restarts the trainer). Without
+        `session_id`, the active session, if any. Returns the session's status, or None when there is no such session; a session that
+        is stopped, failed or finished raises RuntimeError."""
+        raise NotImplementedError
+
+    def save_passive(self, session_id):
+        """Save a passive session's best checkpoint as a trained version (scored like a local pretrain, with the session, its rounds and
+        its best error in the description). Saving the same best checkpoint again returns the version it made. Returns
+        {"version": number, "created": bool}, or None for an unknown session; a session with no checkpoint yet raises RuntimeError."""
         raise NotImplementedError
 
     def remove_passive_signin(self):
@@ -373,6 +491,34 @@ class Services:
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
 
+    def cached_step_rate(self, spec, rows):
+        """The step rate measure_step_rate found for `spec` at `rows` rows a step on this computer, or None while it is unknown. Never
+        computes. {"seconds_per_step", "tokens_per_second", "device", "device_name", "note", "rows", "context"}."""
+        return None
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        """Time a few optimizer steps of a throwaway copy of `spec` (`vocab` word pieces) on the device a run of it would use, keep the
+        answer (cached_step_rate) and return it. Slow: call it off the Tk thread. RuntimeError with a sentence when the device cannot
+        hold the model. None when `stop` (a threading.Event) ended it."""
+        raise NotImplementedError
+
+    def loss_evidence(self, version):
+        """The validation points of `version`'s newest run when that run started from step 0 on this design, {"points": [(word
+        pieces read, validation loss)], "run": folder}, else None. What the plan fits a curve to."""
+        return None
+
+    def device_facts(self):
+        """studio_backend.gpu_status(): {available, kind, name, ...} of the GPU this computer offers, or None when it cannot say."""
+        return None
+
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+        """Queue a pretrain job that continues version `number`'s newest run (studio_ia.continue_run): kind "same" adds `steps` steps on
+        the same data, "new_data" adds them on `dataset_ids` (same weights, optimizer and step), "grow" trains a bigger design
+        (`spec`, or this one at `width` and `layers`, saved as the next version) from these weights for `steps` steps. The job's label
+        says what it continues and from which step. Returns {"job_id", "label", "version", "kind", "from_step"}. Reads checkpoints: call it
+        off the Tk thread. ValueError with a sentence when the run cannot be continued that way."""
+        raise NotImplementedError
+
     def word_lists(self):
         """studio_ia.pieces.word_lists for the Builder: the four word lists, the small and whole-word ones fitted on a sample
         of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
@@ -388,7 +534,11 @@ class Services:
         """studio_data_kinds.DataSummary for "text" | "conversations" | "problems"; query filters the rows."""
         raise NotImplementedError
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def text_sets(self):
+        """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
+        return list(self.data("text").sets or [])
+
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
         reached; cursor None = the first page, a next cursor of None = nothing follows. Rows are shaped like DataSummary.rows."""
         raise NotImplementedError
@@ -469,6 +619,18 @@ class Services:
         """{'ids' [1,T], 'tokens' [[str]], 'logits' [1,T,V], 'hooks' {name: array}} (studio_inspect.forward)."""
         raise NotImplementedError
 
+    def inspect_logit_lens(self, version, text, top_k=5):
+        """studio_inspect.logit_lens: one row per stage ('embed', 'blockN.resid.post'): {'hook', 'probabilities' [1,T,V], 'top_ids' [1,T,k], 'top_probabilities' [1,T,k]}."""
+        raise NotImplementedError
+
+    def inspect_ablate(self, version, text, targets=None, mode="zero", heads=None):
+        """studio_inspect.ablate: {'baseline', 'mode', 'heads': [{'block','head','loss','delta', + head_stats}]}, one head ablated at a time (all of them when `heads` is None)."""
+        raise NotImplementedError
+
+    def inspect_head_stats(self, pattern):
+        """studio_inspect.head_stats of an attention pattern [B,H,T,T]: {'entropy','mean_distance','first_token_mass','previous_token_mass'}, each [H]."""
+        raise NotImplementedError
+
     def inspect_trace(self, version, text, pos=-1):
         """studio_inspect.trace: {'tokens', 'pos', 'rows'}."""
         raise NotImplementedError
@@ -479,6 +641,14 @@ class Services:
 
     def inspect_loss(self, version, text, pos=-1, trained=True):
         """{'tokens', 'pos', 'probabilities' [V], 'target' id, 'pieces' [str per id]}; trained=False uses fresh weights."""
+        raise NotImplementedError
+
+    def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
+        """The loss on a grid of weights around a version's weights (studio_landscape): {mode, unit, grid, span, seed, axis [grid], loss
+        [grid][grid] (rows are the second direction), ceiling, current {x, y, loss, step}, minimum {x, y, loss, inside}, trajectory
+        [{step, x, y, loss}], center {step, name}, batch {rows, tokens}, cost {seconds, evaluations}, note, live}. snapshot picks the
+        centre from viewer_snapshots (default: the best checkpoint). live is a small, throttled frame with the same directions as the
+        last one (new_anchor starts them afresh). ValueError with a sentence when it cannot run. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
     def inspect_value_map(self, version, heads, block=0, head=0):
@@ -535,6 +705,21 @@ class Services:
         """Rows for a post_round job: conversations | problems | pairs | heldout_docs | heldout_problems."""
         raise NotImplementedError
 
+    def post_loops(self) -> list:
+        """The automated RLHF loops (studio_loop.summary dicts), newest first: id, version, status, stop_reason, config, anchor, current,
+        kept, rounds [the journal's records], and so on."""
+        raise NotImplementedError
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None) -> dict:
+        """Queue an `rlhf_loop` job for `version` (None = the current one): {"job", "loop_id", "label"}. `judge_model` is the Ollama model
+        that grades (None = the workspace's teacher, or no judge: checked problems only). `resume` is the id of an earlier
+        loop to carry on, from its last kept round. Raises ValueError with a sentence when it cannot start."""
+        raise NotImplementedError
+
+    def adopt_loop(self, loop_id) -> dict:
+        """Check a loop's best on all the held-back data and, if the gate passes, make it the version's checkpoint: the gate result."""
+        raise NotImplementedError
+
     # 3D viewer (S11): a separate Panda3D process; Services only starts, stops and talks to it -------------------
     def viewer_status(self) -> dict:
         """{'available': bool, 'running': bool, 'connected': bool}. available False = the viewer cannot be launched here."""
@@ -555,27 +740,73 @@ class Services:
         """Messages the viewer sent back since the last call."""
         raise NotImplementedError
 
-    def viewer_snapshots(self) -> list:
-        """The current version's training snapshots (absolute paths of <run>/viz/step_*.npz), oldest first."""
+    def viewer_snapshots(self, number=None) -> list:
+        """A version's training snapshots, oldest first; omit number for the current version."""
         raise NotImplementedError
 
-    def viewer_probe_step(self, text):
-        """Run one real training step of the current version's checkpoint on `text` without touching training, save it
+    def viewer_probe_step(self, text, number=None):
+        """Run one real training step of the chosen (default current) version's checkpoint without touching training, save it
         as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
+    def viewer_token_text(self, number, ids):
+        """The text of each token id (a list of strings, '' for a piece with no text), for the viewer's labels; None when the version
+        has no tokenizer yet. A small file read."""
+        return None
+
+    def viewer_summary(self, number=None) -> tuple:
+        """(state, summary) of a version's saved whole-context summary (studio_summary.summary_state): state is ready, stale, none or
+        no_checkpoint; summary is {edges, n_ctx, step, attention, stream_norms} when ready or stale, else None. A file read."""
+        from studio_summary import summary_state
+        return summary_state(self._summary_checkpoint(number))
+
+    def viewer_summarize(self, number=None) -> dict:
+        """Run the chosen (default current) version's checkpoint over a full window of its held-back text, save the summary beside
+        the run's snapshots and return it (studio_summary.whole_context). ValueError with a sentence when there is no checkpoint or
+        no held-back text to read. Slow: call it off the Tk thread."""
+        from pathlib import Path
+
+        from studio_ia.copy import INSIDE3D
+        from studio_summary import save_summary, whole_context
+        checkpoint = self._summary_checkpoint(number)
+        if not checkpoint or not Path(checkpoint).is_file():
+            raise ValueError(INSIDE3D["summary_no_checkpoint"])
+        summary = whole_context(checkpoint, self._heldout())
+        save_summary(checkpoint, summary)
+        return summary
+
+    def _summary_checkpoint(self, number):
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
+        return version.best_checkpoint if version is not None else None
+
+    def _heldout(self):
+        """The held-back documents as text."""
+        raise NotImplementedError
+
+
+DEMO_RUN = "demo-run"  # the id of the run `studio_api --fake` starts with (FakeServices.demo_run)
+
 
 class FakeServices(Services):
-    """Empty, in-memory placeholder data so pages render before real services exist."""
+    """Empty, in-memory placeholder data so pages render before real services exist. A test fixture and `studio_api --fake`
+    only, never the real app. start_queue() runs the queued pretrain jobs one after another in a worker thread: `job_steps`
+    steps of `step_seconds` each (`sleep` is injectable, so a test needs no real wait), then the job's version is trained or,
+    for a job with no version of its own, a new one is added. The events match studio_queue.Runner's."""
 
-    def __init__(self):
+    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep, snapshot_every=0):
         super().__init__()
+        self.job_steps, self.step_seconds, self._sleep = job_steps, step_seconds, sleep
+        self.snapshot_every = snapshot_every  # > 0: also emit the training loop's viz_snapshot event every that many steps (--fake does)
+        self._worker: threading.Thread | None = None
+        self._started = False  # start_queue() was called: from then on a resume carries on, as the real runner's thread does
+        self._worker_lock = threading.Lock()
         self._versions: list[Version] = []
         self._queue = QueueState()
         self.viewer_log: list = []  # (action, payload): the fake viewer records calls and spawns nothing
         self._viewer_running = False
         self.snapshot_paths: list = []  # what viewer_snapshots returns
         self.probe_path = None  # what viewer_probe_step returns
+        self.heldout_docs: list = []  # the held-back text viewer_summarize reads
         self.passive_sessions, self.passive_signin = [], False  # what passive() returns
 
     def viewer_status(self):
@@ -596,12 +827,48 @@ class FakeServices(Services):
     def viewer_poll(self):
         return []
 
-    def viewer_snapshots(self):
+    def viewer_snapshots(self, number=None):
         return list(self.snapshot_paths)
 
-    def viewer_probe_step(self, text):
+    def viewer_token_text(self, number, ids):
+        return None
+
+    def viewer_probe_step(self, text, number=None):
         self.viewer_log.append(("probe", text))
         return self.probe_path
+
+    def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
+        """A made-up bowl with two ripples and a path that walks into it one point longer per call, so a live page has something to show."""
+        import math
+
+        import studio_landscape
+        if mode not in studio_landscape.MODES:
+            raise ValueError(f"Directions are {' or '.join(studio_landscape.MODES)}.")
+        grid = studio_landscape.grid_size(min(grid, 15) if live else grid)
+        studio_landscape.check_size(5_000, grid)
+        self._landscape_frames = 0 if new_anchor else getattr(self, "_landscape_frames", 0) + (1 if live else 0)
+        shift = 0.15 * math.sin(self._landscape_frames / 3.0) if live else 0.0
+        axis = [span * (2 * i / (grid - 1) - 1) for i in range(grid)]
+
+        def height(x, y):
+            return 1.2 + 1.6 * ((x - shift) ** 2 + (y + 0.5 * shift) ** 2) / (span * span) + 0.15 * math.sin(5 * x / span) * math.cos(4 * y / span)
+
+        loss = [[height(x, y) for x in axis] for y in axis]
+        low = min(((loss[r][c], r, c) for r in range(grid) for c in range(grid)))
+        count = 6 + self._landscape_frames if live else 8
+        path = [{"step": 50 * (i + 1), "x": 0.9 * span * (1 - i / count) * math.cos(0.6 * i), "y": 0.9 * span * (1 - i / count) * math.sin(0.6 * i)} for i in range(count)]
+        for point in path:
+            point["loss"] = height(point["x"], point["y"])
+        return {"mode": mode, "unit": "filter" if mode == "random" else "trajectory", "grid": grid, "span": span, "seed": seed, "live": live,
+                "axis": axis, "loss": loss, "ceiling": sorted(v for row in loss for v in row)[int(0.95 * grid * grid)],
+                "current": {"x": 0.0, "y": 0.0, "loss": loss[grid // 2][grid // 2], "step": path[-1]["step"]},
+                "minimum": {"x": axis[low[2]], "y": axis[low[1]], "loss": low[0], "inside": 0 < low[1] < grid - 1 and 0 < low[2] < grid - 1},
+                "trajectory": path, "center": {"step": path[-1]["step"], "name": "best.npz"}, "batch": {"rows": 4, "tokens": 128},
+                "cost": {"seconds": 0.0, "evaluations": grid * grid + len(path)}, "note": "Made-up data for the fake studio."}
+
+
+    def _heldout(self):
+        return self.heldout_docs
 
     def versions(self):
         return list(self._versions)
@@ -620,6 +887,22 @@ class FakeServices(Services):
         self.emit("versions", v)
         return v
 
+    def version_store(self):
+        from studio_publish import NO_STORE
+        raise RuntimeError(NO_STORE)  # a cluster of one
+
+    def publish_version(self, number):
+        return self.version_store()
+
+    def published_versions(self):
+        return self.version_store()
+
+    def pull_version(self, number, origin=None):
+        return self.version_store()
+
+    def share_version(self, number):
+        raise NoCheckpoint(number)  # nothing here has weights
+
     def queue(self):
         return self._queue
 
@@ -631,6 +914,113 @@ class FakeServices(Services):
     def enqueue(self, job):
         self._queue.up_next.append(job)
         self.emit("queue", self._queue)
+
+    def start_queue(self):
+        """Run the waiting jobs in a worker thread, unless one is already running or the queue is paused. The first job is
+        already the running job when this returns."""
+        with self._worker_lock:
+            self._started = True
+            if self._worker is not None and self._worker.is_alive():
+                return
+            job = self._take_job()
+            if job is None:
+                return
+            self._worker = start_thread(self._run_jobs, job)
+
+    def wait_idle(self, timeout=10.0):
+        """Test hook: block until the worker has run every waiting job; True when it has."""
+        worker = self._worker
+        if worker is not None:
+            worker.join(timeout)
+        return worker is None or not worker.is_alive()
+
+    def _take_job(self):
+        """The next waiting job, now the running one; None when paused or nothing waits. Hold _worker_lock."""
+        job = next((j for j in self._queue.up_next if j.status == "waiting"), None)
+        if job is None or self._queue.paused:
+            return None
+        self._queue.up_next.remove(job)
+        job.status = "running"
+        self._queue.job, self._queue.step, self._queue.total, self._queue.phase = job, 0, self.job_steps, "warm-up"
+        return job
+
+    def _run_jobs(self, job):
+        while job is not None:
+            self._run_job(job)
+            with self._worker_lock:
+                job = self._take_job()
+                if job is None:
+                    self._worker = None
+
+    def _run_distributed(self, job):
+        """A distributed pretraining run with a made-up coordinator (studio_ia.fake_distributed): a round takes about nine steps' time."""
+        import studio_diloco
+        import studio_distributed
+        from studio_ia.fake_distributed import FakeCoordinator
+        q = self._queue
+        coordinator = FakeCoordinator(studio_distributed.run_of(job), job.params.get("settings") or {}, unit=self.step_seconds * 1.5)
+        studio_diloco.register(job.id, coordinator)
+        studio_distributed.invite(job)
+        coordinator.start()
+        q.total = coordinator.rounds
+        self.emit("job", {"job": job.id, "status": "running"})
+        self.emit("queue", q)
+        while not coordinator.finished:
+            self._sleep(self.step_seconds * 2)
+            coordinator.advance()
+            q.step = coordinator.round
+            self.emit("queue", q)
+        job.status = "stopped" if coordinator.stopped else "done"
+        if job.status == "done":
+            studio_distributed.note_saved(job.id, job.params.get("version"))  # the made-up run "saves" the version it was for
+        q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
+        self.emit("job", {"job": job.id, "status": job.status, "error": ""})
+        self.emit("queue", q)
+
+    def demo_run(self, clock=time.monotonic, unit=1.):
+        """A distributed run already under way, with no queue job behind it: a CUDA and an MPS machine training in rounds of about
+        six seconds, so `studio_api --fake` opens the Training tab on a live run. Stop it from the tab like any other."""
+        import studio_diloco
+        import studio_distributed
+        from studio_ia.fake_distributed import FakeCoordinator
+        machines = [studio_distributed.Machine(node="mac-mini", address="local", device="mps", device_name="Apple M2"),
+                    studio_distributed.Machine(node="gpu-box", address="gpu-box:8787", device="cuda", device_name="NVIDIA GeForce RTX 4090")]
+        settings = {"rounds": 400, "inner_steps": 100, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "float16"}
+        run = studio_distributed.Run(DEMO_RUN, "Demo run on a Mac mini and a GPU box", 1, time.time(), settings, "mac-mini", machines)
+        with studio_distributed._LOCK:
+            studio_distributed.RUNS[run.id] = run
+        coordinator = FakeCoordinator(run, settings, clock=clock, unit=unit)
+        studio_diloco.register(run.id, coordinator)
+        coordinator.start()
+        return run
+
+    def _run_job(self, job):
+        if job.kind == "pretrain_distributed":
+            return self._run_distributed(job)
+        total, q = self.job_steps, self._queue
+        self.emit("job", {"job": job.id, "status": "running"})
+        self.emit("queue", q)
+        for step in range(1, total + 1):
+            self._sleep(self.step_seconds)
+            phase = "warm-up" if step * 4 <= total else "cool-down" if step * 4 > total * 3 else "steady"
+            q.step, q.phase, q.lr = step, phase, 3e-4
+            q.eta_s = (total - step) * self.step_seconds
+            self.emit("train", {"job": job.id, "type": "stats", "step": step, "total": total, "phase": phase, "lr": q.lr,
+                                "loss": round(5.0 - 3.0 * step / total, 4), "tokens_per_second": 1000.0})
+            if self.snapshot_every and step % self.snapshot_every == 0:
+                self.emit("train", {"job": job.id, "type": "viz_snapshot", "step": step, "path": f"viz/step_{step:08d}.npz", "markers": []})
+        job.status = "done"
+        q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
+        self.emit("job", {"job": job.id, "status": "done", "error": ""})
+        number = job.params.get("version")
+        known = next((v for v in self._versions if v.number == number), None)
+        if known is not None:
+            known.status = "trained"
+        else:
+            self._versions.append(Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", job.label or "Trained",
+                                          spec=dict(job.params.get("spec") or {}), status="trained"))
+        self.emit("versions", None)
+        self.emit("queue", q)
 
     def move_up(self, job_id):
         q = self._queue.up_next
@@ -667,13 +1057,57 @@ class FakeServices(Services):
         self.exports = [*getattr(self, "exports", []), (version, kind, path)]
         return {"path": str(path), "files": [], "note": ""}
 
-    def import_pretrained(self, name="gpt2"):
+    def import_pretrained(self, name="gpt2", lora=None):
         import studio_import
         self.imports = [*getattr(self, "imports", []), name]
-        return self.save_version(studio_import.gpt2_spec(), f"Started from {studio_import.MODELS[name]['title']}")
+        return self.save_version(studio_import.gpt2_spec(lora=lora), f"Started from {studio_import.MODELS[name]['title']}")
 
     def passive(self):
         return {"sessions": [dict(row) for row in self.passive_sessions], "signin": self.passive_signin}
+
+    def passive_lessons(self, session_id):
+        if all(r["id"] != session_id for r in self.passive_sessions):
+            return None
+        return [dict(row) for row in getattr(self, "passive_lesson_rows", {}).get(session_id, [])]
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        rows = self.passive_lessons(session_id)
+        if rows is None:
+            return None
+        if status not in ("pending", "dropped"):
+            raise ValueError("A lesson is either dropped or kept.")
+        stored = getattr(self, "passive_lesson_rows", {}).get(session_id, [])
+        row = next((r for r in stored if r["id"] == lesson_id), None)
+        if row is None:
+            return None
+        row["status"] = status
+        return dict(row)
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        import studio_passive
+        data = getattr(self, "passive_details", {}).get(session_id, {})  # tests set {"state": ..., "journal": [...]}
+        plan = studio_passive.merge_plan({})
+        events = data.get("journal", [])
+        end = len(events) if before is None else max(0, min(before, len(events)))
+        start = max(0, end - max(1, limit))
+        return {"session": dict(row), "plan": studio_passive.plan_summary(plan), "progress": studio_passive.progress_summary(data.get("state", {}), plan),
+                "journal": {"events": [{**events[i], "index": i} for i in range(start, end)], "total": len(events), "first": start}}
+
+    def start_passive(self, plan, version=None):
+        import studio_passive
+        if any(r["status"] in studio_passive.ACTIVE for r in self.passive_sessions):
+            raise RuntimeError("A passive training session is already running. Stop it before starting another.")
+        if version is not None and all(v.number != version for v in self._versions):
+            raise ValueError(f"There is no version {version}.")
+        merged = studio_passive.merge_plan(plan)
+        row = {"id": f"passive_{len(self.passive_sessions) + 1}", "status": "queued", "created": "2026-10-01T22:00:00",
+               "stop": studio_passive.plan_summary(merged)["stop"], "trainer": "Running", "watchdog": "Running", "restarts": 0, "heard": None, "error": ""}
+        self.passive_sessions = [row, *self.passive_sessions]
+        self.passive_started = [*getattr(self, "passive_started", []), (merged, version)]
+        return row["id"]
 
     def stop_passive(self, session_id):
         for row in self.passive_sessions:
@@ -681,6 +1115,52 @@ class FakeServices(Services):
                 row.update(status="stopped", trainer="Stopped", watchdog="Stopped")
                 return "stopped"
         return None
+
+    def command_passive(self, session_id, command):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        if command == "resume" and row["status"] in ("stopped", "failed"):
+            if any(r["status"] in ("queued", "running", "paused") for r in self.passive_sessions):
+                raise RuntimeError("A passive training session is already running. Stop it before resuming another.")
+            row.update(status="queued", trainer="Running", watchdog="Running", error="", restarts=0)  # the real watchdog starts the trainer on its first check
+            self.passive_commands = [*getattr(self, "passive_commands", []), (session_id, "requeue")]
+            return "queued"
+        if row["status"] not in ("queued", "running", "paused"):
+            raise RuntimeError(f"Passive session {session_id} is {row['status']}, so it cannot {command}.")
+        row["status"] = "paused" if command == "pause" else "running"  # the real trainer takes the command at its next check
+        self.passive_commands = [*getattr(self, "passive_commands", []), (session_id, command)]
+        return row["status"]
+
+    def resume_passive_at_start(self):
+        pass  # a fake has no watchdog to bring back
+
+    def keep_passive_going(self, session_id=None):
+        active = [r for r in self.passive_sessions if r["status"] in ("queued", "running", "paused")]
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None) if session_id else (active[0] if active else None)
+        if row is None:
+            return None
+        if row not in active:
+            raise RuntimeError(f"Passive session {row['id']} is {row['status']}, so there is nothing to keep going.")
+        if row.get("watchdog") != "Running":
+            row.update(watchdog="Running", trainer="Running")  # the real watchdog starts the trainer on its first check
+            self.passive_kept = [*getattr(self, "passive_kept", []), row["id"]]
+        return row["status"]
+
+    def save_passive(self, session_id):
+        row = next((r for r in self.passive_sessions if r["id"] == session_id), None)
+        if row is None:
+            return None
+        if not row.get("checkpoints"):
+            raise RuntimeError(f"Passive session {session_id} has no checkpoint yet, so there is nothing to save.")
+        if row.get("version"):
+            return {"version": row["version"], "created": False}
+        v = Version(len(self._versions) + 1, f"version {len(self._versions) + 1}", f"Passive training {session_id}", spec={},
+                    status="trained", best_checkpoint=f"/work/runs/{session_id}/best.npz")
+        self._versions.append(v)
+        row["version"] = v.number
+        self.emit("versions", None)
+        return {"version": v.number, "created": True}
 
     def remove_passive_signin(self):
         self.passive_signin = False
@@ -696,6 +1176,8 @@ class FakeServices(Services):
     def resume(self):
         self._queue.paused = False
         self.emit("queue", self._queue)
+        if self._started:
+            self.start_queue()  # the worker stopped on the pause: carry on
 
     def checkpoint_now(self):
         self.emit("queue", self._queue)
@@ -716,6 +1198,24 @@ class FakeServices(Services):
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
+
+    def cached_step_rate(self, spec, rows):
+        return self.measure_step_rate(spec, rows, 256)
+
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+        if not any(v.number == number for v in self.versions()):
+            raise ValueError(f"No version {number}.")
+        label = {"same": f"Version {number} continued from step 100", "new_data": f"Version {number} continued from step 100 on new data",
+                 "grow": f"Version {number + 1} grown from version {number} (step 100)"}[kind]
+        made = self.__dict__.setdefault("continued", [])
+        job = Job(id=f"c{len(made) + 1}", kind="pretrain", label=label, params={"continue_from": {"kind": kind, "step": 100, "add": steps}})
+        made.append(job)
+        self.enqueue(job)
+        return {"job_id": job.id, "label": label, "version": number, "kind": kind, "from_step": 100}
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        return {"seconds_per_step": .25, "tokens_per_second": rows * 256 / .25, "device": "cpu", "device_name": "PyTorch / CPU", "note": "",
+                "rows": rows, "context": 256}
 
     def set_plan(self, plan):
         self._queue.plan = dict(plan)
@@ -753,8 +1253,10 @@ class FakeServices(Services):
         out.rows = [dict(r) for r in rows if needle in f"{r['a']} {r['b']}".casefold()]
         return out
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         rows, start = self.data(kind, query).rows, cursor or 0
+        if review_only:
+            rows = [row for row in rows if row.get("draft") and row["status"] == "Review"]
         return rows[start:start + limit], start + limit if start + limit < len(rows) else None
 
     def _add_row(self, kind, a, b, status="Good", dataset="Your data", draft=False):
@@ -772,7 +1274,30 @@ class FakeServices(Services):
         return added
 
     def import_data(self, kind, paths):
-        return [f"{Path(p).name}: 0 added (no workspace)" for p in paths]
+        from studio_core import normalize, parse_file
+        from studio_data_kinds import classify, rule_of
+        report = []
+        for source in paths:
+            path = Path(source)
+            try:
+                added = duplicate = invalid = 0
+                for item in parse_file(path):
+                    row = normalize(item)
+                    if row is None or classify(row) != kind:
+                        invalid += 1
+                        continue
+                    a, b = (path.stem, row["text"]) if kind == "text" else \
+                        (row["user"], rule_of(row)) if kind == "problems" else (row["user"], row["assistant"])
+                    status = "In use" if kind == "text" else "Ready" if kind == "problems" else "Good"
+                    if self._add_row(kind, a, b, status, dataset=path.stem):
+                        added += 1
+                    else:
+                        duplicate += 1
+                report.append(f"{path.name}: {added} added, {duplicate} duplicates, {invalid} invalid")
+            except (OSError, ValueError) as exc:
+                report.append(f"{path.name}: {plain_error(exc)}")
+        self.emit("data", {"kind": kind})
+        return report
 
     def collection(self, kind="text"):
         return getattr(self, "_collection", []) if kind == "text" else getattr(self, "_collections", {}).get(kind, [])
@@ -859,13 +1384,17 @@ class FakeServices(Services):
                          {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
 
     def benchmark(self):
+        import studio_bench
+
         def result(n, bpc, accuracy, rate):
-            return {"suite": "fake", "version": n, "bpc": bpc, "problems": {"passed": round(30 * rate), "total": 30, "rate": rate},
-                    "few_shot": {"items": 40, "chance": .3, "accuracy": accuracy, "rows": []}}
-        return {"suite": "fake", "sizes": {"docs": 24, "choice": 40, "problems": 30}, "dropped": {},
-                "rows": [{"number": 1, "name": "Version 1", "lineage": "a", "tokens": 200_000, "result": result(1, 2.6, .30, .1)},
-                         {"number": 2, "name": "Version 2", "lineage": "a", "tokens": 800_000, "result": result(2, 2.2, .35, .2)},
-                         {"number": 3, "name": "Version 3", "lineage": "b", "tokens": 500_000, "result": None}]}
+            return {"suite": "fake", "version": n, "bpc": bpc, "bpc_band": [bpc - .05, bpc + .05], "dropped": {"docs": 0, "choice": 2, "problems": 0},
+                    "decontam": "checked", "problems": {"passed": round(30 * rate), "total": 30, "rate": rate},
+                    "few_shot": {"items": 40, "chance": .3, "accuracy": accuracy, "band": [accuracy - .14, accuracy + .14], "rows": []}}
+        rows = [{"number": 1, "name": "Version 1", "lineage": "a", "continues": None, "tokens": 200_000, "stale": False, "result": result(1, 2.6, .30, .1)},
+                {"number": 2, "name": "Version 2", "lineage": "a", "continues": 1, "tokens": 800_000, "stale": False, "result": result(2, 2.2, .35, .2)},
+                {"number": 3, "name": "Version 3", "lineage": "b", "continues": None, "tokens": 500_000, "stale": False, "result": None}]
+        return {"suite": "fake", "sizes": {"docs": 24, "choice": 40, "problems": 30}, "dropped": {}, "sources": [], "rows": rows,
+                "lineages": studio_bench.trend(rows)}
 
     def run_benchmark(self, number):
         return next(r["result"] for r in self.benchmark()["rows"] if r["number"] == number) or {}
@@ -875,6 +1404,31 @@ class FakeServices(Services):
 
     def post_rows(self, kind):
         return []
+
+    def post_loops(self):
+        return list(getattr(self, "_loops", []))
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None):
+        loops = self.__dict__.setdefault("_loops", [])
+        v = next((x for x in self._versions if x.number == version), None) if version else (self._versions[-1] if self._versions else None)
+        if v is None or not v.best_checkpoint:
+            raise NoCheckpoint(getattr(v, "number", None))
+        loop_id = resume or uuid.uuid4().hex[:8]
+        if any(j.kind == "rlhf_loop" and j.params.get("loop_id") == loop_id for j in [self._queue.job, *self._queue.up_next] if j):
+            raise ValueError("This loop is already queued or running.")
+        if not resume:
+            loops.insert(0, {"id": loop_id, "version": v.number, "status": "running", "stop_reason": "", "config": dict(config or {}),
+                             "anchor": v.best_checkpoint, "current": v.best_checkpoint, "kept": 0, "failed_streak": 0, "audit_flagged": 0,
+                             "elapsed_s": 0., "created": "", "updated": "", "phase": "", "note": "", "anchor_eval": None,
+                             "current_eval": None, "rounds": [], "round": 1})
+        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds",
+                  params={"version": v.number, "checkpoint": v.best_checkpoint, "config": dict(config or {}), "loop_id": loop_id,
+                          "judge_model": judge_model})
+        self.enqueue(job)
+        return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def adopt_loop(self, loop_id):
+        return {"round": 5, "ok": False, "checks": [], "verdict": "Nothing to adopt: the fake services run no loops.", "checkpoint": ""}
 
     # inspect stubs: small synthetic arrays, 2 blocks x 4 heads, 9 pieces, vocab 12 ---------------------------------
     def inspect_forward(self, version, text, hooks=True):
@@ -891,6 +1445,33 @@ class FakeServices(Services):
                           f"block{b}.attn.pattern": pattern / pattern.sum(-1, keepdims=True)})
         ids = np.arange(T)[None] % V
         return {"ids": ids, "tokens": [[f"t{i}" for i in ids[0]]], "logits": rng.normal(size=(1, T, V)), "hooks": hooks}
+
+    def inspect_logit_lens(self, version, text, top_k=5):
+        rng, T, V = np.random.default_rng(1), 9, 12
+        k = max(1, min(int(top_k), V))
+        rows = []
+        for name in ("embed", "block0.resid.post", "block1.resid.post"):
+            raw = np.exp(rng.normal(size=(1, T, V)))
+            probabilities = raw / raw.sum(-1, keepdims=True)
+            top = np.argsort(probabilities, axis=-1)[..., -k:][..., ::-1]
+            rows.append({"hook": name, "probabilities": probabilities, "top_ids": top,
+                         "top_probabilities": np.take_along_axis(probabilities, top, axis=-1)})
+        return rows
+
+    def inspect_ablate(self, version, text, targets=None, mode="zero", heads=None):
+        if mode not in ("zero", "mean"):
+            raise ValueError("Ablation must be zero or mean.")
+        selected = [(b, h) for b in range(2) for h in range(4)] if heads is None else [tuple(h) for h in heads]
+        if any(not (0 <= b < 2 and 0 <= h < 4) for b, h in selected):
+            raise ValueError("Selected block/head has no attention output hook.")
+        stats = self.inspect_head_stats(self.inspect_forward(version, text)["hooks"]["block0.attn.pattern"])
+        rows = [{"block": b, "head": h, "loss": 2.0 + .1 * (4 * b + h), "delta": .1 * (4 * b + h),
+                 **{key: float(value[h]) for key, value in stats.items()}} for b, h in selected]
+        return {"baseline": 2.0, "mode": mode, "heads": rows}
+
+    def inspect_head_stats(self, pattern):
+        import studio_inspect
+        return studio_inspect.head_stats(pattern)
 
     def inspect_trace(self, version, text, pos=-1):
         names = ["embedding", "block 1 mixer", "block 1 channel", "output"]
@@ -929,11 +1510,11 @@ class FakeServices(Services):
 import json  # noqa: E402
 import math  # noqa: E402
 import uuid  # noqa: E402
-from studio_ia import threads  # noqa: E402
+from studio_ia.snapshots import start_thread  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-VERSION_JOBS = ("pretrain", "import_pretrained")  # queue jobs that carry a version through queued, training and trained
+VERSION_JOBS = ("pretrain", "import_pretrained", "pretrain_distributed")  # queue jobs that carry a version through queued, training and trained
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
 PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
@@ -990,12 +1571,31 @@ def _run_docs(run, limit=RUN_DOC_CHARS):
     return docs
 
 
+LANDSCAPE_LIVE_GRID = 11  # a live frame is at most this many cells a side: 121 evaluations of the held-back batch
+LANDSCAPE_LIVE_PATH = 6  # and draws at most this many of the newest snapshots as the path
+LANDSCAPE_LIVE_THROTTLE = 3.0  # it sleeps 3 s per second of work, so a live frame takes about a quarter of one core
+
+
 class _Cold(BaseException):
     """Raised inside ready(): the read asked for is not cached. Not an Exception, so no page's own handler swallows it."""
 
 
 class _Slow(_Cold):
     """A _Cold that is long however small the store is (scoring a checkpoint, parsing the held-back text): ready() says no."""
+
+
+_PASSIVE_SAVE = threading.Lock()
+
+
+def _passive_best(session):
+    """The checkpoint entry ({n, round, path, error, ...}) a passive session counts as its best, or None before its first checkpoint."""
+    state = session["state"] or {}
+    return next((c for c in state.get("checkpoints", []) if c["n"] == state.get("best")), None)
+
+
+def _passive_saved(rows):
+    """{checkpoint path: version number} for the versions made from a passive session's checkpoint."""
+    return {r["passive"]["checkpoint"]: r["number"] for r in rows if isinstance(r.get("passive"), dict) and r["passive"].get("checkpoint")}
 
 
 class _Pending(Exception):
@@ -1005,21 +1605,27 @@ class _Pending(Exception):
 class WorkspaceServices(Services):
     """Every Services method over the real modules. Queue events fire on the runner thread and hop to Tk via emit."""
 
+    auto_bench = True  # a version that gets weights is scored on the frozen suite by itself (_bench_later); a test may turn it off
+
     def __init__(self, workspace):
         import studio_jobs
         import studio_queue
 
         super().__init__()
         self._reads(workspace)
+        import studio_distributed
+        studio_distributed.load(self.root)  # the Training tab's runs from before a restart (the queue's restart handling reads them)
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
                                           prepare=lambda job: studio_jobs.prepare(job, self),
                                           ledger=self.ledger, make_room=self.evict_oldest_chat,
                                           on_start=self.chat_job_started, on_end=self.chat_job_ended)
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
+        for job in self.runner.ended_on_load:  # a distributed run the restart could not resume: its version is not training any more
+            self._record_job("job", {"job": job.id, "status": job.status})
         workspace.progress = self.note
         # an older records.sqlite is brought up to date now, with progress shown, not under the first page that reads it
-        self._schema = threads.start(workspace.ensure_schema) if workspace.schema_pending() else None
+        self._schema = start_thread(workspace.ensure_schema) if workspace.schema_pending() else None
 
     def _reads(self, workspace):
         import studio_versions
@@ -1037,6 +1643,7 @@ class WorkspaceServices(Services):
         self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
         self._to_score, self._scorer, self._unscorable = {}, False, set()  # held-back scores the Tk thread asked for (_held_scores)
         self._score_lock = threading.Lock()
+        self._bench_lock, self._bench_wait, self._bench_busy = threading.Lock(), [], False  # versions waiting for the frozen suite (_bench_later)
 
     @classmethod
     def reader(cls, root):
@@ -1053,28 +1660,26 @@ class WorkspaceServices(Services):
         if getattr(self, "_viz", None) is not None:
             self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
+        import studio_distributed
+        studio_distributed.unload(self.root)
         if self._schema is not None:  # its connection holds records.sqlite open, and Windows cannot delete an open file
             self._schema.join()
+        bench = getattr(self, "_bench_thread", None)
+        if bench is not None:  # it writes under data/bench, which a caller removing the workspace must not race
+            bench.join(60)
 
     # 3D viewer --------------------------------------------------------------
     _viz = None
 
     def viewer_status(self):
-        import sys
         script = Path(__file__).resolve().parent.parent / "studio_brain3d.py"
-        frozen = getattr(sys, "frozen", False)  # bundled: no script beside the executable
         viz = self._viz
-        return {"available": frozen or script.exists(), "running": bool(viz and viz.running), "connected": bool(viz and viz.connected)}
+        return {"available": script.exists(), "running": bool(viz and viz.running), "connected": bool(viz and viz.connected)}
 
     def viewer_start(self, scene=None):
-        import sys
-
-        from studio_core import module_command
         from studio_vizbridge import VizBridge
         if self._viz is None:
-            frozen = getattr(sys, "frozen", False)
-            self._viz = VizBridge(Path(__file__).resolve().parent.parent / "studio_brain3d.py",
-                                  command=module_command("studio_brain3d") if frozen else None)
+            self._viz = VizBridge(Path(__file__).resolve().parent.parent / "studio_brain3d.py")
         if not self._viz.running:
             self._viz.start(log_path=self.root / "logs" / "viewer.log")
         version = self.current_version()
@@ -1094,19 +1699,31 @@ class WorkspaceServices(Services):
     def viewer_poll(self):
         return self._viz.poll() if self._viz is not None else []
 
-    def viewer_snapshots(self):
-        version = self.current_version()
+    def viewer_snapshots(self, number=None):
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
         if version is None:
             return []
         return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
 
-    def viewer_probe_step(self, text):
+    def viewer_token_text(self, number, ids):
+        import json
+
+        from studio_model import Tokenizer
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
+        for run in (version.runs if version is not None else []):
+            path = Path(self._abs(run)) / "tokenizer.json"
+            if path.is_file():
+                tokenizer = Tokenizer.restore(json.loads(path.read_text(encoding="utf-8")))
+                return [tokenizer.decode([int(i)]) for i in ids]
+        return None
+
+    def viewer_probe_step(self, text, number=None):
         import numpy as np
 
         from studio_core import uid
         from studio_model import Tokenizer, load_checkpoint
         from studio_snapshot import one_step, save
-        version = self.current_version()
+        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
         source = version.best_checkpoint if version is not None else None
         if not source or not Path(source).exists():
             return None
@@ -1314,6 +1931,7 @@ class WorkspaceServices(Services):
             card = {**(self.store.get(row["number"]).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                     "bpc_method": studio_eval.SCORE_METHOD}
             self.store.set_scorecard(row["number"], card)
+            self._note_devices(row["number"], self._abs(row["best_checkpoint"]), True)
             row["scorecard"] = card
 
     def checkpoint_step(self, version):
@@ -1337,6 +1955,136 @@ class WorkspaceServices(Services):
         self.emit("versions", v)
         return v
 
+    # sharing versions between machines -------------------------------------------
+    def version_store(self):
+        """The store `studioConfig.store.folder` names in the workspace, else the one the TRAINER_STORE_* variables describe."""
+        import studio_publish
+        store = studio_publish.configured_store(self.workspace.state["studioConfig"])
+        if store is None:
+            raise RuntimeError(studio_publish.NO_STORE)
+        return store
+
+    def _through(self, store, work):
+        """work(), with whatever the store throws as a StoreError that says what to do."""
+        import studio_publish
+        try:
+            return work()
+        except Exception as error:  # noqa: BLE001 - disk, network and the provider's own errors all end as a sentence
+            raise studio_publish.store_error(error, store) from error
+
+    def publish_version(self, number):
+        store = self.version_store()
+        try:
+            row = self.store.get(number)
+        except KeyError:
+            raise ValueError(f"No version {number}.") from None
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard", "score_device")}
+        key = self._through(store, lambda: store.publish(version, self._abs(row.get("best_checkpoint"))))
+        self.store.add_published(number, key)
+        return {"key": key, "number": number, "origin": key.split("/")[0]}
+
+    def published_versions(self):
+        import studio_publish
+        store = self.version_store()
+        entries = self._through(store, store.list)
+        own = studio_publish.own_origin(store)
+        here = {key: row["number"] for row in self._rows() for key in row.get("published") or ()}
+        return [{**{k: entry.get(k) for k in ("key", "number", "name", "change", "origin", "device", "train_device", "score_device", "step", "published_at", "size")},
+                 "scorecard": entry.get("scorecard") or {}, "mine": entry.get("origin") == own,
+                 "local": entry["key"] in here, "local_number": here.get(entry["key"])} for entry in reversed(entries)]
+
+    def share_version(self, number):
+        import studio_publish
+        try:
+            row = self.store.get(number)
+        except KeyError:
+            raise ValueError(f"No version {number}.") from None
+        version = {k: row.get(k) for k in ("number", "name", "change", "parent", "spec", "scorecard", "score_device")}
+        return self._through(None, lambda: studio_publish.shared_copy(
+            version, self._abs(row.get("best_checkpoint")), self.root / "data" / "shared", studio_publish.own_origin()))
+
+    def pull_version(self, number, origin=None):
+        found, said = self._from_peer(number, origin) if origin else (None, "")
+        if found is not None:
+            return found
+        store = self.version_store()
+        from studio_publish import StoreError
+        entry = self._published(self._through(store, store.list), number, origin)
+        key = entry["key"]
+        if not entry.get("spec"):
+            raise StoreError(f"The published version {key} carries no design, so it cannot be added here. Publish it again from {entry.get('origin')}.")
+        row = self._held(key)
+        if self._here(row):
+            self.note(f"Version {number} from {entry.get('origin')} is already here, so nothing was downloaded.")
+            return self._version(row)
+        if not origin:  # the store has said who published it
+            found, said = self._from_peer(number, entry.get("origin"))
+            if found is not None:
+                return found
+        path = self._through(store, lambda: store.pull(key, self.root / "data" / "pulled"))
+        v = self._land(entry, path, row, store)
+        self.note(said or f"Downloaded version {number} from the version store.")
+        return v
+
+    def _held(self, key):
+        """The row of the version here that came from, or was published as, store key `key`."""
+        return next((r for r in self._rows() if key in (r.get("published") or ())), None)
+
+    def _here(self, row):
+        return row is not None and bool(row.get("best_checkpoint")) and Path(self._abs(row["best_checkpoint"])).is_file()
+
+    def _land(self, entry, path, row, store):
+        """The pulled file `path` as a version here: under `row` when this workspace had the version and lost the file, else as a new one."""
+        if row is not None:
+            self.store.set_best_checkpoint(row["number"], path)
+            row = self.store.get(row["number"])
+        else:
+            name = f"{entry.get('name') or 'Version ' + str(entry.get('number'))} from {entry.get('origin')}"
+            change = f"pulled from {entry.get('origin')}: {entry.get('change') or 'no description'}"
+            row = self._through(store, lambda: self.store.add_pulled(entry.get("spec"), name, change, path, entry["key"], entry.get("train_device") or entry.get("device")))
+        v = self._version(row)
+        self.emit("versions", v)
+        return v
+
+    def _from_peer(self, number, origin):
+        """(version, "") when version `number` was copied straight from the node that `origin` names, which is asked only if the
+        workspace lists it. (None, sentence for the note) when the store has to do it: that node did not answer or could not send it."""
+        import studio_cluster
+        import studio_peer_pull as peer
+        from studio_peer import PeerError
+        try:
+            addresses = studio_cluster.configured_nodes(self.workspace.state)
+        except ValueError:
+            return None, ""  # the cluster page says what is wrong with the list
+        client, off = peer.find_owner(addresses, origin, self.runner.cluster.client_for)
+        if client is None:
+            return None, f"{origin} did not answer, so version {number} came from the version store." if off else ""
+        try:
+            meta, path = peer.fetch(client, number, self.root / "data" / "pulled", lambda meta: self._here(self._held(meta["key"])))
+        except (PeerError, ValueError) as error:
+            why = (error.detail or "It did not answer.") if isinstance(error, PeerError) else "What it sent did not check out."
+            return None, f"{origin} could not send version {number}. {why.rstrip('.')}. It came from the version store instead."
+        row = self._held(meta["key"])
+        if path is None:
+            self.note(f"Version {number} from {origin} is already here, so nothing was downloaded.")
+            return self._version(row), ""
+        v = self._land(meta, path, row, None)
+        self.note(f"Copied version {number} straight from {origin}.")
+        return v, ""
+
+    @staticmethod
+    def _published(entries, number, origin):
+        """The published entry for version `number` (the newest, when its machine published several), or a sentence on why none."""
+        from studio_publish import StoreError
+        found = [e for e in entries if e.get("number") == number and (origin is None or e.get("origin") == origin)]
+        if not found:
+            by = f" by {origin}" if origin else ""
+            raise StoreError(f"Version {number} is not published{by}. Publish it from the machine that trained it, then pull it again.")
+        origins = sorted({e.get("origin") for e in found})
+        if len(origins) > 1:
+            raise StoreError(f"Version {number} is published by {', '.join(origins)}. Say which machine to pull it from.")
+        return max(found, key=lambda e: e.get("published_at") or "")
+
     # queue ------------------------------------------------------------------
     def queue(self):
         return self.runner.state()
@@ -1351,10 +2099,50 @@ class WorkspaceServices(Services):
             self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
 
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+        from studio_ia import continue_run as cont
+        from studio_ia import pretraining_plan as plan
+        from studio_ia import sizing
+        from studio_spec import validate_spec
+        try:
+            row = self.store.get(number)
+        except KeyError:
+            raise ValueError(f"No version {number}.") from None
+        if not row["runs"]:
+            raise cont.ContinueError(f"Version {number} has no training run to continue yet.")
+        run = cont.run_of(self._abs(row["runs"][-1]))
+        best = self._abs(row.get("best_checkpoint"))
+        own = False
+        if kind != "same":
+            own = plan.user_text(plan.sets_of(self.data("text")), list(dataset_ids))
+        if kind == "same":
+            label, params = cont.same_job(number, run, steps, best)
+        elif kind == "new_data":
+            label, params = cont.new_data_job(number, run, steps, list(dataset_ids), own, best)
+        elif kind == "grow":
+            design = validate_spec(spec) if spec else sizing.resized_spec(validate_spec(row["spec"]), width, layers)
+            if design is None:
+                raise cont.ContinueError("This design is built block by block, so it cannot be resized automatically: save the bigger design in the Network designer.")
+            warm = self.root / "runs" / f"warm_{uuid.uuid4().hex[:8]}" / "warm_start.npz"
+            cont.write_warm_start(run, design, warm)  # first: a design the weights cannot go into saves no version
+            grown = self.save_version(design, f"grown from version {number} at step {run['step']:,}")
+            label, params = cont.grow_job(number, grown, run, warm, steps, list(dataset_ids), rows, hold, own, best)
+        else:
+            raise cont.ContinueError(f"Unknown way to continue: {kind}.")
+        job = Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=label, params=params, created_at=time.time())
+        self.enqueue(job)
+        return {"job_id": job.id, "label": label, "version": params["version"], "kind": kind, "from_step": run["step"]}
+
     def start_queue(self):
         """Start the runner when jobs are waiting from an earlier session; otherwise the first enqueue starts it."""
         if self.runner.thread is None and any(j.status == "waiting" for j in self.runner.jobs):
             self.runner.start()
+
+    def resume_queue_at_start(self):
+        """Carry on the queue a restart cut short: jobs waiting from the last session run again with no Start pressed (a job that
+        was running continues from its own checkpoint, studio_jobs.continue_here). A pause or stop the person made is saved in
+        queue.json and still holds: the runner starts but runs nothing while paused."""
+        self.start_queue()
 
     @timed("services.refresh_downloads")
     def refresh_downloads(self):
@@ -1384,7 +2172,7 @@ class WorkspaceServices(Services):
             raise NoCheckpoint(v.number if v else None)
         return studio_export.export(v.best_checkpoint, kind, path)
 
-    def import_pretrained(self, name="gpt2"):
+    def import_pretrained(self, name="gpt2", lora=None):
         import studio_import
         if name not in studio_import.MODELS:
             raise ValueError(f"Unknown pretrained model {name!r}.")
@@ -1393,7 +2181,7 @@ class WorkspaceServices(Services):
             if any(j.kind == "import_pretrained" and j.params.get("model") == name and j.status in ("waiting", "held", "running")
                    for j in self.runner.jobs):
                 raise ValueError(f"{title} is already being imported. Wait for it in the queue before starting another.")
-        v = self.save_version(studio_import.gpt2_spec(), f"Started from {title}")
+        v = self.save_version(studio_import.gpt2_spec(lora=lora), f"Started from {title}")
         out = studio_import.new_output_dir(self.workspace.run_dir, name)
         self.enqueue(Job(uuid.uuid4().hex[:8], "import_pretrained", f"Start from {title}",
                          "downloads the model once and turns it into a version that continues text and that you can fine-tune",
@@ -1402,21 +2190,190 @@ class WorkspaceServices(Services):
 
     def passive(self):
         import studio_passive_watch as watch
-        from studio_passive import ACTIVE, PassiveStore, plan_summary
+        from studio_passive import ACTIVE, PassiveStore
         signin = watch.installed(self.root)
         if not (self.root / "data" / "passive.sqlite").exists():  # never used here: opening the store would create it
             return {"sessions": [], "signin": signin}
-        store, rows = PassiveStore(self.root), []
-        for s in store.list()[:10]:
-            facts = watch.status(store, s) if s["status"] in ACTIVE else {"trainer": "Stopped", "watchdog": "Stopped", "heard": None, "restarts": len(s["restarts"])}
-            rows.append({"id": s["id"], "status": s["status"], "created": s["created_at"], "stop": plan_summary(s["plan"])["stop"],
-                         "error": s["error"], **facts})
+        store = PassiveStore(self.root)
+        saved = _passive_saved(self._rows()) if hasattr(self, "_rows") else {}
+        rows = [passive_row(store, s, saved) for s in store.list()[:10]]
+        autosave = getattr(self, "autosave_passive", None)  # not on the bare namespaces some tests pass as `self`
+        if autosave:
+            autosave([s for s in store.list()[:10] if s["status"] not in ACTIVE])
         return {"sessions": rows, "signin": signin}
+
+    def passive_lessons(self, session_id):
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        if store.get(session_id) is None:
+            return None
+        return [passive_lesson(row) for row in store.lessons(session_id)]
+
+    def set_passive_lesson(self, session_id, lesson_id, status):
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        if store.get(session_id) is None:
+            return None
+        row = store.set_lesson_status(session_id, lesson_id, status)
+        return row and passive_lesson(row)
+
+    def passive_detail(self, session_id, limit=50, before=None):
+        from studio_passive import PassiveStore, plan_summary, progress_summary
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        s = store.get(session_id)
+        if s is None:
+            return None
+        events, total, first = store.journal_page(session_id, limit, before)
+        return {"session": passive_row(store, s, _passive_saved(self._rows()) if hasattr(self, "_rows") else {}), "plan": plan_summary(s["plan"]), "progress": progress_summary(s["state"], s["plan"]),
+                "journal": {"events": events, "total": total, "first": first}}
+
+    def start_passive(self, plan, version=None, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""
+        import copy
+        import studio_passive_watch as watch
+        from studio_ia import pretraining_plan
+        from studio_passive import AlreadyActive, PassiveStore
+        from studio_spec import config_from_spec
+        store = PassiveStore(self.root)
+        if store.active() is not None:
+            raise AlreadyActive("A passive training session is already running. Stop it before starting another.")
+        versions = self.versions()
+        chosen = next((v for v in versions if v.number == version), None) if version is not None else (versions[-1] if versions else None)
+        if chosen is None:
+            raise ValueError(f"There is no version {version}." if version is not None else "Design a version first: passive training trains the design you pick.")
+        plan = copy.deepcopy(plan or {})
+        data = plan.setdefault("data", {})
+        if not data.get("sources"):
+            data["sources"] = [s["id"] for s in pretraining_plan.sets_of(self.data("text")) if not pretraining_plan.held_out(s["id"])]
+            if not data["sources"]:
+                raise ValueError("There is no text to train on yet. Add some under Your data.")
+        checkpoint = self._abs(chosen.best_checkpoint)
+        plan["config"] = config_from_spec(chosen.spec)
+        plan["base_checkpoint"] = checkpoint if checkpoint and Path(checkpoint).is_file() else None
+        session_id = store.create(plan)
+        try:
+            watch.start(self.root, session_id, **hooks)
+        except Exception as exc:  # the record exists but nothing will run it: say so rather than leave it queued
+            message = f"Could not start the watchdog: {exc}"
+            store.update(session_id, status="failed", error=message)
+            raise RuntimeError(message) from exc
+        return session_id
 
     def stop_passive(self, session_id):
         import studio_passive_watch as watch
         from studio_passive import PassiveStore
         return watch.stop(PassiveStore(self.root), session_id)
+
+    def command_passive(self, session_id, command, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours, for a resumed session's watchdog."""
+        import studio_passive_watch as watch
+        from studio_passive import ACTIVE, PassiveStore
+        if command not in ("pause", "resume"):
+            raise ValueError("Command must be pause or resume.")
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        session = store.get(session_id)
+        if session is None:
+            return None
+        if command == "resume" and session["status"] in ("stopped", "failed"):
+            store.requeue(session_id)
+            try:
+                watch.start(self.root, session_id, **hooks)
+            except Exception as exc:
+                message = f"Could not start the watchdog: {exc}"
+                store.update(session_id, status="failed", error=message)
+                raise RuntimeError(message) from exc
+            return store.get(session_id)["status"]
+        if session["status"] not in ACTIVE:
+            raise RuntimeError(f"Passive session {session_id} is {session['status']}, so it cannot {command}.")
+        if not store.command(session_id, command):
+            raise RuntimeError(f"Passive session {session_id} is being stopped, so it cannot {command}.")
+        return session["status"]
+
+    def keep_passive_going(self, session_id=None, **hooks):
+        """`hooks` replace studio_passive_watch.start's spawn, install, alive and ours (tests never start a real watchdog)."""
+        import studio_passive_watch as watch
+        from studio_passive import ACTIVE, PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        store = PassiveStore(self.root)
+        session = store.get(session_id) if session_id else store.active()
+        if session is None:
+            return None
+        if session["status"] not in ACTIVE:
+            raise RuntimeError(f"Passive session {session['id']} is {session['status']}, so there is nothing to keep going.")
+        watch.start(self.root, session["id"], **hooks)
+        return store.get(session["id"])["status"]
+
+    def resume_passive_at_start(self, **hooks):
+        """Called once when the API starts: an active passive session left without a watchdog (it never started, it died, the
+        computer restarted without the sign-in entry) gets one again. Never stops the server from starting."""
+        try:
+            self.keep_passive_going(**hooks)
+        except Exception as exc:
+            print(f"passive training: could not start the watchdog again: {exc}", flush=True)
+
+    def save_passive(self, session_id):
+        import studio_eval
+        import studio_model
+        from studio_passive import PassiveStore
+        if not (self.root / "data" / "passive.sqlite").exists():
+            return None
+        session = PassiveStore(self.root).get(session_id)
+        if session is None:
+            return None
+        best = _passive_best(session)
+        if best is None:
+            raise RuntimeError(f"Passive session {session_id} has no checkpoint yet, so there is nothing to save.")
+        path = Path(best["path"])
+        if not path.is_file():
+            raise RuntimeError(f"The best checkpoint of passive session {session_id} is no longer on disk ({path}).")
+        with _PASSIVE_SAVE:  # two saves of one checkpoint (the button and the automatic one) make one version
+            have = _passive_saved(self._rows()).get(str(path))
+            if have:
+                return {"version": have, "created": False}
+            scores = self._held_scores(str(path))  # before the row exists: a scoring that fails leaves no unscored version behind
+            rounds = len(session["state"]["checkpoints"])
+            config = studio_model.load_checkpoint(path, weights_only=True)["config"]
+            spec = studio_model.effective_spec(studio_model.validate_config(config))
+            change = f"Passive training {session_id}: the best of {rounds} {'round' if rounds == 1 else 'rounds'} (round {best['round']}), test error {best['error']:.4g}"
+            row = self.store.add_trained(spec, change, path, path.parent, {"session": session_id, "rounds": rounds, "round": best["round"],
+                                                                         "error": best["error"], "checkpoint": str(path)})
+            number = row["number"]
+            if scores is not None:
+                card = {"bpc": studio_eval.corpus_bpc(scores), "bpc_method": studio_eval.SCORE_METHOD}
+                self.store.set_scorecard(number, card)
+            self._note_devices(number, path, scores is not None)
+        self.emit("versions", None)
+        return {"version": number, "created": True}
+
+    def autosave_passive(self, ended):
+        """Sessions that ended with a checkpoint no version holds yet are saved on a worker thread, once each per run of the app (the
+        trainer is another process and cannot score). A failure is logged and left to the button."""
+        tried = self.__dict__.setdefault("_passive_tried", set())
+        saved = _passive_saved(self._rows())
+        todo = []
+        for session in ended:
+            best = _passive_best(session)
+            if best and str(best["path"]) not in saved and (session["id"], str(best["path"])) not in tried:
+                tried.add((session["id"], str(best["path"])))
+                todo.append(session["id"])
+        if todo:
+            start_thread(self._autosave_passive, todo)
+
+    def _autosave_passive(self, ids):
+        for session_id in ids:
+            try:
+                self.save_passive(session_id)
+            except Exception as exc:
+                _log.warning("passive session %s: could not save its best checkpoint as a version: %s", session_id, exc)
 
     def remove_passive_signin(self):
         import studio_passive_watch as watch
@@ -1442,7 +2399,7 @@ class WorkspaceServices(Services):
     def remove(self, job_id):
         with self.runner.lock:
             job = next((j for j in self.runner.jobs if j.id == job_id), None)
-            waiting = job is not None and job is not self.runner.running  # a running job is stopped and ends through _record_job
+            waiting = job is not None and job.status in ("waiting", "held")  # a running job is stopped and ends through _record_job; a failed one is only dismissed
         self.runner.remove(job_id)
         if waiting and job.kind == "import_pretrained" and job.params.get("version"):  # it never started: no event will say it ended
             self._drop_empty_import(job.params["version"], "stopped")
@@ -1569,7 +2526,8 @@ class WorkspaceServices(Services):
         v = self.current_version()
         if v is None or not v.spec:
             return {}
-        context = v.spec["dims"]["n_ctx"]
+        spec = studio_spec.validate_spec(v.spec)
+        context = spec["dims"]["n_ctx"]
 
         def make():
             import studio_data_kinds as dk
@@ -1579,7 +2537,7 @@ class WorkspaceServices(Services):
             # total size comes from stored character counts, so pieces are scaled up ("estimated") for larger text.
             sample, total = dk.text_sample(self.workspace, ids, PREVIEW_CHARS, exclude=set(self._heldout()))
             self.note("Building the word list")
-            module, cfg = studio_spec.module_of("tokenizer", v.spec["tokenizer"])
+            module, cfg = studio_spec.module_of("tokenizer", spec["tokenizer"])
             tok = module.fit(cfg, [{"text": d} for d in sample])
             self.note("Counting word pieces")
             encoded = [tok.encode(d) for d in sample]
@@ -1587,7 +2545,7 @@ class WorkspaceServices(Services):
             estimated = total > chars
             pieces = round(counted * total / max(1, chars)) if estimated else counted
             return {"pieces": pieces if sample else None, "estimated": estimated,
-                    "params": studio_estimate.estimate(v.spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
+                    "params": studio_estimate.estimate(spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         key = self._preview_key(v, dataset_ids, rows)
         store = self._previews()
@@ -1638,6 +2596,66 @@ class WorkspaceServices(Services):
         hit = self._previews().get(self._preview_key(v, dataset_ids, rows))
         return None if hit is None else {**hit, "tokens_per_second": self._speed(read_metrics)}
 
+    def cached_step_rate(self, spec, rows):
+        return self._step_rates().get(self._rate_key(spec, rows))
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        import studio_scaling
+        from studio_core import atomic_json
+        found = studio_scaling.measure_step_rate(spec, rows, vocab, stop=stop)
+        if found is None:
+            return None
+        found = {**found, "measured_at": time.time()}
+        store = self._step_rates()
+        with self._lock:
+            store[self._rate_key(spec, rows)] = found
+            while len(store) > PREVIEWS_KEPT:
+                store.pop(next(iter(store)))
+            atomic_json(self.root / "data" / "step_rates.json", store)
+        return found
+
+    def _step_rates(self):
+        """{design and rows -> measured step rate}, kept in data/step_rates.json: a rate belongs to this computer and its data folder."""
+        if getattr(self, "_step_rate_store", None) is None:
+            path = self.root / "data" / "step_rates.json"
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError):
+                loaded = {}
+            self._step_rate_store = loaded if isinstance(loaded, dict) else {}
+        return self._step_rate_store
+
+    @staticmethod
+    def _rate_key(spec, rows):
+        return json.dumps([spec, rows], sort_keys=True, default=str)
+
+    def loss_evidence(self, version):
+        from studio_core import read_json
+        from studio_model import read_metrics
+        try:
+            run = Path(self._abs(self.store.get(version.number)["runs"][-1]))
+        except (KeyError, IndexError, TypeError):
+            return None
+        try:
+            record = read_json(run / "run.json") if (run / "run.json").exists() else {}
+            config = read_json(run / "config.json")
+            context = read_json(run / "spec.json")["dims"]["n_ctx"]
+            rows = read_metrics(run / "metrics.jsonl")
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if record.get("initialized_from") or record.get("resumed_from"):
+            return None  # a run that began from other weights is not this design's curve from step 0
+        per_step = int(config.get("batch_size", 1)) * int(config.get("accumulation", 1)) * int(context)
+        points = [(r["step"] * per_step, r["val_loss"]) for r in rows if r.get("val_loss") is not None and r.get("step")]
+        return {"points": points, "run": str(run)} if points else None
+
+    def device_facts(self):
+        from studio_backend import gpu_status
+        try:
+            return gpu_status()
+        except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
+            return None
+
     def _preview_key(self, version, dataset_ids, rows):
         """Same chosen sets, design and stored data (records, held-back text) -> same preview."""
         return json.dumps([sorted(dataset_ids), rows, version.spec, self._stamp(), self._heldout_stamp()], sort_keys=True, default=str)
@@ -1683,6 +2701,8 @@ class WorkspaceServices(Services):
         if payload["status"] == "running":
             return self._to(number, "training")
         out = Path(job.params.get("output_dir") or "")
+        if job.kind == "pretrain_distributed":
+            return self._record_distributed(job, number, payload["status"], out)
         ckpt = next((p for p in (out / "best.npz", out / "last.npz") if p.exists()), None)
         if not ckpt and job.kind == "import_pretrained" and payload["status"] in ("failed", "stopped"):
             return self._drop_empty_import(number, payload["status"])
@@ -1695,16 +2715,81 @@ class WorkspaceServices(Services):
                 card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                         "bpc_method": studio_eval.SCORE_METHOD}
                 self.store.set_scorecard(number, card)
+            self._note_devices(number, ckpt, scores is not None)
         self._to(number, "trained" if ckpt and payload["status"] == "done" else "saved")
         self.emit("versions", None)
+        if ckpt and payload["status"] == "done":
+            self._bench_later(number)
+
+    def _record_distributed(self, job, number, status, out):
+        """A distributed run ends: only a run that finished all its rounds gives its coordinator's final weights (`last.npz` in the
+        run's folder) to the version it trained, scored like a local pretrain's, with a change note naming the run and its machines.
+        A run that finished under a successor coordinator after a failover (#361) gives the successor's final weights, fetched from it.
+        A stopped or failed run saves nothing, even past some rounds: the version goes back to saved."""
+        import studio_distributed
+        import studio_eval
+        from studio_core import read_json
+        record, ckpt = out / "run.json", out / "last.npz"
+        done = status == "done" and ckpt.exists() and record.exists() and read_json(record).get("status") == "completed"
+        if status == "done" and not done:
+            ckpt = self._successor_weights(job.id, out)
+            done = ckpt is not None
+        if done:
+            machines = [m.node for m in studio_distributed.run_of(job).machines if m.state != "unreachable"]
+            self.store.add_run(number, out)
+            self.store.set_best_checkpoint(number, ckpt)
+            scores = self._held_scores(self._abs(ckpt))
+            if scores is not None:
+                card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores), "bpc_method": studio_eval.SCORE_METHOD}
+                self.store.set_scorecard(number, card)
+            self._note_devices(number, ckpt, scores is not None)
+            self.store.set_change(number, f"{self.store.get(number)['change']} (trained in distributed run {job.id} on {', '.join(machines)})")
+            studio_distributed.note_saved(job.id, number)
+        self._to(number, "trained" if done else "saved")
+        self.emit("versions", None)
+        if done:
+            self._bench_later(number)
+
+    def _successor_weights(self, run, out):
+        """The final weights of `run` from the coordinator the where-file names (studio_failover writes it after a failover, term 2 or
+        more), saved in the run's folder as last_term<N>.npz. None when there is no successor or it cannot send them (not finished,
+        stopped, unreachable): the run then saves nothing, as one that did not finish. Network: call it off the UI thread."""
+        import studio_diloco
+        from studio_core import read_json
+        import zipfile
+        from studio_peer import PeerClient, PeerError
+        try:
+            where = read_json(studio_diloco.where_file(self.root, run))
+            node, term, url = str(where["node"]), int(where["term"]), str(where["url"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if term < 2:
+            return None
+        try:
+            body = PeerClient(url).get_bytes(f"/collective/{run}/weights", {"term": term})
+            np.load(io.BytesIO(body), allow_pickle=False).close()  # an archive, before it is kept
+        except (PeerError, OSError, ValueError, zipfile.BadZipFile) as exc:
+            _log.warning("The final weights of run %s could not be fetched from %s (term %s): %s", run, node, term, exc)
+            return None
+        path = out / f"last_term{term}.npz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        part.write_bytes(body)
+        part.replace(path)
+        return path
+
+    def _note_devices(self, number, ckpt, scored=False):
+        """Record on the version the device kind that trained `ckpt` and, when the caller just scored it, the one that scored it."""
+        import studio_eval
+        from studio_model import checkpoint_device
+        self.store.set_devices(number, train=checkpoint_device(ckpt), score=studio_eval.SCORE_DEVICE if scored else None)
 
     def _drop_empty_import(self, number, how):
         """An import that ended without weights leaves a version that holds only a design. The newest can simply go; an older one
         cannot (numbers follow the order), so it says in its description that it has no weights."""
         if not self.store.remove_last(number):
-            self._to(number, "saved")
             reason = "was stopped" if how == "stopped" else "did not finish"
-            self.store.set_change(number, f"{self.store.get(number)['change']}, but the download {reason}, so this design has no weights")
+            self.store.leave_saved(number, f", but the download {reason}, so this design has no weights")
         self.emit("versions", None)
 
     def _json(self, name, default):
@@ -1733,7 +2818,10 @@ class WorkspaceServices(Services):
                 card["answers"] = True
             self.store.set_best_checkpoint(v.number, result["checkpoint"])
             self.store.set_scorecard(v.number, card)
+            self._note_devices(v.number, self._abs(result["checkpoint"]))
         self.emit("versions", None)
+        if result.get("ok"):
+            self._bench_later(v.number)  # the weights changed: score the new file
 
     def _human_pairs(self):
         from studio_rlhf import PreferenceStore
@@ -1806,6 +2894,46 @@ class WorkspaceServices(Services):
             self._note_overlap("problems", report)
         return out
 
+    def post_loops(self):
+        import studio_loop
+        return studio_loop.list_loops(self.workspace.run_dir)
+
+    def start_loop(self, version, config=None, resume=None, judge_model=None):
+        import studio_loop
+        from studio_core import uid
+        v = self._as_version(version) if version else self.current_version()
+        if v is None:
+            raise ValueError("There is no version yet. Build one first.")
+        if not v.best_checkpoint:
+            raise NoCheckpoint(v.number)
+        loop_id = resume or uid("loop")
+        folder = Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}"
+        if resume:
+            if studio_loop.load_state(folder) is None:
+                raise ValueError(f"There is no loop {resume} to carry on.")
+        else:
+            studio_loop.clean_config(config)  # a refused setting is told now, not when the job starts
+        with self.runner.lock:
+            busy = [j for j in self.runner.jobs if j.kind == "rlhf_loop" and j.status in ("waiting", "held", "running")
+                    and (j.params.get("loop_id") == loop_id or (not resume and j.params.get("version") == v.number))]
+        if busy:
+            raise ValueError("A loop is already queued or running for this version. Stop it first.")
+        params = {"version": v.number, "checkpoint": str(v.best_checkpoint), "config": dict(config or {}), "loop_id": loop_id,
+                  "output_dir": str(folder), "budget_token": uid("budget") if resume else None, "judge_model": judge_model}
+        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds", params=params)
+        self.enqueue(job)
+        return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def adopt_loop(self, loop_id):
+        import studio_loop
+        state = studio_loop.load_state(Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}")
+        if state is None:
+            raise ValueError(f"There is no loop {loop_id}.")
+        result = studio_loop.adoption(state, {kind: self.post_rows(kind) for kind in ("heldout_docs", "heldout_problems")})
+        if result["ok"]:
+            self.record_round(result["round"], state["version"], result)
+        return result
+
     def teach_correction(self, version, messages, correction, whole_answer=False):
         """A whole new answer becomes a conversation for round 1 (dataset "From Chat"); anything else is a correction the
         round-3 teacher sees in front of the conversation (the student never does)."""
@@ -1860,11 +2988,22 @@ class WorkspaceServices(Services):
             pool = [i for i in map(studio_eval.choice_item, self.post_rows("problems")) if i]
             asked = held or pool  # ponytail: no held-back choice problem yet, so training ones are asked (flagged held_back False)
             asked = random.Random(0).sample(asked, min(FEW_SHOT_ITEMS, len(asked)))
-            return {**studio_eval.few_shot(ckpt, asked, pool=held + pool), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
+            return {**studio_eval.few_shot(ckpt, asked, pool=held + pool, norm="char"), "tasks": len({i["task"] for i in asked}), "held_back": bool(held)}
         return self._cached(("few_shot", ckpt, Path(ckpt).stat().st_mtime_ns, self.workspace.revision), make)
 
-    def _bench_suite(self):
-        """The fixed benchmark items (studio_bench.build_suite), rebuilt only when the held-back data or the stored data changes."""
+    def _bench_sources(self, held):
+        """{held-back document: name of the dataset it came from}, so the suite spreads its passages over the data sources."""
+        import studio_data_kinds as dk
+        held, out = set(held), {}
+        for d in self.workspace.state["datasets"]:
+            for e in self.workspace.iter_examples(d["id"]):
+                if e.get("text") in held and dk.classify(e) == "text":
+                    out.setdefault(e["text"], d.get("name") or d["id"])
+        return out
+
+    def _bench_build(self):
+        """The suite as the stored data would make it now (studio_bench.build_suite). Read only when the frozen suite is missing or
+        lacks a kind of item; items that share a 13-gram with the workspace's training text are left out, and counted."""
         import studio_bench
 
         def make():
@@ -1874,9 +3013,21 @@ class WorkspaceServices(Services):
 
             def decontaminated(kind, items):  # an item sharing a 13-gram with training text (studio_decontam) is left out
                 return items if kind == "pool" else studio_decontam.exclude_overlap(items, index, text[kind])[0]  # worked examples are training problems
-            return studio_bench.suite_from_rows(self._heldout(), self.post_rows("heldout_problems"), self.post_rows("problems"),
-                                                filter_items=decontaminated)
+            docs = self._heldout()
+            return studio_bench.suite_from_rows(docs, self.post_rows("heldout_problems"), self.post_rows("problems"),
+                                                filter_items=decontaminated, sources=self._bench_sources(docs))
         return self._cached(("bench_suite", self._heldout_stamp(), self.workspace.revision), make)
+
+    def _bench_suite(self):
+        """The workspace's frozen eval suite (studio_bench.frozen): chosen from the held-back data the first time it is asked for,
+        then kept in data/bench/suite.json, so every version is scored on the same items."""
+        import studio_bench
+        return studio_bench.frozen(self.root, self._bench_build)
+
+    def bench_suite(self):
+        """The frozen suite, for a caller that must keep its own prompts away from it: {id, docs, choice, pool, problems, ...}.
+        studio_bench.suite_index(suite).overlaps(text) says whether a prompt is, or contains a run of 13 words of, one of its items."""
+        return self._bench_suite()
 
     def _bench_tokens(self, v, checkpoint):
         """Tokens seen by a version's checkpoint over every run it descends from (studio_bench.tokens_seen), or None."""
@@ -1886,30 +3037,168 @@ class WorkspaceServices(Services):
             return next(([self._abs(r) for r in w.runs] for w in self.versions() if w.best_checkpoint and Path(w.best_checkpoint) == Path(path)), None)
         return studio_bench.tokens_seen([self._abs(r) for r in v.runs], checkpoint, owner)
 
-    def benchmark(self):
+    def _continues(self, v, versions):
+        """The number of the version whose weights `v` was started from (run.json initialized_from), or None."""
+        from studio_core import read_json
+        if not v.runs:
+            return None
+        try:
+            start = read_json(Path(self._abs(v.runs[-1])) / "run.json").get("initialized_from")
+        except (OSError, ValueError, AttributeError):
+            return None
+        if not start:
+            return None
+        start = Path(start)
+        for w in versions:
+            if w.number == v.number:
+                continue
+            if (w.best_checkpoint and Path(w.best_checkpoint) == start) or any(Path(self._abs(r)) == start.parent for r in w.runs):
+                return w.number
+        return None
+
+    def _lineages(self, versions):
+        """{version number: (lineage id, number it continues)}. Versions that continue one another share a lineage; one that
+        does not is grouped with the others of its design (same structure, trained differently), as before."""
         import hashlib
-        import studio_bench
         from studio_spec import structure_key
-        suite = self._bench_suite()
-        rows = []
-        for v in self.versions():
-            if not v.best_checkpoint or not Path(v.best_checkpoint).exists() or v.status == "training":
+        continues = {v.number: self._continues(v, versions) for v in versions}
+        children = {n for n in continues.values() if n}
+
+        def root(n):
+            seen = {n}
+            while continues.get(n) and continues[n] not in seen:
+                n = continues[n]
+                seen.add(n)
+            return n
+        out = {}
+        for v in versions:
+            if continues[v.number] or v.number in children:
+                out[v.number] = (f"chain-{root(v.number)}", continues[v.number])
                 continue
             try:
-                lineage = hashlib.sha1(structure_key(v.spec).encode()).hexdigest()[:8]  # one design, trained differently, is one line
+                design = hashlib.sha1(structure_key(v.spec).encode()).hexdigest()[:8]  # one design, trained differently, is one line
             except (ValueError, KeyError, TypeError):
-                lineage = f"v{v.number}"
-            rows.append({"number": v.number, "name": v.name, "lineage": lineage, "tokens": self._bench_tokens(v, v.best_checkpoint),
-                         "result": studio_bench.cached(self.root, v, suite)})
+                design = f"v{v.number}"
+            out[v.number] = (design, None)
+        return out
+
+    def _bench_skip(self, v, versions):
+        """(suite items this version's training text contains, studio_bench.contaminated) or None when its training text is not on this
+        computer (a pulled or imported version): then nothing is dropped and the result says "unknown". The text is every run
+        dataset.jsonl the weights descend from."""
+        import studio_decontam
+        runs, seen, current = [], set(), v
+        while current is not None and current.number not in seen:
+            seen.add(current.number)
+            runs += [Path(self._abs(r)) for r in current.runs]
+            parent = self._continues(current, versions)
+            current = next((w for w in versions if w.number == parent), None)
+        runs = [r for r in runs if (r / "dataset.jsonl").is_file()]
+        if not runs:
+            return None
+        return studio_decontam.index_of_runs(runs)
+
+    def _bench_run(self, v, checkpoint, suite, number=None):
+        import studio_bench
+        versions = self.versions()
+        index = self._bench_skip(v, versions)
+        skip = studio_bench.contaminated(suite, index) if index is not None else None
+        result = studio_bench.benchmark(self.root, (v.number if number is None else number, checkpoint), suite,
+                                        self._bench_tokens(v, checkpoint), skip=skip)
+        return result
+
+    def benchmark(self):
+        import studio_bench
+        suite = self._bench_suite()
+        versions = [v for v in self.versions() if v.best_checkpoint and Path(v.best_checkpoint).exists() and v.status != "training"]
+        lineage = self._lineages(self.versions())
+        rows = []
+        for v in versions:
+            result = studio_bench.cached(self.root, v, suite)
+            rows.append({"number": v.number, "name": v.name, "lineage": lineage[v.number][0], "continues": lineage[v.number][1],
+                         "tokens": self._bench_tokens(v, v.best_checkpoint), "result": result,
+                         "stale": result is None and studio_bench.stale(self.root, v, suite)})
         return {"suite": suite["id"], "sizes": {k: len(suite[k]) for k in ("docs", "choice", "problems")}, "dropped": suite["dropped"],
-                "rows": rows}
+                "sources": sorted({s for s in suite.get("sources", []) if s}), "rows": rows, "lineages": studio_bench.trend(rows)}
 
     def run_benchmark(self, number):
-        import studio_bench
         v, checkpoint = self._as_version(number), self._checkpoint(number)
-        return studio_bench.benchmark(self.root, (v.number, checkpoint), self._bench_suite(), self._bench_tokens(v, checkpoint))
+        return self._bench_run(v, checkpoint, self._bench_suite())
+
+    def _bench_later(self, number):
+        """Score version `number` on the frozen suite on a worker, after any already waiting, then emit "versions" so the Benchmark
+        page reads it. Called when a version gets weights. Cheap on CPU (a fixed small suite, a single worker, threads capped as
+        in _score_later), and resumable (studio_bench.benchmark keeps each finished stage). A failure is logged and the page's
+        "Check the rest" still scores it."""
+        if not self.auto_bench or not hasattr(self, "_bench_lock"):
+            return
+        with self._bench_lock:
+            if number in self._bench_wait:
+                return
+            self._bench_wait.append(number)
+            if self._bench_busy:
+                return
+            self._bench_busy = True
+
+        def run():
+            from studio_backend import cap_threads
+            cap_threads()
+            while True:
+                with self._bench_lock:
+                    if not self._bench_wait:
+                        self._bench_busy = False
+                        break
+                    todo = self._bench_wait[0]
+                try:
+                    suite = self._bench_suite()
+                    if any(suite[k] for k in ("docs", "choice", "problems")):
+                        self.run_benchmark(todo)
+                except Exception:
+                    logging.getLogger(__name__).exception("scoring version %s on the frozen suite failed", todo)
+                with self._bench_lock:
+                    self._bench_wait.remove(todo)
+            self.emit("versions", None)
+        self._bench_thread = start_thread(run)
+
+    def gate_eval(self, checkpoint, baseline=None):
+        """For an automated loop (the RLHF gate): `checkpoint`'s scores on the frozen suite, and when `baseline` (a checkpoint path or a
+        version number) is given, studio_bench.gate_verdict of it against the baseline. Returns {scores, baseline, verdict}.
+
+        The suite is the same one every version is scored on, so the numbers sit on the Benchmark page's trend. Any checkpoint file
+        works, a round's candidate included; its result is kept by file (path, size, time) so asking again is free. The items are
+        held-back text and problems the judge never sees: keep your own prompts away from them with bench_suite() and
+        studio_bench.suite_index. Slow (a minute or so on CPU the first time): call it from a worker."""
+        import hashlib
+        import studio_bench
+        suite = self._bench_suite()
+
+        def scores(target):
+            if isinstance(target, int):
+                v = self._as_version(target)
+                return self._bench_run(v, self._checkpoint(target), suite)
+            path = self._abs(str(target))
+            key = "gate-" + hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:12]
+            return studio_bench.benchmark(self.root, (key, path), suite, None)  # a file that is no version: its training text is unknown
+        got = scores(checkpoint)
+        base = None if baseline is None else scores(baseline)
+        return {"scores": got, "baseline": base, "verdict": None if base is None else studio_bench.gate_verdict(base, got)}
 
     # data / evaluation ------------------------------------------------------
+    def text_sets(self):
+        """The text sets from the counts storage keeps exact (Workspace.kind_stats), not from the summary: answering needs no scan
+        of the rows, so it takes milliseconds on a workspace of a million of them."""
+        import studio_data_kinds as dk
+        out = []
+        for dataset in list(self.workspace.state["datasets"]):
+            if dataset.get("storage") == "sqlite":
+                stats = self.workspace.kind_stats(dataset["id"])
+                count = stats.get("text", (0,))[0] if stats is not None else sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+            else:
+                count = sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+            if count:
+                out.append({"id": dataset["id"], "name": dataset["name"], "count": count})
+        return out
+
     def data(self, kind, query=""):
         summaries = self._summaries()
         full = summaries[kind]
@@ -1918,8 +3207,11 @@ class WorkspaceServices(Services):
         names = {d["id"]: d["name"] for d in self.workspace.state["datasets"]}
         return replace(full, rows=self._summary_cache().search(kind, query, summaries["takes"][kind], names))
 
-    def data_page(self, kind, query="", cursor=None, limit=200):
+    def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         import studio_data_kinds as dk
+        if review_only:
+            sets = [(d["id"], d["name"]) for d in self.workspace.state["datasets"] if d["name"] in self._DRAFT_SETS.values()]
+            return dk.page(self.workspace, kind, query, sets, cursor, limit, review_only=True)
         summary = self.data(kind)  # the sets and the near-duplicates; the rows come from storage
         dups = {r["id"] for r in summary.rows if r["status"] == "Near-duplicate"}
         return dk.page(self.workspace, kind, query, [(x["id"], x["name"]) for x in summary.sets], cursor, limit, dups)
@@ -1992,7 +3284,7 @@ class WorkspaceServices(Services):
                     self.emit("download_failed", {"id": cid, "error": self._failed[cid]})
             self._busy = {}
             self.emit("downloads_finished", {"ids": list(ids)})  # one data reload per batch, not one per source
-        self._worker = threads.start(run)
+        self._worker = start_thread(run)
         return True
 
     def download_sources(self, ids=None, kind="text", install=False):
@@ -2218,7 +3510,7 @@ class WorkspaceServices(Services):
                 with self._score_lock:
                     self._to_score.pop(key, None)
             self.emit("versions", None)
-        threads.start(run)
+        start_thread(run)
 
     def _gate(self, parent_ckpt, candidate_ckpt):
         """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair.
@@ -2311,7 +3603,7 @@ class WorkspaceServices(Services):
             raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
         return v.best_checkpoint
 
-    def chat(self, version, messages, on_text, stop):
+    def chat(self, version, messages, on_text, stop, ablate=None):
         from studio_model import LocalModel
         import studio_memory
         ckpt = self._checkpoint(version)
@@ -2327,7 +3619,7 @@ class WorkspaceServices(Services):
                 self._evict_chat()
             using = self._using[ckpt]
         with using:  # a move to another device waits for the reply: its cache lives on the device it started on
-            return model.generate(messages, on_text=on_text, stop=stop)
+            return model.generate(messages, on_text=on_text, stop=stop, ablate=[tuple(h) for h in ablate] if ablate else None)
 
     def _chat_device(self):
         """Where a chat model should live now (the chat lock is held): the CUDA GPU while no job runs, the CPU otherwise, and on
@@ -2423,6 +3715,59 @@ class WorkspaceServices(Services):
     def inspect_loss(self, version, text, pos=-1, trained=True):
         import studio_inspect
         return studio_inspect.loss_view(self._checkpoint(version), text, pos, trained)
+
+    def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
+        import numpy as np
+
+        import studio_landscape as landscape
+        v = self._as_version(version)
+        runs = [Path(self._abs(r)) for r in getattr(v, "runs", [])] if v is not None else []
+        run = next((r for r in reversed(runs) if r.is_dir()), None)
+        if run is None:
+            raise ValueError("This version has not trained yet, so there are no weights to look around.")
+        if live:
+            mode, grid = "random", min(grid, LANDSCAPE_LIVE_GRID)
+        mine = landscape.run_snapshots(run)  # the model is rebuilt from this run's own files, so only its snapshots share its shape
+        if snapshot is not None:
+            every = [Path(p) for p in self.viewer_snapshots(v.number)]
+            if not 0 <= snapshot < len(every) or every[snapshot] not in mine:
+                raise ValueError("Choose a snapshot of this version's latest run.")
+            center = every[snapshot]
+        elif live:
+            center = mine[-1] if mine else None
+        else:
+            center = next((p for p in (run / "best.npz", run / "last.npz") if p.exists()), mine[-1] if mine else None)
+        if center is None:
+            raise ValueError("Training has not saved any weights yet. The landscape appears at the first snapshot.")
+        others = [p for p in mine if p != center]
+        if live:
+            others = others[-LANDSCAPE_LIVE_PATH:]
+        docs = self._heldout()
+        if not docs:
+            raise ValueError("No held-back text yet, so there is nothing to measure the error on.")
+        stamp = lambda p: (str(p), p.stat().st_mtime_ns, p.stat().st_size)  # noqa: E731
+        key = ("landscape", stamp(center), tuple(stamp(p) for p in others), self._heldout_stamp(), mode, grid, span, seed)
+
+        def make():
+            model, tokenizer = landscape.run_model(run)
+            ids, targets = self._cached(("landscape-batch", str(run), self._heldout_stamp()), lambda: landscape.landscape_batch(tokenizer, docs, model.dims.n_ctx))
+            step, weights = landscape.read_weights(center)
+            norms = None
+            if live:
+                anchors = self.__dict__.setdefault("_landscape_anchor", {})
+                if new_anchor or str(run) not in anchors:
+                    anchors[str(run)] = landscape.filter_norms(weights, model.roles)
+                norms = anchors[str(run)]
+            trajectory = [landscape.read_weights(p) for p in others]
+            got = landscape.compute(model, ids, targets, weights, trajectory, mode=mode, grid=grid, span=span, seed=seed, norms=norms,
+                                    stop=stop, throttle=LANDSCAPE_LIVE_THROTTLE if live else 0.)
+            got["current"]["step"] = step
+            tokens = int((np.asarray(targets) >= 0).sum())
+            cost = {"seconds": got.pop("seconds"), "evaluations": got.pop("evaluations")}
+            return dict(got, mode=mode, grid=len(got["axis"]), span=span, seed=seed, live=live, cost=cost,
+                        center={"step": step, "name": center.name}, batch={"rows": int(len(ids)), "tokens": tokens},
+                        note="Held-back text, one fixed batch, so every frame is measured on the same words.")
+        return make() if live else self._cached(key, make)
 
     def inspect_value_map(self, version, heads, block=0, head=0):
         import studio_inspect

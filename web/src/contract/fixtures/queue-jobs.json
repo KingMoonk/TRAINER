@@ -1,0 +1,40 @@
+{
+  "body": [
+    {
+      "created_at": 1700000000.0,
+      "details": "",
+      "epoch": 0,
+      "error": "",
+      "eta_s": null,
+      "id": "job0001",
+      "kind": "pretrain",
+      "label": "Version 1 pretraining",
+      "node": "",
+      "note": "First try",
+      "owner": "",
+      "params": {},
+      "status": "waiting"
+    },
+    {
+      "created_at": 1700000000.0,
+      "details": "",
+      "epoch": 0,
+      "error": "",
+      "eta_s": null,
+      "id": "job0002",
+      "kind": "pretrain",
+      "label": "Version 2 pretraining",
+      "node": "",
+      "note": "",
+      "owner": "",
+      "params": {},
+      "status": "waiting"
+    }
+  ],
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/queue/jobs"
+  },
+  "status": 200
+}

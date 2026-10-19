@@ -1,8 +1,5 @@
 """Errors in plain words, Chat only offering trained versions, and the disk check before a job (no display)."""
-import errno
 import io
-import logging
-import socket
 import tempfile
 import time
 import unittest
@@ -12,55 +9,11 @@ from pathlib import Path
 from unittest import mock
 
 import studio_queue
-from studio_catalog import DownloadCancelled
-from studio_ia.pages.chat import answering_version, stream_reply
-from studio_ia.services import FakeServices, NoCheckpoint, Version, WorkspaceServices, plain_error
+from studio_ia.services import FakeServices, NoCheckpoint, Version, WorkspaceServices
 from studio_queue import Job, Plan, Runner
 
 Usage = namedtuple("Usage", "total used free")
 ANY = Plan(hours="any", idle_only=False, pause_on_battery=False)
-
-
-class PlainErrorTest(unittest.TestCase):
-    def test_no_connection(self):
-        for error in (urllib.error.URLError("dns"), socket.timeout("slow"), ConnectionResetError("reset")):
-            self.assertEqual(plain_error(error), "Could not reach the download server. Check the connection and try again.")
-
-    def test_http_error_names_the_source(self):
-        error = urllib.error.HTTPError("http://x", 404, "Not Found", {}, io.BytesIO())
-        self.assertEqual(plain_error(error, "TinyStories"),
-                         "The server returned 404 for TinyStories. The file may have moved; try again later.")
-
-    def test_disk_full(self):
-        self.assertEqual(plain_error(OSError(errno.ENOSPC, "No space left on device")),
-                         "The disk is full. Free space in Resources › Storage, then try again.")
-
-    def test_other_oserror_is_not_called_disk_full(self):
-        with self.assertLogs("studio_ia.services", logging.ERROR):
-            text = plain_error(PermissionError(errno.EACCES, "denied"))
-        self.assertTrue(text.startswith("Something went wrong: PermissionError"))
-
-    def test_memory(self):
-        self.assertEqual(plain_error(MemoryError(), "wikipedia.jsonl"), "Ran out of memory while reading wikipedia.jsonl.")
-
-    def test_messages_written_for_people_pass_through(self):
-        self.assertEqual(plain_error(DownloadCancelled("Download cancelled.")), "Download cancelled.")
-        self.assertEqual(plain_error(ValueError("No chat pairs or text records found.")), "No chat pairs or text records found.")
-        self.assertEqual(plain_error(NoCheckpoint(3)), str(NoCheckpoint(3)))
-
-    def test_anything_else_is_one_sentence_and_the_traceback_is_logged(self):
-        with self.assertLogs("studio_ia.services", logging.ERROR) as logged:
-            text = plain_error(KeyError("x"), "a source")
-        self.assertEqual(text, "Something went wrong: KeyError. The log has the details.")
-        self.assertIn("KeyError", logged.output[0])
-
-    def test_stream_reply_puts_the_sentence_not_a_raw_error(self):
-        def chat(version, messages, on_text, stop):
-            raise NoCheckpoint(2)
-        got = []
-        stream_reply(chat, 2, [], None, got.append)
-        self.assertEqual(got, [str(NoCheckpoint(2)), None])
-        self.assertNotIn("[error", got[0])
 
 
 class BackgroundTest(unittest.TestCase):
@@ -109,18 +62,6 @@ class NoCheckpointTest(unittest.TestCase):
         self.assertIn("Version 2 has not trained yet", str(caught.exception))
         with self.assertRaises(NoCheckpoint):  # and a round started without one says the same
             studio_rl.run_round(1, Job("post_round", params={"version": 2}), services, None, None, None)
-
-
-class AnsweringVersionTest(unittest.TestCase):
-    def test_an_untrained_best_never_answers(self):
-        self.assertEqual(answering_version([1, 2, 3], 3, None, trained={1}), 1)
-        self.assertEqual(answering_version([1, 2, 3], 3, 3, trained={1, 2}), 2)  # even a picked one that is untrained
-
-    def test_nothing_trained_means_nobody_answers(self):
-        self.assertIsNone(answering_version([1, 2], 2, None, trained=set()))
-
-    def test_without_the_filter_the_rule_is_unchanged(self):
-        self.assertEqual(answering_version([1, 2, 3], 2, None), 2)
 
 
 def note_ran(job, context, emit, stop, pause):

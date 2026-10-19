@@ -23,7 +23,7 @@ import orjson
 import pandas as pd
 from studio_ui_guard import slow
 
-SCHEMA_VERSION = 3   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns), 2 = before the kind_stats index
+SCHEMA_VERSION = 4   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns), 2 = before the kind_stats index, 3 = before set_counts
 MIGRATE_BATCH = 5000
 INSERT_BATCH = 5000
 _COLUMNS = "id,dataset_id,fingerprint,payload,user,assistant,intent,quality,characters,kind,holdout"
@@ -35,7 +35,21 @@ _CREATE_RECORDS = """CREATE TABLE IF NOT EXISTS records (
     kind TEXT, holdout INTEGER,
     UNIQUE(dataset_id, fingerprint))"""
 _PICK_INDEX = "CREATE INDEX IF NOT EXISTS records_pick ON records(kind, holdout, quality, dataset_id)"
-_STATS_INDEX = "CREATE INDEX IF NOT EXISTS records_stats ON records(dataset_id, kind, quality, characters, holdout)"  # kind_stats and review_count read this alone
+_STATS_INDEX = "CREATE INDEX IF NOT EXISTS records_stats ON records(dataset_id, kind, quality, characters, holdout)"  # review_count reads this alone
+# set_counts: records, characters and held-back rows of every (dataset, kind), kept exact by triggers on records, so kind_stats reads a few
+# rows instead of grouping a million. kind '' stands for a row not classified yet (NULL).
+_CREATE_COUNTS = """CREATE TABLE set_counts (dataset_id TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, chars INTEGER NOT NULL,
+    held INTEGER NOT NULL, PRIMARY KEY (dataset_id, kind)) WITHOUT ROWID"""
+_COUNT_UP = """INSERT INTO set_counts VALUES ({r}.dataset_id, COALESCE({r}.kind, ''), 1, {r}.characters, COALESCE({r}.holdout, 0))
+    ON CONFLICT(dataset_id, kind) DO UPDATE SET n=n+1, chars=chars+excluded.chars, held=held+excluded.held;"""
+_COUNT_DOWN = """UPDATE set_counts SET n=n-1, chars=chars-old.characters, held=held-COALESCE(old.holdout, 0)
+    WHERE dataset_id=old.dataset_id AND kind=COALESCE(old.kind, '');"""
+_COUNT_TRIGGERS = {
+    "records_counts_insert": f"CREATE TRIGGER records_counts_insert AFTER INSERT ON records BEGIN {_COUNT_UP.format(r='new')} END",
+    "records_counts_delete": f"CREATE TRIGGER records_counts_delete AFTER DELETE ON records BEGIN {_COUNT_DOWN} END",
+    "records_counts_update": ("CREATE TRIGGER records_counts_update AFTER UPDATE OF dataset_id, kind, characters, holdout ON records BEGIN "
+                             f"{_COUNT_DOWN} {_COUNT_UP.format(r='new')} END"),
+}
 
 
 def _root():
@@ -53,8 +67,8 @@ def _root():
 
 
 def module_command(module, *args):
-    """Command line that runs `module` as a script in a new process. A frozen app has no python: its executable dispatches on --run-module (see app.py)."""
-    return [sys.executable, *(["--run-module"] if getattr(sys, "frozen", False) else ["-m"]), module, *args]
+    """Command line that runs `module` as a script in a new process."""
+    return [sys.executable, "-m", module, *args]
 
 
 ROOT = _root()
@@ -487,8 +501,31 @@ class Workspace:
             if self.progress:
                 self.progress("Indexing your stored data", None)
             connection.execute(_STATS_INDEX)
+            if self.progress:
+                self.progress("Counting your stored data", None)
+            self._build_counts(connection)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
+
+    @staticmethod
+    def _build_counts(connection):
+        """Count every (dataset, kind) once and keep the counts exact from then on: the triggers and the counts are made in one
+        write transaction, so no write lands between them (and one that waits finds both)."""
+        connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for name in _COUNT_TRIGGERS:
+                connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+            connection.execute("DROP TABLE IF EXISTS set_counts")
+            connection.execute(_CREATE_COUNTS)
+            connection.execute("INSERT INTO set_counts SELECT dataset_id, COALESCE(kind, ''), COUNT(*), COALESCE(SUM(characters), 0), "
+                               "COALESCE(SUM(holdout), 0) FROM records GROUP BY dataset_id, kind")
+            for statement in _COUNT_TRIGGERS.values():
+                connection.execute(statement)
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
 
     @staticmethod
     def _where(dataset_id, query=""):
@@ -599,26 +636,26 @@ class Workspace:
         else:
             yield from (e for e in self.examples(dataset_id) if dk.classify(e) == kind)
 
-    def kind_rows(self, dataset_id, kind, query="", after=0, limit=200, rules=()):
+    def kind_rows(self, dataset_id, kind, query="", after=0, limit=200, rules=(), review_only=False):
         """[(rowid, example)] of one disk dataset: up to `limit` rows of `kind` after rowid `after`, in storage order, whose user,
         assistant or intent hold `query` (SQLite folds case for ASCII letters only) or whose stored rule is one of `rules`."""
         where, parameters = self._where(dataset_id, query)
         if query.strip() and rules:
             where = f"({where} OR dataset_id=? AND ({' OR '.join(['payload LIKE ?'] * len(rules))}))"
             parameters = parameters + [dataset_id] + [f'%"rule": "{rule}"%' for rule in rules]
+        if review_only:
+            where = f"({where}) AND quality='Review' AND json_extract(payload, '$.synthetic')=1"
         with self._connect() as connection:
             cursor = connection.execute(f"SELECT rowid,{_READ} FROM records WHERE {where} AND kind=? AND rowid>? ORDER BY rowid LIMIT ?",
                                         parameters + [kind, after, limit])
             return [(row[0], self._row_to_example(row[1:])) for row in cursor]
 
-    @slow("count a whole dataset on disk", when=lambda self, *args, **kwargs: not self.is_small())
     def kind_stats(self, dataset_id):
-        """{kind: (records, characters, held back)} of one disk dataset from one GROUP BY on the kind column (read from the records_stats
-        index, not the rows); None when some row has no kind yet (then the caller reads the rows)."""
+        """{kind: (records, characters, held back)} of one disk dataset, read from the few set_counts rows the triggers keep exact
+        (adding and removing rows moves them; nothing is counted again); None when some row has no kind yet (then the caller reads the rows)."""
         with self._connect() as connection:
-            groups = connection.execute("SELECT kind,COUNT(*),COALESCE(SUM(characters),0),COALESCE(SUM(holdout),0) "
-                                        "FROM records WHERE dataset_id=? GROUP BY kind", (dataset_id,)).fetchall()
-        if any(kind is None for kind, *_ in groups):
+            groups = connection.execute("SELECT kind,n,chars,held FROM set_counts WHERE dataset_id=? AND n>0", (dataset_id,)).fetchall()
+        if any(kind == "" for kind, *_ in groups):
             return None
         return {kind: tuple(rest) for kind, *rest in groups}
 

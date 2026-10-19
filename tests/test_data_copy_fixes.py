@@ -10,9 +10,6 @@ import studio_rl
 import studio_rules
 from studio_catalog import CATALOG, FORMAT_VERSION, convert_record, download_dataset, file_sha256, list_downloads, refresh_downloads, register_download
 from studio_core import Workspace
-from studio_ia.copy import BUILDER
-from studio_ia.pages import builder as B
-from studio_ia.services import Job
 from studio_model import LocalModel, train
 
 
@@ -23,23 +20,6 @@ def entry(catalog_id):
 def tree(tree_id, lang, text="hello"):
     return {"message_tree_id": tree_id, "prompt": {"role": "prompter", "lang": lang, "text": text, "replies": [
         {"role": "assistant", "lang": lang, "text": "hi", "message_id": tree_id + "-a"}]}}
-
-
-class BuilderCopy(unittest.TestCase):
-    def test_6_memory_verdict_is_not_a_placeholder(self):
-        verdict = BUILDER["training_memory_fits"]
-        self.assertNotIn("[", verdict)
-        self.assertIn("unknown", verdict)
-        with patch("os.sysconf", side_effect=OSError, create=True):  # the case the text covers: this computer does not report its memory
-            self.assertIsNone(B.fits({}))
-
-    def test_7_no_version_yet_is_not_version_0(self):
-        self.assertEqual(B.version_name(0), "no version yet")
-        self.assertEqual(B.version_name(3), "version 3")
-        job = Job("j", "pretrain", "Train", "train", {})
-        self.assertNotIn("0", B.pill_text(job, None))
-        self.assertEqual(B.pill_text(job, None), "Training (no version yet)")
-        self.assertEqual(B.pill_text(Job("j", "pretrain", "Train", "train", {"version": 2, "mode": "from_scratch"}), None), "Version 2 is training")
 
 
 class Converters(unittest.TestCase):

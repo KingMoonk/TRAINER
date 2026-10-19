@@ -9,9 +9,6 @@ from unittest import mock
 import studio_bench
 import studio_catalog
 import studio_eval
-from studio_ia.copy import BENCH
-from studio_ia.pages import benchmark as page
-from studio_ia.services import FakeServices, FixtureServices
 from studio_model import train
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.jsonl"
@@ -163,7 +160,7 @@ class Cache(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_fake(self, version, suite, tokens):
+    def run_fake(self, version, suite, tokens, **kw):
         self.calls.append(suite["id"])
         return {"suite": suite["id"], "version": version[0], "tokens": tokens, "bpc": 2.0}
 
@@ -196,7 +193,7 @@ class Cache(unittest.TestCase):
     def test_the_stamp_is_taken_before_the_run_so_a_rewrite_mid_run_is_checked_again(self):
         suite = studio_bench.build_suite(**pieces())
 
-        def rewrites(version, suite, tokens):
+        def rewrites(version, suite, tokens, **kw):
             self.calls.append(suite["id"])
             self.checkpoint.write_bytes(b"weights that arrived while the suite was running")
             return {"suite": suite["id"], "bpc": 2.0}
@@ -216,7 +213,7 @@ class Cache(unittest.TestCase):
         suite = studio_bench.build_suite(**pieces())
         started, release = threading.Event(), threading.Event()
 
-        def slow(version, suite, tokens):
+        def slow(version, suite, tokens, **kw):
             self.calls.append(1)
             started.set()
             release.wait(5)
@@ -279,141 +276,6 @@ class Chart(unittest.TestCase):
         self.assertEqual(studio_bench.chart_data([], "bpc")["lines"], [])
 
 
-class PageHelpers(unittest.TestCase):
-    rows = Chart.rows
-
-    def state(self, rows=None, docs=24, choice=40, problems=30):
-        return {"suite": "x", "sizes": {"docs": docs, "choice": choice, "problems": problems}, "dropped": {}, "rows": self.rows if rows is None else rows}
-
-    def test_numbers_read_plainly(self):
-        self.assertEqual([page.tokens_text(n) for n in (950, 12_400, 3_200_000, 2_000_000_000)], ["950", "12K", "3.2M", "2.0B"])
-        self.assertEqual((page.value_text("bpc", 2.345), page.value_text("few_shot", .4), page.value_text("problems", 0.)), ("2.35", "40%", "0%"))
-
-    def test_designs_are_lettered_in_the_order_they_first_appear(self):
-        self.assertEqual(page.designs(self.rows), {"a": ("A", [1, 2, 4]), "b": ("B", [3, 5])})
-
-    def test_pending_lists_unchecked_versions_oldest_first(self):
-        self.assertEqual(page.pending(self.state()), [5])
-        self.assertEqual(page.pending(self.state([row(2, "a", 1, None), row(1, "a", 1, None)])), [1, 2])
-        self.assertEqual(page.pending(self.state(docs=0, choice=0, problems=0, rows=[row(1, "a", 1, None)])), [])  # nothing to check with
-        self.assertEqual(page.pending(None), [])
-
-    def test_the_few_shot_chart_says_how_many_examples_were_really_used(self):
-        def with_used(used):
-            res = result(2.0, .4)
-            res["few_shot"]["rows"] = [{"shots": 0, "used": 0, "accuracy": .3}, {"shots": 4, "used": used, "accuracy": .4}]
-            return self.state([row(1, "a", 1, res)])
-        self.assertEqual(page.shots_text(with_used(4.0)), "4")
-        self.assertEqual(page.shots_text(with_used(3.5)), BENCH["up_to"].format(shots=4))
-        self.assertEqual(page.shots_text(self.state()), "4")  # results with no rows: nothing to say otherwise
-
-    def test_has_items_follows_the_suite_sizes(self):
-        state = self.state(choice=0)
-        self.assertEqual([page.has_items(state, m) for m in studio_bench.METRICS], [True, False, True])
-
-    def test_plot_args_draw_a_line_per_design_and_a_dashed_chance_line(self):
-        args, chart = page.plot_args(self.state(), "few_shot")
-        *lines, chance = args["series"]
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(all(s["dots"] for s in lines))
-        self.assertNotEqual(lines[0]["color"], lines[1]["color"])
-        self.assertEqual((chance["points"], chance["dash"]), ([(0, .33), (800, .33)], (4, 3)))
-        self.assertEqual((args["fmt"](.5), args["x_fmt"](2_000_000)), ("50%", "2.0M"))
-        plain, _ = page.plot_args(self.state(), "bpc")
-        self.assertEqual(len(plain["series"]), 2)  # no chance line on the others
-        self.assertEqual(page.plot_args(self.state([row(1, "a", 1, None)]), "bpc")[0], None)
-
-    def test_status_line(self):
-        self.assertEqual(page.status_text(self.state([])), BENCH["no_versions"])
-        self.assertEqual(page.status_text(self.state(docs=0, choice=0, problems=0)), BENCH["no_data"])
-        self.assertEqual(page.status_text(self.state()), BENCH["waiting"].format(n=1, total=5))
-        self.assertEqual(page.status_text(self.state([row(1, "a", 1, result(2.))])), BENCH["all_done"])
-
-    def test_checking_goes_through_each_version_and_a_failure_does_not_stop_the_rest(self):
-        class Services:
-            def __init__(self):
-                self.ran, self.noted = [], []
-
-            def note(self, text, fraction):
-                self.noted.append(fraction)
-
-            def run_benchmark(self, number):
-                if number == 2:
-                    raise ValueError("bad checkpoint")
-                self.ran.append(number)
-        svc = Services()
-        failed = page.check_versions(svc, [1, 2, 3])
-        self.assertEqual((svc.ran, list(failed)), ([1, 3], [2]))
-        self.assertEqual(svc.noted, [0, 1 / 3, 2 / 3])
-
-
-class FakePage(page.BenchmarkPage):
-    """The page's logic without a window: quietly runs the work where it stands and keeps the callback to deliver later."""
-
-    def __init__(self, services, state):
-        self.services, self.state, self.running, self.failed = services, state, False, {}
-        self.later, self.drawn, self.refreshed = [], 0, 0
-
-    def draw(self):
-        self.drawn += 1
-
-    def refresh(self):
-        self.refreshed += 1
-
-    def winfo_exists(self):
-        return True
-
-    def quietly(self, work, then, lane="fast"):
-        self.lane = lane
-        self.later.append((work, then))
-
-
-class Checking(unittest.TestCase):
-    class Services:
-        def __init__(self):
-            self.ran = []
-
-        def note(self, text, fraction):
-            pass
-
-        def run_benchmark(self, number):
-            if number == 2:
-                raise ValueError("bad checkpoint")
-            self.ran.append(number)
-
-    def state(self, numbers):
-        return {"suite": "x", "sizes": {"docs": 1, "choice": 1, "problems": 1}, "dropped": {}, "rows": [row(n, "a", 1, None) for n in numbers]}
-
-    def test_opening_the_page_only_reads_and_the_button_starts_one_run_on_the_slow_lane(self):
-        svc = self.Services()
-        fake = FakePage(svc, None)
-        fake._show(self.state([1, 2, 3]))
-        self.assertEqual((fake.later, svc.ran), ([], []))  # showing results starts nothing
-        fake.on_event("versions", None)
-        self.assertEqual((fake.refreshed, fake.later), (1, []))
-        fake.check()
-        fake.check()  # a second press while it runs
-        fake.on_event("versions", None)
-        self.assertEqual((len(fake.later), fake.lane, fake.running), (1, "slow", True))
-        work, then = fake.later[0]
-        then(work())
-        self.assertEqual((svc.ran, fake.running, list(fake.failed)), ([1, 3], False, [2]))
-
-    def test_failures_pile_up_and_a_version_that_now_works_clears_its_own(self):
-        fake = FakePage(self.Services(), self.state([2, 4]))
-        fake.failed = {7: "old trouble", 2: "older trouble"}
-        fake.check()
-        work, then = fake.later.pop()
-        then(work())
-        self.assertEqual(set(fake.failed), {7, 2})
-        self.assertEqual(fake.failed[2], "bad checkpoint")
-        fake.state = self.state([4])
-        fake.check()
-        work, then = fake.later.pop()
-        then(work())
-        self.assertEqual(set(fake.failed), {7, 2})  # 2 was not retried; 7 never was
-
-
 class RealModel(unittest.TestCase):
     """A tiny trained model: the same suite gives the same numbers, and the numbers are in range."""
 
@@ -438,57 +300,6 @@ class RealModel(unittest.TestCase):
         self.assertAlmostEqual(first["few_shot"]["chance"], 1 / 3)
         self.assertEqual(first["problems"]["total"], 4)
         self.assertEqual(stored, again)
-
-
-class Services(unittest.TestCase):
-    def test_the_workspace_checks_each_trained_version_and_remembers(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            svc = FixtureServices(tmp)
-            try:
-                before = svc.benchmark()
-                self.assertEqual([r["number"] for r in before["rows"]], [1, 2])
-                self.assertTrue(all(r["result"] is None and r["tokens"] for r in before["rows"]))
-                done = svc.run_benchmark(1)
-                after = svc.benchmark()
-            finally:
-                svc.close()
-        self.assertEqual(done["suite"], before["suite"])
-        self.assertEqual(done["version"], 1)
-        self.assertEqual([r["result"] is not None for r in after["rows"]], [True, False])
-        self.assertEqual(after["rows"][0]["result"], done)
-        self.assertEqual(page.pending({**after}), [2])
-
-    def test_one_bad_spec_does_not_break_the_whole_read(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            svc = FixtureServices(tmp)
-            try:
-                with mock.patch("studio_spec.structure_key", side_effect=KeyError("dims")):
-                    rows = svc.benchmark()["rows"]
-            finally:
-                svc.close()
-        self.assertEqual([r["lineage"] for r in rows], ["v1", "v2"])
-
-    def test_a_held_back_document_also_in_training_is_left_out_of_the_suite(self):
-        import studio_decontam
-
-        def suite(leak):
-            with tempfile.TemporaryDirectory() as tmp:
-                svc = FixtureServices(tmp)
-                try:
-                    leaked = [d for d in svc._heldout() if len(d.split()) >= 13][:leak]
-                    with mock.patch.object(svc, "_train_index", return_value=studio_decontam.Index().add_all(leaked)):
-                        return svc.benchmark()
-                finally:
-                    svc.close()
-        clean, dirty = suite(0), suite(1)
-        self.assertEqual(clean["dropped"]["docs"], 0)
-        self.assertEqual(dirty["dropped"]["docs"], 1)
-        self.assertNotEqual(dirty["suite"], clean["suite"])
-
-    def test_fake_services_return_the_same_shape(self):
-        fake = FakeServices().benchmark()
-        self.assertEqual(set(fake), {"suite", "sizes", "dropped", "rows"})
-        self.assertTrue(studio_bench.chart_data(fake["rows"], "few_shot")["lines"])
 
 
 if __name__ == "__main__":

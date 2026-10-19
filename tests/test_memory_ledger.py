@@ -119,8 +119,8 @@ class ChatLedger(unittest.TestCase):
     def chat(self, names):
         def local(path, device):
             return SimpleNamespace(model=SimpleNamespace(p={"w": torch.zeros(int(Path(path).stem[1:]) * 256)}),
-                                   generate=lambda messages, on_text=None, stop=None: "ok")
-        with mock.patch("studio_model.LocalModel", side_effect=local), mock.patch.object(self.svc, "_checkpoint", side_effect=lambda v: v):
+                                   generate=lambda messages, on_text=None, stop=None, ablate=None: "ok")
+        with mock.patch("studio_model.LocalModel", side_effect=local), mock.patch.object(self.svc, "_checkpoint", side_effect=lambda v: v),                 mock.patch.object(self.svc, "_chat_device", return_value="cpu"):  # a machine with a CUDA GPU would register under "cuda"
             for name in names:
                 self.svc.chat(name, [], None, None)
 

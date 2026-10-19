@@ -3,11 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import studio_passive_watch as watch
-from studio_ia.pages.passive import competes, session_view, when
-from studio_ia.services import FakeServices, Job, QueueState, WorkspaceServices
+from studio_ia.services import WorkspaceServices
 from studio_passive import PassiveStore, merge_plan
 
 
@@ -18,14 +17,21 @@ def row(**kw):
 
 class SignIn(unittest.TestCase):
     def test_installed_follows_install_and_uninstall_on_each_platform(self):
-        run = MagicMock()
+        tasks = set()  # a fake Task Scheduler: the real schtasks is never called
+
+        def run(args, **kw):
+            if args[1] == "/Create":
+                tasks.add(args[3])
+            elif args[1] == "/Delete":
+                tasks.discard(args[3])
+            return SimpleNamespace(returncode=0 if args[3] in tasks or args[1] != "/Query" else 1)
         for platform in ("darwin", "linux", "win32"):
             with self.subTest(platform), tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as root:
-                self.assertFalse(watch.installed(root, home=home, platform=platform))
+                self.assertFalse(watch.installed(root, home=home, run=run, platform=platform))
                 watch.install(root, home=home, run=run, platform=platform)
-                self.assertTrue(watch.installed(root, home=home, platform=platform))
+                self.assertTrue(watch.installed(root, home=home, run=run, platform=platform))
                 watch.uninstall(root, home=home, run=run, platform=platform)
-                self.assertFalse(watch.installed(root, home=home, platform=platform))
+                self.assertFalse(watch.installed(root, home=home, run=run, platform=platform))
 
     def test_other_platforms_never_start_at_sign_in(self):
         self.assertFalse(watch.installed("x", platform="freebsd"))
@@ -99,42 +105,100 @@ class WorkspaceView(unittest.TestCase):
         self.assertEqual(self.view()["sessions"][0]["status"], "stopped")
 
 
-class PageLogic(unittest.TestCase):
-    def test_running_session_reads_plainly_and_can_stop(self):
-        headline, facts, can_stop = session_view(row())
-        self.assertTrue(headline.startswith("Running · started "), headline)
-        self.assertEqual(facts, "Trainer: Running · watchdog: Running · restarts: 0 · last heard under a minute ago")
-        self.assertTrue(can_stop)
+class KeepGoing(unittest.TestCase):
+    """Bringing back a session whose watchdog and trainer died: a fake spawn, never a real process."""
 
-    def test_finished_session_has_no_stop_and_no_heartbeat(self):
-        headline, facts, can_stop = session_view(row(status="finished", trainer="Stopped", watchdog="Stopped", restarts=3, heard=4000.0))
-        self.assertTrue(headline.startswith("Finished"))
-        self.assertNotIn("last heard", facts)
-        self.assertFalse(can_stop)
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.services = SimpleNamespace(root=self.root)
+        self.spawned, self.installed = [], []
+        self.hooks = dict(spawn=lambda command, log, cwd: self.spawned.append(command) or 777, install=self.installed.append,
+                          alive=lambda pid: False, ours=lambda *a: False)
 
-    def test_heard_long_ago_drops_the_about(self):
-        self.assertIn("last heard 1.7 hours ago", session_view(row(heard=6000.0))[1])
+    def keep(self, session_id=None):
+        return WorkspaceServices.keep_passive_going(self.services, session_id, **self.hooks)
 
-    def test_when_shows_local_time_or_the_raw_stamp(self):
-        self.assertRegex(when("2026-10-15T08:30:00+00:00"), r"^\d\d [A-Z][a-z]{2} \d\d:\d\d$")
-        self.assertEqual((when("garbage"), when(None)), ("garbage", ""))
+    def test_a_dead_watchdog_is_started_again_and_recorded(self):
+        store = PassiveStore(self.root)
+        sid = store.create(merge_plan({}))
+        store.update(sid, status="running", trainer_pid=4001, watchdog_pid=4002)
+        self.assertEqual(self.keep(sid), "running")
+        self.assertEqual((len(self.spawned), store.get(sid)["watchdog_pid"]), (1, 777))
+        self.assertEqual(self.installed, [self.root])
 
-    def test_warns_only_when_a_passive_session_and_a_queue_job_both_train(self):
-        busy, idle = QueueState(job=Job("1", "pretrain")), QueueState()
-        view = {"sessions": [row()], "signin": True}
-        self.assertIn("share this computer", competes(view, busy))
-        self.assertEqual(competes(view, idle), "")
-        self.assertEqual(competes(view, QueueState(job=Job("1", "pretrain"), paused=True)), "")
-        self.assertEqual(competes({"sessions": [row(status="paused")], "signin": False}, busy), "")
+    def test_without_an_id_the_active_session_is_used_and_a_live_watchdog_is_left_alone(self):
+        store = PassiveStore(self.root)
+        sid = store.create(merge_plan({}))
+        store.update(sid, status="paused", watchdog_pid=4002)
+        self.hooks.update(alive=lambda pid: True, ours=lambda *a: True)
+        self.assertEqual(self.keep(), "paused")
+        self.assertEqual(self.spawned, [])
 
-    def test_fake_services_stop_and_remove_sign_in(self):
-        f = FakeServices()
-        self.assertEqual(f.passive(), {"sessions": [], "signin": False})
-        f.passive_sessions, f.passive_signin = [row()], True
-        self.assertEqual(f.stop_passive("p1"), "stopped")
-        f.remove_passive_signin()
-        view = f.passive()
-        self.assertEqual((view["sessions"][0]["status"], view["signin"]), ("stopped", False))
+    def test_nothing_to_keep_going(self):
+        self.assertIsNone(self.keep())  # never used: no record is created
+        self.assertFalse((self.root / "data" / "passive.sqlite").exists())
+        store = PassiveStore(self.root)
+        sid = store.create(merge_plan({}))
+        store.update(sid, status="stopped")
+        self.assertIsNone(self.keep())
+        self.assertIsNone(self.keep("nope"))
+        with self.assertRaises(RuntimeError):
+            self.keep(sid)
+        self.assertEqual(self.spawned, [])
+
+    def test_the_api_start_restarts_the_active_session_and_never_raises(self):
+        store = PassiveStore(self.root)
+        sid = store.create(merge_plan({}))
+        store.update(sid, status="running")
+        services = SimpleNamespace(root=self.root)
+        services.keep_passive_going = lambda *a, **kw: WorkspaceServices.keep_passive_going(services, *a, **kw)
+        WorkspaceServices.resume_passive_at_start(services, **self.hooks)
+        self.assertEqual(len(self.spawned), 1)
+        self.hooks["spawn"] = lambda *a: (_ for _ in ()).throw(OSError("no python"))
+        WorkspaceServices.resume_passive_at_start(services, **self.hooks)  # prints, does not raise
+
+
+class PauseResume(unittest.TestCase):
+    """The page's Pause and Resume write the command the trainer takes and journals (tests.test_passive.test_pause_and_resume)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.services = SimpleNamespace(root=self.root)
+        self.store = PassiveStore(self.root)
+        self.id = self.store.create(merge_plan({}))
+        self.store.update(self.id, status="running")
+
+    def send(self, command, session_id=None):
+        return WorkspaceServices.command_passive(self.services, session_id or self.id, command)
+
+    def test_the_command_is_left_for_the_trainer(self):
+        self.assertEqual(self.send("pause"), "running")  # the trainer has not taken it yet
+        self.assertEqual(self.store.get(self.id)["command"], "pause")
+        self.store.update(self.id, status="paused", command="")
+        self.assertEqual(self.send("resume"), "paused")
+        self.assertEqual(self.store.get(self.id)["command"], "resume")
+
+    def test_unknown_and_never_used_are_none(self):
+        self.assertIsNone(self.send("pause", "nope"))
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertIsNone(WorkspaceServices.command_passive(SimpleNamespace(root=Path(empty)), "x", "pause"))
+            self.assertFalse((Path(empty) / "data" / "passive.sqlite").exists())
+
+    def test_an_ended_or_stopping_session_is_refused(self):
+        self.store.command(self.id, "stop")
+        with self.assertRaises(RuntimeError):
+            self.send("pause")
+        self.assertEqual(self.store.get(self.id)["command"], "stop")  # the stop is not replaced
+        for status in ("stopped", "finished", "failed"):
+            self.store.update(self.id, status=status)
+            with self.assertRaises(RuntimeError):
+                self.send("pause")
+        with self.assertRaises(ValueError):
+            self.send("stop")
 
 
 if __name__ == "__main__":
