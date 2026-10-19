@@ -312,7 +312,7 @@ class SourceWatcher:
 def training_busy(folder=None, alive=None, command_line=None):
     """True while a queue job's worker process runs: restarting the API now would kill it (on Windows `stop` ends the whole tree) and
     cost the steps since its last checkpoint. The workers are the specs in <workspace>/data/workers, each naming a live studio_worker."""
-    import studio_passive_watch as procs
+    import studio_platform as procs
     import studio_worker
     if folder is None:
         from studio_core import ROOT

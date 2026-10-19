@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import studio_passive_watch as platform_helpers  # battery + keep-awake live there; never duplicated
+import studio_platform as platform_helpers  # battery + keep-awake live there; never duplicated
 from studio_core import atomic_json, read_json
 from studio_failures import explain
 from studio_passive import PassiveStore

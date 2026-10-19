@@ -35,6 +35,7 @@ class Peer:
     stale: bool = True  # the jobs are the last known ones, not this survey's
     seen_at: float = 0.0  # when they were read (epoch seconds); 0 when never
     progress: dict | None = None  # its GET /queue running job as {job_id, step, total, eta_s}; None when idle, stale or unread
+    limits: dict | None = None  # its GET /queue plan and verdict as `limits_of` reads them; None when stale or unread
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,8 @@ class Peers:
                     if fresh:
                         last, seen_at = tuple(j for j in jobs if isinstance(j, dict)), now
                     self._seen[address] = (last, seen_at, info.hostname)
-                    out.append(Peer(info, last, stale=not fresh, seen_at=seen_at, progress=running_progress(state) if fresh else None))
+                    out.append(Peer(info, last, stale=not fresh, seen_at=seen_at, progress=running_progress(state) if fresh else None,
+                                    limits=limits_of(state) if fresh else None))
                 else:
                     count = self._failed.get(address, (0,))[0] + 1
                     self._failed[address] = (count, now + min(BACKOFF_MAX, BACKOFF_FIRST * 2 ** (count - 1)), info.error)
@@ -126,6 +128,16 @@ def running_progress(state):
     number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
     return {"job_id": job["id"], "step": int(step) if number(step) else 0, "total": int(total) if number(total) else 0,
             "eta_s": float(eta) if number(eta) else None}
+
+
+def limits_of(state):
+    """The limits a machine's queue plan puts on its jobs, from its GET /queue: {"plan": the plan's settings, "blocked": why it is
+    holding its jobs now (None when it is not), "paused": the person paused its queue}; None when it answered something else."""
+    plan = state.get("plan") if isinstance(state, dict) else None
+    if not isinstance(plan, dict):
+        return None
+    blocked = state.get("blocked")
+    return {"plan": dict(plan), "blocked": blocked if isinstance(blocked, str) and blocked else None, "paused": bool(state.get("paused"))}
 
 
 def own_node(cluster=None):

@@ -200,7 +200,7 @@ def own_info(busy=False, version="", status=None, memory=None):
     kind = status.get("kind") if status.get("available") else "cpu"
     if memory is None and kind != "cuda":
         try:
-            from studio_passive import total_memory
+            from studio_memory import total_memory
             memory = total_memory()
         except Exception:
             memory = 0

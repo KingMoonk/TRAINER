@@ -1315,7 +1315,8 @@ class Member:
     inject their own) while the next round's steps run, and is joined at the end of that round, where its theta is applied."""
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
-                 progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None):
+                 progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None, pause=None, memory_share=None):
+        self.pause, self.memory_share = pause, memory_share  # this node's queue plan: its pause event and its share of memory
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
@@ -1810,12 +1811,19 @@ class Member:
                     self.live = {"loss": self.loss, "tokens_per_second": event.get("tokens_per_second")}
                 emit(event)
             cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": self.info["total_steps"]}
+            if self.memory_share:
+                import studio_memory
+                declared = cfg["batch_size"]
+                cfg["batch_size"] = studio_memory.batch_cap(cfg, self.memory_share)
+                if cfg["batch_size"] < declared:
+                    emit({"type": "info", "text": f"A batch of {declared} does not fit the {self.memory_share:.0%} of memory this node's plan "
+                                                  f"allows: this member trains with batch size {cfg['batch_size']}."})
             attempt = 0
             while True:  # one attempt of train() per coordinator this member is attached to; a failover or a settled claim ends one
                 self.first_step, found = 0, None
                 try:
                     studio_model.train(cfg, [], directory if not attempt else Path(f"{directory}_{attempt}"), emit=watch,
-                                       stop=Halt(self.stop, self.ended), distributed=self, telemetry_every=0)
+                                       stop=Halt(self.stop, self.ended), pause=self.pause, distributed=self, telemetry_every=0)
                     if (self.superseded or self.moved) and not self.finished and not self.stop.is_set():
                         found = self._relocated_within()
                 except Rebound as bound:

@@ -6415,6 +6415,35 @@
         "title": "QuestionBody",
         "type": "object"
       },
+      "QueueLimits": {
+        "description": "What a machine's queue plan allows its jobs, so the run-start form can say it before a machine is chosen.",
+        "properties": {
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked"
+          },
+          "paused": {
+            "default": false,
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanModel"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "QueueLimits",
+        "type": "object"
+      },
       "QueueNode": {
         "properties": {
           "address": {
@@ -6440,6 +6469,16 @@
           "hostname": {
             "title": "Hostname",
             "type": "string"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueLimits"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "listed": {
             "default": true,
