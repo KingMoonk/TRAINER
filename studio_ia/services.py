@@ -404,6 +404,16 @@ class Services:
     def clean_storage(self, days=None, data=False):
         raise NotImplementedError
 
+    def leftovers(self):
+        """[{id, kind, name, belongs_to, bytes, shared}] of what training left in runs/ that no result needs: interrupted attempts,
+        failed runs and dataset snapshots no run uses (studio_cleanup.leftovers). Never a running job's folder, the checkpoint a
+        waiting job continues from or a version's runs."""
+        raise NotImplementedError
+
+    def remove_leftovers(self, ids):
+        """Delete the listed leftovers (ids from leftovers(); one that is not listed any more is ignored). Returns (items, bytes)."""
+        raise NotImplementedError
+
     def free_space(self) -> int:
         """Bytes free on the disk that holds the workspace (where checkpoints are written)."""
         raise NotImplementedError
@@ -996,6 +1006,13 @@ class FakeServices(Services):
 
     def clean_storage(self, days=None, data=False):
         self.cleaned = (days, data)
+        return (0, 0)
+
+    def leftovers(self):
+        return []
+
+    def remove_leftovers(self, ids):
+        self.removed = list(ids)
         return (0, 0)
 
     def free_space(self):
@@ -2248,6 +2265,20 @@ class WorkspaceServices(Services):
             out = studio_cleanup.clean(self.workspace, days, data)
         self.runner._emit("queue", {})
         return out
+
+    def _queue_rows(self):
+        """The queue's jobs as {id, label, status, params}: what studio_cleanup judges a folder by. Call with the runner's lock held."""
+        return [{"id": j.id, "label": j.label, "status": j.status, "params": dict(j.params)} for j in self.runner.jobs]
+
+    def leftovers(self):
+        import studio_cleanup
+        with self.runner.lock:
+            return studio_cleanup.leftovers(self.root, self._queue_rows())
+
+    def remove_leftovers(self, ids):
+        import studio_cleanup
+        with self.runner.lock:  # no job starts between the check and the delete
+            return studio_cleanup.remove_leftovers(self.root, ids, self._queue_rows())
 
     def remove(self, job_id):
         with self.runner.lock:

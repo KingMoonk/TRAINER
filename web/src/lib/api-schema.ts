@@ -2801,6 +2801,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storage/leftovers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Leftovers
+         * @description What training left in runs/ that no result needs, largest first: attempts moved aside by a restart, failed runs, and dataset
+         *     snapshots no run uses. A running job's folder, the checkpoint a waiting job continues from and a version's runs are never listed.
+         */
+        get: operations["leftovers_storage_leftovers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/leftovers/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove Leftovers
+         * @description Delete the listed leftovers. An id that is not listed any more (already gone, or protected since) is ignored.
+         */
+        post: operations["remove_leftovers_storage_leftovers_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/traffic": {
         parameters: {
             query?: never;
@@ -4712,6 +4753,36 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** Leftover */
+        Leftover: {
+            /**
+             * Belongs To
+             * @description the job it came from, or why nothing needs it
+             */
+            belongs_to: string;
+            /**
+             * Bytes
+             * @description what removing it frees
+             */
+            bytes: number;
+            /**
+             * Id
+             * @description what to send back to remove it; a path under the workspace
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "interrupted" | "failed" | "snapshot";
+            /** Name */
+            name: string;
+            /**
+             * Shared
+             * @description bytes it holds that other runs still link to (not freed)
+             */
+            shared: number;
+        };
         /** LessonChange */
         LessonChange: {
             /**
@@ -6367,6 +6438,11 @@ export interface components {
         RemoteStop: {
             /** Address */
             address: string;
+        };
+        /** RemoveLeftovers */
+        RemoveLeftovers: {
+            /** Ids */
+            ids: string[];
         };
         /** Renewal */
         Renewal: {
@@ -12254,6 +12330,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FreeSpace"];
+                };
+            };
+        };
+    };
+    leftovers_storage_leftovers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Leftover"][];
+                };
+            };
+        };
+    };
+    remove_leftovers_storage_leftovers_remove_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveLeftovers"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageUse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

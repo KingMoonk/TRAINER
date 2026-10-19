@@ -71,6 +71,19 @@ class StorageApiTest(unittest.TestCase):
     def test_exports_are_empty_before_anything_trains(self):
         self.assertEqual(self.client.get("/storage/exports").json(), [])
 
+    def test_leftovers_are_listed_and_removed_by_id(self):
+        row = {"id": "runs/queue_a-before-restart", "kind": "interrupted", "name": "queue_a-before-restart", "belongs_to": "Version 1",
+               "bytes": 2000, "shared": 500}
+        self.services.leftovers = lambda: [row]
+        self.assertEqual(self.client.get("/storage/leftovers").json(), [row])
+        self.services.remove_leftovers = lambda ids: (len(ids), 2000)
+        done = self.client.post("/storage/leftovers/remove", json={"ids": [row["id"]]})
+        self.assertEqual((done.status_code, done.json()), (200, {"items": 1, "bytes": 2000}))
+
+    def test_nothing_is_removed_without_ids(self):
+        self.assertEqual(self.client.get("/storage/leftovers").json(), [])
+        self.assertEqual(self.client.post("/storage/leftovers/remove", json={"ids": []}).status_code, 422)
+
     def test_negative_days_are_refused(self):
         self.assertEqual(self.client.get("/storage", params={"days": -1}).status_code, 422)
         self.assertEqual(self.client.post("/storage/clean", json={"days": -1}).status_code, 422)
