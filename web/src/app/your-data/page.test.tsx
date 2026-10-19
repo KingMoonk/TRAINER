@@ -67,11 +67,10 @@ function server() {
 }
 
 describe("Your data page", () => {
-  test("passive training is reachable and Make extra data is a section at the foot of the page", async () => {
+  test("Make extra data is a section at the foot of the page", async () => {
     server();
     renderPage(<YourDataPage />, { route: "/your-data/" });
-    expect(await screen.findByRole("link", { name: /Passive training: see or stop it/ })).toHaveAttribute("href", expect.stringMatching(/^\/passive\/?$/));
-    expect(screen.getByText("Make extra data", { selector: "summary" })).toBeVisible();
+    expect(await screen.findByText("Make extra data", { selector: "summary" })).toBeVisible();
   });
 
   test("the three kinds show their counts and the first kind's rows", async () => {

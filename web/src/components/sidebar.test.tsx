@@ -18,7 +18,7 @@ describe("Sidebar", () => {
     renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/runs/view" });
     const group = screen.getByRole("group", { name: "Pages in this area" });
     expect(within(group).getAllByRole("link").map((a) => a.textContent)).toEqual([
-      "Runs", "New run", "Training run", "Post-training", "Queue", "Passive training", "Training",
+      "Runs", "New run", "Training run", "Post-training", "Queue", "Training",
     ]);
   });
 

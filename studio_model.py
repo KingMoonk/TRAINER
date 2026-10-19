@@ -666,7 +666,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
 
     rebase=True (with resume) continues a checkpoint on different data: the weights, tokenizer, optimizer state and step carry over,
     and cfg["steps"] is the number of steps to add. The dataset, split, seed, learning rate and batch size may differ from the
-    checkpoint's; the sampler, the best score and its best.npz start fresh. Passive training's rounds use it (studio_passive.py).
+    checkpoint's; the sampler, the best score and its best.npz start fresh.
 
     The run folder keeps the deduplicated examples as dataset.jsonl, which a resume rebuilds the split from. The bytes are stored
     once under their hash in snapshot_dir (default: .snapshots in the `runs` folder holding the run; elsewhere none) and the folder holds a hard link to them,

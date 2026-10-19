@@ -80,7 +80,7 @@ class QueueLimits(BaseModel):
     """What a machine's queue plan allows its jobs, so the run-start form can say it before a machine is chosen."""
 
     plan: PlanModel
-    blocked: str | None = None  # why its plan holds its jobs right now ("on battery", "outside hours", "computer in use", passive training)
+    blocked: str | None = None  # why its plan holds its jobs right now ("on battery", "outside hours", "computer in use")
     paused: bool = False  # its person paused its queue
 
 

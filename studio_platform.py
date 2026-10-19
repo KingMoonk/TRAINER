@@ -1,6 +1,6 @@
 """Process and power helpers shared by every module that runs or watches a trainer: is a pid alive, is it ours, start one detached,
 stop one, keep the computer awake while it runs, tell whether it is on battery. Neutral ground: the queue, the worker, the cluster
-and passive training's watchdog all use these, so none of them has to import another's module for them."""
+and the training worker all use these, so none of them has to import another's module for them."""
 from __future__ import annotations
 
 import os
@@ -128,7 +128,7 @@ def keep_awake(pid, *, platform=sys.platform, popen=subprocess.Popen):
         if platform == "darwin":
             return popen(["caffeinate", "-i", "-w", str(pid)], **quiet)
         if platform.startswith("linux"):  # systemd machines; without systemd-inhibit this raises FileNotFoundError and nothing happens
-            return popen(["systemd-inhibit", "--what=sleep:idle", "--who=Groundwork", "--why=Passive training", "--mode=block", "tail", f"--pid={pid}", "-f", "/dev/null"], **quiet)
+            return popen(["systemd-inhibit", "--what=sleep:idle", "--who=Groundwork", "--why=Training", "--mode=block", "tail", f"--pid={pid}", "-f", "/dev/null"], **quiet)
         if platform == "win32":
             import ctypes
             ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED

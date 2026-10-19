@@ -287,7 +287,6 @@ DEFAULTS = {
     "pretrain_distributed": Requirements(device="cuda"),  # the owner: the coordinator plus one local member (studio_diloco)
     "diloco_member": ANY,
     "lora": ANY,
-    "passive": ANY,
     "eval": ANY,
     "score": ANY,
     "benchmark": ANY,

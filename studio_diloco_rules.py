@@ -1,5 +1,4 @@
-"""The rules that end or redirect a DiLoCo run, as pure functions over a small state (the port of studio_passive's stop_reason,
-plateaued, next_move and _next_pivot to rounds).
+"""The rules that end or redirect a DiLoCo run, as pure functions over a small state (stop_reason, plateaued, next_move and _next_pivot, in rounds).
 
 `studio_diloco.Coordinator._finish` calls `observe` once a round's `val_loss` is known and acts on the answer: continue, stop with a
 plain reason, or go back to the best weights and apply the next pivot. Nothing here reads a clock or a file: the coordinator passes

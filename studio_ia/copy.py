@@ -384,32 +384,6 @@ EXPORT = {
     "done": "Exported {name} to {path}. {note}",
 }
 
-PASSIVE = {
-    "h1": "Passive training",
-    "lead": "Training that keeps going on its own, outside the queue, restarted by a watchdog. See it, stop it, or stop it starting when you sign in.",
-    "kicker": "SESSIONS",
-    "desc": "A passive session trains in the background until its plan says stop. A watchdog restarts it if it stops, and starts again when you sign in.",
-    "none": "No passive training on this computer.",
-    "status_queued": "Starting",
-    "status_running": "Running",
-    "status_paused": "Paused",
-    "status_stopped": "Stopped",
-    "status_finished": "Finished",
-    "status_failed": "Failed",
-    "started": "{status} · started {when}",
-    "facts": "Trainer: {trainer} · watchdog: {watchdog} · restarts: {restarts}",
-    "heard": " · last heard {ago} ago",
-    "stop": "Stop",
-    "stop_confirm": "Stop this passive training? It saves where it got to and does not start again.",
-    "stopping": "Asked it to stop. It stops at its next check.",
-    "competes": "The queue is training too. Both share this computer's processor, graphics card and memory, so each runs slower. Stop one for full speed.",
-    "signin_kicker": "START WHEN YOU SIGN IN",
-    "signin_on": "The watchdog starts when you sign in, so passive training carries on after a restart.",
-    "signin_off": "Nothing starts when you sign in.",
-    "signin_remove": "Don't start when I sign in",
-    "signin_removed": "Removed. Passive training no longer starts when you sign in.",
-}
-
 QUICKTEST = {
     "h1": "Quick test",
     "lead": "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real.",
@@ -1010,7 +984,6 @@ FEEDBACK = {
 YOURDATA = {
     "h1": "Your data",
     "storage_link": "Storage: free up disk space ›",
-    "passive_link": "Passive training: see or stop it ›",
     "lead": "Three kinds, because each one trains a different stage.",
     "text_tab": "Text it reads",
     "text_used": "used by Pretraining",

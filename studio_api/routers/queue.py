@@ -48,7 +48,7 @@ class NewJob(BaseModel):
 class GateModel(Model):
     """studio_queue.Gate: whether the plan lets the machine train right now."""
 
-    reason: str | None = None  # "passive training is running" | "outside hours" | "on battery" | "computer in use" | None
+    reason: str | None = None  # "outside hours" | "on battery" | "computer in use" | None
     resumes_at: datetime | None = None
     supported: bool = True
 

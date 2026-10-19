@@ -1,4 +1,4 @@
-"""studio_platform: the process and power helpers the queue, the worker, the cluster and passive training's watchdog share."""
+"""studio_platform: the process and power helpers the queue, the worker and the cluster share."""
 import os
 import subprocess
 import sys
@@ -85,11 +85,11 @@ class PowerTests(unittest.TestCase):
 
 class ProcessTests(unittest.TestCase):
     def test_ours_compares_the_command_line(self):
-        line = "/usr/bin/python -m studio_passive run passive_1 --root /tmp/w"
-        self.assertTrue(watch.ours(5, "studio_passive", "passive_1", read=lambda pid: line))
-        self.assertFalse(watch.ours(5, "studio_passive", "passive_2", read=lambda pid: line))
-        self.assertFalse(watch.ours(5, "studio_passive", read=lambda pid: ""))  # no such process
-        self.assertTrue(watch.ours(5, "studio_passive", read=lambda pid: None))  # unreadable: trust it
+        line = "/usr/bin/python -m studio_worker run job_1 --root /tmp/w"
+        self.assertTrue(watch.ours(5, "studio_worker", "job_1", read=lambda pid: line))
+        self.assertFalse(watch.ours(5, "studio_worker", "job_2", read=lambda pid: line))
+        self.assertFalse(watch.ours(5, "studio_worker", read=lambda pid: ""))  # no such process
+        self.assertTrue(watch.ours(5, "studio_worker", read=lambda pid: None))  # unreadable: trust it
         self.assertTrue(watch.command_line(os.getpid()))
 
     def test_alive(self):
@@ -127,24 +127,19 @@ class ProcessTests(unittest.TestCase):
             self.assertNotIn(first, watch._children)
 
     def test_windows_reads_a_command_line_once_per_process(self):
-        run = MagicMock(return_value=SimpleNamespace(stdout="python -m studio_passive_watch\n"))
+        run = MagicMock(return_value=SimpleNamespace(stdout="python -m studio_worker\n"))
         with patch.object(sys, "platform", "win32"), patch.object(watch, "_created", lambda pid: 1234), patch.object(watch.subprocess, "run", run), \
                 patch.object(watch.subprocess, "CREATE_NO_WINDOW", 0, create=True), patch.dict(watch._lines, clear=True):
-            self.assertEqual([watch.command_line(9) for _ in range(3)], ["python -m studio_passive_watch"] * 3)
+            self.assertEqual([watch.command_line(9) for _ in range(3)], ["python -m studio_worker"] * 3)
         run.assert_called_once()
 
 
 
 class HomeTests(unittest.TestCase):
-    def test_the_helpers_import_from_their_new_modules(self):
+    def test_the_memory_helpers_live_in_studio_memory(self):
         import studio_memory
-        import studio_passive_watch
-        for name in ("on_battery", "keep_awake", "release_awake", "alive", "terminate", "spawn", "ours", "command_line"):
-            self.assertIs(getattr(studio_passive_watch, name), getattr(watch, name), name)  # the watchdog re-exports them; #486 removes it
-        import studio_passive
         for name in ("process_memory", "total_memory"):
             self.assertTrue(callable(getattr(studio_memory, name)))
-            self.assertTrue(callable(getattr(studio_passive, name)))
         self.assertGreater(studio_memory.total_memory(), studio_memory.process_memory())
 
 
