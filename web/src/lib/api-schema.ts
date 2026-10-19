@@ -6360,7 +6360,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "polishing" | "finished" | "stopped";
+            phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "polishing" | "judging" | "finished" | "stopped";
             /**
              * Reviewed Only
              * @default false
@@ -6400,6 +6400,8 @@ export interface components {
             timeline: components["schemas"]["RoundTimeline"][];
             /** Version */
             version: number | null;
+            /** Win Rate */
+            win_rate?: number | null;
             /** Window S */
             window_s: number | null;
         };
@@ -6409,7 +6411,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging";
             /** Node */
             node: string;
             /** Round */

@@ -1,5 +1,6 @@
 """A cluster run started with reviewed_only trains only on the examples marked Good: the real route over a real workspace, then the real
 coordinator the queue builds from the job it stored."""
+import json
 import tempfile
 import unittest
 from dataclasses import asdict
@@ -90,6 +91,27 @@ class ReviewedOnly(unittest.TestCase):
         _, text = self.coordinator_of(self.queued[0])
         self.assertIn("good page", text)
         self.assertIn("~", text)
+
+    def test_a_good_example_held_back_for_scoring_does_not_count_as_text_to_train_on(self):
+        lone = self.workspace.create_dataset("One good")
+        held = "the only good page, kept back to score every version on"
+        self.workspace.add(lone, [{"text": held, "quality": "Good"}] + [{"text": t, "quality": "Review"} for t in PENDING])
+        path = self.services.root / "data" / "heldout.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps([{"id": "heldout_0", "text": held}]), encoding="utf-8")
+        response = self.start(dataset_ids=[lone], reviewed_only=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.queued, [])
+
+    def test_one_good_example_among_many_unreviewed_is_either_refused_or_trainable(self):
+        few = self.workspace.create_dataset("Almost none")
+        self.workspace.add(few, [{"text": GOOD[0], "quality": "Good"}] + [{"text": t, "quality": "Review"} for t in PENDING])
+        response = self.start(dataset_ids=[few], reviewed_only=True)
+        if response.status_code == 201:  # accepted, so the coordinator must be able to build from it
+            _, text = self.coordinator_of(self.queued[-1])
+            self.assertNotIn("~", text)
+        else:
+            self.assertEqual(response.status_code, 400)
 
     def test_a_start_with_nothing_marked_good_is_a_400_with_a_sentence(self):
         empty = self.workspace.create_dataset("Unreviewed")

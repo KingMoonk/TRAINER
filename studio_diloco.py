@@ -28,6 +28,7 @@ import gc
 import hashlib
 import io
 import json
+import logging
 import math
 import random
 import re
@@ -69,6 +70,7 @@ PROGRESS_WAIT = .25  # seconds a progress report or a snapshot waits for a round
 EVENTS_KEPT = 200  # the coordinator's event log is bounded
 TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished round's also goes to metrics.jsonl)
 SAMPLES_KEPT = 240  # progress samples kept per member for the open round
+EVAL_PROMPTS = 12  # prompts of the head-to-head against the starting weights (target_win_rate)
 PROMPTS_PER_POLISH = 500  # the teacher is given this many training prompts per polish, a new window each time
 
 
@@ -168,8 +170,9 @@ class Settings:
     max_seconds: float | None = None   # active wall-clock; time with fewer than min_members does not count
     patience_rounds: int = 0           # rounds without a better val_loss
     target_val_loss: float | None = None
-    target_win_rate: float | None = None  # not available yet (#511): rejected
-    teacher: str = ""                  # the teacher model's name (an Ollama model); needed by polish_every
+    target_win_rate: float | None = None  # stop once the best weights win this share of head-to-head replies against the starting weights (judged by the teacher)
+    versus_seconds: float = 600.       # wall-clock limit of one head-to-head against the starting weights; past it the comparison is skipped and rounds go on
+    teacher: str = ""                  # the teacher model's name (an Ollama model); needed by polish_every and target_win_rate
     plateau_checks: int = 0            # rounds the val_loss must have improved within, else it is a plateau (0: off)
     plateau_min_improvement: float = .01
     worse_limit: int = 0               # rounds in a row worse than the best before the coordinator goes back to the best and pivots (0: off)
@@ -472,6 +475,8 @@ class Coordinator:
         self.paused = False  # the owner paused the run: no round opens until resume (a round in flight finishes)
         self.polishing = False  # the teacher is polishing theta, on a thread off the lock: like paused, no round opens meanwhile
         self.polisher, self.teacher_settings, self.polish_on = default_polish, {}, True  # polish_on: off on a coordinator made from a replica
+        self.judging = False  # with polishing: the held phase is the head-to-head of target_win_rate, not a polish (the phase says so)
+        self.versus, self.versus_on = default_versus, True  # the head-to-head of target_win_rate; off on a coordinator made from a replica (no prompts, no start.npz)
         self._polish_stop = threading.Event()  # set by stop, step-down and release: the polish in flight is discarded
         self.lessons, self.lesson_windows = [], {}  # [{shard, round, rows, status}] in shard-id order; shard id -> its windows
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
@@ -530,6 +535,9 @@ class Coordinator:
             train, val = sm.samples_from(training, tokenizer, cfg), sm.samples_from(validation, tokenizer, cfg)
         if not train:
             raise ValueError("No trainable target tokens were found.")
+        if settings.target_win_rate is not None and not val:
+            raise ValueError("target_win_rate needs a validation split: without one no round has a validation loss, so no round is ever the best "
+                             "to compare. Hold some of the text out (validation above 0), or leave target_win_rate unset.")
         model = sm.ScratchTransformer(cfg, tokenizer.vocab_size)
         theta = {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         state = cls._read_state(directory, cfg, settings, digest)
@@ -554,6 +562,11 @@ class Coordinator:
                 coordinator.paused, coordinator.rules = bool(saved.get("paused")), drules.State.from_json(saved.get("rules"))
         if settings.polish_every:  # after _start_files, which clears a new run's prompts
             coordinator._write_prompts(training)
+        if settings.target_win_rate is not None:
+            coordinator._write_eval_prompts(validation, training)
+            if start_from and not state:
+                shutil.copyfile(start_from, directory / "start.npz")  # a restart compares with the weights it started from
+        if settings.polish_every or settings.target_win_rate is not None:
             coordinator.teacher_settings = teacher_settings(settings)  # prepare replaces it with the workspace's own
         return coordinator
 
@@ -617,6 +630,7 @@ class Coordinator:
         coordinator.deal = record.get("shard_deal") or {}
         coordinator._start_files(model)
         coordinator.polish_on = False  # the replica holds no training examples to make prompts from, nor the teacher's rows
+        coordinator.versus_on = False  # ... nor the prompts of the head-to-head or the weights the run started from
         for entry in coordinator.lessons:
             entry["status"] = "left_out"  # the replica holds no lesson shards, so the lessons the old coordinator dealt are not dealt any more
         if coordinator.history:  # only the latest round's weights came over: they are the best this coordinator can keep
@@ -640,6 +654,10 @@ class Coordinator:
         atomic_json(directory / "run.json", coordinator.record)
         coordinator._event("took_over", "", coordinator.next_round,
                            f"Term {term} began here, continuing from round {coordinator.next_round} of term {record.get('term', 1)}.")
+        if settings.target_win_rate is not None:
+            coordinator._event("win_rate_off", "", coordinator.next_round,
+                               "The win-rate stop rule ends here: this node holds neither the prompts of the head-to-head nor the weights the run started from, "
+                               "so the run goes on without it.")
         if settings.polish_every:
             coordinator._event("polish_off", "", coordinator.next_round,
                                "The teacher polish ends here: this node holds neither the training examples nor the lessons the old coordinator wrote, "
@@ -678,6 +696,26 @@ class Coordinator:
         if not prompts:
             raise ValueError("polish_every is set, but the training text has no conversations for the teacher to answer: "
                              "use a chat dataset, or turn polish_every off.")
+        temporary = path.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            for prompt in prompts:
+                stream.write(json.dumps(prompt, ensure_ascii=False) + "\n")
+        temporary.replace(path)
+
+    def _write_eval_prompts(self, validation, training):
+        """eval_prompts.jsonl: EVAL_PROMPTS conversations for the head-to-head against the starting weights, from the validation split
+        (topped up from the END of the training split when it has fewer: the teacher's polish windows start at its front), once per run.
+        Each line says where its prompt came from. The prompts the polish turned into lessons are left out when the comparison runs."""
+        path = self.directory / "eval_prompts.jsonl"
+        if path.is_file():
+            return
+        from studio_rlhf import prompts_from
+        prompts = [{**p, "from": "validation"} for p in prompts_from(validation)[:EVAL_PROMPTS]]
+        spare = EVAL_PROMPTS - len(prompts)
+        prompts += [{**p, "from": "training"} for p in (prompts_from(training)[::-1][:spare] if spare > 0 else [])]
+        if not prompts:
+            raise ValueError("target_win_rate is set, but the text has no conversations for the teacher to compare the weights on: "
+                             "use a chat dataset, or leave target_win_rate unset.")
         temporary = path.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as stream:
             for prompt in prompts:
@@ -746,6 +784,8 @@ class Coordinator:
         atomic_json(self.directory / "tokenizer.json", self.tokenizer.serialize())
         (self.directory / "metrics.jsonl").write_text("", encoding="utf-8")
         (self.directory / "prompts.jsonl").unlink(missing_ok=True)  # ... nor prompts: they are made from this run's own training split
+        (self.directory / "eval_prompts.jsonl").unlink(missing_ok=True)  # ... nor the head-to-head's prompts or the weights it compares with
+        (self.directory / "start.npz").unlink(missing_ok=True)
         (self.directory / "lessons.jsonl").unlink(missing_ok=True)  # a new run has no lessons: the rows of an earlier one in this folder are not its own
         self.record = {"name": self.cfg["name"], "createdAt": now(), "status": "training", "step": 0, "steps": self.cfg["steps"],
                        "parameters": model.parameter_count, "vocabulary": self.tokenizer.vocab_size, "backend": "diloco",
@@ -997,6 +1037,7 @@ class Coordinator:
         self.next_round += 1
         self.current = None
         self.finished = self.next_round >= self.settings.rounds
+        self._save_start(current.number)
         verdict = self._apply_rules(row, current)
         if verdict["action"] == "stop":
             self.finished = True
@@ -1007,6 +1048,8 @@ class Coordinator:
             self._event("finished", "", current.number, self.rules.stop_text or f"The run finished after {self.next_round} rounds.")
         else:
             self._start_polish(row, current, verdict)
+            if not self.polishing:
+                self._start_versus(current)
         self.cond.notify_all()
 
     def _apply_rules(self, row, current):
@@ -1247,6 +1290,8 @@ class Coordinator:
             return "stopped" if self.stopped else "finished"
         if self.stage:
             return self.stage
+        if self.judging:
+            return "judging"
         if self.polishing:
             return "polishing"
         if current is None:
@@ -1447,13 +1492,20 @@ class Coordinator:
         finally:
             for folder in (self.directory / "teacher").glob("rlhf_*"):  # the preference runs have given what they had: their checkpoints are not kept
                 shutil.rmtree(folder, ignore_errors=True)
+        job = None
         with self.cond:
             try:
                 self._polish_done(context, outcome, stop)
+                job = self._versus_job(stop)  # the polish may have made a new best
+                if job is not None:
+                    self._begin_judging(job, context["number"])
             finally:
-                self.polishing = False
-                self._advance()
-                self.cond.notify_all()
+                if job is None:
+                    self.polishing = self.judging = False
+                    self._advance()
+                    self.cond.notify_all()
+        if job is not None:
+            self._versus_run(job, stop)
 
     def _polish_done(self, context, outcome, stop):
         """Take the teacher's work into the run (lock held). The polished weights replace theta only when the teacher's head-to-head gate
@@ -1510,6 +1562,128 @@ class Coordinator:
             self._event("lessons", "", number, f"Round {number}: {added} lesson{'s' if added != 1 else ''} join training from round {number + 1}.")
         if self.finished:
             self._event("finished", "", number, self.rules.stop_text or f"The run finished after {self.next_round} rounds.")
+        self._remember()
+
+    # -- the head-to-head against the starting weights (target_win_rate)
+    def _save_start(self, number):
+        """start.npz, once: the weights after the first trained round, which the best weights are compared with (a restart's is its
+        restart_from checkpoint, copied in by build). Called with the lock held, the round folded in and before any rule restores weights."""
+        if self.settings.target_win_rate is None or not self.versus_on or (self.directory / "start.npz").is_file():
+            return
+        self._write_npz(self.directory / "start.npz", self._checkpoint_arrays(self.next_round * self.settings.inner_steps))
+        self.rules.start_round = number
+
+    def _versus_job(self, stop):
+        """What the head-to-head of the best weights needs (lock held), or None when none is due: the rule is set, this coordinator can
+        run it, the run goes on, and the best round has not been compared yet. Also not the run's own start (the first round, when
+        start.npz was saved from it), which would only meet itself."""
+        rules = self.rules
+        if (self.settings.target_win_rate is None or not self.versus_on or self.superseded or self.stopped or self.finished or not self.theta
+                or stop.is_set() or rules.best_round is None or rules.best_round == rules.win_round or rules.best_round == rules.start_round):
+            return None
+        prompts_file = self.directory / "eval_prompts.jsonl"
+        if not (self.directory / "start.npz").is_file() or not (self.directory / "best.npz").is_file() or not prompts_file.is_file():
+            return None
+        prompts = [json.loads(line) for line in prompts_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        taught = self._lesson_prompts()  # never judge on a conversation the lessons teach
+        prompts = [p for p in prompts if json.dumps(p["messages"], sort_keys=True) not in taught]
+        if not prompts:
+            return None
+        return {"round": rules.best_round, "new": str(self.directory / "best.npz"), "old": str(self.directory / "start.npz"), "prompts": prompts}
+
+    def _lesson_prompts(self):
+        """The conversations lessons.jsonl answers, as strings to compare the head-to-head's prompts with."""
+        path = self.directory / "lessons.jsonl"
+        if not path.is_file():
+            return set()
+        return {json.dumps(json.loads(line)["messages"], sort_keys=True)
+                for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+    def _begin_judging(self, job, number):
+        """The held phase is now the head-to-head (lock held): the phase and the journal say so, with where the prompts came from."""
+        self.judging = True
+        sources = [p.get("from") for p in job["prompts"]]
+        said = f"{sources.count('validation')} from the validation split, {sources.count('training')} from the training split"
+        logging.getLogger(__name__).info("head-to-head of round %d: %d prompts (%s)", job["round"], len(sources), said)
+        self._event("judging", "", number, f"Round {number}: the teacher ({self.settings.teacher}) is comparing round {job['round']}'s weights with "
+                                           f"the starting weights on {len(sources)} prompts ({said}). No round opens until it is done "
+                                           f"(at most {self.settings.versus_seconds:,.0f} seconds).")
+
+    def _start_versus(self, current):
+        """After a round that did not start a polish (called with the lock held, the round saved): when it made a new best, compare it with
+        the starting weights on a thread of its own, and open no round until that is done."""
+        stop = threading.Event()
+        job = self._versus_job(stop)
+        if job is None:
+            return
+        self._polish_stop = stop
+        self.polishing = True
+        self._begin_judging(job, current.number)
+        try:
+            threading.Thread(target=self._versus_run, args=(job, stop), daemon=True, name="diloco-versus").start()
+        except Exception as exc:  # no thread to be had: the gate must not stay shut
+            self.polishing = self.judging = False
+            self.rules.win_round = job["round"]
+            drules.record_win(self.rules, self.settings, None)
+            self._event("win_rate", "", current.number, f"Round {current.number}: the head-to-head with the starting weights could not start ({exc}).")
+
+    def _versus_run(self, job, stop):
+        """The head-to-head thread: ask self.versus for the share of replies where the best weights beat the starting ones, then hand the
+        outcome to _versus_done under the lock. Nothing here touches the run's state; no round is open to change it."""
+        outcome, halt = {"rate": None, "error": ""}, threading.Event()  # halt: told to the comparison when the run stops or the time is up
+
+        def compare():
+            try:
+                outcome["rate"] = self.versus(self.teacher_settings, job["new"], job["old"], job["prompts"], self.cfg.get("device", "auto"), halt)
+            except Exception as exc:  # the teacher is optional: a failed comparison is skipped and the run goes on
+                outcome["error"] = (str(exc) or type(exc).__name__)[:300]
+
+        try:
+            worker = threading.Thread(target=compare, daemon=True, name="diloco-versus-call")
+            worker.start()
+            end = time.monotonic() + self.settings.versus_seconds  # real time: the coordinator's clock is injectable
+            while worker.is_alive() and time.monotonic() < end and not stop.is_set():
+                worker.join(.05)
+            timed_out = worker.is_alive() and not stop.is_set()
+            if timed_out:
+                outcome["rate"], outcome["error"] = None, f"it took longer than the {self.settings.versus_seconds:g} seconds allowed"
+        except Exception as exc:  # no thread to be had: the gate must still open
+            outcome["rate"], outcome["error"] = None, "the comparison could not start: " + (str(exc) or type(exc).__name__)[:300]
+        finally:
+            halt.set()  # always: a call still running is left behind and ends at its next check of halt (its models stay loaded until then)
+        with self.cond:
+            try:
+                self._versus_done(job, outcome, stop)
+            finally:
+                self.polishing = self.judging = False
+                self._advance()
+                self.cond.notify_all()
+
+    def _versus_done(self, job, outcome, stop):
+        """Take the comparison into the run (lock held): the win rate joins the rules' state, and the run ends when it reached the target.
+        A stopped, released or superseded run takes nothing."""
+        if stop.is_set() or self.superseded or self.finished or not self.theta:
+            self._remember()
+            return
+        rules, number, rate = self.rules, self.history[-1]["round"], outcome["rate"]
+        drules.accrue(rules, self.clock(), self._counting())  # the time the teacher took counts toward max_seconds
+        rules.win_round = job["round"]  # tried: the next comparison is for the next best, whether or not this one gave a number
+        drules.record_win(rules, self.settings, None if outcome["error"] else rate)
+        if outcome["error"] or rate is None or not math.isfinite(rate):
+            self._event("win_rate", "", number, f"Round {number}: the head-to-head of round {job['round']}'s weights with the starting weights "
+                                                f"was skipped ({outcome['error'] or 'the teacher judged no replies'}).")
+        else:
+            self._event("win_rate", "", number, f"Round {number}: round {job['round']}'s weights win {rate:.0%} of head-to-head replies against "
+                                                f"the starting weights (target {self.settings.target_win_rate:.0%}, reached "
+                                                f"{rules.win_hits} of {drules.WIN_READINGS} times in a row).")
+        found = drules.stop_reason(rules, self.settings)  # the target, or max_seconds used up by the teacher
+        if found:
+            rules.stop_rule, rules.stop_text = found
+            self.finished = True
+        self._persist(self.history[-1]["members"], self.deal)
+        self._write_record(self.history[-1])
+        if self.finished:
+            self._event("finished", "", number, rules.stop_text or f"The run finished after {self.next_round} rounds.")
         self._remember()
 
     def _rewrite_metric(self, row):
@@ -1581,7 +1755,7 @@ class Coordinator:
         self.record.update({"step": self.next_round * self.settings.inner_steps,
                             "val_loss": row["val_loss"],
                             "status": "completed" if self.finished else "training",
-                            "best_round": self.rules.best_round, "best_val_loss": self.rules.best_loss})
+                            "best_round": self.rules.best_round, "best_val_loss": self.rules.best_loss, "win_rate": self.rules.win_rate})
         if self.rules.stop_rule:
             self.record.update({"stop_rule": self.rules.stop_rule, "stop_reason": self.rules.stop_text})
         if row["loss"] is not None:
@@ -1685,9 +1859,10 @@ def teacher_settings(settings, root=None):
     return {**(load_settings(root) if root else json.loads(json.dumps(SETTINGS_DEFAULTS))), "teacher_model": settings.teacher}
 
 
-def _teacher(found):
+def _teacher(found, stop=None):
+    """The Ollama teacher for `found`; with `stop`, it asks nothing more once that is set (a request already sent ends by its timeout)."""
     from studio_rlhf import OllamaTeacher
-    return OllamaTeacher(found["url"], found["teacher_model"], rubric=found.get("rubric"), judge_model=found.get("judge_model") or None)
+    return OllamaTeacher(found["url"], found["teacher_model"], rubric=found.get("rubric"), judge_model=found.get("judge_model") or None, stop=stop)
 
 
 PREFLIGHT_TIMEOUT = 10  # seconds the start-up check waits for Ollama
@@ -1709,7 +1884,7 @@ def default_polish(directory, found, checkpoint, prompts, device, stop, emit):
     keep the result only if it wins the head-to-head gate. Returns {"checkpoint", "win_rate", "lessons": [{"messages", "chosen", "rejected"}]};
     "checkpoint" is the given one when the gate did not pass. Raises when the teacher cannot be reached."""
     from studio_rlhf import PreferenceStore, auto_rlhf
-    teacher = _teacher(found)
+    teacher = _teacher(found, stop)
     teacher.models()  # RuntimeError when Ollama is not reachable
     Path(directory).mkdir(parents=True, exist_ok=True)
     store = PreferenceStore(directory)
@@ -1719,6 +1894,15 @@ def default_polish(directory, found, checkpoint, prompts, device, stop, emit):
         raise RuntimeError(result["aborted"])
     rows = [row for row in store.all()[before:] if row.get("kind") == "rewrite"]
     return {"checkpoint": result["checkpoint"], "win_rate": result["win_rate"], "lessons": [dict(row) for row in rows]}
+
+
+def default_versus(settings, new, old, prompts, device, stop):
+    """The share of head-to-head replies where checkpoint `new` beats checkpoint `old`, as graded by the teacher (a tie counts half);
+    None when no reply was judged. Raises when the teacher cannot be reached."""
+    from studio_rlhf import compare_checkpoints
+    teacher = _teacher(settings, stop)
+    teacher.models()  # RuntimeError when Ollama is not reachable
+    return compare_checkpoints(new, old, prompts, teacher.judge_teacher(), device=device, stop=stop)["win_rate"]
 
 
 def register(run, coordinator):
@@ -1742,14 +1926,16 @@ def prepare(job, services, directory, port, client_for=None):
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
     examples = p["examples"] if "examples" in p else services.examples(p)
+    if not examples and p.get("reviewed_only"):
+        raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
     try:
-        if settings.polish_every:
+        if settings.polish_every or settings.target_win_rate is not None:
             teacher = teacher_settings(settings, getattr(services, "root", None))
-            if not p.get("resuming"):  # a new run fails now, not at the first polish, when the teacher cannot be used; a resumed one meets it then
+            if not p.get("resuming"):  # a new run fails now, not at the first use of the teacher, when it cannot be used; a resumed one meets it then
                 try:
                     check_teacher(teacher)
                 except RuntimeError as exc:
-                    raise ValueError(f"The run polishes with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
+                    raise ValueError(f"The run {'polishes' if settings.polish_every else 'judges'} with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
                                        start_from=p.get("restart_from"))
     except ValueError as exc:

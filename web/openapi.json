@@ -7865,6 +7865,7 @@
               "outer_step",
               "validating",
               "polishing",
+              "judging",
               "finished",
               "stopped"
             ],
@@ -7949,6 +7950,17 @@
             ],
             "title": "Version"
           },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
           "window_s": {
             "anyOf": [
               {
@@ -8012,7 +8024,10 @@
               "stepped_down",
               "polish",
               "polish_off",
-              "lessons"
+              "lessons",
+              "win_rate",
+              "win_rate_off",
+              "judging"
             ],
             "title": "Kind",
             "type": "string"

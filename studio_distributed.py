@@ -588,7 +588,7 @@ def view(run, coordinator, job, peers=None):
             "lessons": sum(e["rows"] for e in lessons if e["status"] == "live"), "lessons_left_out": sum(e["rows"] for e in lessons if e["status"] != "live"),
             "paused": paused, "can_pause": state in ("waiting", "running") and not paused and coordinator is not None, "can_resume": paused,
             "can_restart": state in ENDED and not restart_blocker(run, getattr(coordinator, "term", run.term)),
-            "best_round": rules.get("best_round"), "best_val_loss": rules.get("best_loss"), "stop_rule": rules.get("stop_rule") or "",
+            "best_round": rules.get("best_round"), "best_val_loss": rules.get("best_loss"), "win_rate": rules.get("win_rate"), "stop_rule": rules.get("stop_rule") or "",
             "stop_reason": stop_reason(state, rules, settings.get("rounds", 0)),
             "phase": phase_of(snap, state), "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
             "window_s": (snap or {}).get("window_s"), "contributed": (snap or {}).get("contributed", 0), "expected": (snap or {}).get("expected", 0),

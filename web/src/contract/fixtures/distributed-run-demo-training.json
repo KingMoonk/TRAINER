@@ -251,6 +251,7 @@
       }
     ],
     "version": 1,
+    "win_rate": null,
     "window_s": 6.25
   },
   "request": {

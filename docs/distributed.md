@@ -364,6 +364,29 @@ job rebuilds the coordinator from `diloco.json`).
 it survives the loss of any `R` of those `R + 1` nodes without the bucket. Only the latest round is kept; runs are
 experiments and there is no round history to restore.
 
+### Stopping on a head-to-head win rate (#511)
+
+`target_win_rate` (a share above 0 and up to 1, with `teacher` naming an Ollama model) ends a run once its best weights beat the weights it
+started from, as an Ollama judge sees it. The settings are in `Settings`; only a coordinator built with them runs the rule, and
+`StartRun` does not carry them (polish's `polish_every` is not reachable from the API or the UI either), so today a test or a script sets them.
+
+- **What is compared.** `start.npz` holds the weights after the first trained round (a restart's is the checkpoint it started from), and
+  `best.npz` the best round so far. `eval_prompts.jsonl` holds up to 12 conversations from the validation split, topped up from the **end** of
+  the training prompts when validation has fewer (the teacher's polish windows start at the front); each line says which split it came from.
+  Prompts the polish turned into lessons (`lessons.jsonl`) are left out when the comparison runs. The number of prompts from each split is
+  logged and journaled in the `judging` event. A run with no validation split is refused: no round would ever be the best.
+- **When.** After a round that made a new best (a polish, if one runs, comes first and its result is what is compared), once per new best.
+  The run holds the next round open while the teacher judges (phase `judging`, event `judging`); a comparison that fails, or takes longer than
+  `versus_seconds` (600 by default, wall clock), is skipped, journaled in a `win_rate` event, and the rounds go on. A stop or step-down
+  discards it. A comparison that timed out leaves its worker behind: it is told to halt, but keeps its two models loaded until its next check
+  of that flag (and an Ollama request already sent ends only by its own timeout). **The final round is never compared**: the run ends there anyway, and its comparison would hold nothing back.
+- **The rule.** Twelve prompts make a noisy reading, so the run stops only after **two comparisons in a row** (two successive new bests) each
+  win the target share (a tie counts half). The prompt set can shrink between two readings as lessons grow (prompts a lesson teaches are
+  dropped), so the two readings need not use identical prompts. A reading under the target, or a comparison that gave no number, starts the count again.
+  `rules.win_rate` and `rules.win_hits` are kept in `diloco.json`.
+- **A coordinator made from a replica** (a failover) has neither the prompts nor the starting weights: it journals `win_rate_off` and goes on
+  without the rule.
+
 ### The owner restarting (#479)
 
 The coordinator runs in the owner's API process, so a restart (a dev `--reload` included) takes it away. Its outer weights and momentum are

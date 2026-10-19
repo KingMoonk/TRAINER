@@ -474,7 +474,7 @@ class Services:
         raise NotImplementedError
 
     def has_reviewed_text(self, dataset_ids):
-        """True when any of the text sets holds a plain-text example marked Good (a run that trains on reviewed examples only needs one)."""
+        """True when a run that trains on reviewed examples only would have text to train on in these sets."""
         raise NotImplementedError
 
     def text_sets(self):
@@ -2104,8 +2104,9 @@ class WorkspaceServices(Services):
         return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
 
     def has_reviewed_text(self, dataset_ids):
-        """True when any of the text sets holds a plain-text example marked Good (what a reviewed_only run trains on)."""
-        return any(self.workspace.sample(dataset_id, limit=1, reviewed_only=True, kind="text") for dataset_id in dataset_ids)
+        """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held
+        back for scoring does not count."""
+        return bool(self.examples({"datasets": list(dataset_ids), "reviewed_only": True}))
 
     def _once(self, key):
         """The lock held while one cache entry is made: other entries are not held up, and an entry both shell lanes ask for is made once."""
