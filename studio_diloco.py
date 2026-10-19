@@ -496,6 +496,10 @@ class Coordinator:
                              f"{'is' if len(coordinator.spans) == 1 else 'are'} supplied (later_examples); training on the first would be a different run.")
         if not state:
             coordinator._start_files(model)
+            held = directory / "paused.json"  # a pause before the first round closed
+            if held.is_file():
+                saved = json.loads(held.read_text(encoding="utf-8"))
+                coordinator.paused, coordinator.rules = bool(saved.get("paused")), drules.State.from_json(saved.get("rules"))
         return coordinator
 
     @staticmethod
@@ -1191,8 +1195,11 @@ class Coordinator:
                 raise Stale("The run is over; there is nothing to pause.")
             if self.paused:
                 return
+            self.paused = True  # first, so the advance below closes a due round but opens no other
             self._advance()
-            self.paused = True
+            if self.finished:  # the advance ended the run: there was nothing left to pause
+                self.paused = False
+                raise Stale("The run is over; there is nothing to pause.")
             drules.accrue(self.rules, self.clock(), self._counting())
             self._event("paused", "", self.next_round, "The run was paused by you. No new round opens until you resume it.")
             self._save_paused()
@@ -1218,11 +1225,12 @@ class Coordinator:
 
     def _save_paused(self):
         """Write the paused flag (and the active seconds it freezes) to diloco.json without closing a round. Before the first round has
-        closed there is no diloco.json yet: write the state of round 0, which is what a restart builds from."""
+        closed there is no diloco.json yet (and no weights worth a restart): only the flag goes to paused.json, which build reads."""
         from studio_core import atomic_json
+        self._state = (None, b"")  # a replica that fetched the state before this change must fetch it again
         path = self.directory / "diloco.json"
         if not path.is_file():
-            self._persist(self.last_members or [], self.deal)
+            atomic_json(self.directory / "paused.json", {"paused": self.paused, "rules": self.rules.to_json()})
             return
         saved = json.loads(path.read_text(encoding="utf-8"))
         atomic_json(path, {**saved, "paused": self.paused, "rules": self.rules.to_json()})
@@ -1281,7 +1289,7 @@ class Coordinator:
             "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
             "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
             "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash,
-            "rules": self.rules.to_json(), "layout": [count for _, count in self.spans], "paused": self.paused})
+            "rules": self.rules.to_json(), "layout": [count for _, count in self.spans], "paused": self.paused and not self.finished})
         if old and old != self.state_file:
             (self.directory / old).unlink(missing_ok=True)
         return step
@@ -1710,6 +1718,8 @@ class Member:
             if view["state"] == "finished":
                 self.finished = True
                 return None
+            if view["state"] == "pending" and view.get("paused"):
+                self._replica_paused()
             if view["state"] == "pending" and view.get("paused") and not quiet and not noted:
                 noted = True
                 self.emit({"type": "info", "text": "The run is paused by its owner. Waiting for it to be resumed."})
@@ -1775,6 +1785,19 @@ class Member:
         if not self.prefetched and (self.prefetch is None or not self.prefetch.is_alive()):
             self.prefetch = threading.Thread(target=self._prefetch, args=(self.replica_epoch,), name=f"diloco-replica-{self.node}", daemon=True)
             self.prefetch.start()
+
+    def _replica_paused(self):
+        """The run is paused and no round is open, so the replica's copy of diloco.json (fetched when the round before opened) does not
+        say so: record it, so a coordinator made from this replica comes up paused."""
+        if self.replica_dir is None or self.holding is None:
+            return
+        path = self.replica_dir / STATE_FILE
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not record.get("paused"):
+            self._write_replica(self.replica_epoch, STATE_FILE, json.dumps({**record, "paused": True}).encode("utf-8"))
 
     def _write_replica(self, epoch, name, data):
         """Write one file of the replica folder, unless that replica's epoch is over (demoted, or the run ended): checked and written

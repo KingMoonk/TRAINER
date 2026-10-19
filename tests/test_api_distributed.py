@@ -1,5 +1,6 @@
 """The Training tab's backend: a coordinator's snapshot and controls (studio_diloco), the invitations and the read model
 (studio_distributed), and the routes over FakeServices (studio_api.routers.distributed)."""
+import json
 import socket
 import tempfile
 import threading
@@ -231,6 +232,20 @@ class ReadModel(unittest.TestCase):
             self.assertEqual(runs.restart_params(self.run)["restart_from"], str(Path(folder) / "best.npz"))
             self.assertFalse(runs.view(self.run, self.coordinator(self.snap()), self.job)["can_restart"])  # not while it goes
 
+    def test_a_run_coordinated_elsewhere_after_a_handoff_cannot_be_restarted(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            self.run.folder = folder
+            (Path(folder) / "last.npz").write_bytes(b"x")
+            ended = types.SimpleNamespace(snapshot=lambda: self.snap(state="stopped", round=1), term=2)
+            self.assertFalse(runs.view(self.run, ended, None)["can_restart"])
+            with self.assertRaisesRegex(ValueError, "coordinated"):
+                runs.restart_params(self.run, 2)
+            self.assertTrue(runs.view(self.run, self.coordinator(self.snap(state="stopped", round=1)), None)["can_restart"])
+
+    def test_only_the_best_round_is_marked_best(self):
+        rows = runs.round_rows([{"round": n, "step": n, "contributed": [], "members": [], "dropped": []} for n in range(3)], 1)
+        self.assertEqual([r["best"] for r in rows], [False, True, False])
+
     def test_a_run_that_has_not_started_is_queued_or_starting_and_its_machines_are_invited(self):
         self.job.status = "waiting"
         view = runs.view(self.run, None, self.job)
@@ -423,9 +438,9 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/resume").status_code, 409)
 
     def test_a_finished_run_is_restarted_as_a_new_run_from_its_best_weights(self):
-        first = self.wait_state(self.start().json()["id"], "finished")
+        first = self.wait_state(self.start(outer_lr=.5).json()["id"], "finished")
         self.assertEqual((first["can_restart"], first["best_round"], first["stop_reason"]), (True, 2, "All 3 rounds are done."))
-        self.assertEqual([r["best"] for r in first["history"]], [True, True, True])
+        self.assertEqual([r["best"] for r in first["history"]], [False, False, True])  # one best round, not every one
         queued = []
         enqueue = self.services.enqueue
         self.services.enqueue = lambda job: (queued.append(job), enqueue(job))[1]
@@ -438,8 +453,14 @@ class Routes(unittest.TestCase):
         self.assertEqual([j.id for j in queued], [fresh["id"]])
         params = queued[0].params
         self.assertTrue(params["restart_from"].endswith("best.npz"), params["restart_from"])
-        self.assertEqual((params["rounds"], params["datasets"]), (3, ["Your files"]))
+        self.assertEqual((params["rounds"], params["datasets"], params["outer_lr"]), (3, ["Your files"], .5))
+        original = runs.RUNS[first["id"]].params
+        carried = lambda p: json.loads(json.dumps({k: v for k, v in p.items() if k not in runs.NOT_RESTARTED}))
+        self.assertEqual(carried(original), carried(params))  # every setting carried
         self.assertEqual(self.wait_state(fresh["id"], "finished")["round"], 3)
+        again = self.client.post(f"/distributed/runs/{first['id']}/restart")  # a run is restarted once
+        self.assertEqual(again.status_code, 409, again.text)
+        self.assertFalse(self.client.get(f"/distributed/runs/{first['id']}").json()["can_restart"])
 
     def test_a_run_that_is_going_or_saved_nothing_cannot_be_restarted(self):
         run_id = self.start(rounds=2000).json()["id"]

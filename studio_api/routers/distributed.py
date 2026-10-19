@@ -476,12 +476,14 @@ def restart_run(run_id: str, services: Services) -> Run:
     if row["state"] in runs.ACTIVE:
         raise HTTPException(409, "The run is still going. Stop it first.")
     try:
-        params = runs.restart_params(run)
+        params = runs.restart_params(run, row["term"])
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
     fresh = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=f"{run.label}, restarted", params=params)
     runs.open_run(fresh)
     services.enqueue(fresh)
+    run.restarted_as = fresh.id
+    runs.persist()
     services.start_queue()
     return Run.model_validate(_found(services, fresh.id))
 

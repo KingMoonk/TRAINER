@@ -137,7 +137,7 @@ class FakeCoordinator:
         self.history.append({
             "round": number, "step": (number + 1) * self.steps, "generation": 1, "members": list(self.roster), "contributed": counted,
             "dropped": dropped, "tokens": sum(node_tokens.values()), "steps": {m: self.steps for m in counted},
-            "loss": loss, "val_loss": round(loss + .08, 4), "best": True, "seconds": done * self.unit,
+            "loss": loss, "val_loss": round(loss + .08, 4), "seconds": done * self.unit,
             "delta_bytes": int(size) * len(counted), "theta_bytes": BYTES * len(self.roster), "delta_dtype": self.dtype,
             "node_tokens": node_tokens, "node_seconds": {m: profiles[m]["train"] * self.unit for m in counted},
             "node_bytes": {m: int(size) for m in counted}, "outer_step_norm": round(.6 / (number + 3), 4),
@@ -241,7 +241,7 @@ class FakeCoordinator:
                     "contributed": sum(1 for n in nodes.values() if n["sent"]) if not self.finished else 0,
                     "expected": len(live) if not self.finished else 0, "theta_bytes": BYTES, "now_s": now * self.unit,
                     "timeline": [*self.timelines, *shown], "events": [dict(event) for event in self.events], "paused": self.paused,
-                    "rules": {"best_round": self.round - 1 if self.history else None, "best_loss": self.history[-1]["val_loss"] if self.history else None,
+                    "rules": {"best_round": self.history[-1]["round"] if self.history else None, "best_loss": self.history[-1]["val_loss"] if self.history else None,
                               "stop_rule": "", "stop_text": ""}}
 
     def _phase(self, plan, offset, closes, states, live):

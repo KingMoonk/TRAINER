@@ -1,5 +1,7 @@
 """Pause and resume of a DiLoCo run (#490), and starting a run from another run's weights: tiny runs on an injected clock."""
+import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -154,6 +156,72 @@ class Pausing(unittest.TestCase):
         c.pause()
         c.submit(number, "a", view["generation"], 0, 10, 2, support.constant_delta(c), 1.)
         self.assertTrue(support.read_json(self.dir / "diloco.json")["paused"])
+
+
+    def test_a_pause_before_the_first_round_writes_only_the_flag(self):
+        c = self.coordinator()
+        c.pause()
+        self.assertFalse((self.dir / "diloco.json").exists())
+        self.assertFalse((self.dir / "last.npz").exists())
+        self.assertTrue((self.dir / "paused.json").is_file())
+        with self.assertRaises(LookupError):
+            c.state_bytes(0)
+        again = self.coordinator()
+        self.assertTrue(again.paused)
+        again.resume()
+        self.assertFalse(self.coordinator().paused)
+
+    def due(self, c):
+        """A round of a and b that only a answered, past its deadline: the next advance closes it. Returns its number."""
+        c.join("a")
+        c.join("b")
+        number = c.next_round
+        view = c.round_view(number, "a")
+        c.round_view(number, "b")
+        c.submit(number, "a", view["generation"], 0, 10, 2, support.constant_delta(c), 1.)
+        self.clock.now += 10_000.
+        return number
+
+    def test_a_pause_closes_a_due_round_and_opens_no_other(self):
+        c = self.coordinator(min_members=2)
+        number = self.due(c)
+        c.pause()
+        self.assertIsNone(c.current)
+        self.assertEqual(c.next_round, number + 1)
+        self.assertEqual(c.round_view(c.next_round, "a")["state"], "pending")
+
+    def test_pausing_a_run_that_ends_in_the_advance_is_refused(self):
+        c = self.coordinator(rounds=1, min_members=2)
+        self.due(c)
+        with self.assertRaises(studio_diloco.Stale):
+            c.pause()
+        self.assertTrue(c.finished)
+        self.assertFalse(c.paused)
+
+    def test_a_pause_drops_the_state_a_replica_may_have_fetched(self):
+        c = self.coordinator()
+        c.join("a")
+        self.send(c)
+        first = c.state_bytes(c.next_round)
+        c.pause()
+        second = c.state_bytes(c.next_round)
+        self.assertNotEqual(first, second)
+        self.assertTrue(json.loads(studio_diloco.decode_state(second)[1])["paused"])
+
+
+class ReplicaOfAPausedRun(unittest.TestCase):
+    def test_a_member_that_sees_the_pause_records_it_for_a_successor(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            replica = Path(tmp) / "replica"
+            replica.mkdir()
+            path = replica / "diloco.json"
+            path.write_text(json.dumps({"round": 1, "paused": False}), encoding="utf-8")
+            member = studio_diloco.Member(None, "run1", "n", 0, Path(tmp) / "shards", threading.Event(), replica_dir=replica)
+            member._replica_paused()  # holding no round: nothing to record
+            self.assertFalse(json.loads(path.read_text(encoding="utf-8"))["paused"])
+            member.holding = (1, 0)
+            member._replica_paused()
+            self.assertTrue(json.loads(path.read_text(encoding="utf-8"))["paused"])
 
 
 class StartingFrom(unittest.TestCase):
