@@ -93,6 +93,7 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
   await expect(tray).toContainText(existing.length ? "No changes" : "Not saved yet");
 
   // Pick a different position module: the picker's menu comes from /design/part-options.
+  await page.getByRole("button", { name: "Advanced modules", exact: true }).click();
   const picker = page.getByTestId("picker-position");
   const before = await picker.textContent();
   await picker.click();
