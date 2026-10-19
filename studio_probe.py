@@ -25,6 +25,8 @@ STEPS = 3  # timed steps (the median is kept)
 BUDGET_S = 4.  # stop timing a device after this many seconds (one timed step is always taken)
 LARGER_BATCH = 4  # the batch multiple tried on the GPU when the CPU wins
 CLOSE = 1.05  # the GPU must be this much faster to be chosen over the CPU; below it the CPU stays
+MAX_AGE_S = 30 * 86400.  # a probe older than this is not reported to peers: torch, the driver or the machine may have changed since
+REPORT_LIMIT = 64  # shapes a node tells its peers about (the newest)
 VERSION = 1  # bump when the measurement changes meaning: old cache entries are ignored
 
 _lock = threading.Lock()
@@ -229,6 +231,38 @@ def cached(spec, vocabulary, batch, status, path=None):
     path = default_path() if path is None else path
     hit = _load(path).get(key) if path else None
     return hit if isinstance(hit, dict) and hit.get("version") == VERSION else None
+
+
+def reported(status, path=None, now=None, max_age=MAX_AGE_S, limit=REPORT_LIMIT):
+    """What this node tells its peers (`GET /node`): {shape key: {device, seconds: {device: s}, tokens, age_s}} for the newest `limit`
+    probes made on THIS machine as it is now (same processor, threads, torch and GPU: the machine part of the cache key) and not older
+    than `max_age`. A probe from another torch or GPU is left out, so it is never trusted. Ages, not timestamps, so no two clocks are
+    compared. Never measures."""
+    if not status.get("available"):
+        return {}
+    machine = machine_key(status)
+    path = default_path() if path is None else path
+    now = time.time() if now is None else now
+    table = dict(_load(path)) if path else {}
+    table.update(_memory)
+    rows = []
+    for key, hit in table.items():
+        shape, _, where = key.partition("|")
+        at = hit.get("measured_at") if isinstance(hit, dict) else None
+        if where != machine or hit.get("version") != VERSION or not isinstance(at, (int, float)) or not 0 <= now - at <= max_age:
+            continue
+        seconds = {d: float(s) for d, s in (hit.get("seconds") or {}).items() if isinstance(s, (int, float)) and s > 0}
+        if hit.get("device") in seconds and hit.get("tokens"):
+            rows.append((at, shape, {"device": hit["device"], "seconds": seconds, "tokens": int(hit["tokens"]), "age_s": now - at}))
+    rows.sort(key=lambda row: row[0], reverse=True)
+    return {shape: value for _, shape, value in rows[:limit]}
+
+
+def any_stored(path=None):
+    """Whether any probe has been made on this machine (in memory or in the cache file): a cheap check that spares a caller which only
+    wants `cached` from bringing the GPU up when there is nothing to find."""
+    path = default_path() if path is None else path
+    return bool(_memory) or bool(path and _load(path))
 
 
 def forget():

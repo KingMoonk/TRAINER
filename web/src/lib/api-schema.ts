@@ -4297,6 +4297,16 @@ export interface components {
             /** Has Text */
             has_text: boolean;
         };
+        /** HealthVerdict */
+        HealthVerdict: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "working" | "not_helping" | "diverging" | "not_enough_data";
+            /** Text */
+            text: string;
+        };
         /** Hold */
         Hold: {
             /**
@@ -5127,6 +5137,26 @@ export interface components {
             /** Tokens Per Second */
             tokens_per_second: number | null;
         };
+        /**
+         * MemberHealth
+         * @description One member's share of one round, measured (studio_run_health.record). compute + wait + sync is the round's seconds.
+         */
+        MemberHealth: {
+            /** Compute S */
+            compute_s: number;
+            /** Loss */
+            loss: number | null;
+            /** Steps */
+            steps: number;
+            /** Sync S */
+            sync_s: number;
+            /** Tokens */
+            tokens: number;
+            /** Tokens Per S */
+            tokens_per_s: number | null;
+            /** Wait S */
+            wait_s: number | null;
+        };
         /** Message */
         Message: {
             /** Content */
@@ -5244,6 +5274,13 @@ export interface components {
             hostname: string;
             /** Memory Bytes */
             memory_bytes: number;
+            /**
+             * Speeds
+             * @default {}
+             */
+            speeds: {
+                [key: string]: components["schemas"]["Speed"];
+            };
             /** Version */
             version: string;
         };
@@ -5639,10 +5676,20 @@ export interface components {
         };
         /** PresetCost */
         PresetCost: {
+            /**
+             * Device
+             * @default cpu
+             */
+            device: string;
             /** Fits */
             fits: boolean | null;
             /** Lines */
             lines: string[];
+            /**
+             * Measured
+             * @default false
+             */
+            measured: boolean;
             /** Need */
             need: number;
             /** Params */
@@ -6537,6 +6584,39 @@ export interface components {
             /** Val Loss Before Polish */
             val_loss_before_polish?: number | null;
         };
+        /** RoundHealth */
+        RoundHealth: {
+            /** Bytes Down */
+            bytes_down: number;
+            /** Bytes Up */
+            bytes_up: number;
+            /** Compression */
+            compression: number | null;
+            /** Dtype */
+            dtype: string;
+            /** Loss */
+            loss: number | null;
+            /** Lr */
+            lr: number | null;
+            /** Members */
+            members: {
+                [key: string]: components["schemas"]["MemberHealth"];
+            };
+            /** Round */
+            round: number;
+            /** Seconds */
+            seconds: number;
+            /** Slowest */
+            slowest: string | null;
+            /** Sync S */
+            sync_s: number;
+            /** Tokens */
+            tokens: number;
+            /** Update Norm */
+            update_norm: number | null;
+            /** Val Loss */
+            val_loss: number | null;
+        };
         /** RoundQueued */
         RoundQueued: {
             /** Id */
@@ -6776,6 +6856,7 @@ export interface components {
              * @default
              */
             handoff: string;
+            health?: components["schemas"]["RunHealth"] | null;
             /** History */
             history: components["schemas"]["Round"][];
             /** Id */
@@ -6887,6 +6968,35 @@ export interface components {
             t: number;
             /** Text */
             text: string;
+        };
+        /**
+         * RunHealth
+         * @description Is the cluster helping (studio_run_health.summarize)? The numbers are over the latest rounds that had two or more members.
+         */
+        RunHealth: {
+            /** Aggregate Tokens Per S */
+            aggregate_tokens_per_s: number | null;
+            /** Baseline Node */
+            baseline_node: string;
+            /** Baseline Tokens Per S */
+            baseline_tokens_per_s: number | null;
+            /** Basis */
+            basis: string;
+            /** Comm Share */
+            comm_share: number | null;
+            /** Rounds */
+            rounds: components["schemas"]["RoundHealth"][];
+            /** Speedup */
+            speedup: number | null;
+            /** Straggler */
+            straggler: string;
+            verdict: components["schemas"]["HealthVerdict"];
+            /** Wait Node */
+            wait_node: string;
+            /** Wait Share */
+            wait_share: number | null;
+            /** Window */
+            window: number;
         };
         /** RunPageModel */
         RunPageModel: {
@@ -7189,6 +7299,19 @@ export interface components {
             spec: {
                 [key: string]: unknown;
             };
+        };
+        /** Speed */
+        Speed: {
+            /** Age S */
+            age_s: number;
+            /** Device */
+            device: string;
+            /** Seconds */
+            seconds: {
+                [key: string]: number;
+            };
+            /** Tokens */
+            tokens: number;
         };
         /** SplitBody */
         SplitBody: {
