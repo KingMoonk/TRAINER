@@ -36,10 +36,36 @@ const preview = {
   tokens_per_second: null,
 };
 
-type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number };
+type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null };
 
-function server({ known = true } = {}) {
-  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known };
+const SIZING = {
+  verdict: "model_too_small",
+  warning: "This model is too small for this much text. The plan reads 25k word pieces per parameter.",
+  tokens_per_param: 25000,
+  measured: true,
+  seconds_per_step: 0.2275,
+  tokens_per_second: 18000,
+  device: "cpu",
+  run_hours: 51.8,
+  hours: 4,
+  expected: {
+    basis: "fit",
+    loss_planned: 1.53,
+    loss_flat: 1.6,
+    flat_steps: 129129,
+    curve: [
+      [1000, 2.5],
+      [50000, 1.7],
+      [129129, 1.6],
+      [819635, 1.53],
+    ],
+  },
+  suggestion: { width: 192, layers: 4, params: 1879488, steps: 14007, hours: 4, tokens_per_param: 30.5, same_design: false, text: "For 4.0 h, a design about 192 wide and 4 layers deep fits best." },
+  gpu_note: "A RTX 4090 would run this design about 10.0× faster than the CPU does.",
+};
+
+function server({ known = true, sizing = SIZING as unknown } = {}) {
+  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[] };
   mockApi({
     "GET /versions": {
       body: [
@@ -76,6 +102,7 @@ function server({ known = true } = {}) {
           passes_over_text: state.known && ids.length ? Math.round(PIECES / perStep) : null,
           steps,
           minutes: null,
+          sizing: state.known && ids.length ? state.sizing : null,
           lr: 0.0006,
           enough: state.known && ids.length ? { ratio: 2, ratio_text: "2.00", headline: "This model could use about 10.0× more text than you have", verdict: "little" } : null,
           expectation: state.known && ids.length ? { headline: "Expect the error to fall to about 3.1 bits per character", details: "Based on the size of the model and the text." } : null,
@@ -91,6 +118,10 @@ function server({ known = true } = {}) {
     "POST /pretraining/preview": () => {
       state.known = true; // the job has the answer; it arrives on /events
       return { status: 202, body: job("p1", "pretrain_preview", null, "running") };
+    },
+    "POST /pretraining/step_rate": ({ body }) => {
+      state.rates.push(body);
+      return { status: 202, body: job("r1", "step_rate", null, "running") };
     },
     "POST /pretraining/lr_range_test": ({ body }) => {
       state.lr.push(body);
@@ -143,6 +174,46 @@ describe("Pretraining page", () => {
     await waitFor(() => expect(screen.getByTestId("selected-line")).toHaveTextContent(/^nothing selected$/));
     expect(await screen.findByTestId("reason")).toHaveTextContent(/^Choose some text first\.$/);
     expect(screen.getByRole("button", { name: "Add to the queue" })).toBeDisabled();
+  });
+
+  test("the plan warns that the model is too small, shows the time and the expected curve, and offers a design that fits the hours", async () => {
+    const state = server();
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("sizing-warning")).toHaveTextContent("This model is too small for this much text");
+    expect(screen.getByTestId("sizing-warning")).toHaveAttribute("role", "alert");
+    expect(screen.getByTestId("sizing-time")).toHaveTextContent("These 977 steps take about 2.2 days on the CPU.");
+    expect(screen.getByTestId("sizing-expected")).toHaveTextContent("by step 129,129");
+    expect(screen.getByTestId("expected-curve")).toBeVisible();
+    expect(screen.getByTestId("sizing-suggestion")).toHaveTextContent("a design about 192 wide and 4 layers deep");
+    expect(screen.getByRole("link", { name: /Open the Network designer/ })).toHaveAttribute("href", "/builder");
+    expect(screen.getByTestId("sizing-gpu")).toHaveTextContent("RTX 4090");
+    expect(state.plans.at(-1)).toMatchObject({ hours: 4, steps: null });
+    expect(state.rates).toEqual([]); // measured already: no timing job
+
+    await user.click(screen.getByRole("radio", { name: "12 h" }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ hours: 12 }));
+  });
+
+  test("a same-design suggestion can be taken as the step count, and choosing a length gives it back", async () => {
+    const state = server({ sizing: { ...SIZING, verdict: "balanced", suggestion: { ...SIZING.suggestion, same_design: true, steps: 500, text: "Keep this design and run 500 steps." } } });
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    await user.click(await screen.findByRole("button", { name: "Use 500 steps" }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ steps: 500 }));
+    expect(screen.queryByRole("link", { name: /Network designer/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Long" }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ steps: null, passes: 4 }));
+  });
+
+  test("a design this computer has not timed is timed by a job, and the plan is asked again", async () => {
+    const state = server({ sizing: { ...SIZING, measured: false, seconds_per_step: null, run_hours: null, suggestion: null, expected: null } });
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("sizing-time")).toHaveTextContent("Timing a few steps of this design on this computer…");
+    await waitFor(() => expect(state.rates).toEqual([{ version: 2, dataset_ids: ["stories"], rows: 16, preview_rows: 6 }]));
+    state.sizing = SIZING;
+    act(() => emit("job", job("r1", "step_rate", { seconds_per_step: 0.2275, tokens_per_second: 18000, device: "cpu", device_name: "CPU", note: "", rows: 16, context: 256 })));
+    await waitFor(() => expect(screen.getByTestId("sizing-time")).toHaveTextContent("about 2.2 days"));
   });
 
   test("the size preview shows a skeleton, then the result its job delivers", async () => {

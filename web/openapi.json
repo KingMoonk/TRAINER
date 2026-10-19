@@ -1630,6 +1630,68 @@
         "title": "Expectations",
         "type": "object"
       },
+      "Expected": {
+        "description": "What the plan can expect of the validation error. `fit`: drawn from this design's own earlier run; `rule`: no run to read.",
+        "properties": {
+          "basis": {
+            "enum": [
+              "fit",
+              "rule"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "curve": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Curve",
+            "type": "array"
+          },
+          "flat_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flat Steps"
+          },
+          "loss_flat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Flat"
+          },
+          "loss_planned": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss Planned"
+          }
+        },
+        "required": [
+          "basis"
+        ],
+        "title": "Expected",
+        "type": "object"
+      },
       "Experiment": {
         "properties": {
           "question": {
@@ -4893,6 +4955,13 @@
             "title": "Hold",
             "type": "number"
           },
+          "hours": {
+            "default": 4.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1440.0,
+            "title": "Hours",
+            "type": "number"
+          },
           "mode": {
             "default": "catch_up",
             "enum": [
@@ -4922,6 +4991,19 @@
             "minimum": 1.0,
             "title": "Rows",
             "type": "integer"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
           },
           "version": {
             "anyOf": [
@@ -5431,6 +5513,16 @@
             "default": "",
             "title": "Reason",
             "type": "string"
+          },
+          "sizing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sizing"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "steps": {
             "anyOf": [
@@ -8337,6 +8429,114 @@
         "title": "SizesBody",
         "type": "object"
       },
+      "Sizing": {
+        "description": "Does the model fit the text and the time? (studio_ia.sizing.sizing)",
+        "properties": {
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expected"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gpu_note": {
+            "default": "",
+            "title": "Gpu Note",
+            "type": "string"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "measured": {
+            "title": "Measured",
+            "type": "boolean"
+          },
+          "run_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Hours"
+          },
+          "seconds_per_step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Per Step"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Suggestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens_per_param": {
+            "title": "Tokens Per Param",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          },
+          "verdict": {
+            "enum": [
+              "model_too_small",
+              "data_too_small",
+              "balanced"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "warning": {
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "warning",
+          "tokens_per_param",
+          "measured",
+          "hours"
+        ],
+        "title": "Sizing",
+        "type": "object"
+      },
       "SlotInfo": {
         "properties": {
           "modules": {
@@ -8858,6 +9058,170 @@
         "title": "StatusRequest",
         "type": "object"
       },
+      "StepRate": {
+        "description": "studio_scaling.measure_step_rate: what a step of the design costs on this computer, on the device a run would use.",
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "device_name": {
+            "title": "Device Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "seconds_per_step": {
+            "title": "Seconds Per Step",
+            "type": "number"
+          },
+          "tokens_per_second": {
+            "title": "Tokens Per Second",
+            "type": "number"
+          }
+        },
+        "required": [
+          "seconds_per_step",
+          "tokens_per_second",
+          "device",
+          "device_name",
+          "rows",
+          "context"
+        ],
+        "title": "StepRate",
+        "type": "object"
+      },
+      "StepRateJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StepRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "StepRateJob",
+        "type": "object"
+      },
+      "StepRateRequest": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "preview_rows": {
+            "default": 6,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Preview Rows",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "StepRateRequest",
+        "type": "object"
+      },
       "Stop": {
         "properties": {
           "epoch": {
@@ -8887,6 +9251,55 @@
           "bytes"
         ],
         "title": "StorageUse",
+        "type": "object"
+      },
+      "Suggestion": {
+        "description": "The design and step count that fit the hours given (studio_ia.sizing.suggest_design).",
+        "properties": {
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "layers": {
+            "title": "Layers",
+            "type": "integer"
+          },
+          "params": {
+            "title": "Params",
+            "type": "integer"
+          },
+          "same_design": {
+            "title": "Same Design",
+            "type": "boolean"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "tokens_per_param": {
+            "title": "Tokens Per Param",
+            "type": "number"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "layers",
+          "params",
+          "steps",
+          "hours",
+          "tokens_per_param",
+          "same_design",
+          "text"
+        ],
+        "title": "Suggestion",
         "type": "object"
       },
       "SummaryJob": {
@@ -15574,6 +15987,48 @@
           }
         },
         "summary": "Pretrain Preview",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/step_rate": {
+      "post": {
+        "description": "Time a few steps of the version's design on the device a run of it would use, as a job. The plan reads the answer\n(`sizing.measured`) for the time a run takes and the design that fits the hours given. 409 while the size of the chosen text is\nstill unknown (the word list size comes from it).",
+        "operationId": "step_rate_pretraining_step_rate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepRateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StepRateJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Step Rate",
         "tags": [
           "pretraining"
         ]

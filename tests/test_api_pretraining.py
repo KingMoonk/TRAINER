@@ -38,6 +38,9 @@ class PretrainingRouterTests(ApiCase):
         self.assertFalse(found["result"]["diverged"])
         self.run_page_reads()
         self.save_versions()
+        rate = self.job("POST", "/pretraining/step_rate", json={"dataset_ids": ["a"], "rows": 8})
+        self.assertEqual(rate["status"], "done", rate)
+        self.assertEqual((rate["result"]["device"], rate["result"]["rows"]), ("cpu", 8))
         self.call("GET", "/pretraining/text_sets")
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"]})
         self.assertAllRoutesHit()
@@ -224,6 +227,114 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual([p["status"] for p in finished], ["queued", "running", "done"])
         self.assertEqual(finished[-1]["result"]["suggestion"], done["result"]["suggestion"])  # the result rides the last event
         self.assertEqual({p["kind"] for p in self.events.of("job")}, {"pretrain_preview", "word_lists", "lr_range_test"})
+
+
+class PlanSizingTests(ApiCase):
+    """The plan's size section: the verdict, the time from a measured step rate, and the design that fits the hours given."""
+
+    prefix = "/pretraining"
+    PIECES, PARAMS = 545_000_000, 133_312  # version 1 on the five catalog text sets
+    RATE = {"seconds_per_step": .2275, "tokens_per_second": 18_000., "device": "cpu", "device_name": "PyTorch / CPU", "note": "",
+            "rows": 16, "context": 256}
+
+    def plan_for(self, rate=RATE, **body):
+        self.services.save_version(default_spec(), "first")
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": self.PIECES, "params": self.PARAMS, "vocab": 263, "context": 256,
+                                                             "first_rows": []}
+        self.services.cached_step_rate = lambda spec, rows: rate
+        return self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], **{"passes": 1, **body}})
+
+    def test_a_model_far_too_small_for_the_text_is_warned_and_given_a_design_that_fits_the_hours(self):
+        plan = self.plan_for(hours=4)
+        size = plan["sizing"]
+        self.assertEqual(size["verdict"], "model_too_small")
+        self.assertIn("too small", size["warning"])
+        self.assertGreater(size["tokens_per_param"], 1000)
+        suggestion = size["suggestion"]
+        self.assertFalse(suggestion["same_design"])
+        self.assertGreater(suggestion["params"], self.PARAMS)
+        self.assertLessEqual(suggestion["hours"], 4.01)  # the steps it suggests fit the stated time at the measured rate
+        self.assertGreaterEqual(suggestion["tokens_per_param"], 20)
+        self.assertLess(suggestion["steps"], plan["steps"])
+        self.assertIn("4.0 h", suggestion["text"])
+
+    def test_the_time_comes_from_the_measured_step_rate(self):
+        plan = self.plan_for()
+        self.assertTrue(plan["sizing"]["measured"])
+        self.assertAlmostEqual(plan["sizing"]["run_hours"], plan["steps"] * .2275 / 3600)
+        self.assertEqual(plan["minutes"], round(plan["steps"] * .2275 / 60))
+        base = self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], "passes": 1})
+        self.services.cached_step_rate = lambda spec, rows: dict(self.RATE, seconds_per_step=.455)
+        again = self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], "passes": 1})
+        self.assertAlmostEqual(again["sizing"]["run_hours"], 2 * base["sizing"]["run_hours"])
+
+    def test_a_chosen_step_count_replaces_the_passes_in_the_job(self):
+        plan = self.plan_for(steps=14_007)
+        self.assertEqual((plan["steps"], plan["config"]["steps"], plan["job"]["params"]["config"]["steps"]), (14_007, 14_007, 14_007))
+        self.assertAlmostEqual(plan["sizing"]["run_hours"], 14_007 * .2275 / 3600)
+        self.call("POST", "/pretraining/plan", 422, json={"dataset_ids": ["a"], "steps": 0})
+        self.assertIsNone(self.call("POST", "/pretraining/plan", json={"dataset_ids": [], "steps": 5})["steps"])
+
+    def test_without_a_measure_the_verdict_stands_and_the_time_waits(self):
+        plan = self.plan_for(rate=None)
+        size = plan["sizing"]
+        self.assertEqual((size["measured"], size["seconds_per_step"], size["run_hours"], size["suggestion"], plan["minutes"]),
+                         (False, None, None, None, None))
+        self.assertEqual(size["verdict"], "model_too_small")
+
+    def test_an_earlier_run_of_the_design_shows_where_its_error_went_flat(self):
+        points = [(s * 4096, v) for s, v in [(1000, 2.515), (5000, 2.006), (10000, 1.843), (20000, 1.764), (40000, 1.678), (80000, 1.622),
+                                             (120000, 1.608), (153000, 1.598)]]
+        self.services.loss_evidence = lambda version: {"points": points, "run": "runs/queue_49cb71ff"}
+        size = self.plan_for(passes=6)["sizing"]  # 6 passes over the five sets: about 800,000 steps, as the live plan asked for
+        self.assertIn("its own last run", size["warning"])
+        expected = size["expected"]
+        self.assertEqual(expected["basis"], "fit")
+        self.assertTrue(100_000 < expected["flat_steps"] < 180_000, expected["flat_steps"])
+        self.assertLess(expected["loss_planned"], expected["loss_flat"])
+        self.assertGreater(len(expected["curve"]), 10)
+        self.assertEqual(sorted(expected["curve"]), expected["curve"])
+
+    def test_the_earlier_run_is_not_read_for_a_catch_up_that_starts_from_other_weights(self):
+        asked = []
+        self.services.loss_evidence = lambda version: asked.append(version.number)
+        v1 = self.services.save_version(default_spec(), "first")
+        v2 = self.services.save_version(default_spec(), "second")
+        v2.parent, v1.best_checkpoint = 1, "/work/runs/v1/best.npz"
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": self.PIECES, "params": self.PARAMS, "vocab": 263, "context": 256}
+        self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"], "mode": "catch_up"})
+        self.assertEqual(asked, [])
+        self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"], "mode": "from_scratch"})
+        self.assertEqual(asked, [2])
+
+    def test_a_plan_that_fits_the_text_says_so(self):
+        self.services.save_version(default_spec(), "first")
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": 3_000_000, "params": self.PARAMS, "vocab": 263, "context": 256}
+        self.services.cached_step_rate = lambda spec, rows: self.RATE
+        size = self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"], "passes": 1})["sizing"]
+        self.assertEqual(size["verdict"], "balanced")
+        self.assertIn("suit each other", size["warning"])
+
+    def test_the_step_rate_job_needs_the_text_size_and_keeps_its_answer(self):
+        self.services.save_version(default_spec(), "first")
+        self.services.cached_preview = lambda ids, rows=16: None
+        self.call("POST", "/pretraining/step_rate", 409, json={"dataset_ids": ["a"]})
+        self.services.cached_preview = lambda ids, rows=16: {"vocab": 300}
+        seen = []
+        self.services.measure_step_rate = lambda spec, rows, vocab, stop=None: seen.append((rows, vocab)) or self.RATE
+        done = self.job("POST", "/pretraining/step_rate", json={"dataset_ids": ["a"], "rows": 16})
+        self.assertEqual((done["status"], seen), ("done", [(16, 300)]))
+        self.assertEqual(done["result"]["seconds_per_step"], .2275)
+
+    def test_a_device_that_cannot_hold_the_design_fails_the_job_with_the_sentence(self):
+        self.services.save_version(default_spec(), "first")
+
+        def refuse(spec, rows, vocab, stop=None):
+            raise RuntimeError("CUDA ran out of memory: use fewer rows.")
+        self.services.measure_step_rate = refuse
+        failed = self.job("POST", "/pretraining/step_rate", json={"dataset_ids": []})
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("fewer rows", failed["error"])
 
 
 if __name__ == "__main__":

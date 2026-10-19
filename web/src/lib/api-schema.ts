@@ -2173,6 +2173,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/step_rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Step Rate
+         * @description Time a few steps of the version's design on the device a run of it would use, as a job. The plan reads the answer
+         *     (`sizing.measured`) for the time a run takes and the design that fits the hours given. 409 while the size of the chosen text is
+         *     still unknown (the word list size comes from it).
+         */
+        post: operations["step_rate_pretraining_step_rate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/text_sets": {
         parameters: {
             query?: never;
@@ -4089,6 +4111,28 @@ export interface components {
             /** Lines */
             lines: string[];
         };
+        /**
+         * Expected
+         * @description What the plan can expect of the validation error. `fit`: drawn from this design's own earlier run; `rule`: no run to read.
+         */
+        Expected: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "fit" | "rule";
+            /**
+             * Curve
+             * @default []
+             */
+            curve: number[][];
+            /** Flat Steps */
+            flat_steps?: number | null;
+            /** Loss Flat */
+            loss_flat?: number | null;
+            /** Loss Planned */
+            loss_planned?: number | null;
+        };
         /** Experiment */
         Experiment: {
             /** Question */
@@ -5479,6 +5523,11 @@ export interface components {
              */
             hold: number;
             /**
+             * Hours
+             * @default 4
+             */
+            hours: number;
+            /**
              * Mode
              * @default catch_up
              * @enum {string}
@@ -5499,6 +5548,8 @@ export interface components {
              * @default 16
              */
             rows: number;
+            /** Steps */
+            steps?: number | null;
             /** Version */
             version?: number | null;
         };
@@ -5677,6 +5728,7 @@ export interface components {
              * @default
              */
             reason: string;
+            sizing?: components["schemas"]["Sizing"] | null;
             /** Steps */
             steps?: number | null;
             /** Version */
@@ -6870,6 +6922,40 @@ export interface components {
             /** V */
             v: number;
         };
+        /**
+         * Sizing
+         * @description Does the model fit the text and the time? (studio_ia.sizing.sizing)
+         */
+        Sizing: {
+            /** Device */
+            device?: string | null;
+            expected?: components["schemas"]["Expected"] | null;
+            /**
+             * Gpu Note
+             * @default
+             */
+            gpu_note: string;
+            /** Hours */
+            hours: number;
+            /** Measured */
+            measured: boolean;
+            /** Run Hours */
+            run_hours?: number | null;
+            /** Seconds Per Step */
+            seconds_per_step?: number | null;
+            suggestion?: components["schemas"]["Suggestion"] | null;
+            /** Tokens Per Param */
+            tokens_per_param: number;
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "model_too_small" | "data_too_small" | "balanced";
+            /** Warning */
+            warning: string;
+        };
         /** SlotInfo */
         SlotInfo: {
             /** Modules */
@@ -7090,6 +7176,77 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /**
+         * StepRate
+         * @description studio_scaling.measure_step_rate: what a step of the design costs on this computer, on the device a run would use.
+         */
+        StepRate: {
+            /** Context */
+            context: number;
+            /** Device */
+            device: string;
+            /** Device Name */
+            device_name: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Rows */
+            rows: number;
+            /** Seconds Per Step */
+            seconds_per_step: number;
+            /** Tokens Per Second */
+            tokens_per_second: number;
+        };
+        /** StepRateJob */
+        StepRateJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["StepRate"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /** StepRateRequest */
+        StepRateRequest: {
+            /**
+             * Dataset Ids
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Preview Rows
+             * @default 6
+             */
+            preview_rows: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
+            /** Version */
+            version?: number | null;
+        };
         /** Stop */
         Stop: {
             /** Epoch */
@@ -7101,6 +7258,28 @@ export interface components {
             bytes: number;
             /** Items */
             items: number;
+        };
+        /**
+         * Suggestion
+         * @description The design and step count that fit the hours given (studio_ia.sizing.suggest_design).
+         */
+        Suggestion: {
+            /** Hours */
+            hours: number;
+            /** Layers */
+            layers: number;
+            /** Params */
+            params: number;
+            /** Same Design */
+            same_design: boolean;
+            /** Steps */
+            steps: number;
+            /** Text */
+            text: string;
+            /** Tokens Per Param */
+            tokens_per_param: number;
+            /** Width */
+            width: number;
         };
         /** SummaryJob */
         SummaryJob: {
@@ -11346,6 +11525,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PreviewJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    step_rate_pretraining_step_rate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StepRateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepRateJob"];
                 };
             };
             /** @description Validation Error */

@@ -486,6 +486,26 @@ class Services:
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
 
+    def cached_step_rate(self, spec, rows):
+        """The step rate measure_step_rate found for `spec` at `rows` rows a step on this computer, or None while it is unknown. Never
+        computes. {"seconds_per_step", "tokens_per_second", "device", "device_name", "note", "rows", "context"}."""
+        return None
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        """Time a few optimizer steps of a throwaway copy of `spec` (`vocab` word pieces) on the device a run of it would use, keep the
+        answer (cached_step_rate) and return it. Slow: call it off the Tk thread. RuntimeError with a sentence when the device cannot
+        hold the model. None when `stop` (a threading.Event) ended it."""
+        raise NotImplementedError
+
+    def loss_evidence(self, version):
+        """The validation points of `version`'s newest run when that run started from step 0 on this design, {"points": [(word
+        pieces read, validation loss)], "run": folder}, else None. What the plan fits a curve to."""
+        return None
+
+    def device_facts(self):
+        """studio_backend.gpu_status(): {available, kind, name, ...} of the GPU this computer offers, or None when it cannot say."""
+        return None
+
     def word_lists(self):
         """studio_ia.pieces.word_lists for the Builder: the four word lists, the small and whole-word ones fitted on a sample
         of your plain text, and the example sentence they cut. Slow the first time: pages ask for it on the slow lane."""
@@ -1146,6 +1166,13 @@ class FakeServices(Services):
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
+
+    def cached_step_rate(self, spec, rows):
+        return self.measure_step_rate(spec, rows, 256)
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        return {"seconds_per_step": .25, "tokens_per_second": rows * 256 / .25, "device": "cpu", "device_name": "PyTorch / CPU", "note": "",
+                "rows": rows, "context": 256}
 
     def set_plan(self, plan):
         self._queue.plan = dict(plan)
@@ -2448,6 +2475,66 @@ class WorkspaceServices(Services):
             return {}
         hit = self._previews().get(self._preview_key(v, dataset_ids, rows))
         return None if hit is None else {**hit, "tokens_per_second": self._speed(read_metrics)}
+
+    def cached_step_rate(self, spec, rows):
+        return self._step_rates().get(self._rate_key(spec, rows))
+
+    def measure_step_rate(self, spec, rows, vocab, stop=None):
+        import studio_scaling
+        from studio_core import atomic_json
+        found = studio_scaling.measure_step_rate(spec, rows, vocab, stop=stop)
+        if found is None:
+            return None
+        found = {**found, "measured_at": time.time()}
+        store = self._step_rates()
+        with self._lock:
+            store[self._rate_key(spec, rows)] = found
+            while len(store) > PREVIEWS_KEPT:
+                store.pop(next(iter(store)))
+            atomic_json(self.root / "data" / "step_rates.json", store)
+        return found
+
+    def _step_rates(self):
+        """{design and rows -> measured step rate}, kept in data/step_rates.json: a rate belongs to this computer and its data folder."""
+        if getattr(self, "_step_rate_store", None) is None:
+            path = self.root / "data" / "step_rates.json"
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError):
+                loaded = {}
+            self._step_rate_store = loaded if isinstance(loaded, dict) else {}
+        return self._step_rate_store
+
+    @staticmethod
+    def _rate_key(spec, rows):
+        return json.dumps([spec, rows], sort_keys=True, default=str)
+
+    def loss_evidence(self, version):
+        from studio_core import read_json
+        from studio_model import read_metrics
+        try:
+            run = Path(self._abs(self.store.get(version.number)["runs"][-1]))
+        except (KeyError, IndexError, TypeError):
+            return None
+        try:
+            record = read_json(run / "run.json") if (run / "run.json").exists() else {}
+            config = read_json(run / "config.json")
+            context = read_json(run / "spec.json")["dims"]["n_ctx"]
+            rows = read_metrics(run / "metrics.jsonl")
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if record.get("initialized_from") or record.get("resumed_from"):
+            return None  # a run that began from other weights is not this design's curve from step 0
+        per_step = int(config.get("batch_size", 1)) * int(config.get("accumulation", 1)) * int(context)
+        points = [(r["step"] * per_step, r["val_loss"]) for r in rows if r.get("val_loss") is not None and r.get("step")]
+        return {"points": points, "run": str(run)} if points else None
+
+    def device_facts(self):
+        from studio_backend import gpu_status
+        try:
+            return gpu_status()
+        except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
+            return None
 
     def _preview_key(self, version, dataset_ids, rows):
         """Same chosen sets, design and stored data (records, held-back text) -> same preview."""
