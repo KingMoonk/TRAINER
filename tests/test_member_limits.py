@@ -147,7 +147,9 @@ class Offload(unittest.TestCase):
         """One member through a whole tiny run with offload_wanted faked; returns what train() was given and what the member said."""
         import studio_memory
         import studio_model
-        coordinator = support.build(self.dir / "run", "run", inner_steps=2, rounds=3, outer_lr=1.)
+        self.drives = getattr(self, "drives", 0) + 1
+        here = self.dir / f"drive{self.drives}"  # one folder per drive: a test may make several
+        coordinator = support.build(here / "run", "run", inner_steps=2, rounds=3, outer_lr=1.)
         studio_diloco.COORDINATORS["run"] = coordinator
         train, asked, events = studio_model.train, [], []
 
@@ -160,7 +162,7 @@ class Offload(unittest.TestCase):
             return train(*args, **options)
         train.calls = []
         with mock.patch.object(studio_memory, "offload_wanted", offload_wanted), mock.patch.object(studio_model, "train", spy):
-            rounds = studio_diloco.run_member(support.Peer(self.client), "run", "solo", 0, self.dir / "shards", self.dir / "out",
+            rounds = studio_diloco.run_member(support.Peer(self.client), "run", "solo", 0, here / "shards", here / "out",
                                               events.append, threading.Event(), wait=.2, memory_share=memory_share)
         self.assertTrue(coordinator.finished)
         self.assertIsNotNone(rounds)
@@ -180,8 +182,27 @@ class Offload(unittest.TestCase):
         self.assertFalse(any("optimizer state in host memory" in event.get("text", "") for event in events))
 
     def test_a_member_without_a_plan_asks_for_the_whole_device_like_a_job(self):
-        _, asked, _ = self.drive(False)
+        import studio_memory
+        caps = []
+
+        def capped(config, share, **options):
+            caps.append((share, options))
+            return config["batch_size"]
+        with mock.patch.object(studio_memory, "batch_cap", capped):
+            _, asked, _ = self.drive(False)
+            self.assertEqual((asked, caps), ([1.], []))  # offload off and no plan: the batch is left as declared
+            _, asked, _ = self.drive(True)
         self.assertEqual(asked, [1.])
+        self.assertEqual(caps, [(1., {"offload": True})])  # offloading without a plan still caps the batch to the whole device
+
+    def test_offloading_changes_no_numbers_on_the_cpu(self):
+        def losses(wanted):
+            _, _, events = self.drive(wanted)
+            studio_diloco.COORDINATORS.clear()
+            return [event["loss"] for event in events if event.get("type") == "metric" and event.get("loss") is not None]
+        off, on = losses(False), losses(True)
+        self.assertTrue(off)
+        np.testing.assert_allclose(on, off, rtol=1e-6, atol=1e-7)  # float tolerance, not exact equality
 
     def test_the_batch_is_capped_with_the_state_off_the_device_when_offloading(self):
         import studio_memory

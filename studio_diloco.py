@@ -2328,11 +2328,12 @@ class Member:
             cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": min(1_000_000, self.info["rounds"] * max(self.info["inner_steps"], int(self.info["inner_steps"] * MAX_SHARE)))}  # the loop bound (train() caps steps at 1,000,000): no member is dealt more than MAX_SHARE of H a round; the schedule length is total_steps
             import studio_memory
             offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), self.memory_share or 1.)  # as a job does: CUDA only, and only when the state cannot fit; train() says so
-            if self.memory_share:
+            if self.memory_share or offload:  # an offloading member without a plan still has the whole device to fit
+                share = self.memory_share or 1.
                 declared = cfg["batch_size"]
-                cfg["batch_size"] = studio_memory.batch_cap(cfg, self.memory_share, offload=offload)
+                cfg["batch_size"] = studio_memory.batch_cap(cfg, share, offload=offload)
                 if cfg["batch_size"] < declared:
-                    emit({"type": "info", "text": f"A batch of {declared} does not fit the {self.memory_share:.0%} of memory this node's plan "
+                    emit({"type": "info", "text": f"A batch of {declared} does not fit the {share:.0%} of memory this node's plan "
                                                   f"allows: this member trains with batch size {cfg['batch_size']}."})
             attempt = 0
             while True:  # one attempt of train() per coordinator this member is attached to; a failover or a settled claim ends one
@@ -2350,6 +2351,7 @@ class Member:
                 if self.finished or self.fenced or self.stop.is_set():
                     break
                 attempt += 1
+                gc.collect()  # the failed attempt's optimizer (its host-side state too) is freed before the next one allocates
             if not (self.finished or self.fenced):
                 if self.stop.is_set():
                     return self.round
