@@ -17,9 +17,11 @@ That is the wrong shape for "does a 13-word run appear anywhere", so only the wo
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 N = 13                    # GPT-3's n-gram length
 MAX_GRAMS = 4_000_000     # hashes kept before the index starts sampling
@@ -117,3 +119,43 @@ def exclude_overlap(items, index, text=lambda item: item):
     items = list(items)
     clean = [item for item in items if not index.overlaps(text(item))]
     return clean, Report(len(items), len(items) - len(clean), index.note)
+
+
+def row_text(row):
+    """One training row as text: a text row, a messages list, or a user and assistant pair (what dataset.jsonl holds)."""
+    if row.get("text"):
+        return str(row["text"])
+    if row.get("messages"):
+        return "\n".join(str(m.get("content", "")) for m in row["messages"])
+    return "\n".join(str(s) for s in (row.get("user"), row.get("assistant")) if s)
+
+
+def jsonl_texts(path):
+    """The text of each row of a jsonl file, streamed; nothing for a file that is not there. A line that is not JSON is skipped."""
+    try:
+        stream = open(path, encoding="utf-8")
+    except OSError:
+        return
+    with stream:
+        for line in stream:
+            try:
+                row = json.loads(line) if line.strip() else None
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                yield row_text(row)
+
+
+def index_of_runs(run_dirs, max_grams=MAX_GRAMS):
+    """The Index of the training text of runs: each run folder's dataset.jsonl is the exact text that run trained on."""
+    index = Index(max_grams=max_grams)
+    for run in run_dirs:
+        for text in jsonl_texts(Path(run) / "dataset.jsonl"):
+            index.add(text)
+    return index
+
+
+def overlap_mask(items, index, text=lambda item: item):
+    """One bool per item: whether it shares a 13-gram with the indexed training text. Use this when a position must stay
+    aligned with the item list (exclude_overlap drops them instead)."""
+    return [index.overlaps(text(item)) for item in items]

@@ -20,6 +20,7 @@ import {
   pending,
   shotsText,
   statusText,
+  trendTables,
   valueText,
   versionName,
   type BenchmarkOut,
@@ -123,6 +124,7 @@ function Loaded({ state }: { state: BenchmarkOut }) {
       <Card>
         <CardContent className="flex flex-col gap-2">
           {anyData && <p className="text-sm text-muted-foreground">{BENCH.fixed(sizes.docs ?? 0, sizes.choice ?? 0, sizes.problems ?? 0)}</p>}
+          {(state.sources ?? []).length > 0 && <p className="text-sm text-muted-foreground">{BENCH.sources(state.sources ?? [])}</p>}
           <p className="text-sm">{statusText(state)}</p>
           {Object.entries(failed).map(([number, error]) => (
             <p key={number} className="text-sm text-warning">
@@ -147,6 +149,7 @@ function Loaded({ state }: { state: BenchmarkOut }) {
         </CardContent>
       </Card>
       {rows.length > 0 && anyData && CHARTS.map((c) => <MetricCard key={c.metric} state={state} chart={c} shots={shots} />)}
+      {rows.length > 0 && anyData && <TrendCard state={state} />}
       {rows.length > 0 && <FewShotCard rows={rows} />}
       {rows.length > 1 && <VerdictCard rows={rows} />}
     </>
@@ -175,6 +178,49 @@ function MetricCard({ state, chart, shots }: { state: BenchmarkOut; chart: (type
           </>
         )}
         {unplaced.length > 0 && <p className="text-xs text-warning">{BENCH.unplaced(unplaced)}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The suite across the versions of each lineage, each against the one before with the server's paired test, so a gain is not just a lower number. */
+function TrendCard({ state }: { state: BenchmarkOut }) {
+  const tables = trendTables(state);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{BENCH.trendTitle}</CardTitle>
+        <CardDescription>{BENCH.trendHint}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {tables.length === 0 && <p className="text-sm text-muted-foreground">{BENCH.trendEmpty}</p>}
+        {tables.map((table) => (
+          <div key={table.lineage} className="flex flex-col gap-1 overflow-x-auto">
+            <h3 className="text-sm font-medium">{table.title}</h3>
+            <table aria-label={table.title} className="w-full text-left text-sm">
+              <thead className="text-xs text-muted-foreground">
+                <tr>
+                  {BENCH.trendHead.map((h, i) => (
+                    <th key={i} className="pb-1 pr-4 font-normal">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {table.rows.map((cells) => (
+                  <tr key={cells[0]}>
+                    {cells.map((c, i) => (
+                      <td key={i} className={`py-1 pr-4 ${i >= 1 ? "font-mono" : ""}`}>
+                        {c}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );

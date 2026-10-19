@@ -1983,6 +1983,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/post-training/judges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Judges
+         * @description The Ollama models that could grade a loop, read from the server the workspace's settings name.
+         */
+        get: operations["judges_post_training_judges_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/loops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Loops
+         * @description Every automated loop, newest first, with each round's evidence.
+         */
+        get: operations["loops_post_training_loops_get"];
+        put?: never;
+        /**
+         * Start Loop
+         * @description Queue the automated loop for a version, or carry on an earlier one from its last kept round. The loop is a long queue job:
+         *     stop it from here and Start again to carry on; it also carries on by itself after an app restart.
+         */
+        post: operations["start_loop_post_training_loops_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/loops/{loop_id}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt Loop
+         * @description Make a loop's best the version's checkpoint if it holds up on ALL the held-back data. A job: it measures both models. The
+         *     result is the gate result (ok, checks, verdict).
+         */
+        post: operations["adopt_loop_post_training_loops__loop_id__adopt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/post-training/loops/{loop_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Loop
+         * @description Stop a loop that is queued or running. It keeps its folder and its last kept round, and Start carries on from there.
+         */
+        post: operations["stop_loop_post_training_loops__loop_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/post-training/options": {
         parameters: {
             query?: never;
@@ -4596,6 +4682,17 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** JudgesOut */
+        JudgesOut: {
+            /** Error */
+            error?: string | null;
+            /** Models */
+            models: string[];
+            /** Selected */
+            selected: string;
+            /** Url */
+            url: string;
+        };
         /** Knobs */
         Knobs: {
             /** H */
@@ -4756,6 +4853,226 @@ export interface components {
             /** Version */
             version?: number | null;
         };
+        /** LoopCheckOut */
+        LoopCheckOut: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok?: boolean | null;
+        };
+        /**
+         * LoopConfigIn
+         * @description The loop's settings (studio_loop.DEFAULTS); a field left out keeps the default. The first four are the stop rules.
+         */
+        LoopConfigIn: {
+            /** Audit Flags */
+            audit_flags?: number | null;
+            /** Beta */
+            beta?: number | null;
+            /** Candidates */
+            candidates?: number | null;
+            /** Dpo Steps */
+            dpo_steps?: number | null;
+            /** Loss Type */
+            loss_type?: ("dpo" | "ipo") | null;
+            /** Max Hours */
+            max_hours?: number | null;
+            /** Max Length Ratio */
+            max_length_ratio?: number | null;
+            /** Max Rounds */
+            max_rounds?: number | null;
+            /** Patience */
+            patience?: number | null;
+            /** Prompts Per Round */
+            prompts_per_round?: number | null;
+        };
+        /**
+         * LoopOut
+         * @description studio_loop.summary: one loop, on disk and live.
+         */
+        LoopOut: {
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /**
+             * Anchor
+             * @default
+             */
+            anchor: string;
+            /** Anchor Eval */
+            anchor_eval?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Audit Flagged
+             * @default 0
+             */
+            audit_flagged: number;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Created */
+            created?: string | null;
+            /**
+             * Current
+             * @default
+             */
+            current: string;
+            /** Current Eval */
+            current_eval?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Elapsed S
+             * @default 0
+             */
+            elapsed_s: number;
+            /**
+             * Failed Streak
+             * @default 0
+             */
+            failed_streak: number;
+            /** Id */
+            id: string;
+            /**
+             * Kept
+             * @default 0
+             */
+            kept: number;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            /**
+             * Round
+             * @default 1
+             */
+            round: number;
+            /** Rounds */
+            rounds?: components["schemas"]["LoopRoundOut"][];
+            /**
+             * Status
+             * @default running
+             */
+            status: string;
+            /**
+             * Stop Reason
+             * @default
+             */
+            stop_reason: string;
+            /** Updated */
+            updated?: string | null;
+            /** Version */
+            version?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** LoopQueued */
+        LoopQueued: {
+            /** Job */
+            job: string;
+            /** Label */
+            label: string;
+            /** Loop Id */
+            loop_id: string;
+        };
+        /**
+         * LoopRoundOut
+         * @description One finished round of a loop: the journal line, with all the evidence.
+         */
+        LoopRoundOut: {
+            /** After */
+            after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Audit */
+            audit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Audit Flag
+             * @default false
+             */
+            audit_flag: boolean;
+            /** Before */
+            before?: {
+                [key: string]: unknown;
+            } | null;
+            /** Checkpoint */
+            checkpoint?: string | null;
+            /** Checks */
+            checks?: components["schemas"]["LoopCheckOut"][];
+            /** Dpo */
+            dpo?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Finished
+             * @default
+             */
+            finished: string;
+            /** Judge */
+            judge?: {
+                [key: string]: unknown;
+            } | null;
+            /** Length Ratio */
+            length_ratio?: number | null;
+            /**
+             * Node
+             * @default
+             */
+            node: string;
+            /** Pairs */
+            pairs?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Round */
+            round: number;
+            /**
+             * Seconds
+             * @default 0
+             */
+            seconds: number;
+            /**
+             * Started
+             * @default
+             */
+            started: string;
+            /** Status */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** LoopStart */
+        LoopStart: {
+            /** @default {} */
+            config: components["schemas"]["LoopConfigIn"];
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Resume */
+            resume?: string | null;
+            /** Version */
+            version?: number | null;
+        };
         /** LossRequest */
         LossRequest: {
             /**
@@ -4837,7 +5154,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "finished";
+            state: "invited" | "joining" | "training" | "behind" | "dropped" | "left" | "stopped" | "unreachable" | "unplaced" | "never_joined" | "finished";
             /** Step In Round */
             step_in_round: number;
             /** Steps */
@@ -11036,6 +11353,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    judges_post_training_judges_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgesOut"];
+                };
+            };
+        };
+    };
+    loops_post_training_loops_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopOut"][];
+                };
+            };
+        };
+    };
+    start_loop_post_training_loops_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopQueued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adopt_loop_post_training_loops__loop_id__adopt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loop_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_loop_post_training_loops__loop_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loop_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
