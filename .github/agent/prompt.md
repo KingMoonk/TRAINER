@@ -27,7 +27,7 @@ Follow CLAUDE.md and `.claude/rules/` (read the rules files that apply before yo
 2. Catch up with the base branch: `git fetch -q origin ${BASE} && git merge --no-edit origin/${BASE}`, resolve any conflicts, re-run the affected tests, and commit the merge.
 3. Write these files in `${OUT_DIR}` (not in the repository):
    - `pr-title.txt`: one line, a Conventional Commit title (`type(scope): subject`) for the squash commit. Never mark it breaking.
-   - `pr-body.md`: what changed and why, how you tested it (the commands you ran and their result), the acceptance criteria from the issue as a checklist ticked only where met, and any reading of the issue you had to choose. End with `Closes #${ISSUE}`. Short and concrete.
+   - `pr-body.md`, in the shape of `.github/pull_request_template.md`: a summary of two or three sentences on what changed and why (plus a mermaid diagram when it helps), then the bullet list of changes, how you tested it (the commands you ran and their result), the acceptance criteria from the issue as a checklist ticked only where met, and any reading of the issue you had to choose. End with `Closes #${ISSUE}`. Short and concrete.
    - `follow-ups.json` (only if there are any): a JSON array of at most 5 objects `{"title": "...", "body": "...", "labels": ["enhancement", "training"]}` in the format of `.claude/rules/github-issues.md`.
 
 If you cannot make a change worth reviewing, make no commits and write the reason to `pr-body.md`. The run then fails and the reason is posted on the issue.
