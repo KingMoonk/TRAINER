@@ -1383,6 +1383,9 @@ class Member:
             except PeerError as exc:
                 self._refused(exc)
                 if exc.status == 404 and exc.detail.startswith(GONE_RUN):
+                    found = self._relocated()  # a coordinator that stepped down is gone from its node, and the run is coordinated elsewhere now
+                    if found is not None:
+                        raise Rebound(found) from None
                     raise PeerError(f"The coordinator no longer has run {self.run} (its app restarted), so this member left. "
                                     f"It joins again if it is invited again.", status=404, detail=exc.detail) from None
                 if exc.status is not None or self.clock() >= end or self.stop.is_set():
