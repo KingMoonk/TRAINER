@@ -1,6 +1,7 @@
 """The rules of coordinator failover (studio_failover, docs/distributed.md "Terms and coordinator failover"), without a network, a store or a
 coordinator: claim ordering, who the successor is, when the coordinator counts as lost, and the driver over a fake host with a fake clock."""
 import unittest
+from types import SimpleNamespace
 
 import studio_failover as failover
 from studio_failover import Claim, Held, Seen
@@ -239,6 +240,28 @@ class Driver(unittest.TestCase):
         with self.assertLogs("studio_failover", "WARNING"):
             self.step()
         self.assertEqual(len(self.host.did("claim")), 1)
+
+
+class WhereFileAddress(unittest.TestCase):
+    """ClusterHost.url_of: the address the where-file gives a member here for the coordinator on `node`."""
+
+    def host(self, published):
+        claims = {node: {"value": {"term": 2, "round": 3, "rank": 0, **({"url": url} if url else {})}} for node, url in published.items()}
+        cluster = SimpleNamespace(hostname="here", lease_s=LEASE, api_port=9123, address_of=lambda node: f"{node}-as-listed",
+                                  state=SimpleNamespace(get=lambda origin, kind, key: claims.get(origin) if kind == failover.CLAIM else None))
+        return failover.ClusterHost(cluster)
+
+    def test_this_node_is_reached_on_loopback_at_the_port_its_api_listens_on(self):
+        self.assertEqual(self.host({}).url_of("here", "r"), "http://127.0.0.1:9123")
+
+    def test_a_peer_is_reached_at_the_url_it_published_with_its_claim(self):
+        self.assertEqual(self.host({"box": "https://box.tail.ts.net"}).url_of("box", "r"), "https://box.tail.ts.net")
+
+    def test_without_a_usable_published_url_a_peer_is_reached_at_its_listed_address(self):
+        host = self.host({"old": None, "lone": "http://127.0.0.1:8787"})
+        self.assertEqual(host.url_of("old", "r"), "old-as-listed")  # a claim from before urls were published
+        self.assertEqual(host.url_of("lone", "r"), "lone-as-listed")  # a loopback url is of no use from another machine
+        self.assertEqual(host.url_of("unknown", "r"), "unknown-as-listed")
 
 
 if __name__ == "__main__":

@@ -12620,6 +12620,65 @@
         ]
       }
     },
+    "/collective/{run}/weights": {
+      "get": {
+        "description": "A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left.",
+        "operationId": "weights_collective__run__weights_get",
+        "parameters": [
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Weights",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
     "/data/browse": {
       "get": {
         "description": "A folder on the server, to pick files from. No path: the places to start from (workspace, home).",

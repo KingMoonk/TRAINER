@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import io
 import logging
 import queue
 import socket
@@ -2571,12 +2572,16 @@ class WorkspaceServices(Services):
     def _record_distributed(self, job, number, status, out):
         """A distributed run ends: only a run that finished all its rounds gives its coordinator's final weights (`last.npz` in the
         run's folder) to the version it trained, scored like a local pretrain's, with a change note naming the run and its machines.
+        A run that finished under a successor coordinator after a failover (#361) gives the successor's final weights, fetched from it.
         A stopped or failed run saves nothing, even past some rounds: the version goes back to saved."""
         import studio_distributed
         import studio_eval
         from studio_core import read_json
         record, ckpt = out / "run.json", out / "last.npz"
         done = status == "done" and ckpt.exists() and record.exists() and read_json(record).get("status") == "completed"
+        if status == "done" and not done:
+            ckpt = self._successor_weights(job.id, out)
+            done = ckpt is not None
         if done:
             machines = [m.node for m in studio_distributed.run_of(job).machines if m.state != "unreachable"]
             self.store.add_run(number, out)
@@ -2592,6 +2597,34 @@ class WorkspaceServices(Services):
         self.emit("versions", None)
         if done:
             self._bench_later(number)
+
+    def _successor_weights(self, run, out):
+        """The final weights of `run` from the coordinator the where-file names (studio_failover writes it after a failover, term 2 or
+        more), saved in the run's folder as last_term<N>.npz. None when there is no successor or it cannot send them (not finished,
+        stopped, unreachable): the run then saves nothing, as one that did not finish. Network: call it off the UI thread."""
+        import studio_diloco
+        from studio_core import read_json
+        import zipfile
+        from studio_peer import PeerClient, PeerError
+        try:
+            where = read_json(studio_diloco.where_file(self.root, run))
+            node, term, url = str(where["node"]), int(where["term"]), str(where["url"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if term < 2:
+            return None
+        try:
+            body = PeerClient(url).get_bytes(f"/collective/{run}/weights", {"term": term})
+            np.load(io.BytesIO(body), allow_pickle=False).close()  # an archive, before it is kept
+        except (PeerError, OSError, ValueError, zipfile.BadZipFile) as exc:
+            _log.warning("The final weights of run %s could not be fetched from %s (term %s): %s", run, node, term, exc)
+            return None
+        path = out / f"last_term{term}.npz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        part.write_bytes(body)
+        part.replace(path)
+        return path
 
     def _note_devices(self, number, ckpt, scored=False):
         """Record on the version the device kind that trained `ckpt` and, when the caller just scored it, the one that scored it."""
