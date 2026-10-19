@@ -341,9 +341,11 @@ class Cluster:
         """A distributed run goes on this machine (it coordinates and is a member) once `min_members` of the machines it was given are
         free at once; it then holds a slot on up to `max_members` of them (`job.params["gang"]`, the addresses), or on none and waits."""
         import studio_diloco
+        import studio_distributed
+        studio_distributed.release_stale(job, self.client_for)  # a run resuming after a restart frees the machines its old members hold
         if self.peers() and self._threads and not self.polled.is_set():
             self.polled.wait(studio_cluster.POLL_TIMEOUT + 1)
-        here = sched.decide(job.kind, self.nodes(), self.health, job.params.get("pinned"))
+        here =sched.decide(job.kind, self.nodes(), self.health, job.params.get("pinned"))
         if here.where != "local":
             self.waiting[job.id] = here.reason
             return here
