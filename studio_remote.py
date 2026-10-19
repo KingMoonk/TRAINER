@@ -354,7 +354,7 @@ class Cluster:
         if self._threads and not self.polled.is_set():
             self.polled.wait(studio_cluster.POLL_TIMEOUT + 1)
         placement = sched.decide(job.kind, self.nodes(), self.health, job.params.get("pinned"), store_ready=self.store() is not None,
-                                 exclude=self.owner.refused_by(job.id))
+                                 exclude=self.owner.refused_by(job.id), shape=sched.job_shape(job.kind, job.params))
         if placement.where == "wait":
             self.waiting[job.id] = placement.reason
         else:

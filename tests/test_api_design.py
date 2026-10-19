@@ -60,7 +60,7 @@ class DesignRouterTests(ApiCase):
         self.assertTrue(all(p["term"] and p["name"] and p["spec"] for p in presets))
 
         cost = self.call("POST", "/design/preset-cost", json={"spec": presets[0]["spec"]})
-        self.assertEqual(set(cost), {"params", "need", "fits", "rows", "step", "slow", "lines", "recipe"})
+        self.assertEqual(set(cost), {"params", "need", "fits", "rows", "step", "slow", "lines", "recipe", "device", "measured"})
         self.assertIn("AdamW", cost["recipe"])
 
         lines = self.call("POST", "/design/compute-lines", json={"spec": base, "v": s["V"], "preview": None})

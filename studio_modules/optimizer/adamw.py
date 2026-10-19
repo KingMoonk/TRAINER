@@ -32,6 +32,30 @@ class AdamW(Optimizer):
         parameter.sub_(lr * m / (torch.sqrt(v) + cfg.eps))
 
 
+    @torch.no_grad()
+    def apply_all(self, parameters, gradients, multiplier, rates):
+        """apply() for every parameter at once with foreach kernels: the same arithmetic, a handful of launches instead of ten per tensor."""
+        cfg = self.cfg
+        keys = list(parameters)
+        grads = torch._foreach_mul([gradients[k] for k in keys], multiplier)
+        m, v = [self.m[k] for k in keys], [self.v[k] for k in keys]
+        torch._foreach_mul_(m, cfg.beta1)
+        torch._foreach_add_(m, grads, alpha=1 - cfg.beta1)
+        torch._foreach_mul_(v, cfg.beta2)
+        torch._foreach_addcmul_(v, grads, grads, value=1 - cfg.beta2)
+        mh = torch._foreach_div(m, 1 - cfg.beta1 ** self.steps)
+        denom = torch._foreach_sqrt(torch._foreach_div(v, 1 - cfg.beta2 ** self.steps))
+        torch._foreach_add_(denom, cfg.eps)
+        for rate in {rates[k] for k in keys}:   # a learning-rate scale is per parameter: one pass per distinct rate
+            at = [i for i, k in enumerate(keys) if rates[k] == rate]
+            params = [parameters[keys[i]] for i in at]
+            decayed = [parameters[keys[i]] for i in at if self.decays(keys[i])]
+            if decayed:
+                torch._foreach_mul_(decayed, 1 - rate * cfg.weight_decay)
+            step = torch._foreach_div(torch._foreach_mul([mh[i] for i in at], rate), [denom[i] for i in at])
+            torch._foreach_sub_(params, step)
+
+
 @register
 class AdamWSpec(ModuleSpec):
     id = "optimizer/adamw"

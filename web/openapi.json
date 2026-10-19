@@ -2041,6 +2041,30 @@
         "title": "HasText",
         "type": "object"
       },
+      "HealthVerdict": {
+        "properties": {
+          "state": {
+            "enum": [
+              "working",
+              "not_helping",
+              "diverging",
+              "not_enough_data"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "text"
+        ],
+        "title": "HealthVerdict",
+        "type": "object"
+      },
       "Hold": {
         "properties": {
           "held": {
@@ -3846,6 +3870,71 @@
         "title": "Member",
         "type": "object"
       },
+      "MemberHealth": {
+        "description": "One member's share of one round, measured (studio_run_health.record). compute + wait + sync is the round's seconds.",
+        "properties": {
+          "compute_s": {
+            "title": "Compute S",
+            "type": "number"
+          },
+          "loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "sync_s": {
+            "title": "Sync S",
+            "type": "number"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per S"
+          },
+          "wait_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait S"
+          }
+        },
+        "required": [
+          "loss",
+          "steps",
+          "tokens",
+          "compute_s",
+          "tokens_per_s",
+          "wait_s",
+          "sync_s"
+        ],
+        "title": "MemberHealth",
+        "type": "object"
+      },
       "Message": {
         "properties": {
           "content": {
@@ -4072,6 +4161,14 @@
           "memory_bytes": {
             "title": "Memory Bytes",
             "type": "integer"
+          },
+          "speeds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Speed"
+            },
+            "default": {},
+            "title": "Speeds",
+            "type": "object"
           },
           "version": {
             "title": "Version",
@@ -5096,6 +5193,11 @@
       },
       "PresetCost": {
         "properties": {
+          "device": {
+            "default": "cpu",
+            "title": "Device",
+            "type": "string"
+          },
           "fits": {
             "anyOf": [
               {
@@ -5113,6 +5215,11 @@
             },
             "title": "Lines",
             "type": "array"
+          },
+          "measured": {
+            "default": false,
+            "title": "Measured",
+            "type": "boolean"
           },
           "need": {
             "title": "Need",
@@ -7296,6 +7403,129 @@
         "title": "Round",
         "type": "object"
       },
+      "RoundHealth": {
+        "properties": {
+          "bytes_down": {
+            "title": "Bytes Down",
+            "type": "integer"
+          },
+          "bytes_up": {
+            "title": "Bytes Up",
+            "type": "integer"
+          },
+          "compression": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compression"
+          },
+          "dtype": {
+            "title": "Dtype",
+            "type": "string"
+          },
+          "loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loss"
+          },
+          "lr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lr"
+          },
+          "members": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MemberHealth"
+            },
+            "title": "Members",
+            "type": "object"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          },
+          "slowest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slowest"
+          },
+          "sync_s": {
+            "title": "Sync S",
+            "type": "number"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "update_norm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Norm"
+          },
+          "val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Val Loss"
+          }
+        },
+        "required": [
+          "round",
+          "seconds",
+          "tokens",
+          "members",
+          "slowest",
+          "val_loss",
+          "loss",
+          "lr",
+          "update_norm",
+          "bytes_up",
+          "bytes_down",
+          "dtype",
+          "compression",
+          "sync_s"
+        ],
+        "title": "RoundHealth",
+        "type": "object"
+      },
       "RoundQueued": {
         "properties": {
           "id": {
@@ -7858,6 +8088,16 @@
             "title": "Handoff",
             "type": "string"
           },
+          "health": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "history": {
             "items": {
               "$ref": "#/components/schemas/Round"
@@ -8138,6 +8378,112 @@
           "text"
         ],
         "title": "RunEvent",
+        "type": "object"
+      },
+      "RunHealth": {
+        "description": "Is the cluster helping (studio_run_health.summarize)? The numbers are over the latest rounds that had two or more members.",
+        "properties": {
+          "aggregate_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregate Tokens Per S"
+          },
+          "baseline_node": {
+            "title": "Baseline Node",
+            "type": "string"
+          },
+          "baseline_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Tokens Per S"
+          },
+          "basis": {
+            "title": "Basis",
+            "type": "string"
+          },
+          "comm_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comm Share"
+          },
+          "rounds": {
+            "items": {
+              "$ref": "#/components/schemas/RoundHealth"
+            },
+            "title": "Rounds",
+            "type": "array"
+          },
+          "speedup": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speedup"
+          },
+          "straggler": {
+            "title": "Straggler",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/HealthVerdict"
+          },
+          "wait_node": {
+            "title": "Wait Node",
+            "type": "string"
+          },
+          "wait_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Share"
+          },
+          "window": {
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "verdict",
+          "basis",
+          "rounds",
+          "window",
+          "aggregate_tokens_per_s",
+          "baseline_node",
+          "baseline_tokens_per_s",
+          "speedup",
+          "comm_share",
+          "wait_node",
+          "wait_share",
+          "straggler"
+        ],
+        "title": "RunHealth",
         "type": "object"
       },
       "RunPageModel": {
@@ -8915,6 +9261,37 @@
           "spec"
         ],
         "title": "SpecBody",
+        "type": "object"
+      },
+      "Speed": {
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "number"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "seconds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Seconds",
+            "type": "object"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device",
+          "seconds",
+          "tokens",
+          "age_s"
+        ],
+        "title": "Speed",
         "type": "object"
       },
       "SplitBody": {

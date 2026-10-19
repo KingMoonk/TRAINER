@@ -84,11 +84,38 @@ class Ledger:
             return max((n for n, d in self._held.values() if pool(d) == pool(device)), default=0)
 
 
+def validated(config):
+    from studio_model import validate_config
+    return validate_config(config)
+
+
+def probe_args(cfg):
+    """(spec, vocabulary, batch) the device probe of a run of the validated config `cfg` is keyed by (studio_probe.shape_key): what the
+    model's own build passes it. The vocabulary is the config's guess, which is the tokenizer's for every fixed tokenizer; the run's batch is
+    the declared one unless the memory plan lowered it, in which case the probe it made is not found here and the size rule decides."""
+    from studio_model import effective_spec, vocabulary_guess
+    from studio_spec import validate_spec
+    return validate_spec(effective_spec(cfg)), vocabulary_guess(cfg), cfg["batch_size"]
+
+
+def shape_of(cfg):
+    """The design shape key of the validated config (what a node reports its measured speeds under)."""
+    import studio_probe
+    return studio_probe.shape_key(*probe_args(cfg))
+
+
 def device_of(cfg):
-    """The device a training run of the validated config `cfg` lands on: the choice the model's build makes."""
+    """The device a training run of the validated config `cfg` lands on: the choice the model's build makes. On "auto" with a GPU, that
+    is the measured pick when this machine has a cached probe of the design (studio_probe.cached; nothing is timed here), else the size rule."""
     from studio_backend import get_backend
     d = cfg["width"], cfg["context"], cfg["layers"]
-    return get_backend(cfg["device"], work=cfg["batch_size"] * d[1] * d[0] * max(1, d[2])).device
+    measure = None
+    import studio_probe
+    if cfg["device"] == "auto" and studio_probe.any_stored():  # nothing stored: do not bring the GPU up just to look
+        def measure():
+            from studio_backend import gpu_status
+            return studio_probe.cached(*probe_args(cfg), gpu_status())
+    return get_backend(cfg["device"], work=cfg["batch_size"] * d[1] * d[0] * max(1, d[2]), measure=measure).device
 
 
 def process_memory():
