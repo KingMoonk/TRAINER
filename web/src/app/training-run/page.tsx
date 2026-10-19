@@ -17,6 +17,7 @@ import { T as RUN_VIEW } from "@/app/runs/view/copy";
 import { fill, STATUS, T } from "./copy";
 import { bits, chartSeries, last, phaseBands, progressLine, sampleRows, switchText, type JobParams } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { ContinueCard } from "./continue-card";
 
 const REFRESH_MS = 1500; // live events redraw at most this often, as the Tk page does
 
@@ -166,6 +167,8 @@ export default function Page() {
               <p className="mt-1 text-sm text-muted-foreground">{run.ended.text}</p>
             </div>
           )}
+
+          {run?.version != null && !run.running && curve && curve.steps.length > 0 && <ContinueCard version={run.version} step={run.step} />}
 
           <Card>
             <CardContent className="flex flex-col gap-3">

@@ -120,6 +120,46 @@ describe("Training run page", () => {
     expect(ended).toHaveTextContent("Stopped at step 30 because the best validation loss (1.595) improved by only 0.19%");
   });
 
+  test("a finished run can be continued, and the queued job says what it continues and from which step", async () => {
+    const sent: unknown[] = [];
+    mockApi({
+      "GET /training-run": () => ({ body: runPage(6, false, ENDED) }),
+      "GET /queue": () => ({ body: queue(0) }),
+      "GET /pretraining/text_sets": { body: [{ id: "poems", name: "Poems", count: 10, held: false, library: false, on: true }] },
+      "POST /versions/2/continue": ({ body }) => {
+        sent.push(body);
+        const kind = (body as { kind: string }).kind;
+        const label = kind === "new_data" ? "Version 2 continued from step 60 on new data" : "Version 2 continued from step 60";
+        return {
+          status: 202,
+          body: { id: "k1", kind: "versions.continue", status: "done", progress: "", fraction: null, result: { job_id: "j9", label, version: 2, kind, from_step: 60 }, error: "", created_at: 0, started_at: 0, finished_at: 1 },
+        };
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<TrainingRunPage />);
+    const card = await screen.findByTestId("continue-card");
+    expect(within(card).getByRole("radio", { name: /More steps on the same data/ })).toHaveAttribute("aria-checked", "true");
+    await user.click(within(card).getByRole("button", { name: "Add to the queue" }));
+    expect(await screen.findByTestId("continued")).toHaveTextContent("Queued: Version 2 continued from step 60.");
+    expect(sent).toEqual([{ kind: "same", steps: 1000, dataset_ids: [], rows: 16, hold: 0.05 }]);
+
+    // Other text needs a set ticked before it can be queued.
+    await user.click(within(card).getByRole("radio", { name: /Continue on other text/ }));
+    expect(within(card).getByRole("button", { name: "Add to the queue" })).toBeDisabled();
+    await user.click(await within(card).findByRole("checkbox", { name: "Poems" }));
+    await user.click(within(card).getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(screen.getByTestId("continued")).toHaveTextContent("continued from step 60 on new data"));
+    expect(sent.at(-1)).toEqual({ kind: "new_data", steps: 1000, dataset_ids: ["poems"], rows: 16, hold: 0.05 });
+  });
+
+  test("a run in progress cannot be continued", async () => {
+    server();
+    renderPage(<TrainingRunPage />);
+    await screen.findByTestId("progress");
+    expect(screen.queryByTestId("continue-card")).not.toBeInTheDocument();
+  });
+
   test("a run in progress shows no ending", async () => {
     server();
     renderPage(<TrainingRunPage />);

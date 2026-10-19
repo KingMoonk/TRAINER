@@ -23,7 +23,10 @@ def default_rule(total_steps, min_gain=.01):
 class Plateau:
     """The rule, fed with one run's events. `hit` becomes a dict {"step", "best", "older_best", "gain", "window"} once it fires."""
 
-    def __init__(self, rule):
+    def __init__(self, rule, use_history=True):
+        """`use_history` False ignores the "history" event: a rebased stage is judged on its own new text, not on the losses the
+        checkpoint carries from the text before."""
+        self.use_history = use_history
         rule = {**PARAMS, **(rule or {})}
         self.window_steps, self.window_seconds = rule["window_steps"], rule["window_seconds"]
         self.min_gain, self.min_steps = float(rule["min_gain"]), int(rule["min_steps"] or 0)
@@ -36,6 +39,8 @@ class Plateau:
     def feed(self, event):
         """Take one training event; returns the plateau dict when this event made the rule fire, else None."""
         kind = event.get("type")
+        if kind == "history" and not self.use_history:
+            return None
         rows = event.get("history") or [] if kind == "history" else [event] if kind == "metric" else []
         found = None
         for row in rows:

@@ -103,6 +103,7 @@ class Cluster:
         self.hostname = hostname or socket.gethostname()  # this node's origin in the observation store
         self._local_runs = local_runs  # tests give each in-process node its own; None: this process's runs (studio_distributed)
         self.address = address if address is not None else (self.environ.get("TRAINER_NODE_ADDRESS") or "").strip() or None
+        self.api_port, self._tailnet = studio_cluster.DEFAULT_PORT, lambda: ""  # serve_at: how this node's API is reached
         self._store_factory = store or self.workspace_store
         self._own_factory = own or (lambda: studio_cluster.own_info(version=_version()))
         self._own = None
@@ -241,6 +242,18 @@ class Cluster:
         with self.runner.lock:
             jobs = list(self.runner.jobs)
         return studio_distributed.local_runs(jobs, create=True, coordinators=self.coordinators)
+
+    def serve_at(self, port, tailnet=lambda: ""):
+        """Say how this node's API is reached (studio_api.__main__): on loopback at `port` by the workers here, and by the peers at
+        TRAINER_NODE_ADDRESS, else https://<tailnet()>, where `tailscale serve` listens (tailnet() is this node's MagicDNS name or '')."""
+        self.api_port, self._tailnet = int(port), tailnet
+
+    def url_for_peers(self):
+        """The address the peers reach this node's API at (serve_at), or None when it is not known."""
+        if self.address:
+            return self.address
+        name = self._tailnet()
+        return f"https://{name}" if name else None
 
     def address_of(self, origin):
         """The listed address of the peer that is `origin`, or None when this node's list has none by that name."""

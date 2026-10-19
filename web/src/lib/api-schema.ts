@@ -573,6 +573,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/weights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Weights
+         * @description A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left.
+         */
+        get: operations["weights_collective__run__weights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data/browse": {
         parameters: {
             query?: never;
@@ -2477,7 +2497,8 @@ export interface paths {
         post?: never;
         /**
          * Remove
-         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop).
+         * @description Services.remove: drop a waiting job, or stop the running one, including one that runs on a peer (it is told to stop). On a
+         *     failed job it dismisses it from the list.
          */
         delete: operations["remove_queue_jobs__job_id__delete"];
         options?: never;
@@ -2702,7 +2723,9 @@ export interface paths {
         put?: never;
         /**
          * Start Queue
-         * @description Services.start_queue: let jobs saved as waiting by an earlier session run.
+         * @description Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it
+         *     waits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`
+         *     with its sentence, instead of a bare 200 followed by a job that has quietly gone.
          */
         post: operations["start_queue_queue_start_post"];
         delete?: never;
@@ -3061,6 +3084,28 @@ export interface paths {
         put?: never;
         /** Checkpoint Step */
         post: operations["checkpoint_step_versions__number__checkpoint_step_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/versions/{number}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Version
+         * @description Queue a pretrain job that continues the version's newest run. The job's result is {job_id, label, version, kind, from_step}; the
+         *     queued job's label says what it continues and from which step. A run that cannot be continued that way (no full checkpoint, a
+         *     design its weights cannot go into) fails the job with a sentence.
+         */
+        post: operations["continue_version_versions__number__continue_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3971,6 +4016,52 @@ export interface components {
             /** V */
             v: number;
         };
+        /** ContinueBody */
+        ContinueBody: {
+            /**
+             * Dataset Ids
+             * @description the text to continue on (new_data; grow, default the run's own)
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @description grow: fraction of the text held back
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Kind
+             * @description same: more steps on the same data, with the optimizer, sampler and random state it had; new_data: more steps on other text, same weights and step; grow: a bigger design started from these weights
+             * @enum {string}
+             */
+            kind: "same" | "new_data" | "grow";
+            /** Layers */
+            layers?: number | null;
+            /**
+             * Rows
+             * @description grow: rows per step
+             * @default 16
+             */
+            rows: number;
+            /**
+             * Spec
+             * @description grow: the bigger design itself
+             */
+            spec?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Steps
+             * @description steps to add (same, new_data), or to train the grown design for (grow)
+             */
+            steps: number;
+            /**
+             * Width
+             * @description grow: the design's width (with layers), when no spec is given
+             */
+            width?: number | null;
+        };
         /** CorrectionRequest */
         CorrectionRequest: {
             /** Correction */
@@ -4601,6 +4692,11 @@ export interface components {
              * @default 0
              */
             created_at: number;
+            /**
+             * Details
+             * @default
+             */
+            details: string;
             /**
              * Epoch
              * @default 0
@@ -6412,6 +6508,11 @@ export interface components {
             blocked?: string | null;
             /** Eta S */
             eta_s?: number | null;
+            /**
+             * Failed
+             * @default []
+             */
+            failed: components["schemas"]["JobModel"][];
             /**
              * @default {
              *       "supported": true
@@ -9297,6 +9398,41 @@ export interface operations {
         };
     };
     validation_collective__run__validation_get: {
+        parameters: {
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    weights_collective__run__weights_get: {
         parameters: {
             query: {
                 /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
@@ -13188,6 +13324,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_version_versions__number__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueBody"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {

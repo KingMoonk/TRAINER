@@ -3,9 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
-import MakeDataPage from "./page";
+import { MakeExtraData } from "./make-extra";
 
-// The Make extra data page against a mocked API (the component tier of tests/make-data.spec.ts; its phone-width check is layout and stays out of jsdom).
+// The Make extra data section of the Your data page against a mocked API (the component tier of tests/live.spec.ts; its phone-width check is layout and stays out of jsdom).
 
 type Draft = { id: string; a: string; b: string; status: string; dataset: string };
 
@@ -41,15 +41,14 @@ function server({ fail = false }: { fail?: boolean } = {}) {
 
 const generate = () => screen.getByRole("button", { name: "Generate problems" });
 
-describe("Make extra data page", () => {
+describe("Make extra data section", () => {
   test.each([
     ["text", /Generate prose/],
     ["conversations", /Rewrite/],
     ["problems", /Problems/],
-    ["invalid", /Problems/],
-  ])("a %s link opens the matching generator", async (kind, label) => {
+  ] as const)("the %s data kind opens the matching generator", async (kind, label) => {
     server();
-    renderPage(<MakeDataPage />, { route: `/make-data/?kind=${kind}` });
+    renderPage(<MakeExtraData initialKind={kind} />, { route: "/your-data/" });
     expect(await screen.findByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true");
     expect(within(screen.getByRole("group", { name: "What to make" })).getAllByRole("button", { pressed: true })).toHaveLength(1);
   });
@@ -57,7 +56,7 @@ describe("Make extra data page", () => {
   test("rules come from the server; preview never stores and generation supports one or all rules", async () => {
     const { state } = server();
     const user = userEvent.setup();
-    renderPage(<MakeDataPage />, { route: "/make-data/" });
+    renderPage(<MakeExtraData initialKind="problems" />, { route: "/your-data/" });
     const rule = await screen.findByLabelText("Rule");
     await user.selectOptions(rule, "reverse");
     await user.click(screen.getByRole("button", { name: "Try 5 first" }));
@@ -85,7 +84,7 @@ describe("Make extra data page", () => {
   test("generated drafts require reading, and accept/discard remove only the chosen row", async () => {
     const { state } = server();
     const user = userEvent.setup();
-    renderPage(<MakeDataPage />, { route: "/make-data/" });
+    renderPage(<MakeExtraData initialKind="problems" />, { route: "/your-data/" });
     await user.click(await screen.findByRole("button", { name: /Rewrite with your local model/ }));
     await user.click(await screen.findByRole("button", { name: "Make drafts" }));
     const first = await screen.findByTestId("draft-d1");
@@ -108,7 +107,7 @@ describe("Make extra data page", () => {
   test("a missing local model is an error, never a fabricated draft", async () => {
     server({ fail: true });
     const user = userEvent.setup();
-    renderPage(<MakeDataPage />, { route: "/make-data/" });
+    renderPage(<MakeExtraData initialKind="problems" />, { route: "/your-data/" });
     await user.click(await screen.findByRole("button", { name: /Rewrite with your local model/ }));
     await user.click(await screen.findByRole("button", { name: "Make drafts" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("No local model connected.");
