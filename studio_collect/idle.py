@@ -1,6 +1,6 @@
 """When the collector may run: enabled and not paused, on mains power, on an unmetered network, and the machine idle.
 
-Battery uses passive training's probe (studio_passive_watch.on_battery). Passive training has no idle test, so idle here means:
+Battery uses the shared probe in studio_platform (on_battery). The app has no shared idle test, so idle here means:
 no queued job running, and CPU use below the person's limit. Network cost is read from the OS where it can be (Windows, NetworkManager);
 elsewhere the person confirms the connection is unmetered. Every probe is injectable for tests.
 """
@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import studio_passive_watch as watch
+import studio_platform as platform_probes
 
 
 def _windows_times():
@@ -79,7 +79,7 @@ def network_metered(*, platform=sys.platform, run=subprocess.run):
 
 @dataclass
 class Probes:
-    on_battery: object = watch.on_battery
+    on_battery: object = platform_probes.on_battery
     cpu: object = field(default_factory=CpuMeter)
     queue_busy: object = queue_busy
     metered: object = network_metered
