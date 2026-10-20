@@ -17,11 +17,11 @@ import { cn } from "@/lib/utils";
 import { QUICKTEST } from "./copy";
 import { NO_RUN, applyEvent, checkMark, secondsLeft, signalText, type Result, type RunState, type Which } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { useLive } from "@/lib/live";
 
 const route = routeFor("quicktest");
 const STORE = "groundwork.quicktest"; // this tab's last run: when it was queued (server clock), its job
 const NEVER = 1e15; // `since` for "no run started from this tab": nothing finished after it
-const REFRESH_MS = 5_000;
 
 type Started = { since: number; jobId: string };
 
@@ -120,9 +120,10 @@ export default function Page() {
   const state = useQuery({
     queryKey: ["quicktest", started?.since ?? NEVER],
     queryFn: () => unwrap(api.GET("/quicktest", { params: { query: { since: started?.since ?? NEVER } } })),
-    refetchInterval: REFRESH_MS,
   });
-  const queue = useQuery({ queryKey: ["queue"], queryFn: () => unwrap(api.GET("/queue")), refetchInterval: REFRESH_MS });
+  const queue = useQuery({ queryKey: ["queue"], queryFn: () => unwrap(api.GET("/queue")) });
+  useLive(["quicktest"], []); // the events below are the fast path; this re-reads after a dropped stream or a hidden tab
+  useLive(["queue"], []);
 
   // A quick test already queued (from an earlier visit or another tab) is watched like one started here.
   const queued = useMemo(

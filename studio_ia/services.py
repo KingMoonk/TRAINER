@@ -2306,7 +2306,7 @@ class WorkspaceServices(Services):
             return ("failed", failed.error) if failed is not None else ("", "")
 
         probe = studio_selftest.AppProbe(make_job, enqueue, status, self.remove, app_version())
-        manager.start(studio_selftest.SelfTest(probe, addresses, peer_url, own.hostname))
+        manager.start(studio_selftest.SelfTest(probe, addresses, peer_url, own.hostname, on_change=lambda: self.emit("selftest", {})))
         return manager.state()
 
     def cluster_selftest(self):

@@ -60,6 +60,18 @@ class Replica:
         self._tombstones = {}  # origin -> (incarnation, expires on this clock)
         self._seq = 0
         self._lock = threading.RLock()
+        self._watchers = []
+
+    def watch(self, watcher):
+        """Call `watcher(changes)` after a write or merge that changed a value, `changes` being the set of (origin, kind, key) whose
+        value is new. A version bump that leaves the value as it was is not a change. Returns the call that stops it."""
+        self._watchers.append(watcher)
+        return lambda: watcher in self._watchers and self._watchers.remove(watcher)
+
+    def _tell(self, changes):
+        if changes:
+            for watcher in list(self._watchers):
+                watcher(changes)
 
     # ---- writing ----------------------------------------------------------------------------------------------------
     def put(self, kind, key, value):
@@ -67,9 +79,12 @@ class Replica:
         value = json.loads(json.dumps(value))
         with self._lock:
             self._seq += 1
+            held = self._entries.get((self.origin, kind, key))
             self._entries[(self.origin, kind, key)] = (self.incarnation, self._seq, value, self.clock())
             self._newest[self.origin] = (self.incarnation, self._seq)
-            return self.incarnation, self._seq
+            version = self.incarnation, self._seq
+        self._tell(set() if held is not None and held[2] == value else {(self.origin, kind, key)})
+        return version
 
     # ---- reading ----------------------------------------------------------------------------------------------------
     def get(self, origin, kind, key):
@@ -117,7 +132,7 @@ class Replica:
     def merge(self, wire):
         """Take in entries (rows as `delta` gives them). Returns how many changed this replica. Rows that are malformed, for this node's
         own origin (only it writes those), tombstoned or of an older incarnation than held are skipped, as are older versions."""
-        changed = 0
+        changed, changes = 0, set()
         with self._lock:
             self.prune()
             now = self.clock()
@@ -130,9 +145,13 @@ class Replica:
                     continue
                 if origin == self.origin or not math.isfinite(age) or seq < 1 or inc < 0:
                     continue
+                held = self._entries.get((origin, kind, key))
                 if self._accept(origin, kind, key, inc, seq, value, now - max(0., age)):
                     changed += 1
+                    if held is None or held[2] != value:
+                        changes.add((origin, kind, key))
             self.prune()
+        self._tell(changes)
         return changed
 
     def _accept(self, origin, kind, key, inc, seq, value, born):

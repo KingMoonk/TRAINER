@@ -3,15 +3,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/lib/api";
 import { problem } from "@/lib/cluster";
+import { useLive } from "@/lib/live";
 
 const KEY = ["cluster", "selftest"] as const;
 
-/** The cluster self-test (GET /cluster/selftest), re-read every second while it runs. */
+/** The cluster self-test (GET /cluster/selftest), re-read at each of its steps (a `selftest` event). */
 export function useSelfTest() {
+  useLive(KEY, ["selftest"]);
   return useQuery({
     queryKey: KEY,
     queryFn: ({ signal }) => unwrap(api.GET("/cluster/selftest", { signal })),
-    refetchInterval: (query) => (query.state.data?.state === "running" ? 1_000 : false),
     retry: false,
   });
 }

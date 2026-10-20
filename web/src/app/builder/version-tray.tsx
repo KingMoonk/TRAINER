@@ -14,6 +14,7 @@ import { cameFrom, isCluster, isStoreUnset, useCluster, usePublished } from "@/l
 import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { T } from "./copy";
+import { useLive } from "@/lib/live";
 
 type Version = components["schemas"]["Version"];
 type Queue = components["schemas"]["QueueStateModel"];
@@ -67,8 +68,10 @@ function useVersionEvents() {
 /** The model editor can pass editingVersion while its unsaved draft is open. */
 export function VersionTray({ editingVersion }: { editingVersion?: number }) {
   useVersionEvents();
-  const versions = useQuery({ queryKey: ["versions"], queryFn: ({ signal }) => unwrap(api.GET("/versions", { signal })), refetchInterval: 15_000 });
-  const queue = useQuery({ queryKey: ["queue"], queryFn: ({ signal }) => unwrap(api.GET("/queue", { signal })), refetchInterval: 15_000 });
+  useLive(["versions"], []); // useVersionEvents is the fast path; this re-reads after a dropped stream or a hidden tab
+  useLive(["queue"], []);
+  const versions = useQuery({ queryKey: ["versions"], queryFn: ({ signal }) => unwrap(api.GET("/versions", { signal })) });
+  const queue = useQuery({ queryKey: ["queue"], queryFn: ({ signal }) => unwrap(api.GET("/queue", { signal })) });
   const cluster = useCluster().data;
   const publishedQuery = usePublished(cluster);
   const published = publishedQuery.data;

@@ -830,6 +830,7 @@ def receive_pause_request(body: AskPause, services: Services) -> PauseRequest:
     """Another computer asks this one to pause its running job. It is shown here as an alert, and nothing happens until a person
     here accepts it. Asking again from the same computer for the same run refreshes the request."""
     request = studio_membership.ask_here(body.from_node, body.run_label)
+    services.emit("invites", {})
     state = services.queue()
     return PauseRequest.model_validate(studio_membership.requests_row(request, state.job, state.eta_s))
 
@@ -843,6 +844,7 @@ def accept_pause_request(request_id: str, services: Services) -> Invites:
         raise HTTPException(404, f"No pause request {request_id}.")
     _yield(services)
     studio_membership.dismiss(request_id)
+    services.emit("invites", {})
     return _invites(services)
 
 
@@ -851,6 +853,7 @@ def dismiss_pause_request(request_id: str, services: Services) -> Invites:
     """Decline a pause request; the running job carries on."""
     if not studio_membership.dismiss(request_id):
         raise HTTPException(404, f"No pause request {request_id}.")
+    services.emit("invites", {})
     return _invites(services)
 
 

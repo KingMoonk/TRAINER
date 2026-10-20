@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,8 @@ import {
   type LoopForm,
   type LoopRound,
 } from "./loop-logic";
-import { useEventStream, useJob } from "./use-events";
+import { useJob } from "./use-events";
+import { useLive } from "@/lib/live";
 
 const LOOPS_KEY = ["post-training", "loops"];
 
@@ -54,20 +55,12 @@ export function LoopCard({ version, hasCheckpoint }: { version: number | undefin
   const loops = useQuery({
     queryKey: LOOPS_KEY,
     queryFn: ({ signal }) => unwrap(api.GET("/post-training/loops", { signal })),
-    refetchInterval: (query) => (query.state.data?.some((l) => l.active) ? 15_000 : false),
   });
+  // a loop's rounds arrive as `train` events of type loop_*, at most one re-read a second
+  useLive(LOOPS_KEY, ["queue", "train"], { match: (kind, payload) => kind !== "train" || String((payload as { type?: unknown } | null)?.type ?? "").startsWith("loop_"), throttleMs: 1_000 });
   const judges = useQuery({ queryKey: ["post-training", "judges"], queryFn: ({ signal }) => unwrap(api.GET("/post-training/judges", { signal })), retry: false });
   const [form, setForm] = useState<LoopForm>(LOOP_DEFAULTS);
   const set = (patch: Partial<LoopForm>) => setForm((f) => ({ ...f, ...patch }));
-  const last = useRef(0);
-  useEventStream((event) => {
-    const p = event.payload as { type?: string };
-    const loopEvent = event.kind === "train" && typeof p.type === "string" && p.type.startsWith("loop_");
-    if ((loopEvent || event.kind === "queue") && Date.now() - last.current > 1000) {
-      last.current = Date.now();
-      queryClient.invalidateQueries({ queryKey: LOOPS_KEY });
-    }
-  });
 
   const loop = loopFor(loops.data, version);
   const active = !!loop?.active;

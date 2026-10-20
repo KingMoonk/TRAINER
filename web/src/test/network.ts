@@ -75,6 +75,11 @@ export function emit(kind: string, payload: unknown) {
   for (const source of [...sources]) source.onmessage?.({ data: JSON.stringify({ kind, payload }) } as MessageEvent<string>);
 }
 
+/** Drop every open /events stream, as a restarted server or a sleeping laptop does. */
+export function dropEvents() {
+  for (const source of [...sources]) source.onerror?.(new Event("error"));
+}
+
 /** Make new /events streams fail (the shell then reads Offline), as the Playwright static server does with its 404. */
 export function eventsUnreachable(down = true) {
   eventsDown = down;

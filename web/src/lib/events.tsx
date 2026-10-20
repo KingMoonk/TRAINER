@@ -54,6 +54,85 @@ export function useAnyEvent(handler: (event: ApiEvent) => void): void {
   }, []);
 }
 
+/** Sent to every listener, as a `resync` event, when the stream opens again after it dropped: events may have been missed meanwhile. */
+export const RESYNC = "resync";
+
+const BACKSTOP_MS = 60_000;
+
+/**
+ * Call `refetch` when something it reads may have changed: on any event of `kinds` (when `match` is given, only those it accepts),
+ * on `resync` (the stream reconnected after a drop), when the tab becomes visible again, and, as a slow safety net for an event
+ * that never arrived, every `backstopMs` (`false` for none) while the tab is visible. A burst coalesces: at most one `refetch` is
+ * in flight, and events that arrive meanwhile cost one more call after it. `throttleMs` also keeps calls at least that far apart.
+ * Events are the fast path; the rest is what keeps a view right when one is lost.
+ */
+export function useLiveRefresh(
+  kinds: readonly string[],
+  refetch: () => unknown,
+  backstopMs: number | false = BACKSTOP_MS,
+  options: { throttleMs?: number; match?: (kind: string, payload: unknown) => boolean } = {},
+): void {
+  const latest = useRef({ refetch, kinds, match: options.match });
+  useEffect(() => {
+    latest.current = { refetch, kinds, match: options.match };
+  });
+  const throttleMs = options.throttleMs ?? 0;
+  useEffect(() => {
+    let inflight = false;
+    let dirty = false;
+    let last = -Infinity;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const run = () => {
+      if (inflight) {
+        dirty = true;
+        return;
+      }
+      inflight = true;
+      last = Date.now();
+      void Promise.resolve()
+        .then(() => latest.current.refetch())
+        .catch(() => {})
+        .finally(() => {
+          inflight = false;
+          if (dirty && !stopped) {
+            dirty = false;
+            request();
+          }
+        });
+    };
+    const request = () => {
+      if (timer !== undefined) return; // a delayed call is already coming
+      const wait = last + throttleMs - Date.now();
+      if (wait > 0) {
+        timer = setTimeout(() => {
+          timer = undefined;
+          run();
+        }, wait);
+      } else run();
+    };
+    const listener = (event: ApiEvent) => {
+      const { kinds: wanted, match } = latest.current;
+      if (event.kind === RESYNC || (wanted.includes(event.kind) && (!match || match(event.kind, event.payload)))) request();
+    };
+    listeners.add(listener);
+    const onVisible = () => {
+      if (!document.hidden) request();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const backstop = backstopMs === false ? undefined : setInterval(() => {
+      if (!document.hidden) request();
+    }, backstopMs);
+    return () => {
+      stopped = true;
+      listeners.delete(listener);
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(backstop);
+      clearTimeout(timer);
+    };
+  }, [backstopMs, throttleMs]);
+}
+
 /** Narrow a raw stream event to one the shell handles; any other kind is for the page that owns it. */
 export function asStudioEvent(event: ApiEvent): StudioEvent | null {
   return event.kind === "status" || event.kind === "problem_report" ? (event as StudioEvent) : null;
@@ -78,6 +157,7 @@ export function ShellEvents({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let close = () => {};
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let dropped = false; // the stream went down since it last opened, so events may have been missed
     const connect = () => {
       close = subscribe(
         (raw) => {
@@ -91,10 +171,16 @@ export function ShellEvents({ children }: { children: React.ReactNode }) {
         },
         () => {
           close();
+          dropped = true;
           setShell((s) => ({ ...s, connection: "offline" }));
           if (!tokenRefused()) timer = setTimeout(connect, RETRY_MS);  // a refused token is not retried until the page reloads
         },
-        () => setShell((s) => ({ ...s, connection: "online" })),
+        () => {
+          setShell((s) => ({ ...s, connection: "online" }));
+          if (!dropped) return;
+          dropped = false;
+          for (const listener of listeners) listener({ kind: RESYNC, payload: {} });
+        },
       );
     };
     connect();

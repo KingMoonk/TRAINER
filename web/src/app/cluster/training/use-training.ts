@@ -5,11 +5,10 @@ import { toast } from "sonner";
 import { api, unwrap } from "@/lib/api";
 import { problem } from "@/lib/cluster";
 import { TRAINING as T } from "@/lib/copy/training";
-import { useEvent } from "@/lib/events";
-import { isActive, type Run, type StartRun } from "./logic";
+import { payloadIs, useLive } from "@/lib/live";
+import type { Run, StartRun } from "./logic";
 
 const RUNS = ["distributed", "runs"] as const;
-const ACTIVE_MS = 1_000;
 export const READ_TIMEOUT_MS = 20_000;
 
 /**
@@ -37,18 +36,14 @@ export async function withTimeout<T>(signal: AbortSignal, call: (signal: AbortSi
 }
 
 /**
- * The runs this computer coordinates (GET /distributed/runs), newest first. Re-read on every `queue` event and every
- * second while one is going (nothing polls otherwise), since the members report to the coordinator without telling this page.
+ * The runs this computer coordinates (GET /distributed/runs), newest first. Re-read when the queue, the cluster or a run here
+ * changes (a `run` event comes with every member report the coordinator takes).
  */
 export function useRuns() {
-  const client = useQueryClient();
-  const refresh = () => void client.invalidateQueries({ queryKey: RUNS });
-  useEvent("queue", refresh);
-  useEvent("cluster", refresh);
+  useLive(RUNS, ["queue", "cluster", "facts", "run"]);
   return useQuery({
     queryKey: RUNS,
     queryFn: ({ signal }) => unwrap(api.GET("/distributed/runs", { signal })),
-    refetchInterval: (query) => ((query.state.data ?? []).some(isActive) ? ACTIVE_MS : false),
     retry: false,
   });
 }
@@ -153,13 +148,13 @@ export function useStopMember() {
   });
 }
 
-/** What the teacher gave a run (GET /distributed/runs/{id}/lessons), re-read every few seconds while `enabled`. */
+/** What the teacher gave a run (GET /distributed/runs/{id}/lessons), re-read when the run changes while `enabled`. */
 export function useLessons(id: string, enabled: boolean) {
+  useLive([...RUNS, id, "lessons"], ["run"], { enabled, match: payloadIs("run", id, ["run"]) });
   return useQuery({
     queryKey: [...RUNS, id, "lessons"],
     queryFn: ({ signal }) => unwrap(api.GET("/distributed/runs/{run_id}/lessons", { params: { path: { run_id: id } }, signal })),
     enabled,
-    refetchInterval: enabled ? 5_000 : false,
     retry: false,
   });
 }

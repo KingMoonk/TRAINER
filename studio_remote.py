@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 import os
 import shutil
 import socket
@@ -39,6 +40,10 @@ from studio_peer import PeerClient
 POLL_EVERY = studio_failover.POLL_EVERY  # seconds between polls of the peers
 POLL_BACKOFF_MAX = studio_failover.POLL_BACKOFF_MAX  # the longest wait between polls of a peer that does not answer: a peer that answers again is seen within this
 TICK_EVERY = 1.  # seconds between lease checks and renewals
+RUN_EVENT_EVERY = .5  # the least seconds between two `run` events of one run (a coordinator changes at every member report)
+FACTS_EVENT_EVERY = 1.  # the least seconds between two `facts` events
+QUIET_KINDS = ("heartbeat",)  # observation kinds whose change is no news to a page
+RUN_KINDS = ("run", "timeline", "run_events", "progress", "shards", "held", "claim")  # observation kinds keyed by run id
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
 RESUME_EVENTS = ("resumed", "resume_refused")  # which way a job placed again on the node that wrote its checkpoint went (`_own_checkpoint`)
 LOCAL_ONLY = ("version", "user_text", "previous_best", "output_dir", "result", "max_batch_size", "pinned", "remote_result")  # not for the runner
@@ -93,6 +98,51 @@ class GuestRun:
             del self.events[:-EVENT_BACKLOG]
 
 
+class Coalescer:
+    """Hands `send(key, payload)` on at most once per `every` seconds per key: the first at once, the rest folded (`fold`) into one
+    trailing call. Pages refetch on these events, so a burst of changes costs one refetch, and the last change is never held back."""
+
+    def __init__(self, send, every, fold=lambda old, new: new, clock=time.monotonic, later=None):
+        self.send, self.every, self.fold, self.clock = send, every, fold, clock
+        self.later = later or (lambda delay, call: _timer(delay, call))
+        self._last, self._held = {}, {}  # key -> clock time of its last send; key -> payload folded while it waits
+        self._lock = threading.Lock()
+
+    def __call__(self, key, payload):
+        with self._lock:
+            if key in self._held:
+                self._held[key] = self.fold(self._held[key], payload)
+                return
+            wait = self._last.get(key, -math.inf) + self.every - self.clock()
+            if wait > 0:
+                self._held[key] = payload
+                self.later(wait, lambda: self._flush(key))
+                return
+            self._last[key] = self.clock()
+        self.send(key, payload)
+
+    def _flush(self, key):
+        with self._lock:
+            payload = self._held.pop(key)
+            self._last[key] = self.clock()
+        self.send(key, payload)
+
+
+def _timer(delay, call):
+    timer = threading.Timer(delay, call)
+    timer.daemon = True
+    timer.start()
+
+
+def _shown(info):
+    """What a machine list shows of a peer, so a poll that changed none of it sends no `nodes` event."""
+    return None if info is None else (info.online, info.busy, info.hostname, info.version, info.device, info.device_name)
+
+
+def _fold_facts(old, new):
+    return {name: sorted({*old[name], *new[name]}) for name in old}
+
+
 class Cluster:
     """Everything a Runner needs to take part in a cluster. Inert (no polling, no threads of consequence) while no peers are listed in
     the workspace config. `client_for(address, **options)` makes the PeerClient; tests pass fakes for it, for `store`, `own` and `clock`."""
@@ -141,6 +191,10 @@ class Cluster:
         for job in runner.jobs:  # an old runner's epoch must never match a new grant
             self.owner.leases.seed(job.id, job.epoch)
         runner.subscribe(self._on_event)
+        # pages refresh on these instead of polling: `run` when a coordinator here changes, `facts` when the observation store does
+        self._run_events = Coalescer(lambda run, payload: runner._emit("run", payload), RUN_EVENT_EVERY)
+        self._facts_events = Coalescer(lambda _, payload: runner._emit("facts", payload), FACTS_EVENT_EVERY, _fold_facts)
+        self._unwatch = [studio_diloco.watch(self._coordinator_changed), self.state.watch(self._facts_changed)]
 
     # ---- configuration ----------------------------------------------------------------------------------------------
     def peers(self):
@@ -228,6 +282,20 @@ class Cluster:
                 self.runner._save()
         for run in list(self.guests.values()):
             run.ended = True
+        for stop in self._unwatch:
+            stop()
+
+    def _coordinator_changed(self, coordinator):
+        run = next((key for key, held in list(self.coordinators.items()) if held is coordinator), None)
+        if run is not None:  # another node's coordinator in this process (tests run several) is that node's news
+            self._run_events(run, {"run": run})
+
+    def _facts_changed(self, changes):
+        changes = [(origin, kind, key) for origin, kind, key in changes if kind not in QUIET_KINDS]
+        if changes:
+            self._facts_events("facts", {"kinds": sorted({kind for _, kind, _ in changes}),
+                                         "runs": sorted({key for _, kind, key in changes if kind in RUN_KINDS}),
+                                         "origins": sorted({origin for origin, _, _ in changes})})
 
     # ---- the cluster as this node sees it ---------------------------------------------------------------------------
     def publish_state(self):
@@ -324,6 +392,7 @@ class Cluster:
         due = [a for a in peers if a not in self._silent or now >= self._silent[a][1]]  # a silent peer is asked less and less often
         with ThreadPoolExecutor(max_workers=min(8, len(due) or 1)) as pool:
             results = list(pool.map(ask, due))
+        before = {address: _shown(self._known.get(address)) for address in peers}
         for address, info, exc in results:
             known = self._known.get(address)
             if info is None and studio_cluster.slow(exc) and known is not None and known.online and address not in self._silent:
@@ -342,6 +411,9 @@ class Cluster:
             else:
                 count = self._silent.get(address, (0,))[0] + 1
                 self._silent[address] = (count, self._probed[address] + min(POLL_BACKOFF_MAX, 2 * POLL_EVERY * 2 ** (count - 1)))
+        changed = sorted(address for address in peers if _shown(self._known.get(address)) != before[address])
+        if changed:  # a machine came online, went offline or changed what it is: the machine lists refresh on this
+            self.runner._emit("nodes", {"addresses": changed})
         self.polled.set()
         try:  # who coordinates which run, from the store as it is after this poll's syncs (studio_failover)
             self.failover.step()
