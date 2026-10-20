@@ -1508,8 +1508,9 @@ class Coordinator:
         """Take a member's report of where it is in its round (no weights): the latest per member is kept for the live view, and a
         training or uploading report also marks the round's timeline and adds a sample for its charts. Stale (409) for a node that
         is not a member or a lease epoch that is not its own, and for a training or uploading report about a round that is closed
-        or of another generation, as a delta is. Returns False, taking nothing, when a closing round holds the lock for a while: a
-        report is never worth holding a request for."""
+        or of another generation, as a delta is. An overlapping member that already sent the open round trains the next one while
+        the others finish: its reports for that round only freshen its report's time. Returns False, taking nothing, when a closing
+        round holds the lock for a while: a report is never worth holding a request for."""
         if phase not in PHASES:
             raise ValueError(f"phase must be one of {', '.join(PHASES)}.")
         self.beats[node] = self.clock()  # a report refused for a closing round is still a sign of life
@@ -1525,6 +1526,10 @@ class Coordinator:
             now, current = self.clock(), self.current
             report = self.reports.setdefault(node, {"samples": [], "sample_round": None})
             if phase in WORK_PHASES:
+                if (current is not None and current.open and number == current.number + 1 and node in current.contributions
+                        and generation == current.generation and "round" in report):
+                    report["at"] = now  # ahead (overlap): nothing to mark until its round opens
+                    return True
                 if current is None or current.number != number or not current.open:
                     raise Stale(f"Round {number} is closed (the open round is {current.number if current else 'none'}).")
                 if node not in current.members:
