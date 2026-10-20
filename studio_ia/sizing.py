@@ -4,6 +4,7 @@ computer (studio_scaling.measure_step_rate) and, when the design has run before,
 from __future__ import annotations
 
 import copy
+import math
 
 import studio_scaling as scaling
 
@@ -73,6 +74,8 @@ def resized_spec(spec, width, layers):
         head = max(1, spec["dims"]["d_model"] // max(1, mixer["heads"]))
         head = max(head, 64) if width >= 256 else head
         mixer["heads"] = max(1, width // head)
+        if "kv_heads" in mixer:
+            mixer["kv_heads"] = math.gcd(mixer["heads"], mixer["kv_heads"])
     try:
         return validate_spec(new)
     except (ValueError, KeyError, TypeError):

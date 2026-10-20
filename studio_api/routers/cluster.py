@@ -389,3 +389,88 @@ def renew(job_id: str, body: Renewal, cluster: Cluster) -> Renewed:
 def finished(job_id: str, body: Finished, cluster: Cluster) -> None:
     """A runner's job ended; the finished version is in the store. 409 for any epoch but the current one."""
     cluster.finished(job_id, body.model_dump())
+
+
+# ---- the cluster self-test (studio_selftest, docs/distributed.md "Self-test") ---------------------------------------------------
+
+class SelfTestStep(BaseModel):
+    id: str
+    title: str
+    machine: str  # the machine it is about; "" for the whole run
+    status: Literal["pending", "running", "pass", "fail", "skipped"]
+    detail: str  # what was measured, or what went wrong
+    fix: str  # on a failure, the plain thing to do about it
+    seconds: float | None
+
+
+class SelfTestRun(BaseModel):
+    id: str
+    machines: list[str]
+    started_at: float
+    finished_at: float | None
+    state: Literal["never", "running", "passed", "failed"]
+    steps: list[SelfTestStep]
+
+
+class SelfTestStart(BaseModel):
+    machines: list[str] = Field(min_length=1)  # the other machines to test with, from the Machines list; this computer always takes part
+
+
+class SelfTestPing(BaseModel):
+    url: str  # the address the coordinator told the member to join at
+
+
+class SelfTestPingAnswer(BaseModel):
+    ok: bool
+    error: str
+    seconds: float
+
+
+class SelfTestDigest(BaseModel):
+    url: str
+    run: str
+    round: int = Field(ge=0)
+    term: int = Field(ge=0)
+
+
+class SelfTestDigestAnswer(BaseModel):
+    sha256: str
+    bytes: int
+    seconds: float
+
+
+@router.get("/selftest")
+def selftest(services=Depends(get_services)) -> SelfTestRun:
+    """The cluster self-test as it stands: its steps while it runs, else the last one's (kept across restarts), else state `never`."""
+    return SelfTestRun.model_validate(services.cluster_selftest())
+
+
+@router.post("/selftest", status_code=202)
+def start_selftest(body: SelfTestStart, request: Request, services=Depends(get_services)) -> SelfTestRun:
+    """Start the self-test with the listed machines: the checks per machine, then a tiny real DiLoCo run through the queue, invite and
+    join path, each step with its verdict. 409 with a sentence when it cannot start (one is running, this computer is busy, an address is
+    not on the Machines list)."""
+    from studio_api.routers.distributed import _address_for_peers
+    try:
+        return SelfTestRun.model_validate(services.cluster_selftest_start(
+            body.machines, _address_for_peers(request), request.url.port or studio_cluster.DEFAULT_PORT))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/selftest/ping")
+def selftest_ping(body: SelfTestPing) -> SelfTestPingAnswer:
+    """Asked by the machine running the self-test: can this one reach `url` (that machine, by the address it gave its members)?"""
+    import studio_selftest
+    return SelfTestPingAnswer.model_validate(studio_selftest.peer_ping(body.url))
+
+
+@router.post("/selftest/digest")
+def selftest_digest(body: SelfTestDigest) -> SelfTestDigestAnswer:
+    """Download the weights of an open round from the coordinator at `url`, as a member does, and answer their checksum. 409 when the
+    round has closed or the coordinator refused."""
+    import studio_selftest
+    try:
+        return SelfTestDigestAnswer.model_validate(studio_selftest.peer_digest(body.url, body.run, body.round, body.term))
+    except studio_peer.PeerError as exc:
+        raise HTTPException(409, str(exc)) from None

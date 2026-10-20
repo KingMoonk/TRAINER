@@ -199,7 +199,7 @@ def gpt2_spec(d_model=768, n_layer=12, n_ctx=1024, heads=12, d_ff=3072, name=Non
     It is meant to be fine-tuned, so its learning rate is a fine-tuning one: FINE_TUNE_LR, or FINE_TUNE_LORA_LR when `lora` (a
     settings dict, {} for the defaults) says the spec trains LoRA adapters instead.
     """
-    spec = studio_spec.default_spec()
+    spec = studio_spec.default_spec(preset="classic")
     spec["name"] = name or "GPT-2 (124M)"
     spec["train"]["optimizer"]["config"]["lr"] = FINE_TUNE_LORA_LR if lora is not None else FINE_TUNE_LR
     if lora is not None:

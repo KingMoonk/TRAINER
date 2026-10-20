@@ -306,10 +306,17 @@ def compare(job, context, emit, stop, pause):
                                                       emit=emit, stop=stop, pause=pause, config=p.get("config"))
 
 
+def mlperf(job, context, emit, stop, pause):
+    """The training-speed benchmark (studio_mlperf): one task on this machine, result stored under data/mlperf."""
+    import studio_mlperf
+    studio_mlperf.job(job, context, emit, stop, pause)
+
+
 def not_built(job, context, emit, stop, pause):
     emit({"type": "info", "text": "not built yet"})
 
 
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
             "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained,
-            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member, "rlhf_loop": rlhf_loop}
+            "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member, "rlhf_loop": rlhf_loop,
+            "mlperf": mlperf}

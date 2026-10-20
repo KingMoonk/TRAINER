@@ -5,7 +5,7 @@ from studio_spec import default_spec, validate_spec
 
 
 def small_spec(layers=2):
-    spec = default_spec()
+    spec = default_spec(preset="classic")   # the classic recipe: the tests built on this helper expect LayerNorm, GELU and a cosine schedule
     spec["dims"].update(d_model=16, n_layer=layers, n_ctx=64, dropout=0.)
     return validate_spec(spec)
 

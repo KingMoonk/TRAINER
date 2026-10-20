@@ -27,11 +27,23 @@ from studio_collect.store import Journal, Ledger, LimitReached, State, Stopped, 
 
 POLL = 2.0
 WAIT_POLL = 10.0
+FLUSH_EVERY = 60.0
 IDLE_RECHECK = 3600.0
 REPLAN = 24 * 3600.0
 ADAPTERS = {"hub": "studio_collect.hub", "stackexchange": "studio_collect.stackexchange", "github": "studio_collect.github", "web": "studio_collect.web"}
 
 
+def plan_key(inputs):
+    """A hash of the settings that change what a source plans; changing one makes its plan stale (approvals and blocks only re-filter it)."""
+    return hashlib.sha1(json.dumps(inputs, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def wake_key(config):
+    """Everything that should end a long wait: any source's plan inputs."""
+    import importlib
+    import importlib.util
+    return plan_key({name: importlib.import_module(module).Adapter.plan_inputs(config)
+                     for name, module in ADAPTERS.items() if importlib.util.find_spec(module) is not None})
 def take_lock(path):
     """An exclusive OS lock on `path`, held while the returned file stays open; None when another process holds it."""
     handle = open(path, "a+b")
@@ -49,13 +61,6 @@ def take_lock(path):
     return handle
 
 
-def plan_key(config):
-    """Settings that change what is searched; changing one makes the plan stale (approvals and blocks only re-filter it)."""
-    keep = {k: config[k] for k in ("topics", "custom_topics", "licences", "sources", "stackexchange", "github", "web")}
-    keep["limits"] = {k: config["limits"][k] for k in ("max_dataset_mb", "max_file_mb", "auto_approve_mb")}
-    return hashlib.sha1(json.dumps(keep, sort_keys=True).encode()).hexdigest()[:12]
-
-
 class Context:
     """What an adapter works with. `stop()` is called often: it raises Stopped the moment collection must not go on."""
 
@@ -63,6 +68,7 @@ class Context:
         self.root, self.config, self.state, self.journal, self.ledger = Path(root), config, state, journal, ledger
         self.http, self.pipeline, self.probes, self.clock = http, pipeline, probes, clock
         self._checked, self._beat = 0.0, 0.0
+        self.adapters, self.flushed = {}, clock()
 
     def stop(self):
         now = self.clock()
@@ -79,6 +85,13 @@ class Context:
             self._beat = now
             self.state.save(heartbeat=now)
 
+    def plan_items(self, source):
+        return [i for i in self.state.data["plan"] if i.get("source") == source]
+
+    def set_plan(self, source, items):
+        """Replace one source's items in the plan (the other sources' items stay)."""
+        self.state.save(plan=[i for i in self.state.data["plan"] if i.get("source") != source] + list(items))
+
     def reserve(self, nbytes=0):
         """LimitReached when `nbytes` more would pass the disk cap."""
         cap = self.config["limits"]["disk_mb"] * 1_000_000
@@ -86,6 +99,7 @@ class Context:
             raise LimitReached(f"The disk cap of {self.config['limits']['disk_mb']:g} MB is reached. Records move to your data when the app registers them.")
 
     def flush(self):
+        self.flushed = self.clock()
         out = self.pipeline.flush()
         self.state.add_stats(out["stats"])
         for group, stats in out["groups"].items():
@@ -101,7 +115,9 @@ def adapters(ctx):
     for name, module in ADAPTERS.items():
         if ctx.config["sources"].get(name):
             try:
-                found.append(importlib.import_module(module).Adapter(ctx))
+                if name not in ctx.adapters:      # kept for the whole run: the crawler's robots.txt cache and frontier live in it
+                    ctx.adapters[name] = importlib.import_module(module).Adapter(ctx)
+                found.append(ctx.adapters[name])
             except ModuleNotFoundError as error:
                 if error.name != module:
                     raise
@@ -154,6 +170,8 @@ def run(root, *, transport=None, probes=None, sleep=time.sleep, clock=time.time,
             _status(state, "running", "", clock)
             try:
                 worked = work(ctx, clock)
+                if not worked or clock() - ctx.flushed > FLUSH_EVERY:
+                    ctx.flush()          # a source that reads small pieces (a crawl) fills a shard slowly: write what it has now and then
                 state.save()
                 if not worked:
                     _status(state, "idle", "Nothing left to collect with these settings. It looks again later.", clock)
@@ -182,6 +200,13 @@ def run(root, *, transport=None, probes=None, sleep=time.sleep, clock=time.time,
                     return "error"
                 wait(ctx, 60, sleep)
     finally:
+        if ctx is not None:
+            try:
+                ctx.flush()
+            except Exception:    # noqa: BLE001 - leaving must not fail on a full disk; the records stay in the next run's re-read
+                pass
+        for adapter in (ctx.adapters.values() if ctx is not None else ()):
+            getattr(adapter, "close", lambda: None)()
         if seen is not None:
             seen.close()
         journal.append("exit")
@@ -191,21 +216,23 @@ def run(root, *, transport=None, probes=None, sleep=time.sleep, clock=time.time,
 
 def wait(ctx, seconds, sleep):
     """Sleep in short steps so a settings change (pause, off, a new topic) is noticed within seconds."""
-    end = ctx.clock() + seconds
+    end, waking = ctx.clock() + seconds, wake_key(cfg.load(ctx.root))
     while ctx.clock() < end:
         sleep(min(POLL, max(0.0, end - ctx.clock())))
         config = cfg.load(ctx.root)
-        if not config["enabled"] or config["paused"] or plan_key(config) != ctx.state.data.get("plan_key"):
+        if not config["enabled"] or config["paused"] or wake_key(config) != waking:
             return
 
 
 def work(ctx, clock):
     """One step of the first source with something to do. False when no source has anything left."""
     for adapter in adapters(ctx):
-        key = plan_key(ctx.config)
-        if getattr(adapter, "plan", None) and (ctx.state.data.get("plan_key") != key or clock() - (ctx.state.data.get("planned_at") or 0) > REPLAN):
+        made = ctx.state.data["plans"].get(adapter.key, {})
+        key = plan_key(adapter.plan_inputs(ctx.config))
+        if made.get("key") != key or clock() - (made.get("at") or 0) > REPLAN:
             adapter.plan()
-            ctx.state.save(plan_key=key)
+            ctx.state.data["plans"][adapter.key] = {"key": key, "at": clock()}
+            ctx.state.save()
         if adapter.step():
             return True
     return False

@@ -312,7 +312,9 @@ class Handoff(unittest.TestCase):
 
 class Conflict(unittest.TestCase):
     def setUp(self):
-        self.fleet = Fleet(self)
+        # a short slack and grace: a member the loser left behind (or one that lagged on a loaded machine) must not hold a round for the
+        # default 30 s + 120 s while the winner waits for it; the wait_for limit below stays as a backstop only
+        self.fleet = Fleet(self, slack_seconds=8., grace_seconds=8.)
         self.addCleanup(studio_diloco.COORDINATORS.clear)
 
     def test_two_claims_of_the_same_term_settle_on_the_higher_one_and_the_loser_s_rounds_are_gone(self):

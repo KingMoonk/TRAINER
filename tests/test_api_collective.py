@@ -5,6 +5,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import uvicorn
@@ -16,7 +17,19 @@ import studio_model
 from studio_queue import Job
 from tests import diloco_support as support
 
-MARGIN = .1  # final val loss, int8 vs float16: measured gaps are 0.00 to 0.05 (the two members race, so a run is not bit-exact)
+# Final val loss, int8 vs float16. Two members race in one process (and share its random number generator), so a run is not bit-exact: even
+# with the same steps dealt, float16 alone ends anywhere from 3.75 to 3.84 and the gap to int8 measured -0.05 to +0.09 over 25 runs (-0.14
+# to +0.02 before the steps were pinned). .25 is about twice that spread, and a broken int8 does not train at all: it stays near the
+# starting loss of 4.7, 0.9 away. This is a smoke check that int8 still trains; how precise int8 is, is guarded by the quantization test
+# in tests/test_diloco.py (test_int8_arrays_are_a_quarter_of_fp32_and_within_half_a_step_of_the_original), not by this margin.
+MARGIN = .25
+
+
+def equal_steps():
+    """deal_steps hands steps out by each member's measured wall-clock speed, so two threads that differ by a few percent are dealt 5 and 3
+    steps in some rounds and the losses move from run to run. The tests that compare losses are about the same steps per member (the
+    balancing has its own tests, test_diloco_speed_share)."""
+    return mock.patch.object(studio_diloco, "deal_steps", lambda settings, members, step_times: {node: settings.inner_steps for node in members})
 
 
 class Collective(unittest.TestCase):
@@ -214,8 +227,9 @@ class Training(Collective):
 
     def test_two_members_over_the_routes_beat_one_member_after_the_same_steps_per_member(self):
         shape = dict(inner_steps=4, rounds=6, outer_lr=.7, outer_momentum=.9, min_members=1, delta_dtype="float16")
-        one = self.train(1, "one", **shape)
-        two = self.train(2, "two", **{**shape, "min_members": 2})
+        with equal_steps():
+            one = self.train(1, "one", **shape)
+            two = self.train(2, "two", **{**shape, "min_members": 2})
         self.assertEqual([len(r["contributed"]) for r in two.history], [2] * 6)
         self.assertEqual([r["steps"] for r in two.history][0], {"node0": 4, "node1": 4})
         losses = (one.history[-1]["val_loss"], two.history[-1]["val_loss"])
@@ -229,8 +243,9 @@ class Training(Collective):
 
     def test_int8_deltas_end_within_a_margin_of_the_float16_run_and_cost_fewer_bytes(self):
         shape = dict(inner_steps=4, rounds=6, outer_lr=.7, outer_momentum=.9, min_members=2)
-        half = self.train(2, "half", delta_dtype="float16", **shape)
-        quarter = self.train(2, "quarter", delta_dtype="int8", **shape)
+        with equal_steps():
+            half = self.train(2, "half", delta_dtype="float16", **shape)
+            quarter = self.train(2, "quarter", delta_dtype="int8", **shape)
         losses = (half.history[-1]["val_loss"], quarter.history[-1]["val_loss"])
         sent = (sum(r["delta_bytes"] for r in half.history), sum(r["delta_bytes"] for r in quarter.history))
         print(f"2 members, 6 rounds x 4 steps: final val loss float16 {losses[0]:.4f}, int8 {losses[1]:.4f} (gap {losses[1] - losses[0]:+.4f}); "

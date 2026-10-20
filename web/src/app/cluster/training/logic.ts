@@ -9,6 +9,7 @@ export type Round = components["schemas"]["Round"];
 export type Defaults = components["schemas"]["Defaults"];
 export type StartRun = components["schemas"]["StartRun"];
 export type TextSet = components["schemas"]["TextSet"];
+export type ChatSet = components["schemas"]["ChatSet"];
 export type ClusterNode = components["schemas"]["ClusterNode"];
 export type Lesson = components["schemas"]["Lesson"];
 
@@ -23,7 +24,7 @@ export function lessonFrom(lesson: Lesson): string {
 }
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -39,12 +40,16 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     outerMomentum: String(defaults?.outer_momentum ?? ""),
     version: "",
     datasets: (sets ?? []).filter((set) => set.on).map((set) => set.id),
+    chats: [],
     machines: [],
     minMachines: "",
     maxMachines: "",
     overlap: false,
     reviewedOnly: false,
     coordinator: "",
+    teacher: "",
+    polishEvery: "",
+    targetWinRate: "",
   };
 }
 
@@ -67,6 +72,34 @@ function positive(text: string): number | null {
   return text.trim() !== "" && Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** Why the teacher options cannot be started with, in a sentence, or "" when they can (or are not used). Every case that keeps Start off says so here. */
+export function teacherProblem(form: Form): string {
+  const polishBlank = form.polishEvery.trim() === "";
+  const winBlank = form.targetWinRate.trim() === "";
+  if (polishBlank && winBlank) return form.teacher === "" ? "" : T.teacherNoUse;
+  if (!polishBlank) {
+    const polish = whole(form.polishEvery);
+    if (polish === null || polish < 1) return T.polishBad;
+    const rounds = whole(form.rounds);
+    if (rounds !== null && polish >= rounds) return T.polishTooLate;
+  }
+  if (!winBlank) {
+    const percent = Number(form.targetWinRate);
+    if (!(percent >= 1 && percent <= 100)) return T.winBad;
+  }
+  if (form.teacher === "") return T.teacherNeeded;
+  if (form.coordinator !== "" && form.machines.includes(form.coordinator)) return T.teacherCoordinator;
+  return "";
+}
+
+/** The teacher's part of the request: nothing while the options are blank. Only called when `teacherProblem` is empty. */
+function teaching(form: Form): Pick<StartRun, "teacher" | "polish_every" | "target_win_rate"> | undefined {
+  const polish = whole(form.polishEvery);
+  const win = form.targetWinRate.trim();
+  if (polish === null && win === "") return undefined;
+  return { teacher: form.teacher, ...(polish !== null ? { polish_every: polish } : {}), ...(win !== "" ? { target_win_rate: Number(win) / 100 } : {}) };
+}
+
 /** The request the form makes, or null while it is not complete (a setting is not a number, or no text is ticked). */
 export function startBody(form: Form): StartRun | null {
   const rounds = whole(form.rounds);
@@ -80,9 +113,11 @@ export function startBody(form: Form): StartRun | null {
   const most = limit(form.maxMachines);
   if (least === null || most === null) return null;
   if (least !== undefined && most !== undefined && least > most) return null;
+  if (teacherProblem(form) !== "") return null;
+  const teacher = teaching(form);
   return {
     version: form.version === "" ? null : Number(form.version),
-    dataset_ids: form.datasets,
+    dataset_ids: teacher ? [...form.datasets, ...form.chats.filter((id) => !form.datasets.includes(id))] : form.datasets, // chat sets only feed the teacher
     machines: form.machines,
     ...(form.coordinator !== "" && form.machines.includes(form.coordinator) ? { coordinator: form.coordinator } : {}),
     rounds,
@@ -93,6 +128,7 @@ export function startBody(form: Form): StartRun | null {
     ...(most !== undefined ? { max_members: most } : {}),
     overlap: form.overlap,
     reviewed_only: form.reviewedOnly,
+    ...teacher,
   };
 }
 

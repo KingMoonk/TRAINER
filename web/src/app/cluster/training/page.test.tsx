@@ -15,15 +15,16 @@ const SETS = [
   { id: "stories", name: "Stories", count: 1200, on: true, held: false, library: false },
   { id: "notes", name: "Notes", count: 40, on: false, held: false, library: false },
 ];
+const CHATS = [{ id: "chats", name: "Your conversations", count: 30 }, { id: "stories", name: "Stories", count: 5 }];
 const VERSIONS = [{ number: 2, name: "Wider", change: "", best_checkpoint: null }];
 const node = (address: string, over: Record<string, unknown> = {}) => ({
   address, local: false, hostname: address, version: "1", device: "cuda", device_name: "RTX 4090", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,
 });
 const NODES = [node("local", { local: true, hostname: "mac-mini", device: "mps", device_name: "Apple M2" }), node("gpu-box"), node("old-laptop", { online: false, error: "old-laptop did not answer within 2 seconds." })];
 
-type Setup = { runs?: Run[]; start?: (body: StartRun) => Run | { status: number; detail: string }; sets?: typeof SETS; versions?: typeof VERSIONS };
+type Setup = { runs?: Run[]; start?: (body: StartRun) => Run | { status: number; detail: string }; sets?: typeof SETS; versions?: typeof VERSIONS; chats?: typeof CHATS; judges?: { url: string; models: string[]; selected: string; error: string | null } };
 function server(opts: Setup = {}) {
-  const state = { runs: opts.runs ?? [], started: [] as StartRun[], stopped: [] as string[], membersStopped: [] as string[] };
+  const state = { runs: opts.runs ?? [], judged: 0, started: [] as StartRun[], stopped: [] as string[], membersStopped: [] as string[] };
   mockApi({
     "GET /distributed/defaults": { body: DEFAULTS },
     "GET /distributed/runs": () => ({ body: state.runs }),
@@ -49,6 +50,11 @@ function server(opts: Setup = {}) {
     "GET /pretraining/text_sets": { body: opts.sets ?? SETS },
     "GET /versions": { body: opts.versions ?? VERSIONS },
     "GET /cluster/nodes": { body: NODES },
+    "GET /distributed/chat_sets": { body: opts.chats ?? CHATS },
+    "GET /post-training/judges": () => {
+      state.judged += 1;
+      return { body: opts.judges ?? { url: "http://localhost:11434", models: ["judge:1b", "big:8b"], selected: "", error: null } };
+    },
   });
   return state;
 }
@@ -93,6 +99,87 @@ describe("Training tab: the start form", () => {
     });
     expect(await screen.findByTestId("run-r1")).toHaveTextContent("Version 2 across machines");
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");
+  });
+
+  test("starts a run with a teacher, a polish cadence and a win-rate target", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Start run" });
+    expect(state.judged).toBe(0); // Ollama is not asked until the section is opened
+    await user.click(screen.getByText("Teacher (optional)"));
+    expect(screen.getByLabelText("Teacher")).toHaveValue("");
+    expect(await screen.findByRole("option", { name: "judge:1b" })).toBeInTheDocument();
+    expect(state.judged).toBe(1);
+    await user.type(screen.getByLabelText("Polish every"), "3");
+    expect(screen.getByRole("button", { name: "Start run" })).toBeDisabled(); // no teacher chosen yet
+    expect(screen.getByText(/Choose a teacher for the polish/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Teacher"), "judge:1b");
+    await user.type(screen.getByLabelText("Win-rate target (%)"), "60");
+    await user.click(await screen.findByRole("checkbox", { name: /Your conversations/ })); // a set of conversations only
+    expect(screen.queryByRole("checkbox", { name: /^Stories 5/ })).toBeNull(); // a set with text is ticked above, not offered twice
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0]).toMatchObject({ dataset_ids: ["stories", "chats"], teacher: "judge:1b", polish_every: 3, target_win_rate: 0.6 });
+  });
+
+  test("keeps the conversation sets out of the request when no teacher is used", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    await user.click(await screen.findByRole("checkbox", { name: /Your conversations/ }));
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0].dataset_ids).toEqual(["stories"]);
+  });
+
+  test("says Ollama has no models when it answers with none", async () => {
+    server({ judges: { url: "http://localhost:11434", models: [], selected: "", error: null } });
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    expect(await screen.findByText("Ollama has no models; pull one first.")).toBeInTheDocument();
+  });
+
+  test("leaves the teacher out of the request when the section is not used", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    for (const key of ["teacher", "polish_every", "target_win_rate"]) expect(state.started[0]).not.toHaveProperty(key);
+  });
+
+  test("a teacher with no polish and no target says so beside Start, and keeps it off", async () => {
+    server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    await user.selectOptions(await screen.findByLabelText("Teacher"), "judge:1b");
+    expect(screen.getByRole("button", { name: "Start run" })).toBeDisabled();
+    const reason = screen.getByText("Pick how often to polish or a win-rate target, or clear the teacher.");
+    expect(reason.closest("details")).toBeNull(); // shown beside Start, not hidden in the section
+  });
+
+  test("says beside Start when the polish would never run", async () => {
+    server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    await user.selectOptions(await screen.findByLabelText("Teacher"), "judge:1b");
+    await user.type(screen.getByLabelText("Polish every"), "10"); // 10 rounds
+    expect(screen.getByRole("button", { name: "Start run" })).toBeDisabled();
+    expect(screen.getByText(/Polish every must be fewer than the number of rounds/).closest("details")).toBeNull();
+  });
+
+  test("says why when Ollama cannot be read", async () => {
+    server({ judges: { url: "http://localhost:11434", models: [], selected: "", error: "connection refused" } });
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Teacher (optional)"));
+    expect(await screen.findByText(/Ollama could not be read, so no teacher can be chosen: connection refused/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "No teacher" })).toBeInTheDocument();
   });
 
   test("offers the ticked machines as coordinator and sends the choice", async () => {

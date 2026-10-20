@@ -187,13 +187,15 @@ class Placement:
     where: str  # "local" | "remote" | "wait"
     node: str = ""  # the peer's address when remote
     reason: str = ""  # when waiting: a sentence saying what the job is waiting for
+    basis: str = ""  # when a node's measured speed picked it: the sentence saying so (empty: the old rule decided)
 
 
-def decide(kind, nodes, health, pinned=None, store_ready=True, requirements=None, exclude=()):
+def decide(kind, nodes, health, pinned=None, store_ready=True, requirements=None, exclude=(), shape=None):
     """Where a waiting job goes. `nodes` is the cluster as NodeInfo, this machine first (address `studio_cluster.LOCAL`).
     A peer is a candidate only when it is up, the kind can run away from its owner (REMOTE_KINDS), the version store is there to carry
     the result back, and it did not just refuse this job (`exclude`). A pinned job goes to its node or waits: it is never moved to
-    a better one."""
+    a better one. `shape` is the job's design shape (`job_shape`): among the free machines that fit, the one that measured the
+    fastest step for it wins (studio_cluster.place_why); with none given, or a machine that has not measured it, the old rule."""
     requirements = requirements or studio_cluster.defaults_for(kind)
     remote_kind = kind in REMOTE_KINDS
     candidates = []
@@ -202,12 +204,24 @@ def decide(kind, nodes, health, pinned=None, store_ready=True, requirements=None
         if not local and not (remote_kind and store_ready and health.state(node.address) == UP and node.address not in exclude):
             node = replace(node, online=False)
         candidates.append(node)
-    target = studio_cluster.place(requirements, candidates, pinned)
+    target, basis = studio_cluster.place_why(requirements, candidates, pinned, shape)
     if target is not None:
-        return Placement("local") if target.address == studio_cluster.LOCAL else Placement("remote", target.address)
+        return Placement("local", basis=basis) if target.address == studio_cluster.LOCAL else Placement("remote", target.address, basis=basis)
     if pinned:
         return Placement("wait", reason=_why_pinned(pinned, kind, nodes, health, remote_kind, store_ready, exclude))
     return Placement("wait", reason="No machine that fits this job is free yet.")
+
+
+def job_shape(kind, params):
+    """The design shape of a job (`studio_probe.shape_key`, the key nodes report speeds under), or None for a job with no design to time
+    or a config that does not validate (placement then falls back to the old rule)."""
+    if kind != "pretrain" or not isinstance(params.get("config"), dict):
+        return None
+    try:
+        import studio_memory
+        return studio_memory.shape_of(studio_memory.validated(params["config"]))
+    except Exception:  # noqa: BLE001 - a job we cannot describe is placed without a speed
+        return None
 
 
 def _why_pinned(pinned, kind, nodes, health, remote_kind, store_ready, exclude):

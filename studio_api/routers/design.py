@@ -247,6 +247,19 @@ def presets() -> list[Preset]:
             for key, spec in design.preset_specs(design.gpt2_words_ready())]
 
 
+class Start(BaseModel):
+    spec: dict
+    note: str  # why the preset is not bfloat16 on this computer; empty when it is
+
+
+@router.get("/start")
+def start() -> Start:
+    """The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it."""
+    from studio_preset import modern_spec
+    spec, note = modern_spec("My network")
+    return Start(spec=spec, note=note)
+
+
 class PresetCost(BaseModel):
     params: int
     need: int
@@ -256,13 +269,15 @@ class PresetCost(BaseModel):
     slow: bool
     lines: list[str]
     recipe: str  # recipe_text
+    device: str = "cpu"  # the device the step time is for: the faster one when this computer has timed the design, else the GPU if there is one
+    measured: bool = False  # the step time is a measurement on this computer (studio_probe), not the fitted estimate
 
 
 @router.post("/preset-cost")
 def preset_cost(body: SpecBody) -> PresetCost:
     """preset_cost: what a design costs on this machine before it is loaded, and its training recipe in one line."""
     spec = maths(validate_spec, body.spec)
-    return PresetCost(**design.preset_cost(spec, gpu=design.gpu_kind()), recipe=design.recipe_text(spec))
+    return PresetCost(**design.preset_cost(spec, gpu=design.gpu_kind(), probe=design.cached_probe(spec)), recipe=design.recipe_text(spec))
 
 
 class ComputeBody(BaseModel):
@@ -281,7 +296,8 @@ def compute_lines(body: ComputeBody) -> list[Line]:
     """compute_lines: how much text a design needs against the text you have, and how long a run should take."""
     spec = maths(validate_spec, body.spec)
     params = design.sizes(spec, body.v)["params"]
-    lines = design.compute_lines(params, spec["dims"]["n_ctx"], spec["dims"]["n_layer"], body.preview, design.gpu_kind())
+    lines = design.compute_lines(params, spec["dims"]["n_ctx"], spec["dims"]["n_layer"], body.preview, design.gpu_kind(),
+                                 design.cached_probe(spec))
     return [Line(text=text, bad=bad) for text, bad in lines]
 
 

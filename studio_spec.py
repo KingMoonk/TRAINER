@@ -29,6 +29,8 @@ MODEL_SLOTS = ("tokenizer", "embedding", "position", "head")
 DEFAULTS = {"tokenizer": "byte", "embedding": "learned", "position": "learned", "norm": "layernorm", "mixer": "attention",
             "channel": "mlp_gelu", "head": "tied", "objective": "ce", "optimizer": "adamw", "schedule": "cosine",
             "init": "gpt2", "precision": "fp32"}
+# DEFAULTS is the classic recipe and is frozen: validate_spec reads a slot a stored spec leaves out as this, so editing it
+# would change the network of every older spec. A new design starts from default_spec() (the modern preset) instead.
 # Run settings an architecture may carry along (older designs stored them); the Training setup page supplies the rest.
 RUN_INTS = {"steps": (1, 1000000), "batch_size": (1, 128), "accumulation": (1, 64), "eval_every": (1, 100000), "seed": (0, 2147483647)}
 RUN_CHOICES = {"objective": ("all", "assistant"), "device": ("auto", "cpu", "cuda", "mps")}
@@ -38,8 +40,18 @@ def is_model_spec(value):
     return isinstance(value, dict) and "schema" in value
 
 
-def default_spec(name="My network"):
-    return validate_spec({"schema": SCHEMA, "name": name, "dims": {"d_model": 64, "n_layer": 2, "n_ctx": 256, "dropout": .1}})
+def default_spec(name="My network", device="auto", preset="modern"):
+    """The spec a new design starts from: the modern preset (studio_preset), or preset="classic" for the older recipe.
+
+    `device` picks bfloat16 or float32 for the preset; pass "cpu" to skip asking the machine about its GPU.
+    DEFAULTS below stays the classic recipe: it is how a stored spec that omits a slot is read, so it must never change.
+    """
+    import studio_preset
+    if preset == "classic":
+        return studio_preset.legacy_spec(name)
+    if preset != "modern":
+        raise ValueError(f"Unknown preset {preset!r}: use modern or classic.")
+    return studio_preset.modern_spec(name, device=device)[0]
 
 
 def _whole(value, label, low, high):

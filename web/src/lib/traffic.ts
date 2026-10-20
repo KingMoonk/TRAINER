@@ -256,6 +256,12 @@ export function ruleFires(rule: Rule, signal: Signal, memory: RuleMemory): boole
   } else {
     if (rule.kind !== signal.kind) return false;
     subject = signal.payload;
+    // Both queued runs and background API reads emit "job". The built-in run
+    // alert (including saved copies of it) applies only to the queue's job id.
+    if (rule.id === "run.finished" && signal.kind === "job") {
+      const job = pick(subject, "job");
+      if (typeof job !== "string" || !job.trim()) return false;
+    }
   }
   if (rule.where === null || rule.where === undefined) return true;
   const actual = pick(subject, rule.where);
@@ -278,7 +284,9 @@ export function alertDetail(signal: Signal): string {
   }
   const payload = signal.payload;
   if (payload && typeof payload === "object") {
-    const fields = Object.entries(payload as Record<string, unknown>).filter(([, v]) => ["string", "number", "boolean"].includes(typeof v)).slice(0, 5);
+    const fields = Object.entries(payload as Record<string, unknown>).filter(([, v]) =>
+      typeof v === "string" ? v.trim().length > 0 : typeof v === "number" || typeof v === "boolean",
+    ).slice(0, 5);
     return [signal.kind, ...fields.map(([k, v]) => `${k} ${String(v)}`)].join(" · ");
   }
   return signal.kind;

@@ -63,6 +63,7 @@ def test_ci():
     # runners differ in CPU; a crash in a CPU kernel (bf16, say) shows up on some of them only
     run(PY, "-c", "import platform, torch; print('+ cpu:', platform.processor(), '| torch', torch.__version__, torch.backends.cpu.get_cpu_capability())")
     test()
+    run(PY, "-m", "unittest", "tests.e2e_cluster", *VERBOSE, env=UNIT)  # a real DiLoCo run and the self-test across two API processes on loopback, about 40 s
 
 
 def test_ci_e2e():
