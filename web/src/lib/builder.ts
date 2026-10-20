@@ -20,12 +20,8 @@ export type Line = components["schemas"]["Line"];
 export type Expectations = components["schemas"]["Expectations"];
 export type Changes = components["schemas"]["Changes"];
 export type Option = components["schemas"]["Option"];
-export type Question = components["schemas"]["Question"];
 export type SplitStep = components["schemas"]["SplitStep"];
 export type SplitPreview = components["schemas"]["SplitPreview"];
-export type LearningCheck = components["schemas"]["LearningCheck"];
-/** A guess: {error: "lower", step: "faster"}; a question left alone has no key. Skipped is the empty guess. */
-export type Guess = Record<string, string>;
 export type Notebook = components["schemas"]["LearningNotebook"];
 export type NotebookRow = components["schemas"]["NotebookRow"];
 export type Explained = components["schemas"]["Explained"];
@@ -72,16 +68,9 @@ export const design = {
     unwrap(api.POST("/design/expectations", { body: { cur, draft, base, draft_spec: draftSpec } })),
   changes: (base: Spec, draftSpec: Spec, cur: Choices, draft: Choices) =>
     unwrap(api.POST("/design/changes", { body: { base, draft_spec: draftSpec, cur, draft } })),
-  /** The dimensions worth a guess for the change from `oldSpec` to `newSpec` (design.prediction_questions). */
-  questions: (oldSpec: Spec, newSpec: Spec) => unwrap(api.POST("/design/questions", { body: { old_spec: oldSpec, new_spec: newSpec } })),
   /** The draft as one version per change, with the chained pretrain jobs (design.split_plan, split_jobs); nothing is saved. */
   splitPlan: (base: Spec, was: Choices, cur: Choices, draft: Choices, parentVersion: number | null, datasets: string[]) =>
     unwrap(api.POST("/design/split-plan", { body: { base, was, cur, draft, parent_version: parentVersion, datasets } })),
-  /** Version `newVersion`'s stored guess against what version `oldVersion` and it did (a job; follow it to its result). */
-  guessCheck: async (oldVersion: number, newVersion: number, signal: AbortSignal) => {
-    const job = await unwrap(api.POST("/design/guess-check", { body: { old_version: oldVersion, new_version: newVersion }, signal }));
-    return (await awaitJob<LearningCheck | null>(job, signal, { events: true })) ?? null;
-  },
   /** The lab notebook: one row per version (a job: it reads every version's run files). */
   notebook: async (signal: AbortSignal) => {
     const job = await unwrap(api.POST("/design/notebook", { signal }));
@@ -125,9 +114,9 @@ export const pretraining = {
 export const versions = {
   list: () => unwrap(api.GET("/versions")),
   current: () => unwrap(api.GET("/versions/current")),
-  /** `prediction` is the guess made before saving; none (or an empty one) when it was skipped. */
-  save: (spec: Spec, change: string, prediction?: Guess) =>
-    unwrap(api.POST("/versions", { body: { spec, change, ...(prediction && Object.keys(prediction).length ? { prediction } : {}) } })),
+  /** `question` is the starting question the change was set up to answer, when there was one. */
+  save: (spec: Spec, change: string, question?: string) =>
+    unwrap(api.POST("/versions", { body: { spec, change, ...(question ? { prediction: { question } } : {}) } })),
   /** Start from a pretrained open model (POST /post-training/imports, a form as the Post-training page sends it): its
    * design is saved as a new version now; its weights come when the queue finishes the download and conversion. */
   importPretrained: async (name: string): Promise<Version> => {
@@ -182,11 +171,6 @@ export function sameChoices(a: Choices, b: Choices): boolean {
 /** The change text a save records: the chips, or what the Tk page says when there are none. */
 export function changeText(chips: string[], base: number | null): string {
   return chips.join(", ") || (base === null ? "first design" : "no change");
-}
-
-/** The picks of a guess panel as a stored guess: the questions left unpicked are left out. */
-export function guessOf(picks: Guess | undefined): Guess {
-  return Object.fromEntries(Object.entries(picks ?? {}).filter(([, value]) => value));
 }
 
 /** A split plan's step is saved as `number`, which can differ from the one planned if a version was saved meanwhile: the job follows the number. */

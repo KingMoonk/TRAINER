@@ -24,7 +24,7 @@ export const BUILDER = {
   experiments_hint: "Try a question, inspect learning rate, and see what to expect.",
   explanation_hint: "Select a model part to explore how it works.",
   history_section: "Version history & results",
-  history_hint: "Review saved designs, compare answers, and check your guesses.",
+  history_hint: "Review saved designs and compare answers.",
   notebook_hint: "Track what changed and what you learned from each version.",
   look_back_heads: "Attention heads",
   look_back_heads_tip:
@@ -145,33 +145,19 @@ export const BUILDER = {
   versions_empty: "No version saved yet.",
   cannot_write: "This design cannot be written:",
   loading_failed: "The Builder could not load its design maths:",
-  // the learning loop: guess, train, check (studio_ia/copy.py, #83)
-  predict: "Before you save · what do you expect?",
-  predict_text: "Guess which way each one goes, then train it and see. Skip any you'd rather not guess.",
-  predict_error: "Held-back error",
-  predict_step: "Time per step",
-  predict_memory: "Memory while training",
-  predict_save: "Save with my guesses",
-  predict_skip: "Save without guessing",
-  predict_back: "Back to editing",
-  predict_split_save: "Save {count} versions and queue them",
-  predict_step_title: "Version {n}: {change}",
-  predict_failed: "The questions could not be read:",
+  // splitting a draft into one version per change (studio_ia/copy.py, #83)
   one_change: "{count} changes at once: if the result moves, you won't be able to tell which change did it.",
   one_change_split: "Split them into {count} versions, one change each, queued one after another, and every result has one cause.",
   one_change_cannot: "These can't be split here, so they train together.",
   split: "Split into {count} versions",
   split_note: "Saved versions {first}–{last}, one change each. They train one after another; each starts from the one before.",
   no_text: "There is no plain text to train on yet. Add some in Your data, then queue it.",
-  predict_loading: "Reading the questions…",
   text_sets_failed: "Your text sets could not be read, so these changes cannot be split here: {reason}",
   split_partial: "Saved {saved}; queued {queued} of {total} jobs. {reason}",
-  guess_checking: "Checking your guess…",
-  predict_question: "Your question: “{question}”",
   // the lab notebook, the explain panel and the starting questions (studio_ia/copy.py, #83)
   notebook: "Lab notebook · one line per version",
   notebook_tip:
-    "What each version changed, what that did to held-back error, step time and memory, and whether your guess was right. Error is measured; memory is estimated from the design; step time is measured when both runs logged their speed.",
+    "What each version changed, what that did to held-back error, step time and memory. Error is measured; memory is estimated from the design; step time is measured when both runs logged their speed.",
   notebook_empty: "Save and train a version to start the notebook.",
   notebook_reading: "Reading the runs…",
   notebook_failed: "The notebook could not be read:",
@@ -191,11 +177,6 @@ export const BUILDER = {
   experiments_failed: "The starting questions could not be read:",
   exp_asking: "You are asking: “{question}”",
 } as const;
-
-/** The label of a guess question (`key` is the server's: error, step or memory). */
-export function questionName(key: string): string {
-  return (BUILDER as Record<string, string>)[`predict_${key}`] ?? key;
-}
 
 /** `BUILDER.x` with its `{name}` holes filled. */
 export function fill(text: string, values: Record<string, string | number>): string {

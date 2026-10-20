@@ -97,7 +97,7 @@ class Member(BaseModel):
     last_delta_dtype: str
     can_stop: bool
     # what it last reported (about every 2 s while it runs); empty until the coordinator has heard from it
-    phase: Literal["downloading", "training", "uploading", "waiting"] | None
+    phase: Literal["downloading", "loading", "training", "uploading", "waiting"] | None
     step_in_round: int  # inner steps done in the open round
     round_steps: int  # inner steps dealt to this member for the open round (H unless the coordinator deals by speed)
     loss: float | None  # its live inner loss in the open round
@@ -226,6 +226,15 @@ class RunHealth(BaseModel):
     straggler: str  # the member whose change most often comes in last
 
 
+class Prep(BaseModel):
+    """What the run is doing before its first round (studio_distributed.preparation): building its data, then inviting the machines."""
+
+    phase: Literal["reading", "teacher", "tokenizer", "tokenizing", "inviting"]
+    note: str  # one sentence, with the count while it tokenizes
+    done: int  # documents tokenized so far ...
+    total: int  # ... of all (0 until known)
+
+
 class Run(BaseModel):
     id: str
     label: str
@@ -263,7 +272,8 @@ class Run(BaseModel):
     stop_reason: str = ""  # why the run ended, in a sentence; "" while it goes
     lessons: int = 0  # the teacher's answers the run trains on as extra shards now
     lessons_left_out: int = 0  # ... and those you dropped, a drop_lessons pivot, or a successor coordinator, left out
-    phase: Literal["waiting", "paused", "next_round", "training", "collecting", "outer_step", "validating", "polishing", "judging", "finished", "stopped"]
+    prep: Prep | None = None  # set while the run is built and its invitations go out; null once the first round can open
+    phase: Literal["preparing", "inviting", "waiting", "paused", "getting_ready", "next_round", "training", "collecting", "outer_step", "validating", "polishing", "judging", "finished", "stopped"]
     deadline_s: float | None  # seconds left to the open round's deadline
     grace_s: float  # the wait after the deadline for a member's download and upload
     window_s: float | None  # the open round's deadline length

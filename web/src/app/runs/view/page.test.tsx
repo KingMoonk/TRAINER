@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { event, lane, line, member, run } from "@/app/cluster/training/test-data";
 import { mockApi, type Call } from "@/test/network";
+import { invite } from "@/test/invites";
 import { renderPage } from "@/test/render";
 import RunViewPage from "./page";
 
@@ -255,5 +256,31 @@ describe("Run view: ids that are not here", () => {
     });
     renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not read the run");
+  });
+});
+
+describe("Run view: a member job on this computer", () => {
+  const owned = () =>
+    run({
+      id: "r7", label: "Version 7", owner: "Michael's Mac", round: 0, rounds: 10, phase: "getting_ready", theta_bytes: 3_800_000,
+      members: [member("BEAST", { address: "local", local: true, phase: "downloading", step_in_round: 0 })],
+    });
+
+  test("says whose run it is, links to the run, shows the start-up phase and claims no local corpus or coordinator", async () => {
+    mockApi({
+      "GET /queue": { body: queue({ job: job("j9", { kind: "diloco_member", label: "Version 7 (member)", node: "BEAST" }) }) },
+      "GET /cluster/nodes": { body: NODES },
+      "GET /distributed/invites": { body: { invites: [invite({ job_id: "j9", run_id: "r7", state: "training", round: 0, rounds: 10 })], pause_requests: [] } },
+      "GET /distributed/runs/r7": { body: owned() },
+    });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=j9" });
+    expect(await screen.findByTestId("run-title")).toHaveTextContent("Version 7");
+    expect(screen.getByTestId("run-shape")).toHaveTextContent("Member of 'Version 7', coordinated by Michael's Mac.");
+    await waitFor(() => expect(screen.getByTestId("member-doing")).toHaveTextContent("Downloading θ (3.6 MB)"));
+    expect(screen.getByTestId("member-round")).toHaveTextContent("Round 1/10");
+    expect(screen.getByTestId("member-run-link")).toHaveAttribute("href", expect.stringContaining("id=r7"));
+    expect(screen.queryByTestId("solo-node")).toBeNull();
+    expect(screen.queryByText(/COORDINATOR/)).toBeNull();
+    expect(screen.queryByText(/corpus, held-out split and checkpoints local/)).toBeNull();
   });
 });

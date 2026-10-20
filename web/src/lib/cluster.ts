@@ -46,6 +46,16 @@ export function seenText(seconds: number): string {
   return seconds > 0 ? new Date(seconds * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
 }
 
+/** A node with no version store answers 409 to GET /versions/published: a setup state, not a failure. */
+export function isStoreUnset(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}
+
+/** Poll the store every 15 seconds, but not while it answers 409: nothing changes until a store is set up. */
+export function refetchPublished(query: { state: { error: unknown } }): number | false {
+  return isStoreUnset(query.state.error) ? false : 15_000;
+}
+
 /**
  * The version store's versions (GET /versions/published), only while other machines are listed. A node with no store
  * answers 409, and that is the same as nothing published: the list is empty and says nothing about machines.
@@ -55,7 +65,7 @@ export function usePublished(cluster: ClusterQueue | undefined) {
     queryKey: ["versions", "published"],
     enabled: isCluster(cluster),
     queryFn: ({ signal }) => unwrap(api.GET("/versions/published", { signal })),
-    refetchInterval: 15_000,
+    refetchInterval: refetchPublished,
     retry: false,
   });
 }

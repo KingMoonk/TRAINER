@@ -301,7 +301,7 @@ All routes are on the coordinator's API, behind node-to-node auth, under `/colle
 | `GET /shards/{s}/hash` | | `{hash}`: the sha256 of that shard's body |
 | `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16, fp32 or int8 `.npz` (int8: per-tensor scale beside the values) | `202`, or `409` when stale |
 | `GET /rounds/{r}` | | `open` or `closed` with the next round; a `pending` round long-polls up to 30 s |
-| `POST /progress` | node, generation, epoch, round, phase (`downloading`, `training`, `uploading`, `waiting`), step, loss, tokens/s | `{accepted}`, or `409` for a stale generation or epoch, a non-member, or a closed round |
+| `POST /progress` | node, generation, epoch, round, phase (`downloading`, `loading`, `training`, `uploading`, `waiting`), step, loss, tokens/s | `{accepted}`, or `409` for a stale generation or epoch, a non-member, or a closed round |
 | `POST /leave` | generation, epoch | `204` |
 | `GET /state?round=r` | | a replica's copy of the closed round: outer momentum `v` (fp32 `.npz`) and `diloco.json` |
 | `GET /validation` | | the validation windows, for a replica, once per run |

@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 // Real fake services (python -m studio_api --fake), no intercepted responses: the rest of the Builder's learning loop around
 // the tower. Where the size goes, the example sentence in pieces, the unsaved draft staged for Quick test, the learning-rate
-// finder and the "when answering" card. The draft is seeded as live.builder-guess.spec.ts does.
+// finder and the "when answering" card. The draft is seeded as live.builder-notebook.spec.ts does.
 async function seed(page: Page, request: APIRequestContext) {
   const presets = await (await request.get("/design/presets")).json();
   const spec = presets[0].spec;

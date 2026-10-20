@@ -74,6 +74,15 @@ export function progressFraction(member: Member, run: Run): number {
   return total > 0 ? Math.min(1, Math.max(0, member.step_in_round / total)) : 0;
 }
 
+/** What a member is doing, in words: "Downloading θ (3.8 MB)", "Loading shards", "Warming up" before its first step of the round. "" before it reports. */
+export function memberPhaseText(member: Member, run: Run): string {
+  if (!member.phase) return "";
+  if (member.phase === "training" && member.step_in_round === 0) return T.warmingUp;
+  const text = T.memberPhases[member.phase];
+  const size = member.phase === "downloading" ? bytesText(run.theta_bytes) : "";
+  return size && run.theta_bytes > 0 ? `${text} (${size})` : text;
+}
+
 /** "40 of 100 steps". */
 export function stepsText(member: Member, run: Run): string {
   return T.stepsOf.replace("{k}", String(member.step_in_round)).replace("{h}", String(member.round_steps || run.inner_steps));

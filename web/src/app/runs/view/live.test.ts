@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   ageText, collectingText, countdownText, deviceBadge, edges, eventAge, eventsNewestFirst, EVENTS_SHOWN, laneSegments, liveLossSeries, liveLossText, liveRun, liveSpeedText,
   factAge, otherRuns, OTHER_RUNS_SHOWN, percent, progressFraction, recentTimeline, reportedText, roundNumber, shardsText, stageIndex, stateColor, stepsText, timelineEnd,
-  timelineExtent, tokensSeries, TIMELINE_ROUNDS,
+  memberPhaseText, timelineExtent, tokensSeries, TIMELINE_ROUNDS,
 } from "./live";
 import { event, lane, line, member, run } from "@/app/cluster/training/test-data";
 
@@ -204,5 +204,24 @@ describe("whose account of a run this is", () => {
   test("a run whose origin is not answering says so, with the age of its last account", () => {
     expect(factAge(run({ origin: "mac", age_s: 300, origin_down: true }))).toBe("mac is unreachable; last heard 5 min ago");
     expect(factAge(run({ origin: "mac", age_s: 0, origin_down: true }))).toContain("unreachable");
+  });
+});
+
+describe("what a member is doing before its first step", () => {
+  const training = run({ theta_bytes: 3_800_000 });
+
+  test("downloading names the size of θ, loading is plain", () => {
+    expect(memberPhaseText(member("a", { phase: "downloading" }), training)).toBe("Downloading θ (3.6 MB)");
+    expect(memberPhaseText(member("a", { phase: "downloading" }), run({ theta_bytes: 0 }))).toBe("Downloading θ");
+    expect(memberPhaseText(member("a", { phase: "loading" }), training)).toBe("Loading shards");
+  });
+
+  test("training before its first step of the round is warming up", () => {
+    expect(memberPhaseText(member("a", { phase: "training", step_in_round: 0 }), training)).toBe("Warming up");
+    expect(memberPhaseText(member("a", { phase: "training", step_in_round: 3 }), training)).toBe("Training");
+  });
+
+  test("a member that has not reported has no phase text", () => {
+    expect(memberPhaseText(member("a", { phase: null }), training)).toBe("");
   });
 });

@@ -1208,9 +1208,15 @@
             "title": "Base"
           },
           "guess": {
-            "default": "",
-            "title": "Guess",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guess"
           },
           "mode": {
             "default": "params",
@@ -4724,6 +4730,7 @@
               {
                 "enum": [
                   "downloading",
+                  "loading",
                   "training",
                   "uploading",
                   "waiting"
@@ -6065,6 +6072,42 @@
         "title": "Prediction",
         "type": "object"
       },
+      "Prep": {
+        "description": "What the run is doing before its first round (studio_distributed.preparation): building its data, then inviting the machines.",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "reading",
+              "teacher",
+              "tokenizer",
+              "tokenizing",
+              "inviting"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "note",
+          "done",
+          "total"
+        ],
+        "title": "Prep",
+        "type": "object"
+      },
       "Preset": {
         "properties": {
           "key": {
@@ -6642,6 +6685,7 @@
           "phase": {
             "enum": [
               "downloading",
+              "loading",
               "training",
               "uploading",
               "waiting"
@@ -7469,13 +7513,20 @@
             "type": "string"
           },
           "guess": {
-            "enum": [
-              "Lower",
-              "Same",
-              "Higher"
+            "anyOf": [
+              {
+                "enum": [
+                  "Lower",
+                  "Same",
+                  "Higher"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Guess",
-            "type": "string"
+            "title": "Guess"
           },
           "minutes": {
             "default": 3,
@@ -7493,9 +7544,6 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "guess"
-        ],
         "title": "QuickTestRunRequest",
         "type": "object"
       },
@@ -9051,8 +9099,11 @@
           },
           "phase": {
             "enum": [
+              "preparing",
+              "inviting",
               "waiting",
               "paused",
+              "getting_ready",
               "next_round",
               "training",
               "collecting",
@@ -9065,6 +9116,16 @@
             ],
             "title": "Phase",
             "type": "string"
+          },
+          "prep": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Prep"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reviewed_only": {
             "default": false,
@@ -12701,7 +12762,7 @@
     },
     "/benchmark/compare-queue": {
       "post": {
-        "description": "Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.",
+        "description": "Queue the runs of a Compare setup. It needs a variant and plain text to train on.",
         "operationId": "compare_queue_benchmark_compare_queue_post",
         "requestBody": {
           "content": {

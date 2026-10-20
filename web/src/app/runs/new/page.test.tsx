@@ -198,16 +198,14 @@ describe("New run", () => {
     expect(sent("POST", "/queue/jobs/job-8/pin")?.body).toEqual({ pinned: "beast" });
   });
 
-  test("Ablation queues the quick test once a guess is made", async () => {
+  test("Ablation queues the quick test with no guess", async () => {
     const { sent } = server();
     const user = userEvent.setup();
     renderPage(<NewRunPage />, { route: "/runs/new/" });
     await user.selectOptions(await screen.findByLabelText("Stage"), "ablation");
-    expect(await cta()).toBeDisabled();
-    await user.click(screen.getByRole("radio", { name: "Lower" }));
     await user.click(await cta());
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-9"));
-    expect(sent("POST", "/quicktest/run")?.body).toEqual({ dataset: "stories", minutes: 3, shrink: false, guess: "Lower" });
+    expect(sent("POST", "/quicktest/run")?.body).toEqual({ dataset: "stories", minutes: 3, shrink: false });
     expect(sent("POST", "/queue/jobs/job-9/pin")).toBeUndefined();
   });
 

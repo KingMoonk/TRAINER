@@ -33,7 +33,7 @@ const results = {
   finished_at: 2000,
 };
 const queued = { status: 202, body: { job_id: "job1", outlook: "Starts now", started_at: 1500 } };
-const signal = "After the same 3 minutes, your idea's error is lower than Version 3's. You guessed lower.";
+const signal = "After the same 3 minutes, your idea's error is lower than Version 3's.";
 
 // The page keeps its last run in sessionStorage, which the shared setup does not clear.
 beforeEach(() => window.sessionStorage.clear());
@@ -74,19 +74,12 @@ describe("Quick test page", () => {
     expect(posts(calls, "/quicktest/run")).toHaveLength(0);
   });
 
-  test("asks for a guess before it runs", async () => {
-    const { calls, user } = await open(true);
-    await user.click(screen.getByRole("button", { name: "Run quick test" }));
-    expect(status()).toHaveTextContent("Pick your guess first.");
-    expect(posts(calls, "/quicktest/run")).toHaveLength(0);
-  });
-
   test("runs with the chosen options, follows progress and shows the result", async () => {
     const queue = { current: idle as object };
     const { calls, user } = await open(true, {
       "GET /queue": () => ({ body: queue.current }),
       "POST /quicktest/run": () => {
-        queue.current = { ...idle, job: { id: "job1", kind: "quicktest", params: { guess: "Lower" } } };
+        queue.current = { ...idle, job: { id: "job1", kind: "quicktest" } };
         return queued;
       },
     });
@@ -94,11 +87,10 @@ describe("Quick test page", () => {
     await user.click(screen.getByRole("radio", { name: "1 min" }));
     await user.click(screen.getByRole("radio", { name: "Shrunk to ¼" }));
     expect(screen.getByText("Faster; a hint, not proof.")).toBeVisible();
-    await user.click(screen.getByRole("radio", { name: "Lower" }));
     await user.click(screen.getByRole("button", { name: "Run quick test" }));
 
     await waitFor(() => expect(status()).toHaveTextContent("Queued. Starts now."));
-    expect(posts(calls, "/quicktest/run").map((c) => c.body)).toEqual([{ dataset: "problems", minutes: 1, shrink: true, guess: "Lower" }]);
+    expect(posts(calls, "/quicktest/run").map((c) => c.body)).toEqual([{ dataset: "problems", minutes: 1, shrink: true }]);
     expect(await screen.findByRole("button", { name: "Running…" })).toBeDisabled();
 
     act(() => {
@@ -127,7 +119,6 @@ describe("Quick test page", () => {
 
   test("a failed check names the part to look at, and a stopped run keeps nothing", async () => {
     const { user } = await open(true, { "POST /quicktest/run": queued });
-    await user.click(screen.getByRole("radio", { name: "Same" }));
     await user.click(screen.getByRole("button", { name: "Run quick test" }));
     await waitFor(() => expect(status()).toHaveTextContent("Queued. Starts now."));
     const broken = {
@@ -155,7 +146,6 @@ describe("Quick test page", () => {
       },
     });
     await user.click(screen.getByRole("radio", { name: "A slice of your data" }));
-    await user.click(screen.getByRole("radio", { name: "Higher" }));
     await user.click(screen.getByRole("button", { name: "Run quick test" }));
     await waitFor(() => expect(status()).toHaveTextContent("Your data has no plain text yet."));
     await user.click(screen.getByRole("button", { name: "Run quick test" }));
@@ -174,7 +164,6 @@ describe("Quick test page", () => {
       "POST /quicktest/save": { status: 201, body: { number: 4 } },
       "DELETE /quicktest/draft": { status: 204 },
     });
-    await user.click(screen.getByRole("radio", { name: "Same" }));
     await user.click(screen.getByRole("button", { name: "Run quick test" }));
     await waitFor(() => expect(status()).toHaveTextContent("Queued. Starts now."));
     act(() => emit("train", { job: "job1", type: "quicktest_done", results }));
@@ -192,7 +181,6 @@ describe("Quick test page", () => {
         return { body: { current, draft, next_number: 4, last: finished ? results : null } };
       },
     });
-    await user.click(screen.getByRole("radio", { name: "Lower" }));
     await user.click(screen.getByRole("button", { name: "Run quick test" }));
     await waitFor(() => expect(status()).toHaveTextContent("Queued. Starts now."));
     expect(screen.queryByText(signal)).toBeNull();
