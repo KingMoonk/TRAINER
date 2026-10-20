@@ -12,14 +12,14 @@ import type { RunHealth } from "./health";
 
 const recorded = (JSON.parse(readFileSync(join(__dirname, "../../../contract/fixtures/distributed-run-demo-second-round.json"), "utf8")) as { body: Run }).body;
 
-const member = (loss: number, rate: number, compute: number, wait: number) => ({ loss, steps: 100, tokens: rate * compute, compute_s: compute, tokens_per_s: rate, wait_s: wait, sync_s: 10 - compute - wait });
+const member = (loss: number, rate: number, compute: number, wait: number) => ({ loss, steps: 100, tokens: rate * compute, compute_s: compute, tokens_per_s: rate, wait_s: wait, idle_s: wait, sync_s: 10 - compute - wait });
 const round = (n: number) => ({
   round: n, seconds: 10, tokens: 6400, slowest: "mac-mini", val_loss: 4 - n * 0.2, loss: 4, lr: 0.7, update_norm: 0.05, bytes_up: 2 ** 21, bytes_down: 2 ** 22, dtype: "float16", compression: 2, sync_s: 2,
   members: { "mac-mini": member(4 - n * 0.2, 400, 8, 0), "gpu-box": member(3.8 - n * 0.2, 400, 8, 1) },
 });
 const measured: RunHealth = {
   verdict: { state: "working", text: "Working: 1.6× faster than gpu-box alone, loss falling." }, basis: "Tokens trained per second against the fastest member alone.",
-  rounds: [round(0), round(1), round(2)], window: 3, aggregate_tokens_per_s: 640, baseline_node: "gpu-box", baseline_tokens_per_s: 400, speedup: 1.6, comm_share: 0.2, wait_node: "gpu-box", wait_share: 0.1, straggler: "mac-mini",
+  rounds: [round(0), round(1), round(2)], window: 3, aggregate_tokens_per_s: 640, baseline_node: "gpu-box", baseline_tokens_per_s: 400, speedup: 1.6, comm_share: 0.2, wait_node: "gpu-box", wait_share: 0.1, straggler: "mac-mini", idle: { "gpu-box": 1 }, idle_node: "gpu-box", idle_share: 0.1,
 };
 
 describe("the health panel", () => {

@@ -57,7 +57,9 @@ DELTA_DTYPES = ("int8", "float16", "float32")
 GONE_RUN = "No distributed run"  # the start of the 404 detail of a run the coordinator's app does not hold (routers.collective.coordinator)
 FINISHED = "The run is finished."  # the 409 detail of a join to a run that has ended
 STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
-SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
+SCALE_SUFFIX = "::scale"  # an int8 array's float32 scales (one per INT8_BLOCK values) sit beside it in the archive under this suffix
+INT8_BLOCK = 256  # values that share one int8 scale
+UPDATE_KEY = "__update_from__"  # in a params body: the body is the outer update from this round's theta, not theta itself
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
 PHASES = ("downloading", "loading", "training", "uploading", "waiting")  # what a member says it is doing (POST /progress)
 WORK_PHASES = ("training", "uploading")  # the phases that belong to one open round: a report in them for a closed round is stale
@@ -124,6 +126,8 @@ class Entered:
     skipped: bool = False
     lr_scale: float = 1.  # the factor the run's pivots put on the global learning-rate schedule
     steps: int = 0  # the inner steps dealt to this member for the round (0: the run's H, as a coordinator that deals none says)
+    train_s: float = 0.  # time-boxed round: the seconds to train for (0: train the dealt steps)
+    bytes: int = 0  # what the download of theta (or its update) was on the wire
 
 
 class Stale(RuntimeError):
@@ -176,7 +180,8 @@ class Settings:
     min_members: int = 1            # below this the run pauses; it continues above
     max_members: int = 8
     shards: int = 64                # S: fixed training shards, dealt to the live members each round
-    delta_dtype: str = "float16"
+    delta_dtype: str = "int8"    # the precision of a member's change AND of the outer update members download (float32: members download theta itself)
+    time_box: bool = False          # members train until the round's training deadline (the fastest member's H-step time) instead of a fixed number of steps
     slack_ratio: float = .25        # round deadline = fastest member's step time * H * (1 + ratio) + slack_seconds
     slack_seconds: float = 30.
     grace_seconds: float = 120.     # after the deadline, for the member's download of theta and upload of its delta
@@ -311,33 +316,81 @@ def deal_steps(settings, members, step_times):
     return {node: min(high, max(low, share[node])) if node in share else probe for node in members}
 
 
-def quantize_int8(value):
-    """(int8 values, float32 scale) for one tensor: scale = max |x| / 127, values round(x / scale). A non-finite tensor gets a NaN
-    scale, so it decodes non-finite and the coordinator refuses it as it would any other."""
+def train_seconds(settings, members, step_times):
+    """The seconds every member trains for in a time-boxed round: the fastest measured member's time for H steps, so it does H steps and
+    no machine waits for a slower one (a slower one does fewer, and its change counts for the tokens it trained). 0 when the run is not
+    time-boxed or nobody has been timed yet (the first round runs fixed steps, and times them)."""
+    measured = [step_times[node] for node in members
+                if isinstance(step_times.get(node), (int, float)) and 0 < step_times[node] < math.inf]
+    return settings.inner_steps * min(measured) if settings.time_box and measured else 0.
+
+
+def timed_steps(settings, members, step_times, train):
+    """{member: the inner steps it is expected to do in `train` seconds}: what its learning-rate schedule is spread over (H for a member
+    nobody has timed). The round ends by the clock, not by this count."""
+    h = settings.inner_steps
+    return {node: min(h * MAX_SHARE, max(1, round(train / step_times[node]))) if 0 < (step_times.get(node) or 0) < math.inf else h
+            for node in members}
+
+
+def quantize_int8(value, block=INT8_BLOCK):
+    """(int8 values, float32 scales) for one tensor, one scale per `block` consecutive values of its flattened form: scale =
+    max |x| / 127 over the block, values round(x / scale). A block with a non-finite value gets a NaN scale, so it decodes
+    non-finite and the coordinator refuses the change as it would any other."""
     value = np.asarray(value, dtype=np.float32)
-    peak = float(np.max(np.abs(value))) if value.size else 0.
-    if not np.isfinite(peak):
-        return np.zeros(value.shape, np.int8), np.float32("nan")
-    scale = np.float32(peak / 127.)
-    if scale == 0:
-        return np.zeros(value.shape, np.int8), np.float32(0.)
-    return np.clip(np.rint(value / scale), -127, 127).astype(np.int8), scale
+    flat = value.reshape(-1)
+    count = -(-flat.size // block)
+    padded = np.zeros(count * block, dtype=np.float32)
+    padded[:flat.size] = flat
+    blocks = padded.reshape(count, block)
+    with np.errstate(invalid="ignore"):
+        peak = np.max(np.abs(blocks), axis=1) if count else np.zeros(0, dtype=np.float32)
+    finite = np.isfinite(peak)
+    scale = np.where(finite, peak / np.float32(127.), np.float32("nan")).astype(np.float32)
+    divisor = np.where(finite & (scale > 0), scale, np.float32(1.)).astype(np.float32)
+    clean = np.where(finite[:, None], blocks, np.float32(0.))
+    values = np.clip(np.rint(clean / divisor[:, None]), -127, 127).astype(np.int8)
+    return values.reshape(-1)[:flat.size].reshape(value.shape), scale
 
 
-def encode_arrays(arrays, dtype="float32"):
+def dequantize_int8(values, scale, block=INT8_BLOCK):
+    """The fp32 tensor of quantize_int8's output; a 0-d scale (one per tensor) is also read."""
+    scale = np.asarray(scale, dtype=np.float32)
+    if scale.ndim == 0:
+        return values.astype(np.float32) * scale
+    flat = values.reshape(-1)
+    if len(scale) != -(-flat.size // block):
+        raise ValueError("An int8 tensor's scales do not match its size.")
+    return (flat.astype(np.float32) * scale[np.arange(flat.size) // block]).reshape(values.shape)
+
+
+def encode_arrays(arrays, dtype="float32", update_from=None):
     """A {name: array} as an uncompressed .npz body; float16 is clipped to its range first; int8 stores each tensor as int8 values
-    plus a per-tensor float32 scale (name + "::scale"), a quarter of the fp32 size."""
+    plus one float32 scale per INT8_BLOCK values (name + "::scale"), a quarter of the fp32 size. `update_from` marks the body as an
+    outer update from that round's theta (see Coordinator.params_bytes)."""
     buffer = io.BytesIO()
+    extra = {} if update_from is None else {UPDATE_KEY: np.array(update_from, dtype=np.int64)}
     if dtype == "float16":
-        np.savez(buffer, **{name: np.clip(value, -65504., 65504.).astype(np.float16) for name, value in arrays.items()})
+        np.savez(buffer, **{name: np.clip(value, -65504., 65504.).astype(np.float16) for name, value in arrays.items()}, **extra)
     elif dtype == "int8":
         out = {}
         for name, value in arrays.items():
             out[name], out[name + SCALE_SUFFIX] = quantize_int8(value)
-        np.savez(buffer, **out)
+        np.savez(buffer, **out, **extra)
     else:
-        np.savez(buffer, **{name: np.asarray(value, dtype=np.float32) for name, value in arrays.items()})
+        np.savez(buffer, **{name: np.asarray(value, dtype=np.float32) for name, value in arrays.items()}, **extra)
     return buffer.getvalue()
+
+
+def encode_feedback(arrays, dtype, residual=None, update_from=None):
+    """(body, residual) of `arrays` plus the quantization residual of the last call, sent as `dtype`: the part of what was meant to
+    go that the encoding lost (non-finite entries are left out), to be added to the next call's arrays (error feedback)."""
+    if residual:
+        arrays = {name: value + residual[name] for name, value in arrays.items()}
+    body = encode_arrays(arrays, dtype, update_from)
+    sent = decode_arrays(body)
+    lost = {name: np.asarray(value, dtype=np.float32) - sent[name] for name, value in arrays.items()}
+    return body, {name: np.where(np.isfinite(value), value, np.float32(0.)).astype(np.float32) for name, value in lost.items()}
 
 
 def decode_arrays(data):
@@ -346,15 +399,26 @@ def decode_arrays(data):
         with np.load(io.BytesIO(data), allow_pickle=False) as archive:
             out = {}
             for name in archive.files:
-                if name.endswith(SCALE_SUFFIX) and name[:-len(SCALE_SUFFIX)] in archive.files:
+                if name == UPDATE_KEY or (name.endswith(SCALE_SUFFIX) and name[:-len(SCALE_SUFFIX)] in archive.files):
                     continue
                 value = archive[name]
                 if value.dtype == np.int8:
-                    value = value.astype(np.float32) * np.float32(archive[name + SCALE_SUFFIX])
+                    value = dequantize_int8(value, archive[name + SCALE_SUFFIX])
                 out[name] = value.astype(np.float32)
             return out
     except Exception as exc:  # noqa: BLE001 - zip and numpy raise many types for a bad body
         raise ValueError(f"The body is not an .npz archive of arrays ({exc}).") from None
+
+
+def update_origin(data):
+    """The round whose theta a params body is an update from, or None when the body is theta itself."""
+    with np.load(io.BytesIO(data), allow_pickle=False) as archive:
+        return int(archive[UPDATE_KEY]) if UPDATE_KEY in archive.files else None
+
+
+def add_update(theta, applied):
+    """theta + the dequantized update, new arrays: the one operation the coordinator and every member apply, so every theta is bit-identical."""
+    return {name: theta[name] + applied[name] for name in theta}
 
 
 def encode_state(momentum, record):
@@ -476,6 +540,8 @@ class Round:
     deadline: float
     window: float
     steps: dict = field(default_factory=dict)  # node -> the inner steps dealt to it (deal_steps)
+    train_seconds: float = 0.  # time-boxed rounds: the seconds every member trains for (0: a fixed number of steps)
+    downloaded: dict = field(default_factory=dict)  # node -> bytes of theta or update it took
     contributions: dict = field(default_factory=dict)  # node -> (tokens, steps, seconds, loss, delta)
     uploaded: dict = field(default_factory=dict)  # node -> bytes of its delta body on the wire
     open: bool = True
@@ -533,6 +599,9 @@ class Coordinator:
         self.blobs, self.hashes, self.blob_lock = {}, {}, threading.Lock()  # shard id -> the file its .npz body was written to (once); see shard_path
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
+        self.late, self.late_round, self.closed = {}, None, None  # a change that came in after its round closed, waiting for the next outer step; (number, generation, members, contributors) of the last closed round
+        self._update, self.update_residual = None, {}  # (round, body): the outer update that turned theta of the round before into theta of that round; what its quantization lost
+        self.last_train = 0.  # the training seconds of the round opened last (time-boxed runs)
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
         self.reports, self.events, self.timelines = {}, deque(maxlen=EVENTS_KEPT), deque(maxlen=TIMELINES_KEPT)  # the live view's state
         self.event_seq, self.stage, self._last = 0, "", None  # stage: "outer_step" or "validating" while a round closes (read without the lock)
@@ -1140,22 +1209,26 @@ class Coordinator:
             self.last_members = active
         for node in [node for node in self.step_times if node not in active]:
             del self.step_times[node]  # a member that left is not timed any more: when it returns it is dealt a probe round
-        steps = deal_steps(self.settings, active, self.step_times)
+        train = train_seconds(self.settings, active, self.step_times)
+        steps = timed_steps(self.settings, active, self.step_times, train) if train else deal_steps(self.settings, active, self.step_times)
         # a member that overlaps runs the previous round's deal (a round's assignment arrives after its steps), so the deadline covers the larger
         runs = {node: max(steps[node], self.last_steps.get(node, steps[node])) for node in active}
         self.last_steps = dict(steps)
         finishes = [(runs[node] * self.step_times[node], node) for node in active if self.step_times.get(node, 0) > 0]
-        if finishes:  # the slowest predicted finish, so the deadline is consistent with the steps run
+        if train:  # time-boxed: every member trains for `train` seconds, so the deadline follows that, not the steps
+            window = round_seconds(self.settings, max(train, self.last_train), 1)
+        elif finishes:  # the slowest predicted finish, so the deadline is consistent with the steps run
             slowest = max(finishes)[1]
             window = round_seconds(self.settings, self.step_times[slowest], runs[slowest])
         else:
             window = round_seconds(self.settings, self.step_time)
+        self.last_train = train
         first, count = self.spans[min(self.rules.source, len(self.spans) - 1)]
         ids = [*range(first, first + count), *(entry["shard"] for entry in self.live_lessons())]  # the source's shards, then the lessons
         if self.stages is not None:
             ids += self.stages.replay_ids(self, self.next_round)  # a share of the earlier sources, so the new text does not make it forget them
         self.current = Round(self.next_round, self.generation, active, deal_ids(self.cfg["seed"], self.next_round, active, ids),
-                             now, now + window, window, steps=steps)
+                             now, now + window, window, steps=steps, train_seconds=train)
         return True
 
     def _close(self, current, now):
@@ -1168,11 +1241,17 @@ class Coordinator:
             self.stage = ""
 
     def _finish(self, current, now, sent):
-        delta = token_average([(tokens, d) for tokens, _, _, _, d in sent.values()])
+        late = self.late if self.late_round == current.number - 1 else {}  # changes of the round before that missed its close
+        self.late, self.late_round = {}, None
+        delta = token_average([(tokens, d) for tokens, _, _, _, d in [*sent.values(), *late.values()]])
         norm = 0.
         if delta is not None:
             outer_lr = self.settings.outer_lr * self.rules.lr_scale  # halve_lr scales the outer step too
+            lossy = self.settings.delta_dtype != "float32"
+            before = {name: value.copy() for name, value in self.theta.items()} if lossy else None
             outer_step(self.theta, self.momentum, delta, outer_lr, self.settings.outer_momentum)
+            if lossy:
+                self._publish_update(before, current.number)
             norm = step_size(delta, self.momentum, outer_lr, self.settings.outer_momentum)
             self._event("outer_step", "", current.number, f"Outer step applied for round {current.number}: size {norm:.4g}, "
                                                           f"from {len(sent)} of {len(current.members)} members.")
@@ -1192,12 +1271,12 @@ class Coordinator:
         tokens = sum(t for t, _, _, _, _ in sent.values())
         losses = [(t, loss) for t, _, _, loss, _ in sent.values() if loss is not None and t > 0]
         row = {"round": current.number, "step": (current.number + 1) * self.settings.inner_steps, "generation": current.generation,
-               "members": list(current.members), "contributed": list(sent), "dropped": dropped, "tokens": tokens,
+               "members": list(current.members), "contributed": list(sent), "dropped": dropped, "tokens": tokens, "late": list(late),
                "steps": {node: value[1] for node, value in sent.items()}, "dealt": dict(current.steps),
                "loss": sum(t * loss for t, loss in losses) / sum(t for t, _ in losses) if losses else None,
                "val_loss": self.evaluate(self.theta), "seconds": now - current.opened,
                "delta_bytes": sum(current.uploaded.get(node, 0) for node in sent), "delta_dtype": self.settings.delta_dtype, "deadline_seconds": current.window,
-               "theta_bytes": sum(value.nbytes for value in self.theta.values()) * len(current.members),  # what the members downloaded
+               "theta_bytes": sum(current.downloaded.get(node, self.theta_nbytes) for node in current.members),  # what the members downloaded for the round (theta, or the outer update that led to it; full theta for one that has not yet)
                "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
                "lr": self.settings.outer_lr * self.rules.lr_scale, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
@@ -1206,6 +1285,7 @@ class Coordinator:
         row["health"] = run_health.record(row, {n: v[3] for n, v in sent.items()}, arrived, self.theta_nbytes)  # what this round measured
         self.history.append(row)
         self.deal = current.deal
+        self.closed = (current.number, current.generation, set(current.members), set(sent))
         self.next_round += 1
         self.current = None
         self.finished = self.next_round >= self.settings.rounds
@@ -1223,6 +1303,22 @@ class Coordinator:
             if not self.polishing:
                 self._start_versus(current)
         self.cond.notify_all()
+
+    def _publish_update(self, before, number):
+        """Quantize the outer update (theta now - theta before, plus what the last one lost) as the members will download it, and make
+        theta the dequantized update added to `before`: the coordinator and every member add the same fp32 numbers to the same fp32
+        theta, so every node's theta is bit-identical. What the quantization loses goes into the next update (error feedback)."""
+        wanted = {name: self.theta[name] - before[name] for name in before}
+        body, self.update_residual = encode_feedback(wanted, self.settings.delta_dtype, self.update_residual, update_from=number)
+        self.theta.update(add_update(before, decode_arrays(body)))
+        self._update, self._params = (number + 1, body), (None, b"")
+
+    def _theta_replaced(self):
+        """Theta was replaced by something other than an outer update (a pivot back to the best round, the teacher's polish): the
+        members take it whole."""
+        self._params, self._state = (None, b""), (None, b"")
+        self._update, self.update_residual = None, {}
+        self.late, self.late_round = {}, None  # computed against weights that are gone
 
     def _apply_rules(self, row, current):
         """Fold the closed round into the stop and pivot rules (studio_diloco_rules): keep the best weights, go back to them and apply the
@@ -1272,7 +1368,7 @@ class Coordinator:
             for name in self.theta:
                 self.theta[name] = np.array(stored["weight::" + name], dtype=np.float32)
                 self.momentum[name] = np.array(stored[STATE_PREFIXES[1] + name], dtype=np.float32)
-        self._params, self._state = (None, b""), (None, b"")
+        self._theta_replaced()
 
     def _view(self, number, node):
         entry = self.members.get(node) or self.pending.get(node)
@@ -1288,7 +1384,7 @@ class Coordinator:
             return {**base, "state": "open", "generation": current.generation, "rank": rank,
                     "replica": node in replica_nodes(current.members, self.settings.replicas, self.prefer),
                     "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members),
-                    "lr_scale": self.rules.lr_scale, "steps": current.steps[node]}
+                    "lr_scale": self.rules.lr_scale, "steps": current.steps[node], "train_s": current.train_seconds}
         return {**base, "state": "pending"}
 
     def round_view(self, number, node="", wait=0.):
@@ -1316,19 +1412,26 @@ class Coordinator:
         if self.stopped or self.finished:
             raise Gone(f"Run {self.run} {'was stopped' if self.stopped else 'is finished'}.")
 
-    def params_bytes(self, number, node=""):
-        """Theta of the open round as an .npz body; `node` (who is asking) is noted on the round's timeline as having taken it."""
+    def params_bytes(self, number, node="", since=None):
+        """Theta of the open round as an .npz body; `node` (who is asking) is noted on the round's timeline as having taken it. A member
+        that holds theta of the round before (`since`) is given the outer update that led to this round's theta instead (a quantized
+        body marked with UPDATE_KEY), unless the run sends fp32 or theta was replaced since (a pivot, a polish): then it is theta."""
         self.ensure_serving()
         with self.cond:
             self._touch()
             self._advance()
             if self.current is None or self.current.number != number:
                 raise Stale(f"Round {number} is not the open round (the open one is {self.current.number if self.current else 'none'}).")
-            if self._params[0] != number:
-                self._params = (number, encode_arrays(self.theta, "float32"))
+            if since is not None and since == number - 1 and self._update is not None and self._update[0] == number:
+                body = self._update[1]
+            else:
+                if self._params[0] != number:
+                    self._params = (number, encode_arrays(self.theta, "float32"))
+                body = self._params[1]
             if node in self.current.members:
                 self.current.marks.setdefault(node, {}).setdefault("theta_taken", self.clock())
-            return self._params[1]
+                self.current.downloaded[node] = self.current.downloaded.get(node, 0) + len(body)
+            return body
 
     def state_bytes(self, number):
         """What a replica keeps beside theta of round `number` (the latest, `next_round`): the outer momentum, fp32, and the text of
@@ -1454,11 +1557,14 @@ class Coordinator:
                 raise StaleTerm(f"{TERM_STALE} {self.term if term is None else term}: the run is at term {self.superseded}, so this node no longer coordinates it.",
                                 self.superseded)
             current = self.current
+            carried = False
             try:
                 self._admit(current, number, node, generation, epoch, term)
             except Stale as exc:
-                self._event("stale", node, number, f"A change from {node} for round {number} was refused: {exc}")
-                raise
+                carried = self._carries(current, number, node, generation, epoch, term)
+                if not carried:
+                    self._event("stale", node, number, f"A change from {node} for round {number} was refused: {exc}")
+                    raise
             if set(delta) != set(self.theta) or any(delta[name].shape != self.theta[name].shape for name in delta):
                 raise ValueError("The delta does not match the model's parameters.")
             if not all(np.isfinite(value).all() for value in delta.values()):
@@ -1467,6 +1573,11 @@ class Coordinator:
                 raise ValueError("A contribution's seconds must be finite and not negative.")
             if tokens < 0 or steps < 1:
                 raise ValueError("A contribution needs at least one step.")
+            if carried:  # too late for its round, not for the next outer step: it counts there, stale by one round and weighted the same
+                self.late[node], self.late_round = (int(tokens), int(steps), float(seconds), loss, delta), number
+                self.members[node]["missed"] = 0
+                self._event("late", node, number, f"The change from {node} for round {number} came in after it closed; it counts in round {number + 1}.")
+                return
             current.contributions[node] = (int(tokens), int(steps), float(seconds), loss, delta)
             current.uploaded[node] = int(size)
             marks = current.marks.setdefault(node, {})
@@ -1474,6 +1585,16 @@ class Coordinator:
             marks.setdefault("delta_sent", marks["delta_received"])
             self._advance()
             self.cond.notify_all()
+
+    def _carries(self, current, number, node, generation, epoch, term):
+        """Whether a change refused as stale can still count: it is for the round that closed just before the open one, from a member
+        of it that did not contribute, with the round's generation and the member's lease."""
+        if self.closed is None or current is None or not current.open or self.closed[0] != number or current.number != number + 1:
+            return False
+        _, closed_generation, members, contributors = self.closed
+        entry = self.members.get(node)
+        return (generation == closed_generation and node in members and node not in contributors and node not in self.late and entry is not None
+                and self._lease(term, epoch) == (entry["term"], entry["epoch"]))
 
     def _admit(self, current, number, node, generation, epoch, term=None):
         if current is None or current.number != number or not current.open:
@@ -1748,7 +1869,7 @@ class Coordinator:
             if old is not None and new is not None and math.isfinite(new) and new <= old:
                 accepted = True
                 self.theta = outcome["theta"]
-                self._params, self._state = (None, b""), (None, b"")
+                self._theta_replaced()
                 verdict = drules.revise(self.rules, self.settings, number, context["step"], old, new)
                 row.update({"polish": "accepted", "val_loss_before_polish": float(old), "val_loss": float(new), "best": self.rules.best_round == number})
                 if verdict["improved"]:
@@ -2041,7 +2162,7 @@ class Coordinator:
         """Drop the big arrays once the run is over; the files on disk are the result."""
         with self.cond:
             self._polish_stop.set()
-            self.theta, self.momentum, self._params, self._state = {}, {}, (None, b""), (None, b"")
+            self.theta, self.momentum, self._params, self._state, self._update = {}, {}, (None, b""), (None, b""), None
 
 
 def _evaluator(model, val, size, limit=None):
@@ -2259,6 +2380,8 @@ class Member:
         self.warm, self.busy, self.timed = False, 0., 0  # stepped(): the first step is warm-up; the time and count of the timed steps of the round
         self.term, self.superseded = 0, 0  # the coordinator's term (0: not learnt yet); superseded: a higher term seen, so nothing more goes to this coordinator
         self.loss = None
+        self.theta, self.theta_round, self.residual = {}, None, {}  # theta and the round it belongs to (an update applies to the round before only); what the int8 encoding of the last change lost
+        self.train_deadline = None  # a time-boxed round ends when the clock gets here
         self.shards, self.downloaded = {}, 0  # downloaded: bytes of shards fetched so far
         # what it tells the coordinator (POST /progress): the phase, its step in the round and the latest loss and speed
         self.progress, self.phase, self.report_round, self.round_step, self.reported_step = progress, "waiting", None, 0, 0
@@ -2284,7 +2407,7 @@ class Member:
         """The schedule position of step `number`: each round spans H positions of the schedule, and the member's steps (however many it
         was dealt) are spread over them, so every member is at the same point of the schedule when the round ends."""
         offset, h = number - self.first_step, self.info["inner_steps"]
-        return self.round * h + (offset if self.round_steps == h else offset * h / self.round_steps)
+        return self.round * h + min(h, offset if self.round_steps == h else offset * h / self.round_steps)
 
     @property
     def rate_scale(self):
@@ -2308,7 +2431,11 @@ class Member:
         self.round_step = step - self.first_step  # the reporter thread reads it; nothing here waits on the network
         if self.round_step - self.reported_step >= PROGRESS_STEPS:
             self.wake.set()
-        return step > self.first_step and (step - self.first_step >= self.round_steps or self.clock() >= self.deadline)
+        if step <= self.first_step:
+            return False
+        if self.train_deadline is not None:  # time-boxed: by the clock, within a bound on the steps so the loop never runs out of them
+            return self.clock() >= min(self.train_deadline, self.deadline) or step - self.first_step >= self.info["inner_steps"] * MAX_SHARE
+        return step - self.first_step >= self.round_steps or self.clock() >= self.deadline
 
     def sync(self, step, trained_tokens, model):
         if self.overlap:
@@ -2329,6 +2456,8 @@ class Member:
     def _begin(self, step, trained_tokens):
         """Start the steps of self.round, from the weights the model now holds."""
         self.first_step, self.first_tokens, self.began, self.deadline = step, trained_tokens, self.clock(), self.clock() + self.deadline_s
+        train_s = self.entered.train_s if self.entered is not None else 0.
+        self.train_deadline = self.began + train_s if train_s > 0 else None
         self.sampler.seed(sampler_seed(self.info["seed"], self.rank, self.round))
         self.round_step, self.reported_step = 0, 0
         self.busy, self.timed = 0., 0
@@ -2395,7 +2524,7 @@ class Member:
 
     def _exchange(self, number, delta, params):
         """On the background thread: send round `number`'s delta, then take round number + 1."""
-        body = encode_arrays(delta, self.info["delta_dtype"])
+        body = self._encode(delta)
         self._post(number, body, params, overlapped=True)
         if self.fenced:
             return None
@@ -2572,6 +2701,7 @@ class Member:
     def _apply(self, entered):
         """Make a taken round the member's own: its theta, place and shards (the sampler's windows swap here, never mid-round)."""
         self.theta, self.generation, self.rank, self.deadline_s, self.entered = entered.theta, entered.generation, entered.rank, entered.deadline_s, entered
+        self.theta_round = entered.round
         self.train.set([self.shards[s] for s in entered.shards])
 
     def _take(self, want, quiet=False):
@@ -2612,11 +2742,19 @@ class Member:
                 if not quiet:
                     self._phase("downloading")
                 try:
-                    body = self._download(f"{self.base}/params", self._q({"round": want, "node": self.node}))
-                    theta = decode_arrays(body)
+                    base, base_round = self.theta, self.theta_round  # read once: the training thread replaces them when it applies the round before
+                    asking = {"round": want, "node": self.node, **({"since": base_round} if base and base_round is not None else {})}
+                    body = self._download(f"{self.base}/params", self._q(asking))
+                    origin = update_origin(body)
+                    if origin is None:
+                        theta = decode_arrays(body)
+                    elif origin == base_round and base:
+                        theta = add_update(base, decode_arrays(body))
+                    else:
+                        raise ValueError(f"Round {want}'s weights came as an update from round {origin}, but this member holds round {base_round}.")
                     replica = bool(view.get("replica") and self.replica_dir is not None)
                     if replica:
-                        self._replicate(want, body, view["rank"])
+                        self._replicate(want, body if origin is None else encode_arrays(theta, "float32"), view["rank"])
                     elif self.replica_dir is not None:
                         self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
                     dealt = [int(s) for s in view["shards"]]
@@ -2639,7 +2777,7 @@ class Member:
                         return None
                     raise
                 return Entered(want, theta, view["generation"], view["rank"], view["deadline_s"], shards, want != asked,
-                               float(view.get("lr_scale", 1.)), int(view.get("steps", 0)))
+                               float(view.get("lr_scale", 1.)), int(view.get("steps", 0)), float(view.get("train_s", 0.)), len(body))
         return None
 
     def _download(self, path, params):
@@ -2806,7 +2944,7 @@ class Member:
         self._phase("uploading")
         weights = model.state_arrays()
         delta = {name: self.theta[name] - weights[name].astype(np.float32) for name in self.theta}
-        body = encode_arrays(delta, self.info["delta_dtype"])
+        body = self._encode(delta)
         params = {"term": self.term, "node": self.node, "generation": self.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
                   "steps": step - self.first_step}
         if self.timed:  # none timed (a round of a step or two): no seconds, and the coordinator keeps the member's speed as it was
@@ -2814,6 +2952,15 @@ class Member:
         if self.loss is not None:
             params["loss"] = self.loss
         self._post(self.round, body, params)
+
+    def _encode(self, delta):
+        """The change as it goes on the wire. int8 loses the most, so it keeps what it lost and adds it to the next change (error
+        feedback); the other precisions send the change as it is."""
+        dtype = self.info["delta_dtype"]
+        if dtype != "int8":
+            return encode_arrays(delta, dtype)
+        body, self.residual = encode_feedback(delta, dtype, self.residual)
+        return body
 
     def _post(self, number, body, params, overlapped=False):
         from studio_peer import PeerError

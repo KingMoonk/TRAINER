@@ -207,7 +207,7 @@ class Timing(unittest.TestCase):
         import random
         member = studio_diloco.Member.__new__(studio_diloco.Member)
         member.info = {"inner_steps": 5, "seed": 0}
-        member.entered = mock.Mock(steps=5)
+        member.entered = mock.Mock(steps=5, train_s=0.)
         member.rank, member.round, member.deadline_s, member.clock, member.sampler = 0, 1, 10., lambda: 0., random.Random(0)
         member.warm, member.busy, member.timed = True, 0., 0
         with mock.patch.object(member, "_phase"):
@@ -215,7 +215,7 @@ class Timing(unittest.TestCase):
             member.stepped(9.)  # the cold step of the round
             member.stepped(.5)
             self.assertEqual((member.busy, member.timed), (.5, 1))
-            member.entered = mock.Mock(steps=2)
+            member.entered = mock.Mock(steps=2, train_s=0.)
             member._begin(12, 200)  # a round of two steps keeps its steps: nothing would be left to time
             member.stepped(.5)
         self.assertEqual((member.busy, member.timed), (.5, 1))

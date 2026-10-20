@@ -1,14 +1,14 @@
 import { describe, expect, test } from "vitest";
 import { bytesSeries, compressionText, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone, type RoundHealth, type RunHealth } from "./health";
 
-const member = (over: Partial<RoundHealth["members"][string]> = {}) => ({ loss: 3, steps: 100, tokens: 1000, compute_s: 6, tokens_per_s: 200, wait_s: 0, sync_s: 2, ...over });
+const member = (over: Partial<RoundHealth["members"][string]> = {}) => ({ loss: 3, steps: 100, tokens: 1000, compute_s: 6, tokens_per_s: 200, wait_s: 0, idle_s: 0, sync_s: 2, ...over });
 const round = (n: number, over: Partial<RoundHealth> = {}): RoundHealth => ({
   round: n, seconds: 10, tokens: 3000, slowest: "mac", val_loss: 4 - n * 0.1, loss: 3.9, lr: 0.7, update_norm: 0.05, bytes_up: 2 * 2 ** 20, bytes_down: 4 * 2 ** 20, dtype: "float16", compression: 2, sync_s: 4,
   members: { mac: member({ loss: 3.5 - n * 0.1 }), box: member({ compute_s: 4, tokens_per_s: 500, wait_s: 2, sync_s: 4, loss: 3.2 - n * 0.1 }) }, ...over,
 });
 const health = (over: Partial<RunHealth> = {}): RunHealth => ({
   verdict: { state: "working", text: "Working: 1.6× faster than box alone, loss falling." }, basis: "Tokens per second.", rounds: [round(0), round(1), round(2)], window: 3,
-  aggregate_tokens_per_s: 800, baseline_node: "box", baseline_tokens_per_s: 500, speedup: 1.6, comm_share: 0.4, wait_node: "box", wait_share: 0.2, straggler: "mac", ...over,
+  aggregate_tokens_per_s: 800, baseline_node: "box", baseline_tokens_per_s: 500, speedup: 1.6, comm_share: 0.4, wait_node: "box", wait_share: 0.2, straggler: "mac", idle: {}, idle_node: "", idle_share: null, ...over,
 });
 
 describe("run health", () => {

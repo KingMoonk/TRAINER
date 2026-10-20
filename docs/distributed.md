@@ -296,24 +296,58 @@ All routes are on the coordinator's API, behind node-to-node auth, under `/colle
 | route | body | answer |
 | --- | --- | --- |
 | `POST /join` | node, lease epoch | rank, generation, round, config, tokenizer, shard ids |
-| `GET /params?round=r` | | the round's `θ`, fp32 `.npz` (downloads are the fast direction on Starlink) |
+| `GET /params?round=r&since=q` | | the round's `θ`, fp32 `.npz`; or, when the caller holds `θ` of round `q = r - 1` and the run's `delta_dtype` is not fp32, the outer update that led to `r` (a quantized `.npz` marked with `__update_from__`) |
 | `GET /shards/{s}` | | one training shard, streamed from a file built once |
 | `GET /shards/{s}/hash` | | `{hash}`: the sha256 of that shard's body |
-| `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16, fp32 or int8 `.npz` (int8: per-tensor scale beside the values) | `202`, or `409` when stale |
+| `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16, fp32 or int8 `.npz` (int8: one scale per 256 values beside the values) | `202`; `409` when stale, except a change for the round that closed just before the open one, from a member of it that sent nothing, which is kept for the next outer step |
 | `GET /rounds/{r}` | | `open` or `closed` with the next round; a `pending` round long-polls up to 30 s |
 | `POST /progress` | node, generation, epoch, round, phase (`downloading`, `loading`, `training`, `uploading`, `waiting`), step, loss, tokens/s | `{accepted}`, or `409` for a stale generation or epoch, a non-member, or a closed round |
 | `POST /leave` | generation, epoch | `204` |
 | `GET /state?round=r` | | a replica's copy of the closed round: outer momentum `v` (fp32 `.npz`) and `diloco.json` |
 | `GET /validation` | | the validation windows, for a replica, once per run |
 
-Bytes per member per round for a 25M-parameter model: 100 MB down (fp32) and 50 MB up (fp16). At 20 Mbps up, the upload is
-about 20 s against H = 500 steps of compute, so communication is a small share of the round. `delta_dtype: int8` sends a quarter of fp32 (25 MB up for that model). Each round logs the delta bytes and round seconds
-(`diloco.json` history, and an info event on the member with its upload time). Streaming fragments come later, once
-measurements show the transfer is the bottleneck.
+Bytes per member per round for a 25M-parameter model, by `delta_dtype` (the default is `int8`, and it sets both directions):
+
+| `delta_dtype` | change up | download | |
+| --- | --- | --- | --- |
+| `float32` | 100 MB | 100 MB (`θ`) | exact |
+| `float16` | 50 MB | 50 MB (outer update) | |
+| `int8` | 25 MB | 25 MB (outer update) | per-block scales and error feedback |
+
+At 20 Mbps up, the fp16 upload is about 20 s against H = 500 steps of compute. Each round logs the delta bytes, the bytes downloaded
+and the round seconds (`diloco.json` history, and an info event on the member with its upload time). Run health shows the bytes and
+dtype each way and each member's idle GPU seconds. Streaming fragments come later.
+
+### Quantized traffic and bit-identical weights (#576)
+
+- **Up.** int8 stores a tensor as int8 values with one float32 scale per `INT8_BLOCK = 256` consecutive values (`max |x| / 127`),
+  so one outlier spoils only its own block. Each member keeps what its encoding lost (the residual) and adds it to its next change
+  (error feedback), so the rounding is delayed, not lost. A block with a non-finite value gets a NaN scale and the coordinator refuses
+  the change as before.
+- **Down.** With a quantized `delta_dtype` the coordinator, after the outer step, computes `u = θ_new - θ_before + residual`, encodes it
+  as the run's dtype and sets `θ = θ_before + dequant(u)`. A member that holds `θ` of the round before adds the very same
+  dequantized array to its own `θ` with the same fp32 add, so every node's `θ` is bit-identical (tests compare with
+  `assert_array_equal`). What the update lost stays in the coordinator's residual and goes out with the next one.
+- **Full `θ`** goes to a fresh joiner, a member that does not hold the round before (`since` is missing or not `r - 1`; an
+  update names its origin round and the member checks it), after a pivot back to the best weights or an accepted teacher polish
+  (the update is dropped), and for `float32` runs. `/state` (a replica's copy) is always full.
+- A replica needs `θ` as fp32 too: a member that received an update re-encodes its `θ` as fp32 when it copies it.
+
+### Time-boxed rounds (#576)
+
+`time_box` is on by default for a run across more than one machine (`StartRun.time_box: null`; the form has a checkbox). Machines
+differ in speed, so a round of H steps each has the fast one wait for the slow one. In a time-boxed round every member trains until
+the round's clock: `train_seconds` = H x the fastest measured seconds per step (so the fastest member does exactly H steps), capped at
+`MAX_SHARE x H` steps for any member and by the round's deadline. The first round has no measurements and runs fixed steps. A member's
+learning-rate schedule is spread over the steps it is expected to do (`timed_steps`), so every member is at the same point of the
+schedule when the round ends. The outer step already weighs each change by the tokens it trained, so a slower member's shorter change
+counts for less. A change that arrives after its round closed (a slow upload) counts in the next outer step with the same weight,
+stale by one round, instead of being dropped.
 
 ### Overlapping communication (#183)
 
-By default a member waits at the end of each round for the upload, the coordinator's round to open and the download of the new
+Overlap is on by default for a run with a member on another machine (`StartRun.overlap: null`; the form has a checkbox, and `false` turns
+it off). Without it a member waits at the end of each round for the upload, the coordinator's round to open and the download of the new
 weights, so a slow link idles its GPU. With `overlap` (a member option: `member_options: {"overlap": true}` in the run's job params,
 which the owner's member and the invited members all get, or `python -m studio_diloco member --overlap`) the member does not wait.
 This is the "overlapping" variant of Streaming DiLoCo:

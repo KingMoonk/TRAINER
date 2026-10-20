@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, errorMarks, lessonsText, holdButtons, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, lessonsText, holdButtons, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { TRAINING as T } from "@/lib/copy/training";
@@ -9,7 +9,7 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: false, reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -19,7 +19,7 @@ describe("the form", () => {
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {
     expect(startBody(form({ machines: ["gpu-box"] }))).toEqual({
-      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: false, reviewed_only: false,
+      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: null, time_box: null, delta_dtype: "float16", reviewed_only: false,
     });
     expect(startBody(form({ version: "3" }))?.version).toBe(3);
   });
@@ -76,7 +76,15 @@ describe("the form", () => {
     expect(startBody(form({ machines: ["other"], coordinator: "gpu-box" }))).not.toHaveProperty("coordinator");
   });
 
-  test("overlap is sent as ticked", () => expect(startBody(form({ overlap: true }))?.overlap).toBe(true));
+  test("overlap ticked is left to the server, unticked is sent as off", () => {
+    expect(startBody(form({ overlap: true }))?.overlap).toBeNull();
+    expect(startBody(form({ overlap: false }))?.overlap).toBe(false);
+  });
+  test("the number format of the traffic is sent, and an unknown default falls back to int8", () => {
+    expect(startBody(form({ deltaDtype: "int8" }))?.delta_dtype).toBe("int8");
+    expect(deltaDtypeOf("fp16")).toBe("int8");
+    expect(deltaDtypeOf("float32")).toBe("float32");
+  });
 
   test("reviewed only is sent as ticked", () => expect(startBody(form({ reviewedOnly: true }))?.reviewed_only).toBe(true));
 

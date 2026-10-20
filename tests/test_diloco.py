@@ -162,8 +162,7 @@ class Rounds(Directory):
         self.assertEqual(late["current"], 1)
         self.assertEqual(c.history[0]["dropped"], ["b"])
         self.assertEqual(c.history[0]["contributed"], ["a"])
-        with self.assertRaises(Stale):
-            c.submit(0, "b", 1, 0, 10, 2, support.constant_delta(c), 1.)  # too late: round 0 is closed, nothing applied
+        c.submit(0, "b", 1, 0, 10, 2, support.constant_delta(c), 1.)  # too late for round 0: nothing applied now, it counts in round 1's outer step
         np.testing.assert_allclose(c.theta[name], start - .01, rtol=1e-5)  # only a's delta, at outer lr 1
         view = c.round_view(1, "b")
         self.assertEqual(view["state"], "open")
@@ -173,6 +172,7 @@ class Rounds(Directory):
         self.send(c, "b", 1)
         self.assertEqual(c.history[1]["contributed"], ["a", "b"])
         self.assertEqual(c.history[1]["dropped"], [])
+        self.assertEqual(c.history[1]["late"], ["b"])
 
     def test_a_member_silent_for_missed_limit_rounds_is_removed_and_must_join_again(self):
         c = self.coordinator(inner_steps=2, rounds=9, missed_limit=2, grace_seconds=1., first_round_seconds=5.)

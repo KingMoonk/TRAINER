@@ -23,8 +23,17 @@ export function lessonFrom(lesson: Lesson): string {
   return T.lessonFrom.replace("{round}", String(lesson.round + 1)).replace("{rows}", String(lesson.rows)).replace("{answers}", lesson.rows === 1 ? T.lessonAnswer : T.lessonAnswers);
 }
 
+/** The number formats a change can travel in, smallest first. */
+export const DELTA_DTYPES = ["int8", "float16", "float32"] as const;
+export type DeltaDtype = (typeof DELTA_DTYPES)[number];
+
+/** The server's default number format when it is one the form offers, else int8. */
+export function deltaDtypeOf(text: string | undefined): DeltaDtype {
+  return DELTA_DTYPES.find((dtype) => dtype === text) ?? "int8";
+}
+
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -44,7 +53,9 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     machines: [],
     minMachines: "",
     maxMachines: "",
-    overlap: false,
+    overlap: true,
+    timeBox: true,
+    deltaDtype: deltaDtypeOf(defaults?.delta_dtype),
     reviewedOnly: false,
     coordinator: "",
     teacher: "",
@@ -126,7 +137,9 @@ export function startBody(form: Form): StartRun | null {
     outer_momentum: outerMomentum,
     ...(least !== undefined ? { min_members: least } : {}),
     ...(most !== undefined ? { max_members: most } : {}),
-    overlap: form.overlap,
+    overlap: form.overlap ? null : false, // null lets the server turn it on for a run that spans machines
+    time_box: form.timeBox ? null : false, // null lets the server turn it on for a run that spans machines
+    delta_dtype: form.deltaDtype,
     reviewed_only: form.reviewedOnly,
     ...teacher,
   };

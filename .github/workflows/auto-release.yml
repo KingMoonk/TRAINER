@@ -1,15 +1,12 @@
 name: Auto Release
 
-# After CI passes on master, read the Conventional Commits since the last v* tag, pick the semver bump,
+# Run by hand (Actions -> Auto Release -> Run workflow) on main: read the Conventional Commits since the last v* tag, pick the semver bump,
 # tag the tested commit and dispatch release.yml (which builds the macOS and Windows executables).
 #   feat -> minor · fix/perf/revert/refactor/style -> patch · docs/chore/test/ci/build -> no release
 #   `!` or BREAKING CHANGE -> major, but only after approval on the `breaking-release` environment
 # Nothing releasable -> the run does nothing. "Run workflow" forces a bump or dry-runs the version math.
+# The automatic release after CI on the base branch is off for now: every merge into main would release.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [master]
   workflow_dispatch:
     inputs:
       bump:
@@ -45,13 +42,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      # CI cancels superseded runs; if master moved on, the newer commit's run releases the whole range
+      # CI cancels superseded runs; if main moved on, the newer commit's run releases the whole range
       - id: tip
         if: github.event_name == 'workflow_run'
         env:
           TESTED: ${{ github.event.workflow_run.head_sha }}
         run: |
-          git fetch --no-tags origin master
+          git fetch --no-tags origin main
           [ "$(git rev-parse FETCH_HEAD)" = "$TESTED" ] || echo "stale=true" >> "$GITHUB_OUTPUT"
       - id: version
         if: steps.tip.outputs.stale != 'true'

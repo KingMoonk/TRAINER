@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, subscribe, unwrap, type ApiEvent } from "@/lib/api";
+import { deltaDtypeOf } from "../cluster/training/logic";
 import { T, fill } from "./copy";
 import { errorText, type Job, type Plan, type Queue } from "./logic";
 
@@ -106,7 +107,7 @@ export function useQueueActions() {
       const version = typeof waiting.params?.version === "number" ? waiting.params.version : null;
       return unwrap(api.POST("/distributed/runs", {
         body: { replaces: waiting.id, all_machines: true, machines: [], version, dataset_ids: datasets, rounds: defaults.rounds, inner_steps: defaults.inner_steps,
-                outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: false, reviewed_only: false },
+                outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: null, time_box: null, delta_dtype: deltaDtypeOf(defaults.delta_dtype), reviewed_only: false },
       }));
     },
     onSuccess: (run) => {
