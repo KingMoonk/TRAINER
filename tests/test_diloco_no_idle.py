@@ -196,7 +196,7 @@ class TimeBox(Directory):
     def member(self, now, train_deadline):
         clock = [now]
         member = studio_diloco.Member(None, "r", "n", 0, self.dir / "s", threading.Event(), clock=lambda: clock[0], progress=False)
-        member.info = {"inner_steps": 10}
+        member.info = {"inner_steps": 10, "rounds": 3}
         member.first_step, member.deadline, member.train_deadline = 0, 100., train_deadline
         return member, clock
 
