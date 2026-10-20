@@ -391,12 +391,17 @@ def characters_in(examples):
     return sum(len(e["text"]) if e.get("text") else sum(len(m["content"]) for m in messages_of(e)) for e in examples)
 
 
+def shard_key(tokenizer, cfg, split_hash):
+    """The folder name under a shard root for this data split (split_hash), tokenizer and cut."""
+    return studio_shards.key_for(split_hash, hashlib.sha256(json.dumps(tokenizer.serialize(), sort_keys=True).encode()).hexdigest(),
+                                 cfg["windowing"], cfg["context"], cfg["objective"])
+
+
 @slow("encode a corpus into windows")
 def shard_windows(training, validation, tokenizer, cfg, split_hash, root):
     """(train windows, validation windows, reused) read from token shards under root, tokenizing into them first when this data,
     tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut."""
-    key = studio_shards.key_for(split_hash, hashlib.sha256(json.dumps(tokenizer.serialize(), sort_keys=True).encode()).hexdigest(),
-                                cfg["windowing"], cfg["context"], cfg["objective"])
+    key = shard_key(tokenizer, cfg, split_hash)
     found = studio_shards.load(root, key, tokenizer.vocab_size)
     reused = found is not None
     if not reused:
