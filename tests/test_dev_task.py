@@ -1,6 +1,12 @@
 """tasks.py dev: the commands it starts, the device notice and the wait for GET /node. No server is started."""
 import json
+import os
+import signal
 import socket
+import subprocess
+import sys
+import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -53,6 +59,70 @@ class DevCommandsTest(unittest.TestCase):
             listener.bind(("127.0.0.1", 0))
             listener.listen()
             self.assertTrue(tasks.port_busy(listener.getsockname()[1]))
+
+
+# A leader that starts a grandchild ignoring SIGTERM (as the API's reloader worker did) and prints its pid, then exits or sleeps.
+TREE = textwrap.dedent("""
+    import subprocess, sys, time
+    child = subprocess.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
+    print(child.pid, flush=True)
+    if sys.argv[1] == "sleep":
+        time.sleep(60)
+""")
+
+
+def pid_gone(pid):
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(.1)
+    return False
+
+
+@unittest.skipIf(sys.platform == "win32", "process groups are POSIX; Windows uses taskkill /T")
+class StopTreeTest(unittest.TestCase):
+    def start(self, mode):
+        proc = tasks.spawn([sys.executable, "-c", TREE, mode], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: [os.killpg(proc.pid, signal.SIGKILL) if not tasks.group_gone(proc.pid) else None, proc.wait()])
+        return proc, int(proc.stdout.readline())
+
+    def test_stop_ends_a_grandchild_that_ignores_sigterm(self):
+        proc, grandchild = self.start("sleep")
+        tasks.stop(proc, grace=.5)
+        proc.wait()
+        self.assertTrue(pid_gone(grandchild))
+
+    def test_stop_ends_the_tree_when_the_leader_already_exited(self):
+        proc, grandchild = self.start("exit")
+        proc.wait()
+        tasks.stop(proc, grace=.5)
+        self.assertTrue(pid_gone(grandchild))
+
+
+class PortOwnerTest(unittest.TestCase):
+    def test_owners_come_from_lsof_with_their_command_lines(self):
+        run = mock.Mock(return_value=mock.Mock(stdout="13965\n15327\n13965\n"))
+        with mock.patch.object(tasks.sys, "platform", "darwin"), \
+                mock.patch("studio_platform.command_line", side_effect=lambda pid: f"python -m studio_api {pid}"):
+            self.assertEqual(tasks.port_owners(8787, run=run), [(13965, "python -m studio_api 13965"), (15327, "python -m studio_api 15327")])
+        self.assertIn("-iTCP:8787", run.call_args.args[0])
+
+    def test_no_lsof_means_no_owners(self):
+        with mock.patch.object(tasks.sys, "platform", "linux"):
+            self.assertEqual(tasks.port_owners(8787, run=mock.Mock(side_effect=FileNotFoundError)), [])
+
+    def test_the_message_names_the_pid_and_calls_our_own_api_stale(self):
+        text = tasks.port_in_use_message("API", 8787, [(13965, "python -m studio_api --reload")])
+        self.assertIn("pid 13965: python -m studio_api --reload", text)
+        self.assertIn("stale API", text)
+
+    def test_the_message_for_something_else_or_nothing_known(self):
+        other = tasks.port_in_use_message("web", 3000, [(7, "node server.js")])
+        self.assertIn("pid 7: node server.js", other)
+        self.assertNotIn("stale API", other)
+        self.assertEqual(tasks.port_in_use_message("API", 8787, []).split(".")[0], "Port 8787 (API) is in use")
 
 
 def serve_status(handlers, host="box.tail1234.ts.net:443"):
@@ -153,16 +223,20 @@ class SetupTest(unittest.TestCase):
     def test_stop_ends_the_whole_process_group_or_tree(self):
         proc = mock.Mock(pid=42)
         proc.poll.return_value = None
-        with mock.patch.object(tasks.sys, "platform", "linux"), mock.patch.object(tasks.os, "killpg", create=True) as killpg:
-            tasks.stop(proc)
-        killpg.assert_called_once_with(42, tasks.signal.SIGTERM)
+        gone = lambda pid, sig: None if sig == tasks.signal.SIGTERM else (_ for _ in ()).throw(ProcessLookupError())  # noqa: E731
+        with mock.patch.object(tasks.sys, "platform", "linux"), mock.patch.object(tasks.os, "killpg", create=True, side_effect=gone) as killpg:
+            tasks.stop(proc, sleep=lambda s: None)
+        self.assertEqual([c.args for c in killpg.call_args_list], [(42, tasks.signal.SIGTERM), (42, 0)])
         with mock.patch.object(tasks.sys, "platform", "win32"), mock.patch.object(tasks.subprocess, "call") as call:
             tasks.stop(proc)
         self.assertEqual(call.call_args.args[0][:2], ["taskkill", "/PID"])
-        proc.poll.return_value = 0
-        with mock.patch.object(tasks.os, "killpg", create=True) as killpg:
-            tasks.stop(proc)
-        killpg.assert_not_called()
+
+    def test_stop_kills_the_group_when_it_ignores_sigterm(self):
+        proc = mock.Mock(pid=42)
+        with mock.patch.object(tasks.sys, "platform", "linux"), mock.patch.object(tasks.os, "killpg", create=True) as killpg:
+            tasks.stop(proc, grace=.3, sleep=lambda s: None)
+        self.assertEqual(killpg.call_args_list[0].args, (42, tasks.signal.SIGTERM))
+        self.assertEqual(killpg.call_args_list[-1].args, (42, tasks.signal.SIGKILL))
 
 
 class SourceWatchTest(unittest.TestCase):

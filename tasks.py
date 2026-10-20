@@ -264,13 +264,66 @@ def spawn(cmd, **kwargs):
     return subprocess.Popen(cmd, **flags, **kwargs)
 
 
-def stop(proc):
-    if proc.poll() is not None:
-        return
+def group_gone(pgid):
+    """True once no process is left in process group `pgid` (POSIX)."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def stop(proc, grace=5., sleep=time.sleep):
+    """End a dev process and everything it started: SIGTERM to its whole group, SIGKILL after `grace` seconds to whatever ignores it
+    (the API's uvicorn reloader, its worker and their children outlive a leader that is gone). Windows: taskkill /T /F."""
     if sys.platform == "win32":
-        subprocess.call(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
+        if proc.poll() is None:
+            subprocess.call(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    try:
         os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    waited = 0.
+    while waited < grace:
+        proc.poll()  # reaps the leader, which would otherwise keep the group alive as a zombie
+        if group_gone(proc.pid):
+            return
+        sleep(.1)
+        waited += .1
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.poll()
+
+
+def port_owners(port, run=subprocess.run):
+    """[(pid, command line)] of the processes listening on `port`; [] when none can be found (no lsof, say)."""
+    import studio_platform as procs
+    try:
+        if sys.platform == "win32":
+            query = f"(Get-NetTCPConnection -LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue).OwningProcess"
+            out = run(["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True, timeout=30).stdout
+        else:
+            out = run(["lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = sorted({int(w) for w in out.split() if w.isdigit()})
+    return [(pid, procs.command_line(pid) or "") for pid in pids]
+
+
+def port_in_use_message(name, port, owners):
+    """Why `dev` will not start on a busy port, naming who holds it and whether it looks like this app's own stale API."""
+    held = "; ".join(f"pid {pid}: {line or '(command unreadable)'}" for pid, line in owners)
+    text = f"Port {port} ({name}) is in use" + (f" by {held}." if held else ".")
+    if any("studio_api" in line for _, line in owners):
+        text += " That looks like a stale API from an earlier make dev: stop it (kill its pids, kill -9 if needed)."
+    else:
+        text += " Stop what listens there first."
+    return text + " A second API on the same data/ and runs/ is unsafe."
 
 
 WATCH_SKIP = {"web", "data", "runs", "node_modules", "__pycache__"}  # besides every directory starting with "." (.venv, .git, .claude/worktrees)
@@ -344,7 +397,7 @@ def dev():
     When Tailscale is running it points `tailscale serve` at them first (`/` the page, `/api/` the API); `run` points it back."""
     for name, port in (("API", API_PORT), ("web", WEB_PORT)):
         if port_busy(port):
-            sys.exit(f"Port {port} ({name}) is in use. Stop what listens there first; a second API on the same data/ and runs/ is unsafe.")
+            sys.exit(port_in_use_message(name, port, port_owners(port)))
     exe = shutil.which("pnpm")
     if not exe:
         sys.exit("pnpm is not installed. See web/README.md.")
@@ -353,10 +406,15 @@ def dev():
     if not (WEB / "node_modules").is_dir():
         run(exe, "install", "--frozen-lockfile", cwd=WEB)
     tailnet(DEV_SERVE)
-    procs = [spawn(api), spawn(web, cwd=WEB, env={**os.environ, **env})]
-    threading.Thread(target=announce, name="device-notice", daemon=True).start()
+    for name in ("SIGTERM", "SIGHUP"):  # kill and a closed terminal end the loop like Ctrl+C, so the finally below stops both trees
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.default_int_handler)
+    procs = []
     code, told, pending, deferred = 0, False, False, False
     try:
+        procs.append(spawn(api))
+        procs.append(spawn(web, cwd=WEB, env={**os.environ, **env}))
+        threading.Thread(target=announce, name="device-notice", daemon=True).start()
         while True:
             pending = pending or bool(watcher and watcher.poll())
             api_up = procs[0].poll() is None
@@ -381,6 +439,7 @@ def dev():
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)  # a second Ctrl+C must not leave a tree behind
         for p in procs:
             stop(p)
         for p in procs:
