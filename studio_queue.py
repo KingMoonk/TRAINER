@@ -205,6 +205,10 @@ class Runner:
         self._sync_pause()
         self.closed = threading.Event()
         self.thread = None
+        # Once start() runs, queue.json is written on a thread of its own, off self.lock: on Windows a save can take seconds (fsync, and
+        # replace_file waiting out a scanner's lock), and every reader of the queue (GET /queue, /queue/jobs) waited on the lock meanwhile.
+        self._written = threading.Condition()
+        self._unsaved, self._writing, self._writer = None, False, None
         import studio_remote
         self.cluster = (cluster or studio_remote.Cluster)(self)  # inert until peers are listed in the workspace config; `cluster(runner)` for tests
 
@@ -245,8 +249,33 @@ class Runner:
         if dropped and getattr(self, "cluster", None) is not None:
             self.cluster.trimmed(dropped)  # (no I/O: it only remembers their result keys, which a sweep must not delete)
         self.jobs = done + live
-        atomic_json(self.path, {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused, "stopping": self.stopping_job,
-                                "jobs": [dataclasses.asdict(j) for j in self.jobs]})
+        state = {"plan": dataclasses.asdict(self.plan), "user_paused": self.user_paused, "stopping": self.stopping_job,
+                 "jobs": [dataclasses.asdict(j) for j in self.jobs]}
+        if self._writer is None:
+            atomic_json(self.path, state)
+            return
+        with self._written:
+            self._unsaved = state  # a later save replaces one not yet written: only the latest state reaches the file
+            self._written.notify_all()
+
+    def _write_loop(self):
+        while True:
+            with self._written:
+                self._written.wait_for(lambda: self._unsaved is not None)
+                state, self._unsaved, self._writing = self._unsaved, None, True
+            try:
+                atomic_json(self.path, state)
+            except OSError:
+                logging.getLogger("groundwork.queue").exception("could not save the queue to %s", self.path)
+            finally:
+                with self._written:
+                    self._writing = False
+                    self._written.notify_all()
+
+    def flush(self, timeout=None):
+        """Wait until every save so far is in queue.json; True when it is."""
+        with self._written:
+            return self._written.wait_for(lambda: self._unsaved is None and not self._writing, timeout)
 
     # ---- events
     def subscribe(self, callback):
@@ -261,11 +290,16 @@ class Runner:
 
     # ---- public API
     def enqueue(self, job):
+        """Add `job` to the end of the queue and return it; a job whose id is already in the queue (any status) is not added again, and
+        the one there is returned: a caller that chose the id can ask again after a timeout without making two."""
         if isinstance(job, str):
             job = Job(kind=job)
         if job.kind not in KINDS:
             raise ValueError(f"Unknown job kind: {job.kind}")
         with self.lock:
+            there = next((j for j in self.jobs if j.id == job.id), None)
+            if there is not None:
+                return there
             self.jobs.append(job)
             self._save()
         self.wake.set()
@@ -423,6 +457,8 @@ class Runner:
                 failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
 
     def start(self):
+        self._writer = threading.Thread(target=self._write_loop, daemon=True, name="queue-save")
+        self._writer.start()
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
         self.cluster.start()
@@ -438,6 +474,7 @@ class Runner:
         if self.thread:
             self.thread.join(timeout)
         self.cluster.close()
+        self.flush(timeout)
 
     # ---- runner thread
     def _sync_pause(self):

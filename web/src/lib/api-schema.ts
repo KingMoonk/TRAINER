@@ -2663,7 +2663,8 @@ export interface paths {
         put?: never;
         /**
          * Enqueue
-         * @description Services.enqueue: add a job to the end of Up next. An unknown kind is a 400.
+         * @description Services.enqueue: add a job to the end of Up next, or answer the job already queued under the caller's `id`. An unknown kind is a
+         *     400.
          */
         post: operations["enqueue_queue_jobs_post"];
         delete?: never;
@@ -5516,10 +5517,14 @@ export interface components {
         /**
          * NewJob
          * @description `params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.
+         *     `id` is the caller's own id for the job, so a POST sent again after it timed out is added once: the job already queued under that id
+         *     is answered instead (whatever its status). Absent, the id is made here.
          */
         NewJob: {
             /** Eta S */
             eta_s?: number | null;
+            /** Id */
+            id?: string | null;
             /** Kind */
             kind: string;
             /**

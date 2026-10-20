@@ -142,6 +142,21 @@ class Merge(unittest.TestCase):
         [back] = peers.survey(["gpu"], net, 1)
         self.assertEqual((back.info.online, back.stale, back.jobs), (True, False, ()))
 
+    def test_a_peer_slow_for_one_survey_stays_online_and_is_offline_after_two(self):
+        net = Net(gpu=peer("gpu-box", job("p1", "running")))
+        clock = [100.]
+        peers = cq.Peers(clock=lambda: clock[0])
+        peers.survey(["gpu"], net, 1)
+        net.peers["gpu"], clock[0] = PeerError("gpu did not answer GET /node: timed out"), 105.
+        [slow] = peers.survey(["gpu"], net, 1)
+        self.assertEqual((slow.info.online, slow.info.hostname, slow.stale, [j["id"] for j in slow.jobs]), (True, "gpu-box", True, ["p1"]))
+        clock[0], before = 110., len(net.calls)
+        [gone] = peers.survey(["gpu"], net, 1)
+        self.assertEqual((gone.info.online, [p for _, p, _ in net.calls[before:]]), (False, ["node"]))
+        net.peers["gpu"], clock[0] = peer("gpu-box"), 200.
+        [back] = peers.survey(["gpu"], net, 1)
+        self.assertTrue(back.info.online)
+
     def test_a_silent_peer_is_asked_less_and_less_often_and_by_node_alone(self):
         net = Net(gpu=DOWN)
         clock = [100.]

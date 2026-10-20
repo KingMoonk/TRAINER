@@ -93,6 +93,26 @@ class Registry(unittest.TestCase):
                          ("windows-box", "windows-box", "cuda", 24 * GB, "1.2.3", True))
         self.assertEqual(info.dtypes, ("float32", "bfloat16"))
 
+    def test_a_peer_slow_for_one_poll_keeps_its_last_answer_and_is_offline_after_two(self):
+        self.addCleanup(sc._ANSWERED.clear)
+        answers = [payload(), TimeoutError("timed out"), payload(), PeerError("slowpoke did not answer GET /node: timed out"),
+                   TimeoutError("timed out")]
+
+        def fetch(url, timeout):
+            answer = answers.pop(0)
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+
+        states = [sc.poll(["slowpoke"], fetch=fetch)[0] for _ in range(4)]
+        self.assertEqual([i.online for i in states], [True, True, True, True])  # every slow poll followed an answer
+        [offline] = sc.poll(["slowpoke"], fetch=fetch)  # the second slow poll in a row
+        self.assertFalse(offline.online)
+        self.assertIn("did not answer", offline.error)
+        sc.poll(["refused"], fetch=lambda url, timeout: payload())
+        [refused] = sc.poll(["refused"], fetch=lambda url, timeout: (_ for _ in ()).throw(ConnectionRefusedError()))
+        self.assertFalse(refused.online)  # refused is not slow: offline at once
+
     def test_an_unreachable_peer_is_offline_and_never_raises(self):
         def fetch(url, timeout):
             if "mini" in url:

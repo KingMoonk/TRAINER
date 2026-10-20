@@ -63,11 +63,13 @@ class Peers:
 
     A peer that did not answer `GET /node` is not asked again every survey: the wait doubles with each failed ask (BACKOFF_FIRST,
     then twice as long, up to BACKOFF_MAX), and meanwhile it is reported offline with the last reason, its last queue kept stale.
-    When the wait is over one `GET /node` probes it, and only an answer is followed by its queue calls."""
+    When the wait is over one `GET /node` probes it, and only an answer is followed by its queue calls. A peer that answered last time
+    and is only slow now keeps its last answer for this survey (stale) and is probed at the next: one stall is not offline."""
 
     def __init__(self, clock=time.time):
         self.clock, self._seen, self._lock = clock, {}, threading.Lock()
-        self._failed = {}  # address -> (failed asks in a row, clock time of the next ask, the reason)
+        self._failed = {}  # address -> (failed asks in a row, clock time of the next ask, the reason); 0 asks: slow once, probed next
+        self._answered = {}  # address -> its NodeInfo when it last answered
 
     def survey(self, addresses, ask=None, timeout=studio_cluster.POLL_TIMEOUT):
         """One Peer per address, in order. `ask(address, path, timeout)` returns the parsed JSON (default: `fetch`)."""
@@ -86,6 +88,7 @@ class Peers:
         with self._lock:
             self._seen = {a: self._seen[a] for a in addresses if a in self._seen}
             self._failed = {a: self._failed[a] for a in addresses if a in self._failed}
+            self._answered = {a: self._answered[a] for a in addresses if a in self._answered}
             for address in addresses:
                 last, seen_at, hostname = self._seen.get(address, ((), 0.0, ""))
                 if address in held:
@@ -93,6 +96,10 @@ class Peers:
                     out.append(Peer(studio_cluster.offline(address, reason, hostname), last, stale=True, seen_at=seen_at))
                     continue
                 node, jobs, state = (answers.get((address, p)) for p in ("node", "queue/jobs", "queue"))
+                if isinstance(node, BaseException) and studio_cluster.slow(node) and address in self._answered and address not in self._failed:
+                    self._failed[address] = (0, now, studio_cluster.failure(address, node, timeout))
+                    out.append(Peer(self._answered[address], last, stale=True, seen_at=seen_at))
+                    continue
                 if isinstance(node, BaseException):
                     info = studio_cluster.offline(address, studio_cluster.failure(address, node, timeout), hostname)
                 else:
@@ -102,6 +109,7 @@ class Peers:
                         info = studio_cluster.offline(address, studio_cluster.failure(address, exc, timeout), hostname)
                 if info.online:
                     self._failed.pop(address, None)
+                    self._answered[address] = info
                     fresh = isinstance(jobs, list)
                     if fresh:
                         last, seen_at = tuple(j for j in jobs if isinstance(j, dict)), now
@@ -110,6 +118,7 @@ class Peers:
                                     limits=limits_of(state) if fresh else None))
                 else:
                     count = self._failed.get(address, (0,))[0] + 1
+                    self._answered.pop(address, None)
                     self._failed[address] = (count, now + min(BACKOFF_MAX, BACKOFF_FIRST * 2 ** (count - 1)), info.error)
                     out.append(Peer(info, last, stale=True, seen_at=seen_at))
         return out
