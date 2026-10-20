@@ -120,6 +120,20 @@ class Http:
             reply.close()
 
 
+    def size(self, url):
+        """The size in bytes of the file at `url` (asked with a one-byte range), or None when the server does not say."""
+        reply = self.open(url, byte_range=(0, 0))
+        try:
+            if reply.status == 206:
+                total = reply.headers.get("content-range", "").rsplit("/", 1)[-1]
+                return int(total) if total.isdigit() else None
+            if reply.status == 200:
+                return int(reply.headers.get("content-length") or 0) or None
+            raise OSError(f"{url} answered {reply.status}.")
+        finally:
+            reply.close()
+
+
 class CountedReply:
     """A Reply whose bytes are counted against the daily bandwidth cap as they arrive (LimitReached the moment it is used up)."""
 
