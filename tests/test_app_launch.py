@@ -3,6 +3,7 @@ import io
 import json
 import socket
 import tempfile
+import threading
 import unittest
 import urllib.request
 from contextlib import contextmanager, redirect_stdout
@@ -35,6 +36,30 @@ class Launch(unittest.TestCase):
         self.assertEqual(code, 0)
         opened.assert_called_once_with(f"http://127.0.0.1:{port}/")
         self.assertIsInstance(seen["node"], dict)
+
+    def test_stops_while_a_browser_holds_the_events_stream_open(self):
+        port, streams = free_port(), []
+
+        def after_open(server):
+            reply = urllib.request.urlopen(f"http://127.0.0.1:{port}/events", timeout=10)  # never ends, like an open page's
+            streams.append(reply)
+            server.should_exit = True  # what Ctrl-C does
+
+        def serve():
+            with mock.patch("webbrowser.open"):
+                app.main(["--fake", "--port", str(port)], after_open=after_open)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "index.html").write_text("<h1>Groundwork</h1>", encoding="utf-8")
+            with mock.patch.object(api_app, "WEB_OUT", Path(tmp)):
+                worker = threading.Thread(target=serve, daemon=True)
+                worker.start()
+                worker.join(30)
+        for reply in streams:
+            reply.close()
+        self.assertFalse(worker.is_alive(), "the server kept waiting for the open /events stream")
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", port))  # the port is free again
 
     def test_without_the_web_build_it_says_so_and_opens_nothing(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(api_app, "WEB_OUT", Path(tmp) / "out"), \
