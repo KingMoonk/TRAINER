@@ -16,6 +16,7 @@ from typing import Any, Callable
 import numpy as np
 
 import studio_ui_guard as ui_guard
+from studio_ia.busy import Busy
 from studio_timing import timed
 from studio_versions import NoCheckpoint
 
@@ -150,6 +151,7 @@ class Services:
         self._raw: list[Callable[[str, Any], None]] = []  # watchers that take events on the emitting thread (the API)
         self._raw_lock = threading.Lock()
         self._settings = {}
+        self.busy = Busy(self.emit)  # `with self.busy("Loading ...", total=n) as task: task.step()`: shown as the busy card, GET /busy
         from studio_ia.snapshots import Snapshots
         self.snapshots = Snapshots(self)  # what the Tk thread reads instead of calling slow services; inert until the shell starts it
 
@@ -2395,18 +2397,21 @@ class WorkspaceServices(Services):
         spec = studio_spec.validate_spec(v.spec)
         context = spec["dims"]["n_ctx"]
 
-        def make():
+        def make(task):
             import studio_data_kinds as dk
             self.note("Reading a sample of the chosen text")
             ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
             # Never the whole corpus: about 5M evenly spread characters build the word list and are counted; the
             # total size comes from stored character counts, so pieces are scaled up ("estimated") for larger text.
             sample, total = dk.text_sample(self.workspace, ids, PREVIEW_CHARS, exclude=set(self._heldout()))
+            task.step()
             self.note("Building the word list")
             module, cfg = studio_spec.module_of("tokenizer", spec["tokenizer"])
             tok = module.fit(cfg, [{"text": d} for d in sample])
+            task.step()
             self.note("Counting word pieces")
             encoded = [tok.encode(d) for d in sample]
+            task.step()
             counted, chars = sum(map(len, encoded)) + len(sample), sum(map(len, sample))
             estimated = total > chars
             pieces = round(counted * total / max(1, chars)) if estimated else counted
@@ -2416,7 +2421,8 @@ class WorkspaceServices(Services):
         key = self._preview_key(v, dataset_ids, rows)
         store = self._previews()
         if key not in store:
-            preview = make()
+            with self.busy("Reading and counting your text", total=3) as task:
+                preview = make(task)
             from studio_core import atomic_json
             with self._lock:
                 store[key] = preview
@@ -3518,14 +3524,18 @@ class WorkspaceServices(Services):
         return v.best_checkpoint
 
     def chat(self, version, messages, on_text, stop, ablate=None):
-        from studio_model import LocalModel
+        from studio_model import LocalModel, load_checkpoint
         import studio_memory
         ckpt = self._checkpoint(version)
         with self._chat_lock:
             model = self._models.pop(ckpt, None)
             if model is None:
                 device = self._chat_device()
-                model = LocalModel(ckpt, device=device)
+                with self.busy("Loading the model for chat", total=2) as task:
+                    data = load_checkpoint(ckpt, weights_only=True)  # the file read, then the model built from it
+                    task.step()
+                    model = LocalModel(ckpt, device=device, data=data)
+                    task.step()
                 self.ledger.register(ckpt, studio_memory.weight_bytes(model.model), device)
                 self._using[ckpt] = threading.RLock()
             self._models[ckpt] = model  # most recently used last; the dict is the LRU order

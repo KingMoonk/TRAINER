@@ -82,6 +82,14 @@ class WireProtocol(Collective):
         self.assertEqual(self.client.get("/collective/r1/rounds/1", params={"node": "a"}).json()["state"], "open")
         self.assertEqual(self.client.post("/collective/r1/leave", json={"node": "a", "generation": 1, "epoch": 3}).status_code, 204)
 
+    def test_a_long_poll_waits_on_its_own_thread_not_one_every_route_shares(self):
+        coordinator = self.start(inner_steps=2, rounds=2)
+        seen = []
+        real = coordinator.round_view
+        coordinator.round_view = lambda *args: (seen.append(threading.current_thread().name), real(*args))[1]
+        self.client.get("/collective/r1/rounds/0", params={"node": "a", "wait": .2})
+        self.assertTrue(seen and all(name.startswith("api-long-poll") for name in seen), seen)
+
     def test_half_precision_deltas_are_accepted(self):
         coordinator = self.start(inner_steps=2, delta_dtype="float16", outer_lr=1.)
         self.client.post("/collective/r1/join", json={"node": "a"})

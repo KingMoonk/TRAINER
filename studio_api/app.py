@@ -4,6 +4,7 @@ import importlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import anyio.to_thread
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,7 +17,8 @@ from studio_api.version import app_version
 from studio_versions import NoCheckpoint
 
 ROUTERS = ("versions", "queue", "storage", "data", "pretraining", "post_training", "chat", "benchmark",
-           "node", "quicktest", "design", "cluster", "collective", "distributed", "training_run", "state", "collect", "mlperf")  # one module each in studio_api.routers
+           "node", "quicktest", "design", "cluster", "collective", "distributed", "training_run", "state", "collect", "mlperf", "busy")  # one module each in studio_api.routers
+THREADS = 128  # anyio's default is 40 threads for every plain `def` route; a few slow peers or long reads could fill them and stall the rest
 LOCAL_ORIGIN = r"^http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 WEB_OUT = Path(__file__).resolve().parent.parent / "web" / "out"
 
@@ -34,6 +36,7 @@ def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, *
     peer take part in the fake run, so the traffic console has DiLoCo exchanges to show (studio_api.traffic.simulate)."""
     @asynccontextmanager
     async def lifespan(app):
+        anyio.to_thread.current_default_thread_limiter().total_tokens = THREADS
         yield
         if isinstance(hosts, HostNames):
             hosts.stop.set()  # the Tailscale-name refresh thread

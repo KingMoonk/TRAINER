@@ -267,6 +267,61 @@
         "title": "Body_import_pretrained_post_training_imports_post",
         "type": "object"
       },
+      "BusyItem": {
+        "properties": {
+          "done": {
+            "description": "steps finished",
+            "minimum": 0.0,
+            "title": "Done",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "description": "what is happening, as a sentence fragment for the person",
+            "title": "Label",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "steps in all; null when the work has no measurable steps (an indeterminate bar)",
+            "title": "Total"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "done",
+          "total"
+        ],
+        "title": "BusyItem",
+        "type": "object"
+      },
+      "BusyList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BusyItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "BusyList",
+        "type": "object"
+      },
       "Changes": {
         "properties": {
           "chips": {
@@ -12918,6 +12973,28 @@
         "summary": "Verdict",
         "tags": [
           "benchmark"
+        ]
+      }
+    },
+    "/busy": {
+      "get": {
+        "description": "Everything busy now, oldest first. Empty when idle.",
+        "operationId": "busy_busy_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusyList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Busy",
+        "tags": [
+          "busy"
         ]
       }
     },

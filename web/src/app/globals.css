@@ -507,6 +507,13 @@
 @keyframes edge-flow { to { stroke-dashoffset: -20; } }
 .edge-flow { stroke-dasharray: 6 4; animation: edge-flow 0.8s linear infinite; }
 
+/* The busy card: a bar that slides while the work has no measurable steps. */
+@keyframes busy-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.busy-indeterminate { width: 40%; animation: busy-slide 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .busy-indeterminate { width: 100%; opacity: 0.55; animation: none !important; }
+}
+
 @media (max-width: 767px) {
   main { padding: 1.25rem !important; }
 }
