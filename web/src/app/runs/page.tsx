@@ -64,7 +64,7 @@ export default function RunsPage() {
         <h2 id="runs-completed" className="text-lg font-semibold">
           <Hint tip={T.completedTip} plain>{T.completed}</Hint>
         </h2>
-        {loading ? <Skeleton className="h-14 w-full" /> : completed.length === 0 ? <Empty>{T.nothingCompleted}</Empty> : <CompletedList rows={completed} />}
+        {loading ? <Skeleton className="h-14 w-full" /> : completed.length === 0 ? <Empty>{T.nothingCompleted}</Empty> : <CompletedList rows={completed} onRestart={(id) => actions.restart.mutate(id)} restarting={actions.restart.isPending} />}
       </section>
     </main>
   );

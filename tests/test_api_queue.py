@@ -70,6 +70,14 @@ class QueueRouterTests(ApiCase):
 
         state = self.call("DELETE", "/queue/jobs/{job_id}", path={"job_id": b["id"]})
         self.assertEqual(ids(state), [a["id"], c["id"]])
+
+        from studio_queue import Job
+        self.services.queue().failed.append(Job(id="f1", kind="pretrain", label="the one that broke", note="v2", params={"version": 2}, status="failed", error="Out of disk."))
+        state = self.call("POST", "/queue/jobs/{job_id}/restart", path={"job_id": "f1"})
+        again = state["up_next"][0]
+        self.assertEqual((again["kind"], again["label"], again["note"], again["params"], again["status"]), ("pretrain", "the one that broke", "v2", {"version": 2}, "waiting"))
+        self.assertNotEqual(again["id"], "f1")
+        self.assertEqual((ids(state)[1:], state["failed"]), ([a["id"], c["id"]], []))
         self.assertAllRoutesHit()
 
     def test_a_running_job_and_its_gate_come_through(self):
@@ -93,7 +101,7 @@ class QueueRouterTests(ApiCase):
         self.call("PUT", "/queue/plan", 422, json={"hours": "whenever"})
         self.call("PUT", "/queue/plan", 422, json={"start_hour": 25})
         self.call("POST", "/queue/jobs/{job_id}/move", 422, path={"job_id": "x"}, json={"index": -1})
-        for method, path in (("POST", "/queue/jobs/nope/move_up"), ("POST", "/queue/jobs/nope/hold"), ("DELETE", "/queue/jobs/nope")):
+        for method, path in (("POST", "/queue/jobs/nope/move_up"), ("POST", "/queue/jobs/nope/hold"), ("DELETE", "/queue/jobs/nope"), ("POST", "/queue/jobs/nope/restart")):
             self.assertEqual(self.client.request(method, path, json={"index": 0} if "move" in path else None).status_code, 404, path)
         self.assertEqual(self.client.post("/queue/jobs/nope/move", json={"index": 0}).status_code, 404)
         self.assertEqual(self.call("GET", "/queue/jobs/{job_id}/outlook", path={"job_id": "nope"})["outlook"], "")

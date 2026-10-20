@@ -40,6 +40,8 @@ export type RunRow = {
   /** The machine that queued a job this computer runs for it, else "". */
   forOwner: string;
   state: string;
+  /** A failed job still in the queue's failed list: it can be restarted. */
+  restartable: boolean;
 };
 
 export type Inputs = { queue: Queue | undefined; runs: Run[] | undefined; clusterJobs: ClusterJob[] | undefined; nodes: ClusterNode[] | undefined };
@@ -116,6 +118,7 @@ function blank(id: string): RunRow {
   return {
     id, section: "scheduled", name: "", kindText: "", distributed: false, version: null, workers: [], coordinator: "", round: 0, rounds: 0,
     innerSteps: 0, step: 0, total: 0, trainLoss: null, valLoss: null, etaS: null, queueIndex: -1, held: false, note: "", forOwner: "", state: "",
+    restartable: false,
   };
 }
 
@@ -125,7 +128,9 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
   const name = (raw: string) => machineName(raw, nodes);
   const rows = new Map<string, RunRow>();
   const queued = queue?.up_next ?? [];
-  const jobs = new Map<string, Job>([...(queue?.job ? [queue.job] : []), ...queued].map((j) => [j.id, j]));
+  const failed = queue?.failed ?? [];
+  // Failed jobs are listed too, under Completed with their reason, so they can be restarted from here.
+  const jobs = new Map<string, Job>([...(queue?.job ? [queue.job] : []), ...queued, ...failed].map((j) => [j.id, j]));
 
   for (const run of runs ?? []) {
     const job = jobs.get(run.id);
@@ -211,6 +216,8 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
   }
 
   const all = [...rows.values()];
+  const failedIds = new Set(failed.map((j) => j.id));
+  for (const row of all) row.restartable = failedIds.has(row.id);
   const byIndex = (a: RunRow, b: RunRow) => (a.queueIndex < 0 ? Infinity : a.queueIndex) - (b.queueIndex < 0 ? Infinity : b.queueIndex);
   const startedAt = new Map((runs ?? []).map((r) => [r.id, r.started_at]));
   return [
