@@ -15,6 +15,7 @@ from studio_arch import model_spec_presets
 from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM, plan, step_seconds, throughput
 from studio_estimate import estimate
 from studio_glossary import MODULE_TERMS, glossary_text
+from studio_preset import room_choice, room_width
 from studio_slots import BLOCK_SLOTS
 from studio_spec import block_at, config_from_spec, set_block, validate_spec
 from studio_validate import errors, validate
@@ -121,7 +122,7 @@ def entry_for(slot, short, old, s):
     if "heads" in names and "heads" not in config:
         config["heads"] = s["H"]
     if "d_ff" in names and "d_ff" not in config and s["W"] != 1:
-        config["d_ff"] = FF[s["W"]] * s["d"]
+        config["d_ff"] = room_width(short, FF[s["W"]], s["d"])
     return {"id": short, "config": config}
 
 
@@ -154,10 +155,9 @@ def read_spec(spec):
     spec = validate_spec(spec)
     f, block = _facts(spec), spec["block"]
     word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
-    room = (block["channel"]["config"].get("d_ff") or 4 * f["width"]) / f["width"]
     parts = {slot: spec[slot]["id"] for slot in PART_SLOTS} | {slot: block[slot]["id"] for slot in BLOCK_SLOTS}
     own = {(o["index"], slot): o[slot]["id"] for o in spec["blocks"] for slot in BLOCK_SLOTS if slot in o}
-    return dict(L=f["blocks"], H=block["mixer"]["config"].get("heads") or 4, W=0 if room < 4 else 1 if room == 4 else 2, V=word,
+    return dict(L=f["blocks"], H=block["mixer"]["config"].get("heads") or 4, W=room_choice(block["channel"], f["width"]), V=word,
                 d=f["width"], T=f["context"], M=parts, O=own)
 
 
@@ -176,7 +176,7 @@ def write_spec(base, s, was=None):
     if s["H"] != was["H"] and "heads" in spec["block"]["mixer"]["config"]:
         spec["block"]["mixer"]["config"]["heads"] = s["H"]
     if s["W"] != was["W"] and "d_ff" in spec["block"]["channel"]["config"]:
-        spec["block"]["channel"]["config"]["d_ff"] = FF[s["W"]] * s["d"]
+        spec["block"]["channel"]["config"]["d_ff"] = room_width(spec["block"]["channel"]["id"], FF[s["W"]], s["d"])
     for key in sorted(set(s["O"]) | set(was["O"])):
         if s["O"].get(key) == was["O"].get(key):
             continue
@@ -288,7 +288,7 @@ def fits(c, ram=None):
 
 # ---------------------------------------------------------------------------------------------- ready-made designs
 
-PRESETS = (("starter", "starter_model"), ("tiny_llama_style", "llama_model"), ("gpt2_small_style", "gpt2_model"),
+PRESETS = (("modern", "modern_model"), ("classic", "classic_model"), ("starter", "starter_model"), ("tiny_llama_style", "llama_model"), ("gpt2_small_style", "gpt2_model"),
            ("gpt3_small_style", "gpt3_model"), ("gpt3_medium_style", "gpt3_model"))  # studio_arch key, GLOSSARY entry
 SLOW_STEP = 30  # seconds per step past which a design is called very slow
 
@@ -302,7 +302,8 @@ def gpt2_words_ready():
 def preset_specs(gpt2_words=False):
     """[(key, spec)] of studio_arch's presets in PRESETS order (Tiny Llama only when its modules are registered).
     With gpt2_words the GPT-2 and GPT-3 designs read text with GPT-2's word list, as the originals did."""
-    presets = model_spec_presets()
+    from studio_preset import legacy_spec, modern_spec
+    presets = dict(model_spec_presets(), modern=modern_spec("Modern preset")[0], classic=legacy_spec("Classic preset"))
     out = []
     for key, _term in PRESETS:
         if key not in presets:

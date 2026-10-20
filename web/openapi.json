@@ -10302,6 +10302,25 @@
         "title": "StackExchangeUpdate",
         "type": "object"
       },
+      "Start": {
+        "properties": {
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec",
+          "note"
+        ],
+        "title": "Start",
+        "type": "object"
+      },
       "StartRun": {
         "description": "What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.",
         "properties": {
@@ -15580,6 +15599,28 @@
           }
         },
         "summary": "Split Preview",
+        "tags": [
+          "design"
+        ]
+      }
+    },
+    "/design/start": {
+      "get": {
+        "description": "The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it.",
+        "operationId": "start_design_start_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Start"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Start",
         "tags": [
           "design"
         ]

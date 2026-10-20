@@ -16,7 +16,7 @@ FACTS = dict(data="d1", steps=300, tokens=9000, lr=0.001, start=None, extra=Fals
 
 
 def spec(blocks, **train):
-    s = D.write_spec(default_spec(), dict(D.read_spec(default_spec()), L=blocks))
+    s = D.write_spec(default_spec(preset="classic"), dict(D.read_spec(default_spec(preset="classic")), L=blocks))
     for path, value in train.items():
         slot, *keys = path.split("__")
         target = s["train"][slot]["config"] if slot != "run" else s["train"].setdefault("run", {})
@@ -88,7 +88,7 @@ class Confounders(unittest.TestCase):
         self.assertEqual(A.spec_changes(spec(2), spec(4, optimizer__lr=0.003)), (["learning rate"], False))
         self.assertEqual(A.spec_changes(spec(2), spec(4, run__steps=500)), (["steps"], False))
         self.assertEqual(A.spec_changes(spec(2), spec(4, run__steps=500, run__batch_size=16)), (["steps", "batch size"], False))
-        roomy = D.write_spec(default_spec(), dict(D.read_spec(default_spec()), L=4, W=2))
+        roomy = D.write_spec(default_spec(preset="classic"), dict(D.read_spec(default_spec(preset="classic")), L=4, W=2))
         self.assertEqual(A.spec_changes(spec(2), roomy), (["thinking room"], False))
 
     def test_run_differences_are_named(self):
@@ -264,9 +264,9 @@ class Services(unittest.TestCase):
     def test_the_page_passes_facts_and_compares_only_when_blocks_changed(self):
         calls = []
         vs = [version(1, 2, 3.0), version(2, 4, 2.5)]
-        D.expectations(D.read_spec(default_spec()), D.read_spec(default_spec()), vs, facts=lambda n: calls.append(n) or FACTS)
+        D.expectations(D.read_spec(default_spec(preset="classic")), D.read_spec(default_spec(preset="classic")), vs, facts=lambda n: calls.append(n) or FACTS)
         self.assertEqual(calls, [])
-        out = D.expectations(dict(D.read_spec(default_spec()), L=4), dict(D.read_spec(default_spec()), L=6), vs,
+        out = D.expectations(dict(D.read_spec(default_spec(preset="classic")), L=4), dict(D.read_spec(default_spec(preset="classic")), L=6), vs,
                              facts=lambda n: calls.append(n) or FACTS)
         self.assertEqual(calls, [1, 2])
         self.assertTrue(any("effect of the change" in t for t in out))

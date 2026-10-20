@@ -16,7 +16,7 @@ CFG = {'device': 'cpu', 'batch_size': 2}
 
 
 def spec():
-    s = default_spec()
+    s = default_spec(preset="classic")
     s['dims'].update(d_model=16, n_layer=1, n_ctx=32, dropout=0.)
     return validate_spec(s)
 
@@ -40,7 +40,7 @@ class QuickTest(unittest.TestCase):
         self.assertLess(abs(r['current']['steps'] - r['draft']['steps']), max(r['current']['steps'], r['draft']['steps']))
 
     def test_shrink_keeps_shape_and_carries_rate(self):
-        small = shrunk(validate_spec(default_spec()))
+        small = shrunk(validate_spec(default_spec(preset="classic")))
         self.assertEqual(small['dims']['d_model'], 16)
         self.assertEqual(small['train']['init']['id'], 'mup')
 

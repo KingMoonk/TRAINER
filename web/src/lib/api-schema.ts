@@ -1421,6 +1421,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start
+         * @description The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it.
+         */
+        get: operations["start_design_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/design/tower": {
         parameters: {
             query?: never;
@@ -7402,6 +7422,15 @@ export interface components {
             /** Sites */
             sites?: string[] | null;
         };
+        /** Start */
+        Start: {
+            /** Note */
+            note: string;
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * StartRun
          * @description What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.
@@ -10516,6 +10545,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_design_start_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Start"];
                 };
             };
         };

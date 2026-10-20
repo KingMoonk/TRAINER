@@ -1,6 +1,188 @@
 {
   "body": [
     {
+      "key": "modern",
+      "name": "Modern preset",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "d_ff": 240
+            },
+            "id": "swiglu"
+          },
+          "mixer": {
+            "config": {
+              "bias": false,
+              "heads": 4,
+              "kv_heads": 2
+            },
+            "id": "gqa"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "rmsnorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 64,
+          "dropout": 0.0,
+          "n_ctx": 256,
+          "n_layer": 2
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "Modern preset",
+        "position": {
+          "config": {
+            "base": 10000.0
+          },
+          "id": "rope"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.95,
+              "eps": 1e-08,
+              "lr": 0.001,
+              "weight_decay": 0.1
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "stable_fraction": 0.8,
+              "warmup": 20
+            },
+            "id": "wsd"
+          }
+        }
+      },
+      "term": "modern_model"
+    },
+    {
+      "key": "classic",
+      "name": "Classic preset",
+      "spec": {
+        "block": {
+          "channel": {
+            "config": {
+              "activation": "gelu",
+              "bias": true,
+              "d_ff": 0,
+              "layers": 1
+            },
+            "id": "mlp_gelu"
+          },
+          "mixer": {
+            "config": {
+              "bias": true,
+              "heads": 4
+            },
+            "id": "attention"
+          },
+          "norm": {
+            "config": {
+              "eps": 1e-05,
+              "placement": "pre"
+            },
+            "id": "layernorm"
+          }
+        },
+        "blocks": [],
+        "dims": {
+          "d_model": 64,
+          "dropout": 0.1,
+          "n_ctx": 256,
+          "n_layer": 2
+        },
+        "embedding": {
+          "config": {},
+          "id": "learned"
+        },
+        "head": {
+          "config": {},
+          "id": "tied"
+        },
+        "name": "Classic preset",
+        "position": {
+          "config": {},
+          "id": "learned"
+        },
+        "schema": 1,
+        "tokenizer": {
+          "config": {},
+          "id": "byte"
+        },
+        "train": {
+          "init": {
+            "config": {
+              "scale_residual": true,
+              "std": 0.02
+            },
+            "id": "gpt2"
+          },
+          "objective": {
+            "config": {},
+            "id": "ce"
+          },
+          "optimizer": {
+            "config": {
+              "beta1": 0.9,
+              "beta2": 0.999,
+              "eps": 1e-08,
+              "lr": 0.001,
+              "weight_decay": 0.01
+            },
+            "id": "adamw"
+          },
+          "precision": {
+            "config": {},
+            "id": "fp32"
+          },
+          "schedule": {
+            "config": {
+              "min_lr": 0.1,
+              "warmup": 20
+            },
+            "id": "cosine"
+          }
+        }
+      },
+      "term": "classic_model"
+    },
+    {
       "key": "starter",
       "name": "Starter decoder",
       "spec": {

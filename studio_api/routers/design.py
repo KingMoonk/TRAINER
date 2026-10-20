@@ -247,6 +247,19 @@ def presets() -> list[Preset]:
             for key, spec in design.preset_specs(design.gpt2_words_ready())]
 
 
+class Start(BaseModel):
+    spec: dict
+    note: str  # why the preset is not bfloat16 on this computer; empty when it is
+
+
+@router.get("/start")
+def start() -> Start:
+    """The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it."""
+    from studio_preset import modern_spec
+    spec, note = modern_spec("My network")
+    return Start(spec=spec, note=note)
+
+
 class PresetCost(BaseModel):
     params: int
     need: int
