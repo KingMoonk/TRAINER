@@ -67,6 +67,14 @@ class Recording(unittest.TestCase):
             self.assertEqual(record["seconds"], 8.)
             self.assertAlmostEqual(record["members"]["a"]["compute_s"] + 5. + record["members"]["a"]["sync_s"], 8.)
 
+    def test_transfer_speeds_are_recorded_in_mib_per_second_and_none_when_not_measured(self):
+        row = {"round": 0, "seconds": 10., "contributed": ["a", "b"], "node_seconds": {"a": 4., "b": 4.}, "node_tokens": {"a": 400, "b": 400},
+               "steps": {"a": 1, "b": 1}, "tokens": 800, "val_loss": 2., "loss": 2.1, "lr": .7, "outer_step_norm": .05, "delta_bytes": 4,
+               "theta_bytes": 8, "delta_dtype": "float16", "node_bytes": {"a": 2, "b": 2}, "node_rates": {"a": {"down": 3 * 2 ** 20, "up": 2 ** 19}}}
+        record = health.record(row, {"a": 2., "b": 2.}, {"a": 5., "b": 5.}, 4)
+        self.assertEqual((record["members"]["a"]["down_mb_s"], record["members"]["a"]["up_mb_s"]), (3., .5))
+        self.assertEqual((record["members"]["b"]["down_mb_s"], record["members"]["b"]["up_mb_s"]), (None, None))
+
     def test_a_member_without_a_recorded_arrival_has_no_wait(self):
         record = make_row(0, {"a": 4., "b": 6.}, {"a": 5.})["health"]
         self.assertIsNone(record["members"]["b"]["wait_s"])

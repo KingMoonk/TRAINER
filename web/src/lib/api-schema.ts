@@ -628,9 +628,10 @@ export interface paths {
         };
         /**
          * Params
-         * @description The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline. A member that holds
-         *     the weights of round `since` (the round before) gets the outer update that led to this round's instead, quantized to the run's
-         *     delta_dtype, as an .npz marked with a `__update_from__` entry; with fp32 runs, or after a pivot or polish, it gets the weights.
+         * @description The open round's global weights, fp32, as an .npz (a `Range` gets that part). `node`, who is asking, is noted on the round's
+         *     timeline. A member that holds the weights of round `since` (the round before) gets the outer update that led to this round's
+         *     instead, quantized to the run's delta_dtype, as an .npz marked with a `__update_from__` entry; with fp32 runs, or after a pivot or
+         *     polish, it gets the weights.
          */
         get: operations["params_collective__run__params_get"];
         put?: never;
@@ -694,8 +695,32 @@ export interface paths {
         /**
          * Delta
          * @description A member's pseudo-gradient (theta - theta_k) as an .npz, with its target-token count and steps. 409 when stale.
+         *     `down_bps` is how fast the member's weights came down this round, for the round's health.
          */
         post: operations["delta_collective__run__rounds__round__delta_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/rounds/{round}/delta/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delta Part
+         * @description One part of a member's pseudo-gradient, posted with the others at the same time (a long link holds one stream to a fraction of
+         *     its speed). `part` of `count` parts, the whole body `total` bytes with hash `sha256`; the part carries its own `part_sha256`.
+         *     The last part to arrive completes the body, which is checked against `sha256` and then taken as `delta` takes one (409 when stale,
+         *     400 when a part or the whole fails its hash: the member sends it again). `count=0` takes nothing: it asks whether this route exists.
+         */
+        post: operations["delta_part_collective__run__rounds__round__delta_parts_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -711,7 +736,7 @@ export interface paths {
         };
         /**
          * Shard
-         * @description One training shard (tokens, target flags and offsets) as an .npz.
+         * @description One training shard (tokens, target flags and offsets) as an .npz; a `Range` gets that part (a file response answers it).
          */
         get: operations["shard_collective__run__shards__shard__get"];
         put?: never;
@@ -5415,6 +5440,8 @@ export interface components {
         MemberHealth: {
             /** Compute S */
             compute_s: number;
+            /** Down Mb S */
+            down_mb_s?: number | null;
             /**
              * Idle S
              * @default 0
@@ -5430,6 +5457,8 @@ export interface components {
             tokens: number;
             /** Tokens Per S */
             tokens_per_s: number | null;
+            /** Up Mb S */
+            up_mb_s?: number | null;
             /** Wait S */
             wait_s: number | null;
         };
@@ -9744,6 +9773,60 @@ export interface operations {
                 steps: number;
                 seconds?: number;
                 loss?: number | null;
+                down_bps?: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__collective__Accepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delta_part_collective__run__rounds__round__delta_parts_post: {
+        parameters: {
+            query: {
+                node: string;
+                generation: number;
+                epoch: number;
+                tokens: number;
+                steps: number;
+                count: number;
+                total: number;
+                sha256: string;
+                part?: number;
+                part_sha256?: string;
+                seconds?: number;
+                loss?: number | null;
+                down_bps?: number;
                 /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
                 term: number;
             };

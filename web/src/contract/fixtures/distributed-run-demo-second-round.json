@@ -68,22 +68,26 @@
           "members": {
             "gpu-box": {
               "compute_s": 2.35,
+              "down_mb_s": null,
               "idle_s": 3.65,
               "loss": 5.0635,
               "steps": 100,
               "sync_s": 2.1,
               "tokens": 23030,
               "tokens_per_s": 9800.0,
+              "up_mb_s": null,
               "wait_s": 1.5499999999999998
             },
             "mac-mini": {
               "compute_s": 3.6,
+              "down_mb_s": null,
               "idle_s": 2.4,
               "loss": 5.0509,
               "steps": 100,
               "sync_s": 2.4,
               "tokens": 8640,
               "tokens_per_s": 2400.0,
+              "up_mb_s": null,
               "wait_s": 0.0
             }
           },

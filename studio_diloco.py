@@ -544,6 +544,7 @@ class Round:
     downloaded: dict = field(default_factory=dict)  # node -> bytes of theta or update it took
     contributions: dict = field(default_factory=dict)  # node -> (tokens, steps, seconds, loss, delta)
     uploaded: dict = field(default_factory=dict)  # node -> bytes of its delta body on the wire
+    rates: dict = field(default_factory=dict)  # node -> {"down", "up"}: bytes per second its weights came down and its change went up
     open: bool = True
     marks: dict = field(default_factory=dict)  # node -> {MARKS name: coordinator clock time}
     closed: float | None = None
@@ -1279,6 +1280,7 @@ class Coordinator:
                "theta_bytes": sum(current.downloaded.get(node, self.theta_nbytes) for node in current.members),  # what the members downloaded for the round (theta, or the outer update that led to it; full theta for one that has not yet)
                "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
+               "node_rates": {node: current.rates[node] for node in sent if node in current.rates},
                "lr": self.settings.outer_lr * self.rules.lr_scale, "tokens_per_second": tokens / max(1e-9, now - current.opened), "grad_norm": 0.,
                "outer_step_norm": norm}
         arrived = {n: current.marks[n]["delta_received"] - current.opened for n in sent if "delta_received" in current.marks.get(n, {})}
@@ -1412,10 +1414,11 @@ class Coordinator:
         if self.stopped or self.finished:
             raise Gone(f"Run {self.run} {'was stopped' if self.stopped else 'is finished'}.")
 
-    def params_bytes(self, number, node="", since=None):
+    def params_bytes(self, number, node="", since=None, count=True):
         """Theta of the open round as an .npz body; `node` (who is asking) is noted on the round's timeline as having taken it. A member
         that holds theta of the round before (`since`) is given the outer update that led to this round's theta instead (a quantized
-        body marked with UPDATE_KEY), unless the run sends fp32 or theta was replaced since (a pivot, a polish): then it is theta."""
+        body marked with UPDATE_KEY), unless the run sends fp32 or theta was replaced since (a pivot, a polish): then it is theta.
+        `count` False is a later part of a ranged download: the bytes are counted once, with the part that starts the body."""
         self.ensure_serving()
         with self.cond:
             self._touch()
@@ -1428,7 +1431,7 @@ class Coordinator:
                 if self._params[0] != number:
                     self._params = (number, encode_arrays(self.theta, "float32"))
                 body = self._params[1]
-            if node in self.current.members:
+            if count and node in self.current.members:
                 self.current.marks.setdefault(node, {}).setdefault("theta_taken", self.clock())
                 self.current.downloaded[node] = self.current.downloaded.get(node, 0) + len(body)
             return body
@@ -1547,7 +1550,7 @@ class Coordinator:
         shard -= first
         return shard_blob(windows, int(bounds[shard]), int(bounds[shard + 1]))
 
-    def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0, term=None):
+    def submit(self, number, node, generation, epoch, tokens, steps, delta, seconds=0., loss=None, size=0, term=None, rates=None):
         """Take a member's pseudo-gradient for the open round. Stale is raised (409) for any other round or generation, a
         member that is not in the round, a lease epoch that is not the member's, or a second contribution."""
         with self.cond:
@@ -1580,6 +1583,8 @@ class Coordinator:
                 return
             current.contributions[node] = (int(tokens), int(steps), float(seconds), loss, delta)
             current.uploaded[node] = int(size)
+            if rates:
+                current.rates[node] = rates
             marks = current.marks.setdefault(node, {})
             marks["delta_received"] = self.clock()
             marks.setdefault("delta_sent", marks["delta_received"])
@@ -2365,7 +2370,10 @@ class Member:
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
                  progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None, pause=None, memory_share=None,
-                 cache_dir=None):
+                 cache_dir=None, streams=None):
+        if streams is not None and hasattr(client, "streams"):
+            client.streams = max(1, int(streams))  # parallel streams per transfer (studio_peer.PeerClient); None keeps the client's default
+        self.down_bps = 0.  # how fast the latest weights came down, bytes per second; told to the coordinator with the change
         self.pause, self.memory_share = pause, memory_share  # this node's queue plan: its pause event and its share of memory
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.cache_dir = Path(cache_dir) if cache_dir else None  # shards by content hash, kept across runs (None: per-run copies only)
@@ -2744,7 +2752,9 @@ class Member:
                 try:
                     base, base_round = self.theta, self.theta_round  # read once: the training thread replaces them when it applies the round before
                     asking = {"round": want, "node": self.node, **({"since": base_round} if base and base_round is not None else {})}
+                    began = self.clock()
                     body = self._download(f"{self.base}/params", self._q(asking))
+                    self.down_bps = len(body) / max(1e-6, self.clock() - began)
                     origin = update_origin(body)
                     if origin is None:
                         theta = decode_arrays(body)
@@ -2951,6 +2961,8 @@ class Member:
             params["seconds"] = self._work_seconds(step - self.first_step)
         if self.loss is not None:
             params["loss"] = self.loss
+        if self.down_bps > 0:
+            params["down_bps"] = round(self.down_bps)
         self._post(self.round, body, params)
 
     def _encode(self, delta):
@@ -3115,6 +3127,8 @@ def main(argv=None):
     member.add_argument("--epoch", type=int, default=0, help="lease epoch (default 0)")
     member.add_argument("--overlap", action="store_true",
                         help="train the next round while this round's delta uploads and the next weights download (applied a round late)")
+    member.add_argument("--streams", type=int, default=None,
+                        help="parallel streams per transfer of weights, shards and changes (default: studio_peer.STREAMS; 1 is one stream)")
     member.add_argument("--root", default="", help="folder that holds data/remote_shards (default: the workspace root)")
     args = parser.parse_args(argv)
     import socket
@@ -3128,7 +3142,7 @@ def main(argv=None):
             if event.get("type") in ("metric", "info"):
                 print(json.dumps({key: event[key] for key in ("type", "step", "loss", "val_loss", "text") if key in event}), flush=True)
         run_member(PeerClient(args.coordinator), args.run, args.node or socket.gethostname(), args.epoch, root,
-                   Path(scratch) / "member", show, stop, overlap=args.overlap)
+                   Path(scratch) / "member", show, stop, overlap=args.overlap, streams=args.streams)
     except KeyboardInterrupt:
         stop.set()
     finally:

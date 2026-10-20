@@ -27,6 +27,12 @@ def _rate(tokens, seconds):
     return tokens / seconds if tokens and seconds and seconds > 0 else None
 
 
+def _mb_s(row, node, way):
+    """How fast `node`'s transfer went this round, in MiB per second ("down": its weights, "up": its change), None when not measured."""
+    bps = (row.get("node_rates", {}).get(node) or {}).get(way) or 0.
+    return bps / 2 ** 20 if bps > 0 else None
+
+
 def _mean(values):
     values = list(values)
     return sum(values) / len(values) if values else 0.
@@ -38,9 +44,10 @@ def record(row, losses, arrivals, theta_nbytes):
     arrived (a member without one has a wait of None). `theta_nbytes` is the weights' size in full precision.
 
     Per member: loss, steps, tokens, compute_s, tokens_per_s, wait_s (the slowest member's arrival minus its own), sync_s (the rest
-    of the round: download, upload, outer step, validation). compute, wait and sync add up to the round's seconds. idle_s is the
-    seconds of the round the member's GPU was not computing: the round minus compute_s, which wait and sync make up when the exchange
-    stops the steps, and which is near 0 when the exchange is overlapped with the next steps."""
+    of the round: download, upload, outer step, validation), down_mb_s and up_mb_s (the speed its weights came down and its change went
+    up, MiB per second; None when not measured). compute, wait and sync add up to the round's seconds. idle_s is the seconds of the
+    round the member's GPU was not computing: the round minus compute_s, which wait and sync make up when the exchange stops the
+    steps, and which is near 0 when the exchange is overlapped with the next steps."""
     seconds = float(row.get("seconds") or 0.)
     contributed = list(row.get("contributed", []))
     known = {node: arrivals[node] for node in contributed if arrivals.get(node) is not None}
@@ -52,7 +59,8 @@ def record(row, losses, arrivals, theta_nbytes):
         wait = max(0., last - known[node]) if last is not None and node in known else None
         members[node] = {"loss": losses.get(node), "steps": int(row.get("steps", {}).get(node) or 0), "tokens": tokens,
                          "compute_s": compute, "tokens_per_s": _rate(tokens, compute), "wait_s": wait,
-                         "sync_s": max(0., seconds - compute - (wait or 0.)), "idle_s": max(0., seconds - compute)}
+                         "sync_s": max(0., seconds - compute - (wait or 0.)), "idle_s": max(0., seconds - compute),
+                         "down_mb_s": _mb_s(row, node, "down"), "up_mb_s": _mb_s(row, node, "up")}
     slowest = max(members, key=lambda node: members[node]["compute_s"], default=None) if len(members) > 1 else None
     up = [row.get("node_bytes", {}).get(node, 0) for node in contributed]
     full = theta_nbytes or 0
