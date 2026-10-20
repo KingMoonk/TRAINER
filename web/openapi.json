@@ -287,6 +287,30 @@
         "title": "ChangesBody",
         "type": "object"
       },
+      "ChatSet": {
+        "description": "One set that holds conversations, which a run's teacher may take its prompts from.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count"
+        ],
+        "title": "ChatSet",
+        "type": "object"
+      },
       "CheckBody": {
         "properties": {
           "new_version": {
@@ -10370,6 +10394,19 @@
             "title": "Overlap",
             "type": "boolean"
           },
+          "polish_every": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polish Every"
+          },
           "replaces": {
             "anyOf": [
               {
@@ -10392,6 +10429,31 @@
             "minimum": 1.0,
             "title": "Rounds",
             "type": "integer"
+          },
+          "target_win_rate": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Win Rate"
+          },
+          "teacher": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Teacher"
           },
           "version": {
             "anyOf": [
@@ -15606,6 +15668,32 @@
         "summary": "Write",
         "tags": [
           "design"
+        ]
+      }
+    },
+    "/distributed/chat_sets": {
+      "get": {
+        "description": "The sets that hold conversations: the form's prompt sources for a run with a teacher (they are never trained on).",
+        "operationId": "chat_sets_distributed_chat_sets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatSet"
+                  },
+                  "title": "Response Chat Sets Distributed Chat Sets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Chat Sets",
+        "tags": [
+          "distributed"
         ]
       }
     },
