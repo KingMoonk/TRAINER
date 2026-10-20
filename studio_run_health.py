@@ -45,7 +45,9 @@ def record(row, losses, arrivals, theta_nbytes):
 
     Per member: loss, steps, tokens, compute_s, tokens_per_s, wait_s (the slowest member's arrival minus its own), sync_s (the rest
     of the round: download, upload, outer step, validation), down_mb_s and up_mb_s (the speed its weights came down and its change went
-    up, MiB per second; None when not measured). compute, wait and sync add up to the round's seconds."""
+    up, MiB per second; None when not measured). compute, wait and sync add up to the round's seconds. idle_s is the seconds of the
+    round the member's GPU was not computing: the round minus compute_s, which wait and sync make up when the exchange stops the
+    steps, and which is near 0 when the exchange is overlapped with the next steps."""
     seconds = float(row.get("seconds") or 0.)
     contributed = list(row.get("contributed", []))
     known = {node: arrivals[node] for node in contributed if arrivals.get(node) is not None}
@@ -57,7 +59,7 @@ def record(row, losses, arrivals, theta_nbytes):
         wait = max(0., last - known[node]) if last is not None and node in known else None
         members[node] = {"loss": losses.get(node), "steps": int(row.get("steps", {}).get(node) or 0), "tokens": tokens,
                          "compute_s": compute, "tokens_per_s": _rate(tokens, compute), "wait_s": wait,
-                         "sync_s": max(0., seconds - compute - (wait or 0.)),
+                         "sync_s": max(0., seconds - compute - (wait or 0.)), "idle_s": max(0., seconds - compute),
                          "down_mb_s": _mb_s(row, node, "down"), "up_mb_s": _mb_s(row, node, "up")}
     slowest = max(members, key=lambda node: members[node]["compute_s"], default=None) if len(members) > 1 else None
     up = [row.get("node_bytes", {}).get(node, 0) for node in contributed]
@@ -95,7 +97,8 @@ def summarize(history):
     losses = [value for value in _losses(rounds) if value is not None]
     recent = [r for r in rounds if len(r["members"]) > 1][-WINDOW:]
     out = {"rounds": rounds, "basis": BASIS, "aggregate_tokens_per_s": None, "baseline_node": "", "baseline_tokens_per_s": None, "speedup": None,
-           "comm_share": None, "wait_node": "", "wait_share": None, "straggler": "", "window": len(recent)}
+           "comm_share": None, "wait_node": "", "wait_share": None, "straggler": "", "window": len(recent),
+           "idle": {}, "idle_node": "", "idle_share": None}
     if losses and not math.isfinite(losses[-1]):
         out["verdict"] = _verdict(DIVERGING, "Diverging: the loss is no longer a number.")
     elif _rises(losses) >= DIVERGE:
@@ -126,15 +129,23 @@ def summarize(history):
             if m["wait_s"] is not None and r["seconds"] > 0:
                 waits.setdefault(node, []).append(m["wait_s"] / r["seconds"])
     shares = {node: sum(v) / len(v) for node, v in waits.items()}
+    idles = {}
+    for r in recent:
+        for node, m in r["members"].items():
+            if r["seconds"] > 0:
+                idles.setdefault(node, []).append(m.get("idle_s", (m["wait_s"] or 0.) + m["sync_s"]) / r["seconds"])
+    idle = {node: sum(v) / len(v) for node, v in idles.items()}
+    idler = max(idle, key=idle.get) if idle else ""
     waiter = max(shares, key=shares.get) if shares else ""
     last_ones = [r["slowest"] for r in recent if r["slowest"]]
     straggler = max(set(last_ones), key=last_ones.count) if last_ones else ""
     comm = sum(r["sync_s"] for r in recent) / seconds if seconds > 0 else None
     out.update(aggregate_tokens_per_s=aggregate, baseline_node=fastest, baseline_tokens_per_s=solo[fastest], speedup=speedup, comm_share=comm,
-               wait_node=waiter, wait_share=shares.get(waiter), straggler=straggler)
+               wait_node=waiter, wait_share=shares.get(waiter), straggler=straggler,
+               idle=idle, idle_node=idler, idle_share=idle.get(idler))
     if "verdict" in out:
         return out
-    held = bool(waiter) and shares[waiter] >= WAITING
+    held = bool(waiter) and shares[waiter] >= WAITING and idle.get(waiter, 1.) >= WAITING  # a member that trains on while it waits (overlap) is not held up
     wait_s = _mean(m["wait_s"] for r in recent for node, m in r["members"].items() if node == waiter and m["wait_s"] is not None)
     sync_s = sum(r["sync_s"] for r in recent) / len(recent)
     # the straggler's extra compute is what it costs the waiter; blame it only when that explains the wait

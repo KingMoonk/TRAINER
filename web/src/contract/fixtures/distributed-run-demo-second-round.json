@@ -54,6 +54,9 @@
       "baseline_tokens_per_s": null,
       "basis": "Tokens trained per second against the fastest member's measured compute speed alone; not loss per second.",
       "comm_share": null,
+      "idle": {},
+      "idle_node": "",
+      "idle_share": null,
       "rounds": [
         {
           "bytes_down": 8000000,
@@ -66,6 +69,7 @@
             "gpu-box": {
               "compute_s": 2.35,
               "down_mb_s": null,
+              "idle_s": 3.65,
               "loss": 5.0635,
               "steps": 100,
               "sync_s": 2.1,
@@ -77,6 +81,7 @@
             "mac-mini": {
               "compute_s": 3.6,
               "down_mb_s": null,
+              "idle_s": 2.4,
               "loss": 5.0509,
               "steps": 100,
               "sync_s": 2.4,

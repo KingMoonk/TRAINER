@@ -162,10 +162,15 @@ def join(request: Request, response: Response, run: str = Run, term: int = Term,
 
 
 @router.get("/params", response_class=Response, responses=BINARY)
-def params(request: Request, round: int, node: str = "", found: "studio_diloco.Coordinator" = Depends(member_call)):
-    """The open round's global weights, fp32, as an .npz (a `Range` gets that part). `node`, who is asking, is noted on the round's timeline."""
+def params(request: Request, round: int, node: str = "", since: int | None = None, found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """The open round's global weights, fp32, as an .npz (a `Range` gets that part). `node`, who is asking, is noted on the round's
+    timeline. A member that holds the weights of round `since` (the round before) gets the outer update that led to this round's
+    instead, quantized to the run's delta_dtype, as an .npz marked with a `__update_from__` entry; with fp32 runs, or after a pivot or
+    polish, it gets the weights."""
     try:
-        return binary(found, found.params_bytes(round, node), request)
+        span = request.headers.get("range")
+        later = bool(span) and not span.replace(" ", "").lower().startswith("bytes=0-")  # a later part of a ranged download: counted once, with the first
+        return binary(found, found.params_bytes(round, node, since, count=not later), request)
     except studio_diloco.Gone as exc:
         raise HTTPException(410, str(exc)) from None
 

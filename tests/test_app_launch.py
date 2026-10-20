@@ -59,7 +59,9 @@ class Launch(unittest.TestCase):
             reply.close()
         self.assertFalse(worker.is_alive(), "the server kept waiting for the open /events stream")
         with socket.socket() as s:
-            s.bind(("127.0.0.1", port))  # the port is free again
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn binds: the closed stream's TIME_WAIT does not hold the port
+            s.bind(("127.0.0.1", port))  # the port is free again: a new server can listen on it
+            s.listen()
 
     def test_without_the_web_build_it_says_so_and_opens_nothing(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(api_app, "WEB_OUT", Path(tmp) / "out"), \

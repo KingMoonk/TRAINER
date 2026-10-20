@@ -27,6 +27,7 @@ export function HealthPanel({ run }: { run: Run }) {
     { id: "baseline", label: fill(T.hBaseline, { node: health.baseline_node }), value: rateText(health.baseline_tokens_per_s), tip: T.hBaselineTip },
     { id: "comm", label: T.hComm, value: percentText(health.comm_share), tip: T.hCommTip },
     { id: "wait", label: fill(T.hWait, { node: health.wait_node }), value: percentText(health.wait_share), tip: T.hWaitTip },
+    { id: "idle", label: fill(T.hIdle, { node: health.idle_node }), value: percentText(health.idle_share), tip: T.hIdleTip },
   ].filter((readout) => readout.value !== "");
   return (
     <section aria-labelledby="run-health" className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5" data-testid="health-panel">

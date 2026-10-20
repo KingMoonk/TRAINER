@@ -185,7 +185,7 @@ class ReadModel(unittest.TestCase):
                     "delta_bytes": 2000, "theta_bytes": 4000, "seconds": 5., "steps": {"mac": 2, "box": 2}, "node_tokens": {"mac": 100, "box": 50},
                     "node_seconds": {"mac": 2., "box": 5.}, "node_bytes": {"mac": 1000, "box": 1000}, "delta_dtype": "float16"}]
         return {"state": "running", "round": 1, "rounds": 4, "generation": 1, "settings": {"rounds": 4, "inner_steps": 2, "outer_lr": .7,
-                                                                                         "outer_momentum": .9, "delta_dtype": "float16"},
+                                                                                         "outer_momentum": .9, "delta_dtype": "int8"},
                 "nodes": {"mac": {"state": "training", "missed": 0, "sent": True, "note": ""},
                           "box": {"state": "behind", "missed": 1, "sent": False, "note": "Missed 1 round in a row."}}, "history": history, **changes}
 
@@ -353,7 +353,7 @@ class Routes(unittest.TestCase):
 
     def test_the_form_starts_from_the_engines_defaults(self):
         self.assertEqual(self.client.get("/distributed/defaults").json(),
-                         {"rounds": 10, "inner_steps": 100, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "float16"})
+                         {"rounds": 10, "inner_steps": 100, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "int8"})
 
     def test_a_start_is_checked_with_a_sentence(self):
         self.assertEqual(self.start(dataset_ids=["nope"]).json()["detail"], "No text set nope.")
@@ -381,6 +381,44 @@ class Routes(unittest.TestCase):
         self.assertEqual(jobs[overlapped].params["member_options"], {"overlap": True})  # studio_jobs._member (owner) and invite (members) read it
         self.assertEqual(self.start(overlap="sometimes").status_code, 422)
         for run_id in (plain, overlapped):
+            self.client.post(f"/distributed/runs/{run_id}/stop")
+
+    def jobs(self):
+        return {j.id: j for j in [self.services.queue().job, *self.services.queue().up_next] if j is not None}
+
+    def test_overlap_is_on_by_default_for_a_run_with_a_member_on_another_machine_and_can_be_turned_off(self):
+        self.services.set_setting("nodes", ["127.0.0.1:9"])
+        ids = {name: self.start(rounds=2000, **body).json()["id"] for name, body in {
+            "alone": {}, "across": {"machines": ["127.0.0.1:9"]}, "off": {"machines": ["127.0.0.1:9"], "overlap": False},
+            "forced": {"overlap": True}}.items()}
+        jobs = self.jobs()
+        self.assertNotIn("member_options", jobs[ids["alone"]].params)  # one machine has no link to hide
+        self.assertEqual(jobs[ids["across"]].params["member_options"], {"overlap": True})
+        self.assertNotIn("member_options", jobs[ids["off"]].params)
+        self.assertEqual(jobs[ids["forced"]].params["member_options"], {"overlap": True})
+        for run_id in ids.values():
+            self.client.post(f"/distributed/runs/{run_id}/stop")
+
+    def test_the_number_format_of_the_traffic_is_a_field_of_the_start_and_defaults_to_int8(self):
+        default = self.start(rounds=2000).json()["id"]
+        int8 = self.start(rounds=2000, delta_dtype="float16").json()["id"]
+        jobs = self.jobs()
+        self.assertEqual((jobs[default].params["delta_dtype"], jobs[default].params["settings"]["delta_dtype"]), ("int8", "int8"))
+        self.assertEqual((jobs[int8].params["delta_dtype"], jobs[int8].params["settings"]["delta_dtype"]), ("float16", "float16"))
+        self.assertEqual(self.start(delta_dtype="bfloat16").status_code, 422)
+        for run_id in (default, int8):
+            self.client.post(f"/distributed/runs/{run_id}/stop")
+
+    def test_time_boxed_rounds_are_on_for_a_run_across_machines_and_can_be_turned_off(self):
+        self.services.set_setting("nodes", ["127.0.0.1:9"])
+        plain = self.start(rounds=2000, machines=["127.0.0.1:9"], time_box=False).json()["id"]
+        boxed = self.start(rounds=2000, machines=["127.0.0.1:9"]).json()["id"]
+        alone = self.start(rounds=2000).json()["id"]
+        jobs = self.jobs()
+        self.assertEqual((jobs[plain].params["time_box"], jobs[plain].params["settings"]["time_box"]), (False, False))
+        self.assertEqual((jobs[boxed].params["time_box"], jobs[boxed].params["settings"]["time_box"]), (True, True))
+        self.assertFalse(jobs[alone].params["time_box"])
+        for run_id in (plain, boxed, alone):
             self.client.post(f"/distributed/runs/{run_id}/stop")
 
     def test_the_demo_run_is_live_with_a_cuda_and_an_mps_member_and_one_can_be_stopped(self):
