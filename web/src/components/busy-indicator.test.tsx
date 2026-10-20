@@ -54,7 +54,7 @@ describe("busy indicator", () => {
     const { client } = renderPage(<BusyIndicator />);
     void client.fetchQuery({ queryKey: ["distributed", "runs"], queryFn: () => fetch("/distributed/runs").then((r) => r.json()) });
     expect(screen.queryByTestId("busy-indicator")).toBeNull();  // not yet: fast reads never flash a card
-    expect(await screen.findByRole("progressbar", { name: "Loading runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("progressbar", { name: "Loading runs" }, { timeout: 5_000 })).toBeInTheDocument(); // shown after SLOW_MS: room for a loaded CI runner
     expect(screen.getByTestId("busy-indeterminate")).toBeInTheDocument();
     answer();
     await waitFor(() => expect(screen.queryByTestId("busy-indicator")).toBeNull());

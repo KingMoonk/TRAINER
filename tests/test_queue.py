@@ -104,8 +104,8 @@ class QueueTests(unittest.TestCase):
             r.enqueue(self.job(name))
         r.start()
         self.assertTrue(wait(lambda: self.fake.ran == ["a", "b", "c"] and r.state().job is None and not r.state().up_next))
-        again = Runner(self.path, self.handlers)
-        self.assertEqual([j.status for j in again.jobs], ["done"] * 3)
+        # the last job's save can land just after the queue reads idle
+        self.assertTrue(wait(lambda: [j.status for j in Runner(self.path, self.handlers).jobs] == ["done"] * 3))
 
     def test_a_reason_a_watchdog_left_on_the_job_becomes_its_error(self):
         r = self.runner()

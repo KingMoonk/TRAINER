@@ -1029,6 +1029,13 @@ class FakeServices(Services):
         coordinator = FakeCoordinator(run, settings, clock=clock, unit=unit)
         studio_diloco.register(run.id, coordinator)
         coordinator.start()
+
+        def tell():  # the fake moves with the clock, not on reports, so it says its view changed as often as a real coordinator may
+            while studio_diloco.COORDINATORS.get(run.id) is coordinator and not (coordinator.finished or coordinator.stopped):
+                self.emit("run", {"run": run.id})
+                time.sleep(.5)  # studio_remote.RUN_EVENT_EVERY
+
+        threading.Thread(target=tell, name="demo-run-events", daemon=True).start()
         return run
 
     def _run_job(self, job):
@@ -2306,7 +2313,7 @@ class WorkspaceServices(Services):
             return ("failed", failed.error) if failed is not None else ("", "")
 
         probe = studio_selftest.AppProbe(make_job, enqueue, status, self.remove, app_version())
-        manager.start(studio_selftest.SelfTest(probe, addresses, peer_url, own.hostname))
+        manager.start(studio_selftest.SelfTest(probe, addresses, peer_url, own.hostname, on_change=lambda: self.emit("selftest", {})))
         return manager.state()
 
     def cluster_selftest(self):

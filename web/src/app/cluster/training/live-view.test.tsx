@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import { mockApi } from "@/test/network";
+import { emit, mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import type { Run } from "./logic";
 import TrainingPage from "./page";
@@ -209,12 +209,17 @@ describe("Training tab: more than one run", () => {
   });
 });
 
-describe("Training tab: polling", () => {
-  test("re-reads the runs about every second while one is going", async () => {
+describe("Training tab: live updates", () => {
+  test("re-reads the runs when the coordinator says one changed, without polling", async () => {
     const calls = server([midRound()]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     await screen.findByTestId("run-r1");
-    await waitFor(() => expect(calls.runs).toBeGreaterThanOrEqual(3), { timeout: 4000 });
+    await waitFor(() => expect(calls.runs).toBeGreaterThanOrEqual(1));
+    const before = calls.runs;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(calls.runs).toBe(before);
+    emit("run", { run: "r1" });
+    await waitFor(() => expect(calls.runs).toBeGreaterThan(before));
   });
 
   test("a finished run names the version it saved; a stopped one says nothing", async () => {

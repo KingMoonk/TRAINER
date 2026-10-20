@@ -1171,6 +1171,12 @@ class Coordinator:
         """Append to the bounded event log the live view shows, on this coordinator's own clock (seconds since it started)."""
         self.event_seq += 1
         self.events.append({"seq": self.event_seq, "t": self.clock() - self.started, "kind": kind, "node": node, "round": number, "text": text})
+        self._changed()
+
+    def _changed(self):
+        """Tell the watchers (`watch`) that what the live view shows of this run changed. Each must be quick: it runs under the lock."""
+        for watcher in list(WATCHERS):
+            watcher(self)
 
     def _advance(self):
         drules.accrue(self.rules, self.clock(), self._counting())
@@ -1255,6 +1261,7 @@ class Coordinator:
             ids += self.stages.replay_ids(self, self.next_round)  # a share of the earlier sources, so the new text does not make it forget them
         self.current = Round(self.next_round, self.generation, active, deal_ids(self.cfg["seed"], self.next_round, active, ids),
                              now, now + window, window, steps=steps, train_seconds=train)
+        self._changed()
         return True
 
     def _close(self, current, now):
@@ -1529,6 +1536,7 @@ class Coordinator:
                 report["samples"].append({"step": int(step), "t": now - current.opened, "loss": loss, "tokens_per_second": tokens_per_second})
                 del report["samples"][:-SAMPLES_KEPT]
             report.update(round=number, phase=phase, step=int(step), loss=loss, tokens_per_second=tokens_per_second, at=now)
+            self._changed()
             return True
         finally:
             self.lock.release()
@@ -1613,6 +1621,7 @@ class Coordinator:
             marks = current.marks.setdefault(node, {})
             marks["delta_received"] = self.clock()
             marks.setdefault("delta_sent", marks["delta_received"])
+            self._changed()
             self._advance()
             self.cond.notify_all()
 
@@ -2219,6 +2228,7 @@ def _evaluator(model, val, size, limit=None):
 # ---- coordinators of this process -------------------------------------------------------------------------------------
 
 COORDINATORS = {}  # run id -> Coordinator: what studio_api.routers.collective serves
+WATCHERS = []  # callables taking a Coordinator whose live view changed (studio_remote.Cluster turns them into `run` events)
 IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten when another starts
 
 
@@ -2315,6 +2325,12 @@ def default_versus(settings, new, old, prompts, device, stop):
     teacher = _teacher(settings, stop)
     teacher.models()  # RuntimeError when Ollama is not reachable
     return compare_checkpoints(new, old, prompts, teacher.judge_teacher(), device=device, stop=stop)["win_rate"]
+
+
+def watch(watcher):
+    """Call `watcher(coordinator)` whenever a coordinator's live view changes; returns the call that stops it."""
+    WATCHERS.append(watcher)
+    return lambda: watcher in WATCHERS and WATCHERS.remove(watcher)
 
 
 def register(run, coordinator):
