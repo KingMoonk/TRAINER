@@ -276,9 +276,17 @@ machine: the training windows of that run go to its members over the tailnet, no
   will have, for example 64), each a token-window archive in the `studio_shards` format.
 - Each round, shards are dealt to live members by a deterministic rule of (seed, round, membership). A member samples only
   from its shards, with a sampler seeded by (seed, rank, round), so a rerun with the same membership history is reproducible.
-- A member downloads a shard once (`GET /collective/{run}/shards/{s}`), caches it under `data/remote_shards/<run>/`, and
-  deletes the cache when the run ends. Validation windows stay on the coordinator and its replicas, which never train on
-  them.
+- A round downloads what its steps draw, not the corpus. The member takes the shards dealt to it in an order shuffled by
+  (seed, rank, round) and stops once their windows cover the round's steps x batch size x accumulation, then samples only
+  from those; the first step starts after the first shard. A replica fetches the rest in the background (it must hold every
+  shard to take over).
+- Shards are cached by content: the coordinator serves each shard from a file it builds once (`served_shards/`) and
+  names its sha256 (`GET /shards/{s}/hash`), and the member keeps the shard under `data/shard_cache/` by that hash, across
+  runs. A shard it already holds with that hash is not downloaded again. There is no eviction. Validation windows stay on
+  the coordinator and its replicas, which never train on them.
+- A stopped, finished or failed run answers `/params` and `/shards` with `410`; a member treats it as the run being over and
+  leaves. A member's stop is checked before each shard and mid-body (the client reads 1 MiB at a time), so it takes effect
+  within a block.
 
 ### Wire protocol
 
@@ -289,7 +297,8 @@ All routes are on the coordinator's API, behind node-to-node auth, under `/colle
 | --- | --- | --- |
 | `POST /join` | node, lease epoch | rank, generation, round, config, tokenizer, shard ids |
 | `GET /params?round=r` | | the round's `θ`, fp32 `.npz` (downloads are the fast direction on Starlink) |
-| `GET /shards/{s}` | | one training shard |
+| `GET /shards/{s}` | | one training shard, streamed from a file built once |
+| `GET /shards/{s}/hash` | | `{hash}`: the sha256 of that shard's body |
 | `POST /rounds/{r}/delta` | generation, epoch, tokens, steps; `Δk` as fp16, fp32 or int8 `.npz` (int8: per-tensor scale beside the values) | `202`, or `409` when stale |
 | `GET /rounds/{r}` | | `open` or `closed` with the next round; a `pending` round long-polls up to 30 s |
 | `POST /progress` | node, generation, epoch, round, phase (`downloading`, `loading`, `training`, `uploading`, `waiting`), step, loss, tokens/s | `{accepted}`, or `409` for a stale generation or epoch, a non-member, or a closed round |

@@ -48,6 +48,10 @@ class PeerError(Exception):
         self.status, self.detail = status, detail
 
 
+class Cancelled(PeerError):
+    """A download the caller cancelled (PeerClient.get_bytes `cancel`)."""
+
+
 def base_url(address):
     """The scheme, host and port of a configured node: a URL as given (any path dropped, so `https://box.tail1234.ts.net` stays on
     443, where `tailscale serve` listens), a bare name on DEFAULT_PORT."""
@@ -83,8 +87,12 @@ class PeerClient:
     def delete_json(self, path, params=None, timeout=None):
         return _json(self._call("DELETE", path, params, None, None, timeout))
 
-    def get_bytes(self, path, params=None, timeout=None):
-        return self._call("GET", path, params, None, None, timeout)
+    interruptible = True  # get_bytes takes `cancel`
+
+    def get_bytes(self, path, params=None, timeout=None, cancel=None):
+        """GET a binary body into memory, BLOCK bytes at a time. `cancel()`, when it returns true between blocks, ends the call with
+        Cancelled (no retry), so a download of tens of megabytes can be stopped within a block's time."""
+        return self._call("GET", path, params, None, None, timeout, None, cancel)
 
     def get_file(self, path, target, params=None, timeout=None):
         """GET a binary body straight into the file `target`, a block at a time (a version's weights are too big to hold in memory).
@@ -98,22 +106,22 @@ class PeerClient:
         """POST a binary body (an .npz); extra fields go in the query string."""
         return _json(self._call("POST", path, params, bytes(data), "application/octet-stream", timeout))
 
-    def _call(self, method, path, params, data, content_type, timeout, read=None):
+    def _call(self, method, path, params, data, content_type, timeout, read=None, cancel=None):
         try:
-            return self._send(method, path, params, data, content_type, timeout, read)
+            return self._send(method, path, params, data, content_type, timeout, read, cancel)
         except PeerError as first:
             if first.status is None or not is_page(first.status, first.detail) or self.base.endswith(API_PREFIX):
                 raise
             self.base += API_PREFIX  # a web page, not the API: the node is in `make dev`
             try:
-                return self._send(method, path, params, data, content_type, timeout, read)
+                return self._send(method, path, params, data, content_type, timeout, read, cancel)
             except PeerError as second:
                 if second.status is not None and is_page(second.status, second.detail):  # no API under /api either
                     self.base = self.base[:-len(API_PREFIX)]
                     raise first from None
                 raise
 
-    def _send(self, method, path, params, data, content_type, timeout, read):
+    def _send(self, method, path, params, data, content_type, timeout, read, cancel=None):
         url = self.url(path, params)
         request = urllib.request.Request(url, data=data, method=method)
         if content_type:
@@ -138,7 +146,7 @@ class PeerClient:
                         note()
                         raise PeerError(f"{self.address} answered {status} to {method} /{path.lstrip('/')} with a web page, not the API",
                                         status=status, detail=detail)
-                    result = read(response) if read else response.read()
+                    result = read(response) if read else _slurp(response, cancel)
                 seen.update(status=status, response=None if read else result, response_bytes=None if read else len(result))
                 note()
                 return result
@@ -156,6 +164,18 @@ class PeerClient:
                     raise PeerError(f"{self.address} did not answer {method} /{path.lstrip('/')}: {reason}") from None
                 self._sleep(delay * (1 + self._rng.random() / 2))
                 delay *= 2
+
+
+def _slurp(response, cancel=None):
+    """The whole body, read BLOCK bytes at a time (one unbuffered read of a big body is slow over a long link)."""
+    parts = []
+    while True:
+        if cancel is not None and cancel():
+            raise Cancelled("The download was cancelled.")
+        chunk = response.read(BLOCK)
+        if not chunk:
+            return b"".join(parts)
+        parts.append(chunk)
 
 
 def _html(response):

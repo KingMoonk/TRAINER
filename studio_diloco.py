@@ -130,6 +130,10 @@ class Stale(RuntimeError):
     """A request from an earlier round, generation or lease epoch, or into a closed or full run: the API answers 409."""
 
 
+class Gone(RuntimeError):
+    """The run is over (stopped or finished) on this coordinator: it hands out no more weights or shards (the API answers 410)."""
+
+
 class StaleTerm(Stale):
     """A request under a lower term than the coordinator's, or a coordinator that has seen a higher term and no longer coordinates
     the run. `term` is the highest term involved. The message begins TERM_STALE so a member can tell it from the other 409s."""
@@ -260,6 +264,14 @@ def deal_ids(seed, round_number, members, ids):
 def deal_shards(seed, round_number, members, shard_count, first=0):
     """deal_ids for the shards first..first+shard_count-1 (one data source's)."""
     return deal_ids(seed, round_number, members, range(first, first + shard_count))
+
+
+def round_order(seed, rank, number, dealt):
+    """The order a member takes its dealt shards in for a round: shuffled by (seed, rank, round), so the shards it trains on differ
+    from round to round while the choice stays the same on every run of the deal."""
+    order = sorted(dealt)
+    random.Random(f"{seed}:{rank}:{number}:order").shuffle(order)
+    return order
 
 
 def sampler_seed(seed, rank, round_number):
@@ -405,6 +417,19 @@ def install_shard(root, shard, blob, vocab_size):
     return studio_model.MappedWindows(*found["train"])
 
 
+def cache_name(digest, vocab_size):
+    """The name of a shard in the cache that outlives runs: its content hash and the vocabulary its tokens are stored for."""
+    return f"{digest[:32]}-{vocab_size}"
+
+
+def cached_shard(root, digest, vocab_size):
+    """The windows of the shard with content hash `digest` held under `root` (install_shard's folder), or None."""
+    import studio_model
+    import studio_shards
+    found = studio_shards.load(root, f"shard{cache_name(digest, vocab_size)}", vocab_size)
+    return None if found is None else studio_model.MappedWindows(*found["train"])
+
+
 class Windows:
     """The windows a member trains on: several WindowStores read as one sequence, swapped when a round deals new shards."""
 
@@ -505,6 +530,7 @@ class Coordinator:
         self.versus, self.versus_on = default_versus, True  # the head-to-head of target_win_rate; off on a coordinator made from a replica (no prompts, no start.npz)
         self._polish_stop = threading.Event()  # set by stop, step-down and release: the polish in flight is discarded
         self.lessons, self.lesson_windows = [], {}  # [{shard, round, rows, status}] in shard-id order; shard id -> its windows
+        self.blobs, self.hashes, self.blob_lock = {}, {}, threading.Lock()  # shard id -> the file its .npz body was written to (once); see shard_path
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
         self.started, self.theta_nbytes = clock(), sum(value.nbytes for value in self.theta.values())  # the zero of the event log; θ's size
@@ -1285,8 +1311,14 @@ class Coordinator:
                     return view
             return first
 
+    def ensure_serving(self):
+        """Gone when the run is stopped or finished: a member still asking for weights or shards should leave."""
+        if self.stopped or self.finished:
+            raise Gone(f"Run {self.run} {'was stopped' if self.stopped else 'is finished'}.")
+
     def params_bytes(self, number, node=""):
         """Theta of the open round as an .npz body; `node` (who is asking) is noted on the round's timeline as having taken it."""
+        self.ensure_serving()
         with self.cond:
             self._touch()
             self._advance()
@@ -1369,6 +1401,34 @@ class Coordinator:
             return True
         finally:
             self.lock.release()
+
+    def shard_path(self, shard):
+        """The shard's .npz body as a file, written the first time it is asked for and served from there after: building it takes
+        a copy of the windows through np.savez, which every member (and every replica) of the run would otherwise make again."""
+        with self.blob_lock:
+            path = self.blobs.get(shard)
+            if path is None or not path.is_file():
+                body = self.shard_bytes(shard)  # KeyError for a shard there is not
+                folder = self.directory / "served_shards"
+                folder.mkdir(parents=True, exist_ok=True)
+                path = folder / f"shard{shard}.npz"
+                temporary = path.with_suffix(".tmp")
+                temporary.write_bytes(body)
+                temporary.replace(path)
+                self.blobs[shard] = path
+            return path
+
+    def shard_hash(self, shard):
+        """The sha256 of the shard's .npz body: a member that holds a shard with this hash need not download it."""
+        with self.blob_lock:
+            known = self.hashes.get(shard)
+        if known is None:
+            digest = hashlib.sha256()
+            with self.shard_path(shard).open("rb") as stream:
+                for block in iter(lambda: stream.read(1 << 20), b""):
+                    digest.update(block)
+            known = self.hashes[shard] = digest.hexdigest()
+        return known
 
     def shard_bytes(self, shard):
         if shard in self.lesson_windows:  # a lesson shard: its ids come after the data sources'
@@ -2183,9 +2243,11 @@ class Member:
     inject their own) while the next round's steps run, and is joined at the end of that round, where its theta is applied."""
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
-                 progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None, pause=None, memory_share=None):
+                 progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None, pause=None, memory_share=None,
+                 cache_dir=None):
         self.pause, self.memory_share = pause, memory_share  # this node's queue plan: its pause event and its share of memory
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
+        self.cache_dir = Path(cache_dir) if cache_dir else None  # shards by content hash, kept across runs (None: per-run copies only)
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
         self.replica_epoch, self.replica_guard = 0, threading.Lock()  # a write to replica_dir is void once the epoch it began under is over
@@ -2197,7 +2259,7 @@ class Member:
         self.warm, self.busy, self.timed = False, 0., 0  # stepped(): the first step is warm-up; the time and count of the timed steps of the round
         self.term, self.superseded = 0, 0  # the coordinator's term (0: not learnt yet); superseded: a higher term seen, so nothing more goes to this coordinator
         self.loss = None
-        self.shards = {}
+        self.shards, self.downloaded = {}, 0  # downloaded: bytes of shards fetched so far
         # what it tells the coordinator (POST /progress): the phase, its step in the round and the latest loss and speed
         self.progress, self.phase, self.report_round, self.round_step, self.reported_step = progress, "waiting", None, 0, 0
         self.reported_phase = None
@@ -2364,7 +2426,7 @@ class Member:
         try:  # the app on this node publishes it as this member's own fact (studio_facts, "progress" and "shards")
             self.emit({"type": "diloco_member", "run": self.run, "node": self.node, "term": self.term, "round": self.report_round,
                        "phase": phase, "step_in_round": step, "round_steps": self.round_steps, "loss": body["loss"],
-                       "tokens_per_second": body["tokens_per_second"], "shard_ids": sorted(list(self.shards))})
+                       "tokens_per_second": body["tokens_per_second"], "shard_ids": sorted(list(self.shards)), "downloaded_bytes": self.downloaded})
         except Exception:  # noqa: BLE001 - a courtesy, like the report itself
             pass
         return True
@@ -2550,39 +2612,109 @@ class Member:
                 if not quiet:
                     self._phase("downloading")
                 try:
-                    body = self._call(lambda: self.client.get_bytes(f"{self.base}/params", self._q({"round": want, "node": self.node})))
+                    body = self._download(f"{self.base}/params", self._q({"round": want, "node": self.node}))
                     theta = decode_arrays(body)
-                    if view.get("replica") and self.replica_dir is not None:
+                    replica = bool(view.get("replica") and self.replica_dir is not None)
+                    if replica:
                         self._replicate(want, body, view["rank"])
                     elif self.replica_dir is not None:
                         self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
-                    shards = [int(s) for s in view["shards"]]
-                    if not quiet and any(shard not in self.shards for shard in shards):
+                    dealt = [int(s) for s in view["shards"]]
+                    if not quiet and dealt and round_order(self.info["seed"], view["rank"], want, dealt)[0] not in self.shards:
                         self._phase("loading")  # θ is in; the text it has not held yet comes next
-                    self._fetch(shards)
+                    shards = self._gather(dealt, want, view["rank"], int(view.get("steps", 0)))
+                    if self.stop.is_set() or self.finished:
+                        return None
+                    if replica:
+                        self._start_prefetch()
                 except PeerError as exc:
+                    if self.stop.is_set():
+                        return None
                     if exc.status == 409:  # the round moved on while this member was downloading
                         want = self.info["round"]
                         continue
+                    if exc.status == 410:  # the run ended (stopped, finished) while this member was downloading
+                        self.emit({"type": "info", "text": f"The run is over: {exc.detail}"})
+                        self.finished = True
+                        return None
                     raise
                 return Entered(want, theta, view["generation"], view["rank"], view["deadline_s"], shards, want != asked,
                                float(view.get("lr_scale", 1.)), int(view.get("steps", 0)))
         return None
 
-    def _fetch(self, wanted):
-        for shard in wanted:
+    def _download(self, path, params):
+        """GET a binary body that ends early (Cancelled) when this member is stopped, where the client can (studio_peer.PeerClient)."""
+        if getattr(self.client, "interruptible", False):
+            return self._call(lambda: self.client.get_bytes(path, params, cancel=self.stop.is_set))
+        return self._call(lambda: self.client.get_bytes(path, params))
+
+    def _gather(self, dealt, number, rank, steps):
+        """The shards round `number` trains on, fetched in order: the dealt ones shuffled by (seed, rank, round), taken until their
+        windows cover what the round draws (its steps * batch size * accumulation). The rest are not fetched (a replica gets them in
+        the background), so a round's download follows its steps, not the corpus, and the first steps start after the first shard.
+        The order and the sizes are data, not what this member holds, so the choice is the same on every run of the deal."""
+        cfg = self.info["config"]
+        need = (steps or self.info["inner_steps"]) * int(cfg.get("batch_size", 1)) * int(cfg.get("accumulation", 1))
+        order = round_order(self.info["seed"], rank, number, dealt)
+        chosen, have = [], 0
+        for shard in order:
+            if self.stop.is_set() or self.finished:
+                break
             self._shard(shard)
+            chosen.append(shard)
+            have += len(self.shards[shard])
+            if have >= need:
+                break
+        return chosen
 
     def _shard(self, shard):
-        """Download and install one shard unless it is held; the training thread and a replica's prefetch may both want it."""
+        """Install one shard unless it is held; the training thread and a replica's prefetch may both want it. With a `cache_dir`, the
+        coordinator is asked for the shard's content hash first, and a shard this node already holds under that hash (from an earlier
+        run) is used without downloading it."""
+        from studio_peer import PeerError
         with self.replica_lock:
             lock = self.shard_locks.setdefault(shard, threading.Lock())
         with lock:
-            if shard not in self.shards:
-                blob = self._call(lambda: self.client.get_bytes(f"{self.base}/shards/{shard}", self._q()))
-                self.shards[shard] = install_shard(self.shard_dir, shard, blob, self.info["vocab_size"])
+            if shard in self.shards or self.stop.is_set() or self.finished:
+                return
+            vocabulary, digest = self.info["vocab_size"], None
+            if self.cache_dir is not None:
+                try:
+                    answer = self._call(lambda: self.client.get_json(f"{self.base}/shards/{shard}/hash", self._q()))
+                    digest = answer.get("hash") if isinstance(answer, dict) else None
+                except PeerError as exc:
+                    if exc.status != 404:  # 404: a coordinator that does not name its shards
+                        raise
+                held = cached_shard(self.cache_dir, digest, vocabulary) if digest else None
+                if held is not None:
+                    self.shards[shard] = held
+                    self._keep_for_failover(digest, shard)
+                    return
+            blob = self._download(f"{self.base}/shards/{shard}", self._q())
+            self.downloaded += len(blob)
+            if self.cache_dir is not None:
+                digest = hashlib.sha256(blob).hexdigest()
+                self.shards[shard] = install_shard(self.cache_dir, cache_name(digest, vocabulary), blob, vocabulary)
+                self._keep_for_failover(digest, shard)
+            else:
+                self.shards[shard] = install_shard(self.shard_dir, shard, blob, vocabulary)
+
+    def _keep_for_failover(self, digest, shard):
+        """A replica must hold its shards where a coordinator made from it looks (from_replica): copy the cached folder there."""
+        if self.replica_dir is None:
+            return
+        target = self.shard_dir / f"shard{shard}"
+        if not target.exists():
+            self.shard_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(Path(self.cache_dir) / f"shard{cache_name(digest, self.info['vocab_size'])}", target)
 
     # -- a replica
+    def _start_prefetch(self):
+        """Once the round's own shards are in, have a replica fetch the rest in the background (see _prefetch)."""
+        if not self.prefetched and (self.prefetch is None or not self.prefetch.is_alive()):
+            self.prefetch = threading.Thread(target=self._prefetch, args=(self.replica_epoch,), name=f"diloco-replica-{self.node}", daemon=True)
+            self.prefetch.start()
+
     def _replicate(self, number, theta, rank=0):
         """Keep theta (the bytes just downloaded) of round `number` with the outer momentum and diloco.json that go with it, replacing
         the round before; then, once, start fetching the validation windows and the shards this member lacks in the background. A round
@@ -2602,9 +2734,6 @@ class Member:
             self.holding = (number, rank)
             self.emit({"type": "info", "text": f"Holding round {number} as a replica."})
             self._announce()
-        if not self.prefetched and (self.prefetch is None or not self.prefetch.is_alive()):
-            self.prefetch = threading.Thread(target=self._prefetch, args=(self.replica_epoch,), name=f"diloco-replica-{self.node}", daemon=True)
-            self.prefetch.start()
 
     def _replica_paused(self):
         """The run is paused and no round is open, so the replica's copy of diloco.json (fetched when the round before opened) does not
@@ -2660,7 +2789,7 @@ class Member:
                 if not self._write_replica(epoch, "validation.npz", self._call(lambda: self.client.get_bytes(f"{self.base}/validation", self._q()))):
                     return
             for shard in range(self.info["shard_count"]):
-                if self.stop.is_set() or self.halt.is_set() or epoch != self.replica_epoch:
+                if self.stop.is_set() or self.halt.is_set() or self.finished or epoch != self.replica_epoch:
                     return
                 self._shard(shard)
             with self.replica_guard:
@@ -2825,7 +2954,7 @@ def run_member(client, run, node, epoch, root, directory, emit, stop, **options)
     <root>/data/remote_shards/<run>/ and deleted at the end; a replica keeps the latest round under <root>/data/replicas/<run>/ and
     deletes it then too."""
     member = Member(client, run, node, epoch, Path(root) / "data" / "remote_shards" / run, stop, emit=emit,
-                    replica_dir=Path(root) / "data" / "replicas" / run, **options)
+                    replica_dir=Path(root) / "data" / "replicas" / run, cache_dir=Path(root) / "data" / "shard_cache", **options)
     return member.work(directory, emit)
 
 

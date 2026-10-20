@@ -211,7 +211,7 @@ class Training(Directory):
         inner, rounds = 3, 4
         coordinator = self.train(1, "solo", inner_steps=inner, rounds=rounds, outer_lr=1., outer_momentum=0.)
         self.assertEqual([len(r["contributed"]) for r in coordinator.history], [1] * rounds)
-        hook = test_diloco.Hooked(coordinator, inner, rounds)
+        hook = test_diloco.Hooked(coordinator, inner, rounds, lag=1)
         studio_model.train({**support.CONFIG, "steps": inner * rounds, "eval_every": 100000}, [], self.dir / "plain", distributed=hook, telemetry_every=0)
         for name, value in hook.model.state_arrays().items():
             np.testing.assert_allclose(coordinator.theta[name], value.astype(np.float32), atol=1e-5, rtol=1e-5, err_msg=name)

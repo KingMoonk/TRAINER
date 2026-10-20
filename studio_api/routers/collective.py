@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import studio_diloco
@@ -19,6 +20,10 @@ router = APIRouter(prefix="/collective/{run}", tags=["collective"])
 Run = Path(pattern=studio_diloco.RUN_ID, description="the run id: the pretrain_distributed job's id")
 Term = Query(description="the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join", ge=0)
 BINARY = {200: {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
+
+
+class StreamedFile(FileResponse):
+    chunk_size = 1 << 20  # Starlette's 64 KiB makes a thread hop per chunk: slow for a 20 MB shard over a long link
 
 
 class Versioned(BaseModel):
@@ -129,14 +134,33 @@ def join(request: Request, response: Response, run: str = Run, term: int = Term,
 @router.get("/params", response_class=Response, responses=BINARY)
 def params(round: int, node: str = "", found: "studio_diloco.Coordinator" = Depends(member_call)):
     """The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline."""
-    return binary(found, found.params_bytes(round, node))
+    try:
+        return binary(found, found.params_bytes(round, node))
+    except studio_diloco.Gone as exc:
+        raise HTTPException(410, str(exc)) from None
 
 
 @router.get("/shards/{shard}", response_class=Response, responses=BINARY)
 def shard(shard: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """One training shard (tokens, target flags and offsets) as an .npz."""
     try:
-        return binary(found, found.shard_bytes(shard))
+        found.ensure_serving()
+        path = found.shard_path(shard)
+    except studio_diloco.Gone as exc:
+        raise HTTPException(410, str(exc)) from None
+    except KeyError:
+        raise HTTPException(404, f"No shard {shard}.") from None
+    return StreamedFile(path, media_type="application/octet-stream", headers={studio_diloco.TERM_HEADER: str(found.term)})
+
+
+@router.get("/shards/{shard}/hash")
+def shard_hash(shard: int, found: "studio_diloco.Coordinator" = Depends(member_call)) -> dict[str, str]:
+    """The sha256 of one shard's .npz body, so a member that holds it from an earlier run skips the download."""
+    try:
+        found.ensure_serving()
+        return {"hash": found.shard_hash(shard)}
+    except studio_diloco.Gone as exc:
+        raise HTTPException(410, str(exc)) from None
     except KeyError:
         raise HTTPException(404, f"No shard {shard}.") from None
 

@@ -1,4 +1,5 @@
 """studio_cluster: the node registry, the requirements each kind of job carries, and placement. No network, no GPU, no window."""
+import io
 import json
 import threading
 import time
@@ -324,8 +325,11 @@ class PollThroughPeerClient(unittest.TestCase):
             def __exit__(self, *exc):
                 return False
 
-            def read(self):
-                return b'{"hostname": "box", "device": "cpu"}'
+            def __init__(self):
+                self.body = io.BytesIO(b'{"hostname": "box", "device": "cpu"}')
+
+            def read(self, size=-1):
+                return self.body.read(size)
 
         def opener(request, timeout):
             calls.append((request.full_url, timeout))
