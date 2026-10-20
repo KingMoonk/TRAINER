@@ -301,6 +301,37 @@ class QueueTests(unittest.TestCase):
             r._watch()
             self.assertEqual(idle.call_count, 4)
 
+    def test_a_job_id_already_in_the_queue_is_not_added_twice(self):
+        r = self.runner()
+        first = r.enqueue(Job("quicktest", "a", id="inv1"))
+        again = r.enqueue(Job("quicktest", "a again", id="inv1"))
+        self.assertIs(again, first)
+        self.assertEqual([j.id for j in r.jobs], ["inv1"])
+        self.assertEqual([j.id for j in Runner(self.path, self.handlers).jobs], ["inv1"])
+
+    def test_a_slow_save_does_not_hold_up_readers_of_the_queue(self):
+        r = self.runner(tick=30)
+        r.pause()
+        r.start()
+        entered, release, real = threading.Event(), threading.Event(), studio_queue.atomic_json
+
+        def slow(path, value):  # a save on Windows that waits out a scanner holding queue.json
+            entered.set()
+            release.wait(10)
+            real(path, value)
+
+        with mock.patch.object(studio_queue, "atomic_json", slow):
+            r.enqueue(self.job("a"))
+            self.assertTrue(entered.wait(5))
+            r.enqueue(self.job("b"))  # saved again while the first save is still writing
+            started = time.monotonic()
+            self.assertEqual([j.label for j in r.state().up_next], ["a", "b"])
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertFalse(r.flush(.05))
+            release.set()
+            self.assertTrue(r.flush(5))
+        self.assertEqual([j.label for j in Runner(self.path, self.handlers).jobs], ["a", "b"])
+
     def test_enqueue_and_resume_wake_the_runner_at_once(self):
         r = self.runner(tick=30)  # no polling to fall back on within the test
         r.start()

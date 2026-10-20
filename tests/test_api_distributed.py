@@ -121,6 +121,37 @@ def owner_job(machines, **params):
                                          "peer_url": "mac.tail.ts.net:8787", **params})
 
 
+class PeerQueue:
+    """A machine's POST /queue/jobs as studio_queue.Runner.enqueue keeps it: a job id is added once. The first `stall` posts land and
+    then time out; the first `refuse` posts fail before reaching it."""
+
+    def __init__(self, stall=0, refuse=0):
+        self.jobs, self.posts, self.stall, self.refuse = {}, 0, stall, refuse
+
+    def client(self, address, **options):
+        return types.SimpleNamespace(post_json=self.post, delete_json=lambda path, **kw: None)
+
+    def post(self, path, body=None, **kw):
+        self.posts += 1
+        if self.refuse:
+            self.refuse -= 1
+            raise PeerError("box did not answer POST /queue/jobs: Connection refused")
+        job = self.jobs.setdefault(body["id"], {"id": body["id"], "status": "waiting"})
+        if self.stall:
+            self.stall -= 1
+            raise PeerError("box did not answer POST /queue/jobs: timed out")
+        return dict(job)
+
+
+def wait(condition, seconds=5.):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(.01)
+    return True
+
+
 MACHINES = [{"node": "mac", "address": "local", "device": "mps", "device_name": "M3"},
             {"node": "box", "address": "box", "device": "cuda", "device_name": "RTX"},
             {"node": "old", "address": "old", "device": "cpu", "device_name": "", "error": "old did not answer within 2 seconds."}]
@@ -134,10 +165,10 @@ class Invitations(unittest.TestCase):
     def test_each_reachable_machine_is_asked_to_join_and_an_offline_one_is_not_called(self):
         job = owner_job(MACHINES)
         runs.invite(job, clients())
-        self.assertEqual(FakeClient.calls, [("box", "POST", "/queue/jobs", {
-            "kind": "diloco_member", "label": "Version 1 across 3 machines (member)",
-            "params": {"coordinator_url": "mac.tail.ts.net:8787", "run": "run1", "node": "box", "epoch": 0}})])
         rows = {m.node: m for m in runs.run_of(job).machines}
+        self.assertEqual(FakeClient.calls, [("box", "POST", "/queue/jobs", {
+            "kind": "diloco_member", "label": "Version 1 across 3 machines (member)", "id": rows["box"].invite_id,
+            "params": {"coordinator_url": "mac.tail.ts.net:8787", "run": "run1", "node": "box", "epoch": 0}})])
         self.assertEqual((rows["box"].state, rows["box"].peer_job), ("invited", "job-box"))
         self.assertEqual((rows["old"].state, rows["old"].reason), ("unreachable", "old did not answer within 2 seconds."))
 
@@ -167,6 +198,80 @@ class Invitations(unittest.TestCase):
         runs.invite(job, clients())
         self.assertEqual(FakeClient.calls, [])
         self.assertIn("TRAINER_NODE_ADDRESS", runs.run_of(job).machines[1].reason)
+
+    def test_an_invite_whose_post_times_out_but_lands_is_asked_again_at_the_next_round_and_queued_once(self):
+        peer = PeerQueue(stall=1)
+        job = owner_job(MACHINES[:2])
+        runs.invite(job, peer.client)
+        box = runs.run_of(job).machines[1]
+        self.assertEqual(box.state, "unreachable")
+        self.assertIn("answering slowly", box.reason)
+        self.assertEqual(len(peer.jobs), 1)  # it landed although the answer never came
+        runs.reinvite(job, 0, peer.client)  # still the round it was invited at: not asked again
+        self.assertEqual(peer.posts, 1)
+        runs.reinvite(job, 1, peer.client)
+        self.assertTrue(wait(lambda: box.state == "invited" and box.peer_job))
+        self.assertEqual((peer.posts, list(peer.jobs), box.peer_job), (2, [box.invite_id], box.invite_id))
+        runs.reinvite(job, 2, peer.client)  # it took its job: nothing to ask again
+        self.assertEqual(peer.posts, 2)
+
+    def test_a_machine_whose_invite_fails_is_retried_on_a_later_round(self):
+        peer = PeerQueue(refuse=1)
+        job = owner_job(MACHINES[:2])
+        runs.invite(job, peer.client)
+        box = runs.run_of(job).machines[1]
+        self.assertEqual((box.state, peer.jobs), ("unreachable", {}))
+        runs.reinvite(job, 1, peer.client)
+        self.assertTrue(wait(lambda: box.state == "invited" and box.peer_job))
+        self.assertEqual(list(peer.jobs), [box.peer_job])
+
+    def test_a_machine_unreachable_when_the_run_started_is_invited_at_a_later_round(self):
+        peer = PeerQueue()
+        job = owner_job([MACHINES[0], MACHINES[2]])
+        runs.invite(job, peer.client)
+        self.assertEqual(peer.posts, 0)
+        runs.reinvite(job, 1, peer.client)
+        old = runs.run_of(job).machines[1]
+        self.assertTrue(wait(lambda: old.state == "invited" and old.peer_job))
+
+    def test_a_reinvite_asks_only_the_machines_holding_a_slot(self):
+        peer = PeerQueue(refuse=1)
+        job = owner_job(MACHINES[:2])
+        runs.invite(job, peer.client)
+        runs.reinvite(job, 1, peer.client, among=set())
+        self.assertEqual((peer.posts, runs.run_of(job).machines[1].state), (1, "unreachable"))
+
+    def test_a_slow_machine_holds_up_neither_the_others_nor_the_run(self):
+        slow, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        class Slow(FakeClient):
+            def post_json(self, path, body=None, params=None, timeout=None):
+                if self.address == "box":
+                    slow.set()
+                    release.wait(10)
+                return super().post_json(path, body, params, timeout)
+
+        job = owner_job([*MACHINES[:2], {"node": "pc", "address": "pc", "device": "cuda"}])
+        runs.invite(job, lambda address, **options: Slow(address), wait=.2)
+        box, pc = runs.run_of(job).machines[1:]
+        self.assertTrue(slow.is_set())
+        self.assertEqual((box.state, box.peer_job, pc.state, pc.peer_job), ("invited", "", "invited", "job-pc"))
+        runs.invite(job, lambda address, **options: Slow(address), wait=0.)  # box's ask is still on its way: not sent twice
+        self.assertEqual([c[0] for c in FakeClient.calls].count("box"), 0)
+        release.set()
+        self.assertTrue(wait(lambda: box.peer_job == "job-box"))
+        self.assertEqual([c[0] for c in FakeClient.calls].count("box"), 1)
+
+    def test_an_id_whose_job_already_ended_is_replaced_by_a_new_one(self):
+        peer = PeerQueue()
+        job = owner_job(MACHINES[:2])
+        box = runs.run_of(job).machines[1]
+        box.invite_id = "old1"
+        peer.jobs["old1"] = {"id": "old1", "status": "stopped"}
+        runs.invite(job, peer.client)
+        self.assertNotEqual(box.peer_job, "old1")
+        self.assertEqual((box.state, peer.jobs[box.peer_job]["status"]), ("invited", "waiting"))
 
     def test_two_machines_with_one_hostname_get_distinct_names(self):
         rows = [{"node": "mac", "address": "local"}, {"node": "box", "address": "a"}, {"node": "box", "address": "b"}]

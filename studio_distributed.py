@@ -11,20 +11,25 @@ import json
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import studio_cluster
 import studio_run_health as run_health
 from studio_peer import PeerClient, PeerError
 
 KEPT = 20  # runs remembered, newest last
 RESTARTED = "The app restarted while this run was going, so it was stopped."
 LOST = "Ended: this machine restarted at round {round}; outer state for that round was not saved."
-INVITE_TIMEOUT = 5.  # seconds a peer has to take its member job
+INVITE_TIMEOUT = 5.  # seconds a peer has to answer a DELETE of a member job (best effort)
+ASK_TIMEOUT = 30.  # seconds a peer has to take its member job: a busy API can stall for 15 s, and the invitation is the run's only one
+ASK_RETRIES = 2  # timed-out asks sent again; safe, because the member job's id is chosen here and the peer adds it once
+INVITE_WAIT = 5.  # seconds `invite` waits for the answers before it returns; a slow machine's ask goes on in the background
 ACTIVE = ("queued", "starting", "waiting", "running")
 UNPLACED = "It was busy when the run was placed. It joins a later round if it is free by then."
 ENDED = ("finished", "stopped", "failed")
+ENDED_JOB = ("done", "failed", "stopped")  # a queue job's statuses once it is over (studio_queue.Job)
 NOT_RESTARTED = ("resuming", "restart_from", "gang")  # params of one run's own life, not of its setup
 STATES = ("queued", "starting", "waiting", "running", "finished", "stopped", "failed")
 
@@ -34,6 +39,7 @@ _LOCK = threading.Lock()
 _HOME = None  # data/distributed_runs.json of the workspace the runs are kept in (see load); None: they live in memory only
 _WRITE = threading.Lock()
 _REMEMBER = threading.Lock()
+_ASKING = set()  # (run id, node) of the invitations on their way
 
 
 @dataclass
@@ -48,6 +54,8 @@ class Machine:
     reason: str = ""
     peer_job: str = ""  # the member job's id on that machine's queue
     stale_job: str = ""  # a member job of the coordinator from before a restart, on that machine's queue until release_stale takes it off
+    invite_id: str = ""  # the id this computer chose for the member job it asks the machine to queue: asked again, the machine adds it once
+    asked_round: int = 0  # the round its invitation was last asked again at (`reinvite`)
 
     @property
     def local(self):
@@ -327,12 +335,23 @@ def release_stale(job, client_for=PeerClient):
 
 # ---- inviting ---------------------------------------------------------------------------------------------------------
 
+def down_note(node):
+    """A machine that refused the connection or could not be found: it may be off."""
+    return f"{node} did not answer. Check that it is on and that Tailscale is running on it."
+
+
+def slow_note(node, seconds, then):
+    """A machine whose ask timed out: it is there and busy, so no advice about turning it on."""
+    return f"{node} is answering slowly: it did not answer within {seconds:g} seconds. {then}"
+
+
 def refusal(machine, exc):
     """Why a machine did not take its member job, in one sentence."""
+    if studio_cluster.slow(exc):
+        return slow_note(machine.node, ASK_TIMEOUT, "It is invited again at the next round.")
     if isinstance(exc, PeerError) and exc.status in (401, 403):
         return (f"{machine.node} refused this computer ({exc.detail or exc.status}). Add this computer's Tailscale login to the "
                 f"allowed users on {machine.node}.")
-    import studio_cluster
     return studio_cluster.failure(machine.address, exc)
 
 
@@ -347,10 +366,13 @@ def across_label(version, count):
     return f"Version {version} across {count} machine{'s' if count != 1 else ''}"
 
 
-def invite(job, client_for=PeerClient, only=None):
+def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
     """Put a member job on each machine the scheduler gave a slot (`gang` in the job's params: the addresses; every chosen machine when
     absent) or, with `only`, on just those addresses. A machine that cannot be reached, or refuses, is recorded with the reason and
-    the run goes on without it; one without a slot is `unplaced` until a slot opens. Never raises: the run does not depend on the peers."""
+    the run goes on without it (`reinvite` asks it again at a later round); one without a slot is `unplaced` until a slot opens. The
+    machines are asked at the same time, each on its own thread; this waits up to `wait` seconds for them, and a machine still answering
+    then goes on in the background, `invited` meanwhile, so one slow machine holds up neither the others nor the run. Never raises: the
+    run does not depend on the peers."""
     run, p = run_of(job), job.params
     url = p.get("peer_url")
     gang = set(only) if only is not None else (set(p["gang"]) if p.get("gang") is not None else None)
@@ -369,21 +391,66 @@ def invite(job, client_for=PeerClient, only=None):
             return
         body = {"kind": "diloco_member", "label": f"{job.label} (member)",
                 "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0,
-                              **({"member_options": p["member_options"]} if p.get("member_options") else {})}}
+                           **({"member_options": p["member_options"]} if p.get("member_options") else {})}}
         try:
-            machine.peer_job = client_for(machine.address, timeout=INVITE_TIMEOUT, retries=0).post_json("/queue/jobs", body)["id"]
+            machine.peer_job = take(machine, client_for(machine.address, timeout=ASK_TIMEOUT, retries=ASK_RETRIES), body)
         except Exception as exc:  # noqa: BLE001 - whatever went wrong is the machine's note
             machine.state, machine.reason = "unreachable", refusal(machine, exc)
 
-    todo = [m for m in run.machines if not m.local and not (m.peer_job and m.state == "invited")]
-    if todo:
-        with ThreadPoolExecutor(max_workers=len(todo)) as pool:
-            list(pool.map(ask, todo))
-        if gang is not None and run.version is not None:  # the name counts the machines that took a slot, not the ones chosen
-            taking = sum(1 for m in run.machines if m.local or m.state == "invited")
-            if taking != len(run.machines):
-                run.label = job.label = across_label(run.version, taking)
-        persist()  # who answered
+    def asking(machine):
+        try:
+            ask(machine)
+        finally:
+            with _LOCK:
+                _ASKING.discard((run.id, machine.node))
+            persist()  # who answered
+
+    todo = []
+    with _LOCK:
+        for m in run.machines:
+            if not m.local and not (m.peer_job and m.state == "invited") and (run.id, m.node) not in _ASKING:
+                _ASKING.add((run.id, m.node))
+                todo.append(m)
+    threads = [threading.Thread(target=asking, args=(m,), name=f"invite {m.node}", daemon=True) for m in todo]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + wait
+    for thread in threads:
+        thread.join(max(0., deadline - time.monotonic()))
+    if todo and gang is not None and run.version is not None:  # the name counts the machines that took a slot, not the ones chosen
+        taking = sum(1 for m in run.machines if m.local or m.state == "invited")
+        if taking != len(run.machines):
+            run.label = job.label = across_label(run.version, taking)
+            persist()
+
+
+def take(machine, client, body):
+    """Ask `machine` to queue its member job; its id there. The id is chosen here (`invite_id`) and kept until a job of that id has
+    ended, so an ask that timed out after the machine took it, sent again now or at a later round, finds that job instead of adding a
+    second one (POST /queue/jobs adds a job id once). A machine that names another id is one without that rule: it took the job."""
+    for _ in range(2):
+        if not machine.invite_id:
+            machine.invite_id = uuid.uuid4().hex[:8]
+        answer = client.post_json("/queue/jobs", {**body, "id": machine.invite_id})
+        if answer["id"] != machine.invite_id or answer.get("status") not in ENDED_JOB:
+            return answer["id"]
+        machine.invite_id = ""  # that member job already ended (it was stopped, or ran for an earlier coordinator): ask for a new one
+    return answer["id"]
+
+
+def reinvite(job, round_, client_for=PeerClient, among=None):
+    """Ask again, once per round, each machine whose invitation failed (`unreachable`), so a machine that was slow or away when the run
+    started joins a later round instead of none. `round_` is the round the coordinator is at; `among` limits it to those addresses (the
+    machines holding a slot of the run). Returns at once: the asks go on in the background."""
+    run = RUNS.get(job.id)
+    if run is None:
+        return
+    again = [m for m in run.machines if not m.local and m.state == "unreachable" and m.asked_round < round_
+             and (among is None or m.address in among)]
+    for machine in again:
+        machine.asked_round = round_
+    if again:
+        invite(job, client_for, only=[m.address for m in again], wait=0.)
 
 
 def release_member(run, node, client_for=PeerClient):
@@ -465,7 +532,7 @@ NEVER_JOINED = "It was invited but never joined the run."
 
 def peer_facts(run, cluster):
     """What this node's copy of the observation store says about each other machine of `run`, for the member rows: {node: {"down":
-    the machine is not answering, "member_running": its member job is running, "blocking": {"label", "eta_s"} of the other job it is
+    the machine is not answering, "slow": it is not answering only because its last poll timed out, "member_running": its member job is running, "blocking": {"label", "eta_s"} of the other job it is
     busy with, else None, "limits": the queue limits holding it now, {"blocked", "paused"}, or None}}. A machine the store holds no
     queue of is left out; this computer is in it only for its limits."""
     import studio_facts
@@ -474,14 +541,15 @@ def peer_facts(run, cluster):
         held = _held(studio_facts.limits_facts(cluster, machine.node))
         if machine.local:
             if held:
-                out[machine.node] = {"down": False, "member_running": False, "blocking": None, "limits": held}
+                out[machine.node] = {"down": False, "slow": False, "member_running": False, "blocking": None, "limits": held}
             continue
         jobs, age = studio_facts.queue_facts(cluster, machine.node)
         if age is None:
             continue
         mine = next((j for j in jobs if machine.peer_job and j["id"] == machine.peer_job), None)
         other = next((j for j in jobs if j["status"] == "running" and j["id"] != machine.peer_job), None)
-        out[machine.node] = {"down": cluster.is_down(machine.node), "member_running": bool(mine and mine["status"] == "running"),
+        down = cluster.is_down(machine.node)
+        out[machine.node] = {"down": down, "slow": down and cluster.answers_slowly(machine.node), "member_running": bool(mine and mine["status"] == "running"),
                              "blocking": {"label": other["label"], "eta_s": other.get("eta_s")} if other else None, "limits": held}
     return out
 
@@ -576,7 +644,7 @@ def _member(node, machine, known, history, ended, snap=None, peer=None):
     elif local:
         state, note = "invited", "Starting."
     elif peer and peer["down"]:
-        state, note = "unreachable", f"{node} did not answer. Check that it is on and that Tailscale is running on it."
+        state, note = "unreachable", slow_note(node, studio_cluster.POLL_TIMEOUT, "It is asked again shortly.") if peer["slow"] else down_note(node)
     elif peer and peer["member_running"]:
         state, note = "joining", f"Starting up on {node}."
     elif peer and peer["blocking"]:

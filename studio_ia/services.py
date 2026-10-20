@@ -943,8 +943,12 @@ class FakeServices(Services):
         self.emit("queue", state)
 
     def enqueue(self, job):
-        self._queue.up_next.append(job)
-        self.emit("queue", self._queue)
+        q = self._queue
+        there = next((j for j in [*([q.job] if q.job else []), *q.up_next, *q.failed] if j.id == job.id), None)
+        if there is not None:
+            return there
+        q.up_next.append(job)
+        self.emit("queue", q)
 
     def start_queue(self):
         """Run the waiting jobs in a worker thread, unless one is already running or the queue is paused. The first job is

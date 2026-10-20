@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urlsplit
@@ -22,7 +23,8 @@ from studio_peer import PeerClient, PeerError, base_url, is_page
 
 DEFAULT_PORT = 8787  # the API's port when a node is listed as a bare name; studio_api (Phase 1) must serve on the same one
 GATEWAY_ERRORS = (502, 503, 504)  # what a proxy answers when the server behind it is not there
-POLL_TIMEOUT = 2.  # seconds: a peer that does not answer this fast is offline for now
+POLL_TIMEOUT = 2.  # seconds: a peer that does not answer this fast is slow; one slow SLOW_POLLS polls in a row is offline for now
+SLOW_POLLS = 2  # a peer that answered before and is too slow this many polls in a row is offline; a busy API stalls now and then
 DEFAULT_TAG = "tag:trainer"  # the tag a node carries to call its peers (docs/cluster.md)
 LOCAL = "local"  # the address of this machine's own NodeInfo
 SPEED_TIE = 1.05  # measured seconds within this ratio count as equal: the earlier node in the list keeps the job
@@ -264,14 +266,39 @@ def run_together(items, work, timeout=POLL_TIMEOUT):
         pool.shutdown(wait=False, cancel_futures=True)
 
 
+_ANSWERED = {}  # address -> (its last answer, slow polls since): what `poll` reports for a peer that is slow once
+_ANSWERED_LOCK = threading.Lock()
+
+
+def slow(exc):
+    """Whether a failed ask failed only by taking too long (not refused, not a wrong answer): the peer may be up and busy."""
+    if isinstance(exc, TimeoutError):
+        return True
+    return isinstance(exc, PeerError) and exc.status is None and "timed out" in str(exc).lower()
+
+
 def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
     """Ask each address for its `GET /node`; one NodeInfo per address, in order. Never raises: a peer that is unreachable, slow,
     or answers nonsense is reported offline with the reason. `fetch(url, timeout)` returns the parsed JSON (default: urllib).
-    Peers are asked at the same time, and the whole poll ends `timeout` seconds in: a peer that has not answered by then is offline."""
+    Peers are asked at the same time, and the whole poll ends `timeout` seconds in: a peer that has not answered by then is slow. A
+    peer that answered its last poll and is slow in fewer than SLOW_POLLS in a row keeps its last answer: one stall is not offline."""
     fetch = fetch or fetch_json
     addresses = list(addresses)
     answers = run_together(addresses, lambda a: info_from_payload(a, fetch(node_url(a), timeout)), timeout)
-    return [offline(a, failure(a, answer, timeout)) if isinstance(answer, BaseException) else answer for a, answer in zip(addresses, answers)]
+    out = []
+    with _ANSWERED_LOCK:
+        for address, answer in zip(addresses, answers):
+            if not isinstance(answer, BaseException):
+                _ANSWERED[address] = (answer, 0)
+                out.append(answer)
+                continue
+            last, misses = _ANSWERED.pop(address, (None, 0))
+            if last is not None and slow(answer) and misses + 1 < SLOW_POLLS:
+                _ANSWERED[address] = (last, misses + 1)
+                out.append(last)
+            else:
+                out.append(offline(address, failure(address, answer, timeout)))
+    return out
 
 
 def failure(address, exc, timeout=POLL_TIMEOUT):

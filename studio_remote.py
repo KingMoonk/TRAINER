@@ -121,7 +121,8 @@ class Cluster:
         self._delete_lock = threading.Lock()  # a sweep checks a key is free and deletes it under this; `finished` records a result under it
         self._sweeping, self._sweep_at = False, 0.  # a sweep of checkpoints is running; the clock time the next may start
         self._known = {}  # peer address -> its last NodeInfo
-        self._silent = {}  # peer address -> (polls in a row it did not answer, clock time of the next poll): it is left alone until then
+        self._slow = set()  # peer addresses whose last poll timed out: busy and answering slowly, not refused or unknown
+        self._silent = {}  # peer address -> (polls in a row it did not answer, clock time of the next poll): it is left alone until then; 0: slow once
         self._answered, self._probed = {}, {}  # peer address -> clock time of its last answer; of the last time it was asked
         self._peers, self._peers_mtime, self.config_problem = [], None, ""
         self._store, self._store_problem, self._store_mtime = None, "", object()  # object(): not yet read, equal to no mtime
@@ -272,6 +273,10 @@ class Cluster:
         age = studio_facts.heartbeat_age(self, origin)
         return age is None or age > studio_facts.DOWN_AFTER
 
+    def answers_slowly(self, origin):
+        """True for a down origin whose last poll timed out: it is there but slow, rather than off or refusing."""
+        return self.is_down(origin) and self.address_of(origin) in self._slow
+
     def contact(self, address):
         """(seconds since the peer at `address` was last heard from, seconds until it is asked again): either is None when not known.
         Heard from is its last answer to a poll or its newest heartbeat in this node's copy of the store, whichever is later."""
@@ -305,12 +310,12 @@ class Cluster:
                 payload = self.client_for(address, retries=0, timeout=studio_cluster.POLL_TIMEOUT).get_json("node")
                 info = studio_cluster.info_from_payload(address, payload)
             except Exception as exc:  # noqa: BLE001 - unreachable, slow or nonsense all mean "did not answer"
-                return address, None, f"{type(exc).__name__}: {exc}"
+                return address, None, exc
             try:  # the observation store rides this poll; a peer without /state/sync (an older version) is still online
                 studio_state.sync_peer(self.state, self.client_for(address, retries=0, timeout=studio_cluster.POLL_TIMEOUT))
             except Exception as exc:  # noqa: BLE001 - the next poll tries again
                 _log.debug("state sync with %s failed: %s", address, exc)
-            return address, info, ""
+            return address, info, None
 
         now = self.clock()
         self._silent = {a: v for a, v in self._silent.items() if a in peers}
@@ -319,7 +324,13 @@ class Cluster:
         due = [a for a in peers if a not in self._silent or now >= self._silent[a][1]]  # a silent peer is asked less and less often
         with ThreadPoolExecutor(max_workers=min(8, len(due) or 1)) as pool:
             results = list(pool.map(ask, due))
-        for address, info, error in results:
+        for address, info, exc in results:
+            known = self._known.get(address)
+            if info is None and studio_cluster.slow(exc) and known is not None and known.online and address not in self._silent:
+                self._silent[address] = (0, self.clock())  # slow once: it keeps its last answer, and the next poll asks it again
+                continue
+            error = "" if exc is None else f"{type(exc).__name__}: {exc}"
+            (self._slow.add if studio_cluster.slow(exc) else self._slow.discard)(address)
             self.health.observe(address, info is not None)
             if info is not None and info.hostname:
                 self._names[address] = info.hostname
@@ -718,7 +729,8 @@ class Cluster:
     def _tick_gangs(self):
         """Owner: free the slots of runs that ended, renew the slots whose member the coordinator hears from, and for each slot that
         lapsed let its member go at the round boundary and free the slot. Open slots are offered each tick to the machines that are free
-        then (`_refill`), so a machine that frees up joins the run at the round after it is invited."""
+        then (`_refill`), so a machine that frees up joins the run at the round after it is invited. A machine holding a slot whose
+        invitation failed is asked again once per round (`studio_distributed.reinvite`)."""
         import studio_distributed
         import studio_diloco
         with self.runner.lock:
@@ -738,6 +750,7 @@ class Cluster:
                     if address == studio_cluster.LOCAL or (known is not None and known["state"] in ("training", "behind", "joining")
                                                            and (reported is None or reported <= self.lease_s)):
                         self.gangs.heard(run_id, address)
+                studio_distributed.reinvite(job, coordinator.next_round, self.client_for, among=set(self.gangs.held(run_id)))
                 self._refill(job)
         for run_id, address in self.gangs.lapsed():
             job, coordinator = live.get(run_id), studio_diloco.COORDINATORS.get(run_id)

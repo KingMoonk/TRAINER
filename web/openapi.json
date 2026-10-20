@@ -5069,7 +5069,7 @@
         "type": "object"
       },
       "NewJob": {
-        "description": "`params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.",
+        "description": "`params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.\n`id` is the caller's own id for the job, so a POST sent again after it timed out is added once: the job already queued under that id\nis answered instead (whatever its status). Absent, the id is made here.",
         "properties": {
           "eta_s": {
             "anyOf": [
@@ -5081,6 +5081,18 @@
               }
             ],
             "title": "Eta S"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
           },
           "kind": {
             "title": "Kind",
@@ -18871,7 +18883,7 @@
         ]
       },
       "post": {
-        "description": "Services.enqueue: add a job to the end of Up next. An unknown kind is a 400.",
+        "description": "Services.enqueue: add a job to the end of Up next, or answer the job already queued under the caller's `id`. An unknown kind is a\n400.",
         "operationId": "enqueue_queue_jobs_post",
         "requestBody": {
           "content": {

@@ -22,6 +22,14 @@ class QueueRouterTests(ApiCase):
     def add(self, label):
         return self.call("POST", "/queue/jobs", 201, json={"kind": "pretrain", "label": label, "params": {"version": 1}})
 
+    def test_a_job_posted_again_under_its_own_id_is_queued_once(self):
+        body = {"id": "inv-1", "kind": "pretrain", "label": "a", "params": {"version": 1}}
+        first = self.call("POST", "/queue/jobs", 201, json=body)
+        again = self.call("POST", "/queue/jobs", 201, json=body)
+        self.assertEqual((first["id"], again["id"]), ("inv-1", "inv-1"))
+        self.assertEqual([j["id"] for j in self.call("GET", "/queue/jobs")], ["inv-1"])
+        self.call("POST", "/queue/jobs", 422, json={**body, "id": "no spaces/allowed"})
+
     def test_every_route_answers(self):
         state = self.call("GET", "/queue")
         self.assertIsNone(state["job"])
