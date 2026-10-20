@@ -1,6 +1,6 @@
 {
   "body": {
-    "delta_dtype": "float16",
+    "delta_dtype": "int8",
     "inner_steps": 100,
     "outer_lr": 0.7,
     "outer_momentum": 0.9,

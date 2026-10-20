@@ -141,6 +141,8 @@ export const T = {
   hCommTip: "The share of a round in which even the slowest member is not training: the download, the upload, the outer step and the check.",
   hWait: "{node} waits",
   hWaitTip: "The share of a round the member that waits longest spends waiting for the slowest member's change.",
+  hIdle: "{node} idle",
+  hIdleTip: "The share of a round the GPU of the member that idles longest is not computing: waiting for the others or for the network. Near 0% means no GPU sits idle.",
   hOver: "Measured over the last {n} rounds with two or more members.",
   hOuterLoss: "outer loss",
   hLossTitle: "Outer and member loss by round",

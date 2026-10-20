@@ -5,7 +5,7 @@ import { RunsList } from "./runs-list";
 import { run } from "./test-data";
 
 const health = (state: "working" | "not_helping" | "not_enough_data", speedup: number | null, text: string) => ({
-  verdict: { state, text }, basis: "", rounds: [], window: 0, aggregate_tokens_per_s: null, baseline_node: "", baseline_tokens_per_s: null, speedup, comm_share: null, wait_node: "", wait_share: null, straggler: "",
+  verdict: { state, text }, basis: "", rounds: [], window: 0, aggregate_tokens_per_s: null, baseline_node: "", baseline_tokens_per_s: null, speedup, comm_share: null, wait_node: "", wait_share: null, straggler: "", idle: {}, idle_node: "", idle_share: null,
 });
 
 describe("the other runs", () => {

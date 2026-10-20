@@ -92,6 +92,29 @@ class Verdict(unittest.TestCase):
         self.assertEqual(found["verdict"]["text"], "Not helping: beast waits 60% of each round for mac.")
         self.assertEqual((found["wait_node"], found["straggler"]), ("beast", "mac"))
 
+    def test_each_members_idle_gpu_time_is_the_round_minus_its_compute(self):
+        rows = [make_row(i, {"beast": 3., "mac": 9.}, {"beast": 3.5, "mac": 9.5}, seconds=10., val_loss=2. - .1 * i) for i in range(4)]
+        self.assertEqual(rows[0]["health"]["members"]["beast"]["idle_s"], 7.)
+        found = health.summarize(rows)
+        self.assertEqual((found["idle_node"], found["idle"]), ("beast", {"beast": .7, "mac": .1}))
+        self.assertAlmostEqual(found["idle_share"], .7)
+        self.assertEqual(health.summarize(rows[:1])["idle"], {})  # one member alone has nothing to compare with
+
+    def test_a_member_that_trains_while_it_waits_is_not_blamed_for_waiting(self):
+        rows = [make_row(i, {"beast": 9., "mac": 9.}, {"beast": 3.5, "mac": 9.5}, seconds=10., tokens_per_s={"beast": 4000., "mac": 500.},
+                         val_loss=2. - .1 * i) for i in range(4)]  # its change is in early, but its GPU kept stepping through the exchange
+        found = health.summarize(rows)
+        self.assertAlmostEqual(found["idle_share"], .1)
+        self.assertNotIn("waits", found["verdict"]["text"])
+
+    def test_rows_from_before_idle_was_recorded_fall_back_to_wait_plus_sync(self):
+        rows = [make_row(i, {"beast": 3., "mac": 9.}, {"beast": 3.5, "mac": 9.5}, seconds=10., val_loss=2. - .1 * i) for i in range(4)]
+        for row in rows:
+            for member in row["health"]["members"].values():
+                del member["idle_s"]
+        found = health.summarize(rows)
+        self.assertEqual((found["idle_node"], round(found["idle_share"], 2)), ("beast", .7))
+
     def test_not_helping_when_communication_eats_the_gain(self):
         found = health.summarize(rounds(3, {"a": 4., "b": 4.}, {"a": 9., "b": 9.}))  # 4 s of compute in 10 s: 800 tokens/s against 1000
         self.assertEqual(found["verdict"]["state"], health.NOT_HELPING)

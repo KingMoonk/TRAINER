@@ -4854,6 +4854,11 @@
             "title": "Compute S",
             "type": "number"
           },
+          "idle_s": {
+            "default": 0.0,
+            "title": "Idle S",
+            "type": "number"
+          },
           "loss": {
             "anyOf": [
               {
@@ -9365,6 +9370,30 @@
             ],
             "title": "Comm Share"
           },
+          "idle": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "Idle",
+            "type": "object"
+          },
+          "idle_node": {
+            "default": "",
+            "title": "Idle Node",
+            "type": "string"
+          },
+          "idle_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Share"
+          },
           "rounds": {
             "items": {
               "$ref": "#/components/schemas/RoundHealth"
@@ -10656,6 +10685,16 @@
             "title": "Dataset Ids",
             "type": "array"
           },
+          "delta_dtype": {
+            "default": "int8",
+            "enum": [
+              "int8",
+              "float16",
+              "float32"
+            ],
+            "title": "Delta Dtype",
+            "type": "string"
+          },
           "inner_steps": {
             "default": 100,
             "maximum": 1000000.0,
@@ -10711,9 +10750,15 @@
             "type": "number"
           },
           "overlap": {
-            "default": false,
-            "title": "Overlap",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlap"
           },
           "polish_every": {
             "anyOf": [
@@ -10775,6 +10820,17 @@
               }
             ],
             "title": "Teacher"
+          },
+          "time_box": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Box"
           },
           "version": {
             "anyOf": [
@@ -13932,7 +13988,7 @@
     },
     "/collective/{run}/params": {
       "get": {
-        "description": "The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline.",
+        "description": "The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline. A member that holds\nthe weights of round `since` (the round before) gets the outer update that led to this round's instead, quantized to the run's\ndelta_dtype, as an .npz marked with a `__update_from__` entry; with fp32 runs, or after a pivot or polish, it gets the weights.",
         "operationId": "params_collective__run__params_get",
         "parameters": [
           {
@@ -13964,6 +14020,22 @@
               "default": "",
               "title": "Node",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           },
           {
