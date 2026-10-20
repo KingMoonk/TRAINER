@@ -305,6 +305,14 @@ class Callers(unittest.TestCase):
                 sc.allowed_callers({"studioConfig": {"cluster": cluster}})
 
 
+class FailureOfAPage(unittest.TestCase):
+    def test_a_web_page_answer_says_the_api_is_not_at_that_address(self):
+        for status in (200, 404, 308):
+            text = sc.failure("https://box.ts.net", PeerError("answered", status=status, detail="<!DOCTYPE html><html>"))
+            self.assertIn("API is not at that address", text)
+            self.assertNotIn("Allow", text)
+
+
 class PollThroughPeerClient(unittest.TestCase):
     def test_default_fetch_asks_the_peer_with_one_attempt(self):
         calls = []

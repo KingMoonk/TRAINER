@@ -139,6 +139,14 @@ class Verdicts(unittest.TestCase):
         self.assertIn("Tailscale login", step.detail)
         self.assertIn("Access", step.fix)
 
+    def test_a_web_page_at_the_address_is_not_called_a_refusal(self):
+        probe = Probe()
+        probe.auth = PeerError("answered 404", status=404, detail="<!DOCTYPE html><html></html>")
+        step = next(s for s in test(probe).run().steps if s.id == f"auth:{PEER}")
+        self.assertEqual(step.status, "fail")
+        self.assertIn("API is not at that address", step.detail)
+        self.assertNotIn("Allow this computer", step.fix)
+
     def test_a_busy_peer_fails_the_free_step(self):
         result = test(Probe(peers=[info(busy=True)])).run()
         self.assertEqual(self.statuses(result)[f"free:{PEER}"], "fail")

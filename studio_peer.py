@@ -102,13 +102,13 @@ class PeerClient:
         try:
             return self._send(method, path, params, data, content_type, timeout, read)
         except PeerError as first:
-            if first.status is None or not _is_page(first.status, first.detail) or self.base.endswith(API_PREFIX):
+            if first.status is None or not is_page(first.status, first.detail) or self.base.endswith(API_PREFIX):
                 raise
             self.base += API_PREFIX  # a web page, not the API: the node is in `make dev`
             try:
                 return self._send(method, path, params, data, content_type, timeout, read)
             except PeerError as second:
-                if second.status is not None and _is_page(second.status, second.detail):  # no API under /api either
+                if second.status is not None and is_page(second.status, second.detail):  # no API under /api either
                     self.base = self.base[:-len(API_PREFIX)]
                     raise first from None
                 raise
@@ -131,8 +131,14 @@ class PeerClient:
         for attempt in range(self.retries + 1):
             try:
                 with self._open(request, timeout=timeout or self.timeout) as response:
-                    result = read(response) if read else response.read()
                     status = getattr(response, "status", 200)
+                    if _html(response):  # Next's 308 to a trailing slash was followed to a web page: not the API
+                        detail = response.read(300).decode("utf-8", "replace")
+                        seen.update(status=status, error=detail)
+                        note()
+                        raise PeerError(f"{self.address} answered {status} to {method} /{path.lstrip('/')} with a web page, not the API",
+                                        status=status, detail=detail)
+                    result = read(response) if read else response.read()
                 seen.update(status=status, response=None if read else result, response_bytes=None if read else len(result))
                 note()
                 return result
@@ -152,9 +158,14 @@ class PeerClient:
                 delay *= 2
 
 
-def _is_page(status, detail):
+def _html(response):
+    headers = getattr(response, "headers", None)
+    return "text/html" in ((headers.get("Content-Type") or "") if headers is not None else "").lower()
+
+
+def is_page(status, detail):
     """Whether an error answer came from a web server, not the API: an HTML page, or Next's 308 to a trailing slash (the API's
-    own slash redirect is a 307)."""
+    own slash redirect is a 307), or a 200 page (the redirect followed)."""
     head = detail.lstrip()[:15].lower()
     return status == 308 or head.startswith("<!doctype html") or head.startswith("<html")
 

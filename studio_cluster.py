@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urlsplit
 
-from studio_peer import PeerClient, PeerError, base_url
+from studio_peer import PeerClient, PeerError, base_url, is_page
 
 DEFAULT_PORT = 8787  # the API's port when a node is listed as a bare name; studio_api (Phase 1) must serve on the same one
 GATEWAY_ERRORS = (502, 503, 504)  # what a proxy answers when the server behind it is not there
@@ -276,6 +276,9 @@ def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
 
 def failure(address, exc, timeout=POLL_TIMEOUT):
     """Why a peer is offline, as a sentence for the person looking at the node list."""
+    if isinstance(exc, PeerError) and exc.status is not None and is_page(exc.status, exc.detail):
+        return (f"{address} answered with a web page, not the app's API: the app's API is not at that address. Check the address "
+                f"(the machine's https://<name>.ts.net, or http://<machine>:{DEFAULT_PORT}) and that the app is running there.")
     if isinstance(exc, PeerError):
         text = f"{str(exc).rstrip('.')}."
         if exc.status in GATEWAY_ERRORS and not exc.detail.strip():  # an empty gateway answer: a proxy is there, the app is not behind it
