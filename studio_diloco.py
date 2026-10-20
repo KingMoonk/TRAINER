@@ -171,6 +171,14 @@ class Halt:
         self.ended.set()
 
 
+REMOTE_INNER_STEPS = 1500  # H when a member is on another machine: moving the model is a fixed cost per round, so a longer round hides it
+
+
+def default_inner_steps(remote: bool) -> int:
+    """The H a run starts from: the usual one on this computer alone, a larger one when a member is on another machine."""
+    return REMOTE_INNER_STEPS if remote else Settings.inner_steps
+
+
 @dataclass(frozen=True)
 class Settings:
     """A run's DiLoCo parameters (the job's params). outer_lr 1 with momentum 0 makes one member exactly plain training."""

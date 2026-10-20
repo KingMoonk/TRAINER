@@ -458,7 +458,11 @@ class Routes(unittest.TestCase):
 
     def test_the_form_starts_from_the_engines_defaults(self):
         self.assertEqual(self.client.get("/distributed/defaults").json(),
-                         {"rounds": 10, "inner_steps": 100, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "int8"})
+                         {"rounds": 10, "inner_steps": 100, "remote_inner_steps": 1500, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "int8"})
+
+    def test_a_run_with_a_member_on_another_machine_starts_from_a_larger_h(self):
+        self.assertEqual(studio_diloco.default_inner_steps(False), studio_diloco.Settings().inner_steps)
+        self.assertEqual(studio_diloco.default_inner_steps(True), 1500)
 
     def test_a_start_is_checked_with_a_sentence(self):
         self.assertEqual(self.start(dataset_ids=["nope"]).json()["detail"], "No text set nope.")

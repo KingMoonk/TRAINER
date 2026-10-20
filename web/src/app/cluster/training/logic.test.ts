@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, errorMarks, lessonsText, holdButtons, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { TRAINING as T } from "@/lib/copy/training";
@@ -14,7 +14,13 @@ const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "1
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
     const sets = [{ id: "a", name: "A", count: 3, on: true, held: false, library: false }, { id: "b", name: "B", count: 1, on: false, held: false, library: false }];
-    expect(initialForm({ rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" }, sets)).toEqual(form());
+    expect(initialForm({ rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" }, sets)).toEqual(form());
+  });
+
+  test("steps per round: the usual on this computer alone, the larger with another machine", () => {
+    const defaults = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+    expect(defaultInnerSteps(defaults, [])).toBe("100");
+    expect(defaultInnerSteps(defaults, ["gpu-box"])).toBe("1500");
   });
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {
