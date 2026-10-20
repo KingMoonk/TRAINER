@@ -66,7 +66,6 @@ test("a starting question sets up one change and goes with the version", async (
   await page.getByTestId("try-depth").click();
   await expect(page.getByTestId("block-count")).toHaveText(String(blocks + 1));
   await expect(page.getByTestId("experiment-asking")).toContainText("Is depth or width better?");
-  await page.getByTestId("save").click();
   const saved = savedNumber(page);
   await page.getByTestId("save").click();
   const number = await saved;
