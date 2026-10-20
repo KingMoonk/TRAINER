@@ -76,7 +76,15 @@ export function RowsList({
                 row.id === selected && "bg-(--selected-surface)",
               )}
             >
-              <span className={cn("min-w-0 flex-1 truncate", mono && "font-mono text-[13px]")}>{row.a}</span>
+              {kind === "text" ? (
+                // A text row's first column is its document, the second its first line: the line is what reads as the row.
+                <>
+                  <span className="max-w-[35%] shrink-0 truncate text-muted-foreground">{row.a}</span>
+                  <span className="min-w-0 flex-1 truncate">{row.b}</span>
+                </>
+              ) : (
+                <span className={cn("min-w-0 flex-1 truncate", mono && "font-mono text-[13px]")}>{row.a}</span>
+              )}
               <Badge variant="outline" className={STATUS_CLASS[row.status]}>
                 {row.status}
               </Badge>
