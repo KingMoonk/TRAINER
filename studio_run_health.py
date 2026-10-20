@@ -27,6 +27,11 @@ def _rate(tokens, seconds):
     return tokens / seconds if tokens and seconds and seconds > 0 else None
 
 
+def _mean(values):
+    values = list(values)
+    return sum(values) / len(values) if values else 0.
+
+
 def record(row, losses, arrivals, theta_nbytes):
     """One closed round, measured. `row` is the history row being written (what the coordinator already knows of the round);
     `losses` maps each contributing member to its inner loss, `arrivals` to the seconds after the round opened that its change
@@ -121,11 +126,22 @@ def summarize(history):
                wait_node=waiter, wait_share=shares.get(waiter), straggler=straggler)
     if "verdict" in out:
         return out
-    if waiter and shares[waiter] >= WAITING and straggler and straggler != waiter:
+    held = bool(waiter) and shares[waiter] >= WAITING
+    wait_s = _mean(m["wait_s"] for r in recent for node, m in r["members"].items() if node == waiter and m["wait_s"] is not None)
+    sync_s = sum(r["sync_s"] for r in recent) / len(recent)
+    # the straggler's extra compute is what it costs the waiter; blame it only when that explains the wait
+    extra = (_mean(r["members"][straggler]["compute_s"] for r in recent if straggler in r["members"])
+             - _mean(r["members"][waiter]["compute_s"] for r in recent if waiter in r["members"]))
+    # transfer dominates: the round's sync is most of the waiter's wait (or nobody waits and the pair still loses to the solo)
+    transfer = comm is not None and comm >= .3 and speedup < HELPING and (not held or sync_s >= .5 * wait_s)
+    if transfer:
+        out["verdict"] = _verdict(NOT_HELPING, f"Not helping: {speedup:.2f}× {fastest} alone; moving the model between machines takes "
+                                               f"{comm:.0%} of each round ({sync_s:.0f} s of {seconds / len(recent):.0f} s). Raise H or "
+                                               "speed up the link.")
+    elif held and straggler and straggler != waiter and extra >= .5 * wait_s:
         out["verdict"] = _verdict(NOT_HELPING, f"Not helping: {waiter} waits {shares[waiter]:.0%} of each round for {straggler}.")
     elif speedup < HELPING:
-        why = f"communication takes {comm:.0%} of each round" if comm is not None and comm >= 0.3 else "the members add little to each other"
-        out["verdict"] = _verdict(NOT_HELPING, f"Not helping: {speedup:.2f}× the speed of {fastest} alone; {why}.")
+        out["verdict"] = _verdict(NOT_HELPING, f"Not helping: {speedup:.2f}× the speed of {fastest} alone; the members add little to each other.")
     else:
         falling = len(losses) > 1 and losses[-1] < losses[0]
         out["verdict"] = _verdict(WORKING, f"Working: {speedup:.1f}× faster than {fastest} alone, "
