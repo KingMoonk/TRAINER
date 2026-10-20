@@ -42,6 +42,13 @@ export function throughputSeries(health: RunHealth): Series[] {
   return perMember(health, (m) => m.tokens_per_s);
 }
 
+/** How fast each member's weights came down and its change went up, in MB/s, by round (the rounds that measured it). */
+export function linkSeries(health: RunHealth): Series[] {
+  const way = (suffix: string, pick: (m: RoundHealth["members"][string]) => number | null | undefined, dash?: string) =>
+    perMember(health, (m) => pick(m) ?? null).map((s) => ({ ...s, id: `${s.id} ${suffix}`, label: `${s.label} ${suffix}`, ...(dash ? { dash } : {}) }));
+  return [...way(T.hLinkDown, (m) => m.down_mb_s), ...way(T.hLinkUp, (m) => m.up_mb_s, "5 4")];
+}
+
 /** What went over the wire each round, in MB. */
 export function bytesSeries(health: RunHealth): Series[] {
   const mb = (pick: (r: RoundHealth) => number) => health.rounds.map((r) => ({ x: r.round + 1, y: round2(pick(r) / MB) }));

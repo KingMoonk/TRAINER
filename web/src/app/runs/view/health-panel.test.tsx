@@ -31,6 +31,15 @@ describe("the health panel", () => {
     expect(screen.getByTestId("health-split")).toBeInTheDocument();
   });
 
+  test("the link chart appears only when a transfer speed was measured", () => {
+    const { unmount } = renderPage(<HealthPanel run={run({ health: measured })} />);
+    expect(screen.queryByTestId("health-link")).toBeNull();
+    unmount();
+    const rounds = measured.rounds.map((r) => ({ ...r, members: { "mac-mini": { ...r.members["mac-mini"], down_mb_s: 2, up_mb_s: 1 }, "gpu-box": r.members["gpu-box"] } }));
+    renderPage(<HealthPanel run={run({ health: { ...measured, rounds } })} />);
+    expect(screen.getByTestId("health-link")).toHaveTextContent("Transfer speed of each member (MB/s)");
+  });
+
   test("a measured run shows its verdict, speed-up, shares and every chart", () => {
     renderPage(<HealthPanel run={run({ health: measured })} />);
     expect(screen.getByTestId("verdict")).toHaveTextContent("Working: 1.6× faster than gpu-box alone, loss falling.");

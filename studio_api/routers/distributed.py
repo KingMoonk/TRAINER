@@ -185,6 +185,8 @@ class MemberHealth(BaseModel):
     tokens_per_s: float | None  # tokens / compute_s: its speed alone
     wait_s: float | None  # seconds its change was in before the slowest member's; null when the arrival was not recorded
     sync_s: float  # the rest: download, upload, outer step, validation
+    down_mb_s: float | None = None  # MiB/s its weights came down this round (parallel streams, #584); null when not measured
+    up_mb_s: float | None = None  # MiB/s its change went up, as the coordinator saw it
 
 
 class RoundHealth(BaseModel):

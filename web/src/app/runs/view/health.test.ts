@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { bytesSeries, compressionText, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone, type RoundHealth, type RunHealth } from "./health";
+import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone, type RoundHealth, type RunHealth } from "./health";
 
 const member = (over: Partial<RoundHealth["members"][string]> = {}) => ({ loss: 3, steps: 100, tokens: 1000, compute_s: 6, tokens_per_s: 200, wait_s: 0, sync_s: 2, ...over });
 const round = (n: number, over: Partial<RoundHealth> = {}): RoundHealth => ({
@@ -24,6 +24,12 @@ describe("run health", () => {
     const series = throughputSeries(health({ rounds }));
     expect(series.find((s) => s.id === "mac")?.points).toHaveLength(1);
     expect(series.find((s) => s.id === "box")?.points).toHaveLength(2);
+  });
+
+  test("the link chart has a down and an up line per member, only where a speed was measured", () => {
+    const rounds = [round(0), round(1, { members: { mac: member({ down_mb_s: 2, up_mb_s: 1.5 }), box: member() } })];
+    expect(linkSeries(health({ rounds })).map((s) => [s.id, s.points.length])).toEqual([["mac down", 1], ["mac up", 1]]);
+    expect(linkSeries(health())).toEqual([]);
   });
 
   test("bytes are in MB, up and down", () => {

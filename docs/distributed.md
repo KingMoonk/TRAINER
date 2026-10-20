@@ -311,6 +311,46 @@ about 20 s against H = 500 steps of compute, so communication is a small share o
 (`diloco.json` history, and an info event on the member with its upload time). Streaming fragments come later, once
 measurements show the transfer is the bottleneck.
 
+### Parallel transfers (#584)
+
+One TCP stream over a long, lossy link (Mac to a GPU box over Tailscale: about 120 ms RTT, about 1.7% loss) is loss-limited to
+roughly 0.1 to 0.5 MB/s, whatever the line carries. Weights, shards, replica state and changes are big bodies, so each goes over
+several streams at once (`studio_peer.PeerClient`, `studio_parts.py`).
+
+- **Downloads** (`/params`, `/state`, `/validation`, `/shards/{s}`): ranged GETs of `part` bytes (4 MiB) over `streams` connections
+  (8). Part 0 is the probe: `Range: bytes=0-(part-1)`. A `206` carries the total size in `Content-Range`, so the other parts start
+  while part 0 is still arriving; a `200` is the whole body and nothing is fetched again (an old server, so one stream, as before).
+  Parts are written at their offsets, so the result equals one GET byte for byte. A part that fails or comes up short is retried
+  by itself (`PART_RETRIES` more tries on top of the client's own). The caller's `cancel` is seen within about 0.1 s, not after the
+  parts in flight. The `/api` dev-prefix fallback works for ranged calls too.
+- **Range on the server:** `/shards/{s}` is a file (`FileResponse` answers Range); `/params`, `/state`, `/validation` and `/weights`
+  are in-memory blobs, answered by `binary()` with `206`/`416` and `Accept-Ranges: bytes`. The content-hash check (`/shards/{s}/hash`)
+  is unchanged.
+- **Change upload:** a delta larger than one part is `POST /rounds/{r}/delta/parts` with `part`, `count`, `total`, `sha256` (the whole
+  body) and `part_sha256`, several at a time. The coordinator (`studio_parts.Assembler`) checks each part, then the whole against
+  `sha256` and `total` when the last arrives, and only then submits it once; a bad part or whole is `400` and the member sends it
+  again. The first big upload of a client probes the route with `count=0`; a `404` (a coordinator from before this) means the old
+  single POST for good.
+- **Streams:** `streams` is a member option, default `studio_peer.STREAMS` (8): `--streams N` on `studio_diloco member`,
+  `member_options={"streams": N}`; 1 is one stream, as before.
+- **Health:** each round's row has `node_rates` (bytes per second down and up per member). The member times its `/params` download
+  and tells the coordinator with the change (`down_bps`); the coordinator times the upload (single POST: reading the body; in parts:
+  first part's start to last part's end). Run health shows them as `down_mb_s` / `up_mb_s` per member (MiB/s), and the health panel
+  charts them.
+
+Loopback benchmark (`python -m tests.test_peer_parallel bench`): a server whose every connection has a fixed 120 ms delay per request
+and a rate ceiling, 4 MiB each way, 8 streams of 256 KiB parts. These are simulated, not measured on the real Mac-BEAST link.
+
+| per-connection rate | mode | down | up |
+| --- | --- | --- | --- |
+| 0.5 MB/s | one stream | 0.45 MB/s (8.96 s) | 0.45 MB/s (8.96 s) |
+| 0.5 MB/s | 8 streams | 2.54 MB/s (1.57 s) | 2.69 MB/s (1.48 s) |
+| 0.25 MB/s | one stream | 0.24 MB/s (16.97 s) | 0.24 MB/s (16.97 s) |
+| 0.25 MB/s | 8 streams | 1.52 MB/s (2.64 s) | 1.58 MB/s (2.53 s) |
+
+The gain is below 8x on a small body because 16 parts over 8 streams are two waves, each paying the request delay; a real shard
+or theta of tens of MB approaches the stream count until the line itself is full.
+
 ### Overlapping communication (#183)
 
 By default a member waits at the end of each round for the upload, the coordinator's round to open and the download of the new

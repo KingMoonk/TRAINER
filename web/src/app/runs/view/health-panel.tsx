@@ -5,7 +5,7 @@ import { Hint } from "@/app/runs/hint";
 import { cn } from "@/lib/utils";
 import type { Run } from "@/app/cluster/training/logic";
 import { T, fill } from "./copy";
-import { bytesSeries, compressionText, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone } from "./health";
+import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone } from "./health";
 
 const PARTS = [
   { key: "compute", label: T.hCompute, colour: "var(--chart-1)" },
@@ -20,6 +20,7 @@ export function HealthPanel({ run }: { run: Run }) {
   const rows = splitRows(health);
   const longest = Math.max(1e-9, ...rows.map((row) => row.compute + row.wait + row.sync));
   const compression = compressionText(health);
+  const link = linkSeries(health);
   const readouts = [
     { id: "speedup", label: T.hSpeedup, value: speedupText(health), tip: T.hSpeedupTip },
     { id: "together", label: T.hAggregate, value: rateText(health.aggregate_tokens_per_s), tip: T.hAggregateTip },
@@ -75,6 +76,12 @@ export function HealthPanel({ run }: { run: Run }) {
               ))}
             </ul>
           </figure>
+          {link.length > 0 && (
+            <figure className="flex min-w-0 flex-col gap-2" data-testid="health-link">
+              <figcaption className="text-sm font-medium"><Hint tip={T.hLinkTip}>{T.hLinkTitle}</Hint></figcaption>
+              <SeriesChart series={link} xLabel={T.hAxisRound} yLabel="MB/s" className="h-48 w-full" />
+            </figure>
+          )}
           <figure className="flex min-w-0 flex-col gap-2" data-testid="health-bytes">
             <figcaption className="text-sm font-medium">{T.hBytesTitle}</figcaption>
             <SeriesChart series={bytesSeries(health)} xLabel={T.hAxisRound} yLabel="MB" className="h-48 w-full" />

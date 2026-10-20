@@ -8,6 +8,8 @@ coordinator's tells it a later coordinator exists: it steps down (Coordinator.st
 """
 
 import asyncio
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
@@ -17,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import studio_diloco
+import studio_parts
 
 router = APIRouter(prefix="/collective/{run}", tags=["collective"])
 # A long poll holds its thread for up to 30 s per member: its own pool keeps them from filling the threads every other plain `def` route shares.
@@ -124,8 +127,31 @@ def member_call(request: Request, response: Response, run: str = Run, term: int 
     return admit(run, term, response, request)
 
 
-def binary(found: "studio_diloco.Coordinator", content: bytes) -> Response:
-    return Response(content, media_type="application/octet-stream", headers={studio_diloco.TERM_HEADER: str(found.term)})
+def binary(found: "studio_diloco.Coordinator", content: bytes, request: Request | None = None) -> Response:
+    """A binary body. With the request's `Range: bytes=a-b` it answers that part (206, Content-Range: the body's size is how a member
+    learns to fetch the parts at the same time, studio_peer.PeerClient); without one, the whole body."""
+    headers = {studio_diloco.TERM_HEADER: str(found.term), "Accept-Ranges": "bytes"}
+    try:
+        span = studio_parts.byte_range(request.headers.get("range") if request is not None else None, len(content))
+    except studio_parts.BadPart as exc:
+        raise HTTPException(416, str(exc), headers={"Content-Range": f"bytes */{len(content)}"}) from None
+    if span is None:
+        return Response(content, media_type="application/octet-stream", headers=headers)
+    first, last = span
+    return Response(content[first:last + 1], status_code=206, media_type="application/octet-stream",
+                    headers={**headers, "Content-Range": f"bytes {first}-{last}/{len(content)}"})
+
+
+PARTS = threading.Lock()
+parts_clock = time.monotonic  # studio_parts.Assembler's clock
+
+
+def assembler(found: "studio_diloco.Coordinator") -> "studio_parts.Assembler":
+    """The run's parts of changes being posted (kept on its coordinator, so a coordinator that goes takes them with it)."""
+    with PARTS:
+        if getattr(found, "parts", None) is None:
+            found.parts = studio_parts.Assembler()
+        return found.parts
 
 
 @router.post("/join", response_model=JoinInfo)
@@ -136,17 +162,17 @@ def join(request: Request, response: Response, run: str = Run, term: int = Term,
 
 
 @router.get("/params", response_class=Response, responses=BINARY)
-def params(round: int, node: str = "", found: "studio_diloco.Coordinator" = Depends(member_call)):
-    """The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline."""
+def params(request: Request, round: int, node: str = "", found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """The open round's global weights, fp32, as an .npz (a `Range` gets that part). `node`, who is asking, is noted on the round's timeline."""
     try:
-        return binary(found, found.params_bytes(round, node))
+        return binary(found, found.params_bytes(round, node), request)
     except studio_diloco.Gone as exc:
         raise HTTPException(410, str(exc)) from None
 
 
 @router.get("/shards/{shard}", response_class=Response, responses=BINARY)
 def shard(shard: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
-    """One training shard (tokens, target flags and offsets) as an .npz."""
+    """One training shard (tokens, target flags and offsets) as an .npz; a `Range` gets that part (a file response answers it)."""
     try:
         found.ensure_serving()
         path = found.shard_path(shard)
@@ -170,36 +196,74 @@ def shard_hash(shard: int, found: "studio_diloco.Coordinator" = Depends(member_c
 
 
 @router.get("/state", response_class=Response, responses=BINARY)
-def state(round: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
+def state(request: Request, round: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.
     409 when `round` is not the latest, 404 before any round has closed."""
     try:
-        return binary(found, found.state_bytes(round))
+        return binary(found, found.state_bytes(round), request)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from None
 
 
 @router.get("/validation", response_class=Response, responses=BINARY)
-def validation(found: "studio_diloco.Coordinator" = Depends(member_call)):
+def validation(request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them."""
-    return binary(found, found.validation_bytes())
+    return binary(found, found.validation_bytes(), request)
 
 
 @router.get("/weights", response_class=Response, responses=BINARY)
-def weights(found: "studio_diloco.Coordinator" = Depends(member_call)):
+def weights(request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left."""
-    return binary(found, found.final_bytes())
+    return binary(found, found.final_bytes(), request)
 
 
-@router.post("/rounds/{round}/delta", status_code=202, response_model=Accepted,
-             openapi_extra={"requestBody": {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}})
+OCTET_BODY = {"requestBody": {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
+
+
+def rates(size: int, seconds: float, down_bps: float) -> dict[str, float]:
+    """What a member's transfers of the round achieved, bytes per second: `down` as it reported (its weights download), `up` as seen here."""
+    return {"down": max(0., down_bps), "up": size / seconds if seconds > 1e-6 else 0.}
+
+
+@router.post("/rounds/{round}/delta", status_code=202, response_model=Accepted, openapi_extra=OCTET_BODY)
 async def delta(request: Request, round: int, node: str, generation: int, epoch: int, tokens: int, steps: int,
-                seconds: float = 0., loss: float | None = None, found: "studio_diloco.Coordinator" = Depends(member_call)):
-    """A member's pseudo-gradient (theta - theta_k) as an .npz, with its target-token count and steps. 409 when stale."""
+                seconds: float = 0., loss: float | None = None, down_bps: float = 0.,
+                found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """A member's pseudo-gradient (theta - theta_k) as an .npz, with its target-token count and steps. 409 when stale.
+    `down_bps` is how fast the member's weights came down this round, for the round's health."""
+    began = time.monotonic()
     body = await request.body()
+    speed = rates(len(body), time.monotonic() - began, down_bps)
 
     def apply():
-        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss, len(body), found.term)
+        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds, loss, len(body), found.term, speed)
+    await run_in_threadpool(apply)
+    return Accepted(term=found.term)
+
+
+@router.post("/rounds/{round}/delta/parts", status_code=202, response_model=Accepted, openapi_extra=OCTET_BODY)
+async def delta_part(request: Request, round: int, node: str, generation: int, epoch: int, tokens: int, steps: int, count: int,
+                     total: int, sha256: str, part: int = 0, part_sha256: str = "", seconds: float = 0., loss: float | None = None,
+                     down_bps: float = 0., found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """One part of a member's pseudo-gradient, posted with the others at the same time (a long link holds one stream to a fraction of
+    its speed). `part` of `count` parts, the whole body `total` bytes with hash `sha256`; the part carries its own `part_sha256`.
+    The last part to arrive completes the body, which is checked against `sha256` and then taken as `delta` takes one (409 when stale,
+    400 when a part or the whole fails its hash: the member sends it again). `count=0` takes nothing: it asks whether this route exists."""
+    if count == 0:
+        return Accepted(term=found.term)
+    began = parts_clock()
+    body = await request.body()
+    key = (round, node, generation, epoch)
+    try:
+        whole, took = assembler(found).add(key, part, count, total, sha256, body, part_sha256, began)
+    except studio_parts.BadPart as exc:
+        raise HTTPException(400, str(exc)) from None
+    if whole is None:
+        return Accepted(term=found.term)
+    speed = rates(total, took, down_bps)
+
+    def apply():
+        found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(whole), seconds, loss, len(whole), found.term, speed)
     await run_in_threadpool(apply)
     return Accepted(term=found.term)
 
