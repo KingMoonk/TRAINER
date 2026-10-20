@@ -36,8 +36,8 @@ import studio_scheduler as sched
 import studio_state
 from studio_peer import PeerClient
 
-POLL_EVERY = 5.  # seconds between polls of the peers
-POLL_BACKOFF_MAX = 2 * POLL_EVERY  # the longest wait between polls of a peer that does not answer: a peer that answers again is seen within this
+POLL_EVERY = studio_failover.POLL_EVERY  # seconds between polls of the peers
+POLL_BACKOFF_MAX = studio_failover.POLL_BACKOFF_MAX  # the longest wait between polls of a peer that does not answer: a peer that answers again is seen within this
 TICK_EVERY = 1.  # seconds between lease checks and renewals
 EVENT_BACKLOG = 200  # events a runner keeps for its next renewal
 RESUME_EVENTS = ("resumed", "resume_refused")  # which way a job placed again on the node that wrote its checkpoint went (`_own_checkpoint`)
