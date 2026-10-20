@@ -46,6 +46,7 @@ export type Inputs = { queue: Queue | undefined; runs: Run[] | undefined; cluste
 
 const LIVE_RUN = ["starting", "waiting", "running"];
 const DISTRIBUTED = "pretrain_distributed";
+const MEMBER = "diloco_member";
 
 /** This computer's name for a page: the local node's hostname, else a plain fallback. */
 export function thisComputer(nodes: ClusterNode[] | undefined): string {
@@ -69,6 +70,11 @@ export function kindText(kind: string): string {
 
 function versionOf(job: Job | undefined): number | null {
   return typeof job?.params?.version === "number" ? job.params.version : null;
+}
+
+/** The DiLoCo run a `diloco_member` job joins (the invite posts it as params.run), else "". */
+function memberRunOf(job: Job): string {
+  return job.kind === MEMBER && typeof job.params?.run === "string" ? job.params.run : "";
 }
 
 function pinnedOf(job: Job | undefined): string {
@@ -124,7 +130,8 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
   for (const run of runs ?? []) {
     const job = jobs.get(run.id);
     const row = blank(run.id);
-    const members = run.members.map((m) => (m.local ? here : name(m.address || m.node)));
+    // `local` is relative to the coordinator, so members are named by node name, resolved against this machine's survey.
+    const members = run.members.map((m) => name(m.node || m.address));
     const planned = machinesOf(job).map(name);
     Object.assign(row, {
       section: runSection(run),
@@ -157,6 +164,7 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
 
   for (const job of jobs.values()) {
     if (rows.has(job.id)) continue; // a DiLoCo run already read from its Run record
+    if (rows.has(memberRunOf(job))) continue; // this machine's member job for a listed run: that run's row already shows it
     const section = jobSection(job.status);
     const running = job.id === queue?.job?.id;
     const where = place(job);
@@ -168,7 +176,7 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
       distributed: job.kind === DISTRIBUTED,
       version: versionOf(job),
       workers: [where],
-      coordinator: where,
+      coordinator: job.kind === MEMBER ? "" : where, // a member never coordinates
       step: running ? queue?.step ?? 0 : 0,
       total: running ? queue?.total ?? 0 : 0,
       etaS: (running ? queue?.eta_s : job.eta_s) ?? null,
