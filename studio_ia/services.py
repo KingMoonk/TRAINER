@@ -481,6 +481,15 @@ class Services:
         """True when these sets hold `at_least` different prompts a run's teacher can answer (only conversations marked Good with `reviewed_only`)."""
         raise NotImplementedError
 
+    def cluster_selftest_start(self, addresses, peer_url, api_port):
+        """Start the cluster self-test (studio_selftest) on the listed machines, this one included; ValueError (with a sentence) when it
+        cannot start: one is already running, this computer is busy, or an address is not on the Machines list."""
+        raise NotImplementedError
+
+    def cluster_selftest(self):
+        """The running self-test's steps as they stand, else the last one's (kept across restarts), else {"state": "never", ...}."""
+        raise NotImplementedError
+
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
@@ -633,6 +642,19 @@ class Services:
     def few_shot(self, version):
         """Lettered problems answered with 0, 1 and a few worked examples in the prompt and no training: studio_eval.few_shot_table's
         dict plus "tasks" and "held_back" (False when no held-back choice problem exists and training ones are asked). Slow."""
+        raise NotImplementedError
+
+    def mlperf_board(self, task_id) -> dict:
+        """The Training speed section: {"tasks": [{"id", "version", "title", "target_bpc", "checksum"}], "board": studio_mlperf.leaderboard,
+        "history": studio_mlperf.history for the single-device division, "devices": the choices a run can name}. Reads stored results only."""
+        raise NotImplementedError
+
+    def mlperf_compare(self, ids) -> dict:
+        """Side by side summaries of stored results (studio_mlperf.compare); ValueError when they are of different task versions."""
+        raise NotImplementedError
+
+    def mlperf_enqueue(self, task_id, device, attempts=None) -> dict:
+        """Queue a training-speed run (job kind "mlperf") on this machine; {"id", "label"}. It waits its turn behind any training job."""
         raise NotImplementedError
 
     def benchmark(self) -> dict:
@@ -863,6 +885,19 @@ class FakeServices(Services):
 
     def conversations(self, params):
         return [{"user": f"Question {n}?", "assistant": f"Answer {n}."} for n in range(int(self.conversations_in_text))]
+
+    def cluster_selftest_start(self, addresses, peer_url, api_port):
+        """A self-test whose every step passes at once (nothing is on the network); `studio_api --fake` shows the card with it."""
+        import studio_selftest
+        test = studio_selftest.SelfTest(None, list(addresses), peer_url, "this computer")
+        for step in test.result.steps:
+            step.status, step.detail, step.seconds = studio_selftest.PASS, "Simulated: this is the fake app.", 0.1
+        test.result.state, test.result.finished_at = "passed", test.now()
+        self._selftest = test.result.view()
+        return self._selftest
+
+    def cluster_selftest(self):
+        return getattr(self, "_selftest", {"state": "never", "id": "", "machines": [], "started_at": 0., "finished_at": None, "steps": []})
 
     def versions(self):
         return list(self._versions)
@@ -1282,6 +1317,21 @@ class FakeServices(Services):
         return {"items": 40, "tasks": 2, "held_back": True, "chance": .3,
                 "rows": [{"shots": 0, "used": 0, "correct": 11, "accuracy": .275}, {"shots": 1, "used": 1, "correct": 13, "accuracy": .325},
                          {"shots": 4, "used": 3.5, "correct": 14, "accuracy": .35}]}
+
+    def mlperf_board(self, task_id):
+        import studio_mlperf
+        results = getattr(self, "_mlperf", [])
+        return {"tasks": studio_mlperf.task_list(), "board": studio_mlperf.leaderboard(results, task_id),
+                "history": studio_mlperf.history(results, task_id), "devices": ["cpu"]}
+
+    def mlperf_compare(self, ids):
+        import studio_mlperf
+        return studio_mlperf.compare(getattr(self, "_mlperf", []), ids)
+
+    def mlperf_enqueue(self, task_id, device, attempts=None):
+        import studio_mlperf
+        studio_mlperf.get_task(task_id)
+        return {"id": "mlperf01", "label": f"Training speed: {task_id} on {device}"}
 
     def benchmark(self):
         import studio_bench
@@ -2217,6 +2267,46 @@ class WorkspaceServices(Services):
         back for scoring does not count."""
         return bool(self.examples({"datasets": list(dataset_ids), "reviewed_only": True}))
 
+    def cluster_selftest_start(self, addresses, peer_url, api_port):
+        """Queue the self-test's tiny run across `addresses` (this computer joins it) and watch it on a thread (studio_selftest)."""
+        import studio_cluster
+        import studio_selftest
+        from studio_api.version import app_version
+        listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": self.setting("nodes", [])}})
+        unknown = [a for a in addresses if a not in listed]
+        if not addresses or unknown:
+            raise ValueError(f"{', '.join(unknown)} is not on the Machines tab." if unknown else "Choose at least one other machine to test with.")
+        if self.queue().job is not None:
+            raise ValueError("This computer is training something. Test the cluster when it is free.")
+        manager = self.__dict__.setdefault("_selftest", studio_selftest.Manager(self.root / "data" / "cluster_selftest.json"))
+        if manager.running():
+            raise ValueError("A cluster self-test is already running.")
+        own = studio_cluster.own_info(version=app_version())
+
+        def make_job(infos):
+            machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
+                        *({"node": i.hostname or i.address, "address": i.address, "device": i.device, "device_name": i.device_name} for i in infos)]
+            return Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed",
+                       label=f"{studio_selftest.LABEL} across {len(machines)} machines",
+                       params=studio_selftest.job_params(machines, peer_url, api_port, own.hostname))
+
+        def enqueue(job):
+            self.enqueue(job)
+            self.start_queue()
+
+        def status(job_id):
+            failed = next((j for j in self.queue().failed if j.id == job_id), None)
+            return ("failed", failed.error) if failed is not None else ("", "")
+
+        probe = studio_selftest.AppProbe(make_job, enqueue, status, self.remove, app_version())
+        manager.start(studio_selftest.SelfTest(probe, addresses, peer_url, own.hostname))
+        return manager.state()
+
+    def cluster_selftest(self):
+        import studio_selftest
+        manager = self.__dict__.setdefault("_selftest", studio_selftest.Manager(self.root / "data" / "cluster_selftest.json"))
+        return manager.state()
+
     def _once(self, key):
         """The lock held while one cache entry is made: other entries are not held up, and an entry both shell lanes ask for is made once."""
         with self._lock:
@@ -2889,6 +2979,26 @@ class WorkspaceServices(Services):
         result = studio_bench.benchmark(self.root, (v.number if number is None else number, checkpoint), suite,
                                         self._bench_tokens(v, checkpoint), skip=skip)
         return result
+
+    def mlperf_board(self, task_id):
+        import studio_backend
+        import studio_mlperf
+        results = studio_mlperf.load_results(self.root)
+        gpu = studio_backend.gpu_status()
+        return {"tasks": studio_mlperf.task_list(), "board": studio_mlperf.leaderboard(results, task_id),
+                "history": studio_mlperf.history(results, task_id), "devices": ["cpu"] + ([gpu["kind"]] if gpu.get("available") else [])}
+
+    def mlperf_compare(self, ids):
+        import studio_mlperf
+        return studio_mlperf.compare(studio_mlperf.load_results(self.root), ids)
+
+    def mlperf_enqueue(self, task_id, device, attempts=None):
+        import studio_mlperf
+        task = studio_mlperf.get_task(task_id)
+        label = f"Training speed: {task.title} v{task.version} on {device}"
+        job = Job(id=uuid.uuid4().hex[:8], kind="mlperf", label=label, params={"task": task_id, "device": device, "attempts": attempts})
+        self.enqueue(job)
+        return {"id": job.id, "label": label}
 
     def benchmark(self):
         import studio_bench

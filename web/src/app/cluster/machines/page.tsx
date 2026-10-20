@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { problem, useCluster } from "@/lib/cluster";
 import { CLUSTER as T } from "@/lib/copy/cluster";
 import { useQueue } from "@/app/queue/use-queue";
+import { SelfTestCard } from "../selftest/selftest-card";
 import { AccessCard } from "./access";
 import { changed, cleanList, jobRows } from "./logic";
 import { MachineCard } from "./machine-card";
@@ -85,6 +86,7 @@ export default function MachinesPage() {
               </div>
             )}
           </section>
+          {!read.isPending && <SelfTestCard peers={nodes.filter((node) => !node.local).map((node) => ({ address: node.address, hostname: node.hostname }))} />}
           <section aria-labelledby="manage" className="flex flex-col gap-3" data-testid="manage">
             <div className="flex flex-col gap-1">
               <h2 id="manage" className="text-lg font-semibold tracking-tight">{T.manage}</h2>

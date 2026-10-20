@@ -16,6 +16,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -106,6 +107,9 @@ def record() -> dict[str, str]:
     kept = dict(studio_distributed.RUNS)  # runs another test left in the process are not part of a fresh app's answers
     studio_distributed.RUNS.clear()
     try:
+        # The modern preset picks bfloat16 where this computer runs it; a recording must not depend on the GPU it was made on.
+        cpu = mock.patch("studio_modules.precision.policy.likely_device", return_value="cpu")
+        cpu.start()
         services = FakeServices()
         client = TestClient(create_app(services, open=True, hosts=ANY))
         ids: dict[str, str] = {}
@@ -121,6 +125,7 @@ def record() -> dict[str, str]:
             out[f"{name}.json"] = json.dumps(_steady(fixture, ids), indent=2, sort_keys=True) + "\n"
         out.update(_demo(client, services, ids))
     finally:
+        cpu.stop()
         studio_distributed.RUNS.clear()
         studio_distributed.RUNS.update(kept)
     return out

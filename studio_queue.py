@@ -18,7 +18,7 @@ from studio_failures import explain
 from studio_timing import timed
 
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now", "import_pretrained",
-         "pretrain_distributed", "diloco_member", "rlhf_loop")
+         "pretrain_distributed", "diloco_member", "rlhf_loop", "mlperf")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 FAILED_SHOWN = 5

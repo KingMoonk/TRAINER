@@ -1,3 +1,5 @@
 # The training engine: PyTorch on the CPU, a CUDA GPU or Apple Metal (MPS).
 # The default wheel from PyPI covers the CPU and Apple Metal; for an NVIDIA GPU see requirements-gpu.txt.
 torch>=2.14.1,<3
+# Fast subword tokenizer: learned from a stream of the whole corpus, encoded in native code (wheels for Windows, macOS and Linux).
+tokenizers>=0.22,<1

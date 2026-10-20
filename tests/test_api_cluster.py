@@ -149,6 +149,10 @@ class ClusterRoutes(ApiCase):
         self.call("PUT", "/cluster/access", json={"allow_users": ["me@example.com"], "allow_tags": ["tag:trainer"]})
         with mock.patch.object(studio_peer.PeerClient, "delete_json", return_value=None):
             self.call("POST", "/cluster/remote/{job_id}/stop", 204, path={"job_id": "x"}, json={"address": "gpu-box"})
+        self.assertEqual(self.call("GET", "/cluster/selftest")["state"], "never")  # the self-test itself: tests/test_selftest.py, tests/e2e_cluster.py
+        self.call("POST", "/cluster/selftest", 202, json={"machines": ["gpu-box"]})
+        self.assertFalse(self.call("POST", "/cluster/selftest/ping", json={"url": "http://127.0.0.1:1"})["ok"])
+        self.call("POST", "/cluster/selftest/digest", 409, json={"url": "http://127.0.0.1:1", "run": "r1", "round": 0, "term": 1})
         self.assertAllRoutesHit()
 
     def test_a_job_that_runs_on_a_peer_can_be_stopped_from_here(self):

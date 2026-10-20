@@ -390,6 +390,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cluster/selftest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Selftest
+         * @description The cluster self-test as it stands: its steps while it runs, else the last one's (kept across restarts), else state `never`.
+         */
+        get: operations["selftest_cluster_selftest_get"];
+        put?: never;
+        /**
+         * Start Selftest
+         * @description Start the self-test with the listed machines: the checks per machine, then a tiny real DiLoCo run through the queue, invite and
+         *     join path, each step with its verdict. 409 with a sentence when it cannot start (one is running, this computer is busy, an address is
+         *     not on the Machines list).
+         */
+        post: operations["start_selftest_cluster_selftest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cluster/selftest/digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Selftest Digest
+         * @description Download the weights of an open round from the coordinator at `url`, as a member does, and answer their checksum. 409 when the
+         *     round has closed or the coordinator refused.
+         */
+        post: operations["selftest_digest_cluster_selftest_digest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cluster/selftest/ping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Selftest Ping
+         * @description Asked by the machine running the self-test: can this one reach `url` (that machine, by the address it gave its members)?
+         */
+        post: operations["selftest_ping_cluster_selftest_ping_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collect": {
         parameters: {
             query?: never;
@@ -1421,6 +1488,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/design/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start
+         * @description The design a person with no saved version starts from: the modern preset, bfloat16 where this computer runs it.
+         */
+        get: operations["start_design_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/design/tower": {
         parameters: {
             query?: never;
@@ -1912,6 +1999,63 @@ export interface paths {
         post?: never;
         /** Cancel Job */
         delete: operations["cancel_job_jobs__job_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mlperf/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Board */
+        get: operations["board_mlperf_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mlperf/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare
+         * @description Summaries of the chosen results side by side. 422 when they are of different tasks or task versions.
+         */
+        post: operations["compare_mlperf_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mlperf/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run
+         * @description Queue a run of the task on this machine; it starts when the queue is free.
+         */
+        post: operations["run_mlperf_run_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3352,6 +3496,32 @@ export interface components {
             /** Label */
             label: string;
         };
+        /** BoardOut */
+        BoardOut: {
+            /**
+             * Board
+             * @description studio_mlperf.leaderboard: results per division, fastest first, and the other task versions held apart
+             */
+            board: {
+                [key: string]: unknown;
+            };
+            /**
+             * Devices
+             * @description the devices this machine can time a task on
+             */
+            devices: string[];
+            /**
+             * History
+             * @description the single-device division's converged times in time order, with the app version of each
+             */
+            history: {
+                [key: string]: unknown;
+            };
+            /** Tasks */
+            tasks: components["schemas"]["TaskOut"][];
+        } & {
+            [key: string]: unknown;
+        };
         /** Body_import_data_data__kind__import_post */
         Body_import_data_data__kind__import_post: {
             /** Files */
@@ -3735,6 +3905,11 @@ export interface components {
             variants: components["schemas"]["studio_api__routers__benchmark__PlanRow"][];
             /** Wall Seconds */
             wall_seconds: number;
+        };
+        /** CompareRequest */
+        CompareRequest: {
+            /** Ids */
+            ids: string[];
         };
         /**
          * CompareSetup
@@ -6191,15 +6366,6 @@ export interface components {
              */
             up_next: components["schemas"]["JobModel"][];
         };
-        /** Queued */
-        Queued: {
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Outlook */
-            outlook: string;
-        };
         /** QuickTestCheck */
         QuickTestCheck: {
             /**
@@ -7074,10 +7240,82 @@ export interface components {
             /** Version */
             version?: number | null;
         };
-        /** RunRequest */
-        RunRequest: {
-            /** Version */
-            version: number;
+        /** SelfTestDigest */
+        SelfTestDigest: {
+            /** Round */
+            round: number;
+            /** Run */
+            run: string;
+            /** Term */
+            term: number;
+            /** Url */
+            url: string;
+        };
+        /** SelfTestDigestAnswer */
+        SelfTestDigestAnswer: {
+            /** Bytes */
+            bytes: number;
+            /** Seconds */
+            seconds: number;
+            /** Sha256 */
+            sha256: string;
+        };
+        /** SelfTestPing */
+        SelfTestPing: {
+            /** Url */
+            url: string;
+        };
+        /** SelfTestPingAnswer */
+        SelfTestPingAnswer: {
+            /** Error */
+            error: string;
+            /** Ok */
+            ok: boolean;
+            /** Seconds */
+            seconds: number;
+        };
+        /** SelfTestRun */
+        SelfTestRun: {
+            /** Finished At */
+            finished_at: number | null;
+            /** Id */
+            id: string;
+            /** Machines */
+            machines: string[];
+            /** Started At */
+            started_at: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "never" | "running" | "passed" | "failed";
+            /** Steps */
+            steps: components["schemas"]["SelfTestStep"][];
+        };
+        /** SelfTestStart */
+        SelfTestStart: {
+            /** Machines */
+            machines: string[];
+        };
+        /** SelfTestStep */
+        SelfTestStep: {
+            /** Detail */
+            detail: string;
+            /** Fix */
+            fix: string;
+            /** Id */
+            id: string;
+            /** Machine */
+            machine: string;
+            /** Seconds */
+            seconds: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "pass" | "fail" | "skipped";
+            /** Title */
+            title: string;
         };
         /**
          * SharedVersion
@@ -7401,6 +7639,15 @@ export interface components {
             min_score?: number | null;
             /** Sites */
             sites?: string[] | null;
+        };
+        /** Start */
+        Start: {
+            /** Note */
+            note: string;
+            /** Spec */
+            spec: {
+                [key: string]: unknown;
+            };
         };
         /**
          * StartRun
@@ -7758,6 +8005,25 @@ export interface components {
                 ];
             };
         };
+        /** TaskOut */
+        TaskOut: {
+            /** Attempts */
+            attempts: number;
+            /** Checksum */
+            checksum: string;
+            /** Id */
+            id: string;
+            /** Step Cap */
+            step_cap: number;
+            /** Target Bpc */
+            target_bpc: number;
+            /** Title */
+            title: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** TeacherOut */
         TeacherOut: {
             /** Name */
@@ -8100,6 +8366,20 @@ export interface components {
             /** Variant */
             variant: number;
         };
+        /** Queued */
+        studio_api__routers__benchmark__Queued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Outlook */
+            outlook: string;
+        };
+        /** RunRequest */
+        studio_api__routers__benchmark__RunRequest: {
+            /** Version */
+            version: number;
+        };
         /** Accepted */
         studio_api__routers__cluster__Accepted: {
             /** Epoch */
@@ -8172,6 +8452,25 @@ export interface components {
             t: number;
             /** Tokens Per Second */
             tokens_per_second: number | null;
+        };
+        /** Queued */
+        studio_api__routers__mlperf__Queued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** RunRequest */
+        studio_api__routers__mlperf__RunRequest: {
+            /** Attempts */
+            attempts?: number | null;
+            /**
+             * Device
+             * @default cpu
+             */
+            device: string;
+            /** Task */
+            task: string;
         };
         /**
          * GateModel
@@ -8307,7 +8606,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Queued"];
+                    "application/json": components["schemas"]["studio_api__routers__benchmark__Queued"];
                 };
             };
             /** @description Validation Error */
@@ -8403,7 +8702,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RunRequest"];
+                "application/json": components["schemas"]["studio_api__routers__benchmark__RunRequest"];
             };
         };
         responses: {
@@ -8857,6 +9156,125 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    selftest_cluster_selftest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfTestRun"];
+                };
+            };
+        };
+    };
+    start_selftest_cluster_selftest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelfTestStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfTestRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    selftest_digest_cluster_selftest_digest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelfTestDigest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfTestDigestAnswer"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    selftest_ping_cluster_selftest_ping_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelfTestPing"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfTestPingAnswer"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -10520,6 +10938,26 @@ export interface operations {
             };
         };
     };
+    start_design_start_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Start"];
+                };
+            };
+        };
+    };
     tower_design_tower_post: {
         parameters: {
             query?: never;
@@ -11262,6 +11700,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_mlperf_board_get: {
+        parameters: {
+            query?: {
+                task?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_mlperf_compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_mlperf_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["studio_api__routers__mlperf__RunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__mlperf__Queued"];
                 };
             };
             /** @description Validation Error */

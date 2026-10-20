@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from studio_core import replace_file
+from studio_preset import room_ratio
 from studio_spec import block_at, structure_key, validate_spec
 
 STATUSES = ("draft", "saved", "queued", "training", "trained")
@@ -33,7 +34,7 @@ class NoCheckpoint(ValueError):
                          if version else "No version has trained yet. Queue one from Build your model.")
 
 
-_WORDS = {"byte": "letters", "character": "letters", "bpe_gpt2": "large word list", "bpe_custom": "small word list",
+_WORDS = {"byte": "letters", "character": "letters", "bpe_gpt2": "large word list", "bpe_custom": "small word list", "bpe_fast": "small word list",
           "word": "whole words"}
 
 
@@ -42,7 +43,7 @@ def _facts(spec):
     d = spec["dims"]["d_model"]
     block = block_at(spec, 0)
     return dict(blocks=spec["dims"]["n_layer"], heads=block["mixer"]["config"].get("heads"), width=d, context=spec["dims"]["n_ctx"],
-                room=(block["channel"]["config"].get("d_ff") or 4 * d) / d, words=_WORDS.get(spec["tokenizer"]["id"], spec["tokenizer"]["id"]))
+                room=room_ratio(block["channel"], d), words=_WORDS.get(spec["tokenizer"]["id"], spec["tokenizer"]["id"]))
 
 
 def _room_label(ratio):
