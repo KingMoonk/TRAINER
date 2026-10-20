@@ -158,7 +158,10 @@ class SelfTest:
             except Exception as exc:  # noqa: BLE001 - its text is the machine's answer
                 import studio_distributed
                 machine = type("M", (), {"node": address, "address": address})()
-                return self._bad(f"auth:{address}", studio_distributed.refusal(machine, exc), "Allow this computer on that machine (Machines tab, Access), then test again.", started)
+                refused = getattr(exc, "status", None) in (401, 403)
+                fix = ("Allow this computer on that machine (Machines tab, Access), then test again." if refused
+                       else "Check the machine's address on the Machines tab and that the app is running there, then test again.")
+                return self._bad(f"auth:{address}", studio_distributed.refusal(machine, exc), fix, started)
             self._ok(f"auth:{address}", "It accepts calls from this computer.", started)
             if info.busy:
                 return self._bad(f"free:{address}", f"{address} is busy with a job of its own.", f"Wait for it to finish or stop it on {address}, then test again.")

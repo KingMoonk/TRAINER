@@ -19,6 +19,10 @@ class Response(io.BytesIO):
         self.close()
 
 
+class Page(bytes):
+    """A 200 body the peer says is a web page (what Next answers to a path the API would own)."""
+
+
 class Opener:
     """Answers each call with the next item: bytes (a 200 body) or an exception to raise. Records the requests."""
 
@@ -30,7 +34,9 @@ class Opener:
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
             raise answer
-        return Response(answer)
+        response = Response(answer)
+        response.headers = {"Content-Type": "text/html; charset=utf-8"} if isinstance(answer, Page) else {}
+        return response
 
 
 def http_error(code, body):
@@ -145,6 +151,18 @@ class Calls(unittest.TestCase):
         client = PeerClient("https://beast.tail1234.ts.net", opener=opener, sleep=self.fail)
         self.assertEqual(client.post_json("cluster/jobs", {}), {"ok": True})
         self.assertEqual(opener.requests[1][0].full_url, "https://beast.tail1234.ts.net/api/cluster/jobs")
+
+    def test_a_redirect_followed_to_a_200_page_goes_under_api(self):
+        opener = Opener(Page(b"<!DOCTYPE html><html></html>"), b'[{"id": 1}]')
+        client = PeerClient("https://beast.tail1234.ts.net", opener=opener, sleep=self.fail)
+        self.assertEqual(client.get_json("queue"), [{"id": 1}])
+        self.assertEqual(opener.requests[1][0].full_url, "https://beast.tail1234.ts.net/api/queue")
+
+    def test_a_200_page_at_both_paths_is_a_page_error(self):
+        opener = Opener(Page(b"<!DOCTYPE html>one"), Page(b"<!DOCTYPE html>two"))
+        with self.assertRaises(PeerError) as caught:
+            PeerClient("https://box.tail1234.ts.net", opener=opener, sleep=self.fail).get_json("queue")
+        self.assertEqual(caught.exception.status, 200)
 
     def test_a_json_error_from_the_api_is_not_retried_under_api(self):
         opener = Opener(http_error(404, '{"detail": "Not Found"}'))
