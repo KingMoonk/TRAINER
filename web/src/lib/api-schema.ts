@@ -2663,7 +2663,8 @@ export interface paths {
         put?: never;
         /**
          * Enqueue
-         * @description Services.enqueue: add a job to the end of Up next. An unknown kind is a 400.
+         * @description Services.enqueue: add a job to the end of Up next, or answer the job already queued under the caller's `id`. An unknown kind is a
+         *     400.
          */
         post: operations["enqueue_queue_jobs_post"];
         delete?: never;
@@ -2789,6 +2790,27 @@ export interface paths {
          *     pins through the Runner, and the stand-in services edit the job in place.
          */
         post: operations["pin_queue_jobs__job_id__pin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/queue/jobs/{job_id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart
+         * @description Run a failed job again: a copy with the same kind, label, note and params goes first in Up next, and the failed entry is
+         *     dismissed. Only a failed job restarts; any other id is a 404.
+         */
+        post: operations["restart_queue_jobs__job_id__restart_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5495,10 +5517,14 @@ export interface components {
         /**
          * NewJob
          * @description `params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.
+         *     `id` is the caller's own id for the job, so a POST sent again after it timed out is added once: the job already queued under that id
+         *     is answered instead (whatever its status). Absent, the id is made here.
          */
         NewJob: {
             /** Eta S */
             eta_s?: number | null;
+            /** Id */
+            id?: string | null;
             /** Kind */
             kind: string;
             /**
@@ -13055,6 +13081,37 @@ export interface operations {
                 "application/json": components["schemas"]["Pin"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueStateModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restart_queue_jobs__job_id__restart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -20,10 +20,11 @@ const diloco = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function server(runs: unknown[] = [diloco()]) {
+function server(runs: unknown[] = [diloco()], failed: unknown[] = []) {
   const up_next = [job("w1", "v4 post", { kind: "post_training" }), job("w2", "v6 long", { params: { pinned: "beast:8000" } })];
   return mockApi({
-    "GET /queue": () => ({ body: { job: job("v5run", "v5", { kind: "pretrain_distributed", status: "running" }), step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next, plan: PLAN } }),
+    "GET /queue": () => ({ body: { job: job("v5run", "v5", { kind: "pretrain_distributed", status: "running" }), step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next, failed, plan: PLAN } }),
+    "POST /queue/jobs/*/restart": { body: { job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { supported: true }, up_next, failed: [], plan: PLAN } },
     "GET /queue/jobs/*/outlook": { body: { outlook: "after v5" } },
     "GET /cluster/jobs": { body: [] },
     "GET /distributed/runs": () => ({ body: runs }),
@@ -64,6 +65,15 @@ describe("Runs page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Hold: v4 post" }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs/w1/hold")).toBe(true));
     expect(calls.find((c) => c.path === "/queue/jobs/w1/hold")?.body).toEqual({ held: true });
+  });
+
+  test("a failed job is listed under Completed with its reason and a Restart; a finished run has none", async () => {
+    const calls = server([diloco(), diloco({ id: "done", label: "v1", state: "finished", started_at: 1 })], [job("f1", "v3 broke", { status: "failed", error: "No room left on the disk." })]);
+    renderPage(<RunsPage />);
+    expect(await screen.findByTestId("completed-f1")).toHaveTextContent("failed: No room left on the disk.");
+    expect(screen.queryByRole("button", { name: /^Restart: v1/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /^Restart: .*v3 broke/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs/f1/restart")).toBe(true));
   });
 
   test("a finished run is completed with its val loss, a failed one with its reason", async () => {

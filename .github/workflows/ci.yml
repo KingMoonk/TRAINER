@@ -15,9 +15,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  unit:
+  # the unit tests in four parallel shards (tasks.py test:ci --shard i/4): every test module runs in exactly one, compileall and ruff in shard 1
+  unit-shard:
+    name: unit ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -32,8 +38,17 @@ jobs:
       - run: |
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r requirements-dev.txt
-      # ruff, unit tests and compileall; see tasks.py. macOS and Windows run test:ci:e2e nightly (nightly.yml).
-      - run: python tasks.py test:ci
+      # see tasks.py. macOS and Windows run the whole of test:ci:e2e nightly, unsharded (nightly.yml).
+      - run: python tasks.py test:ci --shard ${{ matrix.shard }}/4
+
+  # the check the main branch ruleset requires: green only when every shard is
+  unit:
+    needs: unit-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: test "${{ needs.unit-shard.result }}" = success
 
   web:
     runs-on: ubuntu-latest

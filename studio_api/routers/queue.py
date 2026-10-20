@@ -36,8 +36,11 @@ class JobModel(Model):
 
 
 class NewJob(BaseModel):
-    """`params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved."""
+    """`params.pinned` (a machine's address or hostname) keeps the job on that machine: it runs there or waits, and is never moved.
+    `id` is the caller's own id for the job, so a POST sent again after it timed out is added once: the job already queued under that id
+    is answered instead (whatever its status). Absent, the id is made here."""
 
+    id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     kind: str
     label: str = ""
     note: str = ""
@@ -141,10 +144,10 @@ def list_jobs(services: Services) -> list[JobModel]:
 
 @router.post("/jobs", status_code=201)
 def enqueue(job: NewJob, services: Services) -> JobModel:
-    """Services.enqueue: add a job to the end of Up next. An unknown kind is a 400."""
-    made = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), **job.model_dump())
-    services.enqueue(made)
-    return JobModel.model_validate(made)
+    """Services.enqueue: add a job to the end of Up next, or answer the job already queued under the caller's `id`. An unknown kind is a
+    400."""
+    made = Job(id=job.id or uuid.uuid4().hex[:8], created_at=time.time(), **job.model_dump(exclude={"id"}))
+    return JobModel.model_validate(services.enqueue(made) or made)
 
 
 SETTLE_S = 2.5  # how long Start waits to see whether the job it starts fails at once
@@ -224,6 +227,20 @@ def remove(job_id: str, services: Services) -> QueueStateModel:
     failed job it dismisses it from the list."""
     if job_id not in {j.id for j in [*local_jobs(services), *services.queue().failed]}:
         raise HTTPException(404, f"No job {job_id}")
+    services.remove(job_id)
+    return _state(services)
+
+
+@router.post("/jobs/{job_id}/restart")
+def restart(job_id: str, services: Services) -> QueueStateModel:
+    """Run a failed job again: a copy with the same kind, label, note and params goes first in Up next, and the failed entry is
+    dismissed. Only a failed job restarts; any other id is a 404."""
+    failed = next((j for j in services.queue().failed if j.id == job_id), None)
+    if failed is None:
+        raise HTTPException(404, f"No failed job {job_id}")
+    again = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind=failed.kind, label=failed.label, note=failed.note, params=dict(failed.params))
+    services.enqueue(again)
+    services.move(again.id, 0)
     services.remove(job_id)
     return _state(services)
 

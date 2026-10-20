@@ -2608,8 +2608,10 @@ class Member:
 
     # -- talking to the coordinator
     def _call(self, call):
-        """Run a client call, waiting for the coordinator to come back if it cannot be reached (a restart) for up to `patience`.
+        """Run a client call, waiting for the coordinator to come back if it cannot be reached (a restart) for up to `patience`. An
+        empty gateway answer counts as not reached: it is `tailscale serve` saying the app behind it is down, as while it restarts.
         Once a higher term has been seen it sends nothing: the call is a 409 without leaving this process."""
+        from studio_cluster import gateway_down
         from studio_peer import PeerError
         end = self.clock() + self.patience
         while True:
@@ -2629,8 +2631,9 @@ class Member:
                         raise Rebound(found) from None
                     raise PeerError(f"The coordinator no longer has run {self.run} (its app restarted), so this member left. "
                                     f"It joins again if it is invited again.", status=404, detail=exc.detail) from None
-                if exc.status is not None or self.clock() >= end or self.stop.is_set():
-                    if exc.status is None and not self.stop.is_set():
+                unreached = exc.status is None or gateway_down(exc)
+                if not unreached or self.clock() >= end or self.stop.is_set():
+                    if unreached and not self.stop.is_set():
                         raise PeerError(f"The coordinator of run {self.run} did not answer for {self.patience:.0f} seconds, so this member "
                                         f"left. It joins again if it is invited again.") from None
                     raise

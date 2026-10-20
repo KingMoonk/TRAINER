@@ -19,8 +19,8 @@ from studio_peer import PeerError
 from tests.test_api_distributed import MACHINES, FakeClient, clients, owner_job
 
 
-def peer(down=False, member_running=False, blocking=None):
-    return {"down": down, "member_running": member_running, "blocking": blocking}
+def peer(down=False, member_running=False, blocking=None, slow=False):
+    return {"down": down, "slow": slow, "member_running": member_running, "blocking": blocking}
 
 
 class OwnerSide(unittest.TestCase):
@@ -65,6 +65,29 @@ class OwnerSide(unittest.TestCase):
         self.assertEqual(row["state"], "unreachable")
         self.assertIn("box did not answer", row["reason"])
 
+    def test_a_machine_down_because_it_refused_or_is_unknown_is_told_to_be_checked(self):
+        row = self.row({"box": peer(down=True)})
+        self.assertEqual(row["reason"], "box did not answer. Check that it is on and that Tailscale is running on it.")
+
+    def test_a_machine_down_only_because_it_answers_slowly_says_so_without_the_advice_to_turn_it_on(self):
+        row = self.row({"box": peer(down=True, slow=True)})
+        self.assertEqual((row["state"], row["reason"]), ("unreachable", "box is answering slowly: it did not answer within 2 seconds. It is asked again shortly."))
+
+    def test_an_invite_that_timed_out_says_the_machine_is_slow_and_one_refused_does_not(self):
+        slow = runs.refusal(self.box, PeerError(f"{self.box.address} did not answer POST /queue/jobs: timed out"))
+        self.assertEqual(slow, "box is answering slowly: it did not answer within 30 seconds. It is invited again at the next round.")
+        refused = runs.refusal(self.box, ConnectionRefusedError())
+        self.assertNotIn("slowly", refused)
+        self.assertIn("refused the connection", refused)
+
+    def test_peer_facts_say_slow_only_for_a_down_machine_whose_last_poll_timed_out(self):
+        import studio_facts
+        queue = [{"id": "job-box", "status": "waiting", "label": "m"}]
+        for down, slowly, expected in ((True, True, True), (True, False, False), (False, True, False)):
+            cluster = types.SimpleNamespace(is_down=lambda node, d=down: d, answers_slowly=lambda node, s=slowly: s)
+            with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
+                self.assertEqual(runs.peer_facts(self.run, cluster)["box"]["slow"], expected)
+
     def test_a_machine_that_refused_the_invite_is_unreachable_with_the_refusal(self):
         self.box.state, self.box.reason = "unreachable", "box refused the connection."
         row = self.row()
@@ -94,7 +117,7 @@ class OwnerSide(unittest.TestCase):
         queue = [{"id": "other", "status": "running", "label": "Version 1", "eta_s": 600.}, {"id": "job-box", "status": "waiting", "label": "m"}]
         with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
             facts = runs.peer_facts(self.run, cluster)
-        self.assertEqual(facts, {"box": {"down": False, "member_running": False, "blocking": {"label": "Version 1", "eta_s": 600.}, "limits": None}})
+        self.assertEqual(facts, {"box": {"down": False, "slow": False, "member_running": False, "blocking": {"label": "Version 1", "eta_s": 600.}, "limits": None}})
         with mock.patch.object(studio_facts, "queue_facts", return_value=([], None)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
             self.assertEqual(runs.peer_facts(self.run, cluster), {})
 

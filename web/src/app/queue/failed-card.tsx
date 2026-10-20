@@ -7,7 +7,7 @@ import { T } from "./copy";
 import type { Job, Queue } from "./logic";
 import type { QueueActions } from "./use-queue";
 
-/** Jobs that ended failed: the sentence says what happened and what to do next; the raw text sits behind a toggle. Dismissing removes the job. */
+/** Jobs that ended failed: the sentence says what happened and what to do next; the raw text sits behind a toggle. Restart runs it again first; dismissing removes the job. */
 export function FailedCard({ queue, actions }: { queue: Queue | undefined; actions: QueueActions }) {
   const failed = queue?.failed ?? [];
   if (failed.length === 0) return null;
@@ -39,6 +39,9 @@ function FailedRow({ job, actions }: { job: Job; actions: QueueActions }) {
             {open ? T.hideDetails : T.showDetails}
           </Button>
         )}
+        <Button size="sm" aria-label={`${T.restart}: ${name}`} disabled={actions.restart.isPending} onClick={() => actions.restart.mutate(job.id)}>
+          {T.restart}
+        </Button>
         <Button variant="outline" size="sm" aria-label={`${T.dismiss}: ${name}`} onClick={() => actions.remove.mutate(job.id)}>
           {T.dismiss}
         </Button>
