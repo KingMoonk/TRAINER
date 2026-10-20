@@ -1,7 +1,7 @@
 """One entry point for tests, so nobody has to remember the flags.
 
     python tasks.py test [tests.test_x ...]   ruff + unit tests (all, or just the modules named). Run this locally.
-    python tasks.py test:ci                   test + compileall. Every pull request runs it, on Linux.
+    python tasks.py test:ci [--shard i/n]     test + compileall + e2e_cluster. Every pull request runs it on Linux, in 4 shards.
     python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). Nightly, on macOS and Windows.
     python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
     python tasks.py web:lint                  eslint + tsc on the web UI (web/). Needs pnpm.
@@ -58,12 +58,61 @@ def test(modules=()):
         run(PY, "-X", "faulthandler", "-m", "unittest", "discover", "-s", "tests", *VERBOSE, env=UNIT)
 
 
-def test_ci():
-    run(PY, "-m", "compileall", "-q", ".")  # catches syntax errors in modules no test imports
+TESTS = Path(__file__).with_name("tests")
+# Seconds a module took in the CI unit job (October 2026 logs). Every other module weighs SECONDS_PER_TEST per test it defines.
+# The longest go first, each to the least loaded shard, so these land in different shards. Re-measure when a shard runs long.
+SLOW = {"e2e_cluster": 40, "test_rl": 41, "test_queue_cluster": 29, "test_failover_cluster": 28, "test_rlhf": 25, "test_worker": 19}
+SECONDS_PER_TEST = .12
+SHARD_ONE_EXTRA = 40  # shard 1 also runs compileall and ruff
+
+
+def test_modules(folder=TESTS):
+    """The modules `unittest discover -s tests` runs (its default pattern is test*.py), plus e2e_cluster."""
+    return sorted(p.stem for p in folder.glob("test*.py")) + ["e2e_cluster"]
+
+
+def module_weight(name, folder=TESTS):
+    if name in SLOW:
+        return SLOW[name]
+    return SECONDS_PER_TEST * max(1, (folder / f"{name}.py").read_text(encoding="utf-8").count("    def test"))
+
+
+def shards(modules, n, weigh=module_weight):
+    """`modules` split into `n` lists, each module in exactly one. Deterministic: heaviest first, ties by name, each to the
+    lightest shard (the lowest index on a tie). Shard 1 starts with the compileall and ruff time it carries."""
+    loads, out = [SHARD_ONE_EXTRA] + [0] * (n - 1), [[] for _ in range(n)]
+    for name in sorted(modules, key=lambda m: (-weigh(m), m)):
+        i = min(range(n), key=lambda k: (loads[k], k))
+        out[i].append(name)
+        loads[i] += weigh(name)
+    return out
+
+
+def parse_shard(args):
+    """(i, n) from `--shard i/n`, 1-based; (1, 1) without it."""
+    if not args:
+        return 1, 1
+    if len(args) != 2 or args[0] != "--shard":
+        sys.exit("usage: python tasks.py test:ci [--shard i/n]")
+    i, _, n = args[1].partition("/")
+    if not (i.isdigit() and n.isdigit() and 1 <= int(i) <= int(n)):
+        sys.exit(f"--shard wants i/n with 1 <= i <= n, not {args[1]}")
+    return int(i), int(n)
+
+
+def test_ci(args=()):
+    """compileall, ruff, the test*.py modules and e2e_cluster. `--shard i/n` runs shard i of n (CI runs four in parallel):
+    compileall and ruff in shard 1 only, and every module in exactly one shard."""
+    i, n = parse_shard(args)
+    if i == 1:
+        run(PY, "-m", "compileall", "-q", ".")  # catches syntax errors in modules no test imports
+        run(PY, "-m", "ruff", "check", ".")
     # runners differ in CPU; a crash in a CPU kernel (bf16, say) shows up on some of them only
     run(PY, "-c", "import platform, torch; print('+ cpu:', platform.processor(), '| torch', torch.__version__, torch.backends.cpu.get_cpu_capability())")
-    test()
-    run(PY, "-m", "unittest", "tests.e2e_cluster", *VERBOSE, env=UNIT)  # a real DiLoCo run and the self-test across two API processes on loopback, about 40 s
+    # e2e_cluster is a real DiLoCo run and the self-test across two API processes on loopback, about 40 s.
+    # A native crash prints every thread's Python stack instead of ending silently.
+    mine = shards(test_modules(), n)[i - 1]
+    run(PY, "-X", "faulthandler", "-m", "unittest", *VERBOSE, *(f"tests.{m}" for m in mine), env=UNIT)
 
 
 def test_ci_e2e():
@@ -464,6 +513,6 @@ TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile"
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
-    if name not in TASKS or (args and name != "test"):
+    if name not in TASKS or (args and name not in ("test", "test:ci")):
         sys.exit(__doc__)
-    TASKS[name](args) if name == "test" else TASKS[name]()
+    TASKS[name](args) if name in ("test", "test:ci") else TASKS[name]()
