@@ -44,6 +44,7 @@ from pathlib import Path
 import numpy as np
 
 import studio_run_health as run_health
+import studio_shards
 from studio_failover import POLL_BACKOFF_MAX, POLL_EVERY
 import studio_diloco_rules as drules
 
@@ -555,6 +556,13 @@ def step_size(delta, momentum, lr, mu):
     return float(np.sqrt(sum(float(((lr * (gradient + mu * momentum[name])) ** 2).sum()) for name, gradient in delta.items())))
 
 
+def tokenized_root(directory):
+    """Where the tokenized text of a run is cached so the next run on the same data and tokenizer finds it: data/shards beside the runs
+    folder (the one Resources > Storage ages out). A run folder anywhere else (a test, a script) keeps it inside itself."""
+    directory = Path(directory)
+    return directory.parent.parent / "data" / "shards" if directory.parent.name == "runs" else directory / "windows"
+
+
 PREPARE_EVERY = 50  # documents tokenized between two progress reports of the build
 
 
@@ -654,17 +662,26 @@ class Coordinator:
         training, validation, split = sm.partition_examples(examples, cfg["validation"], random.Random(cfg["seed"]), True)
         split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" + "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
         say = progress or (lambda *_: None)
-        say("tokenizer", 0, 0)
-        module, module_cfg = module_of("tokenizer", sm.effective_spec(cfg)["tokenizer"])
-        tokenizer = module.fit(module_cfg, training)
+        spec = sm.effective_spec(cfg)["tokenizer"]
+        folder = studio_shards.tokenizer_folder(shard_dir or tokenized_root(directory), split_hash, spec)  # shared by runs: this data under this tokenizer
+        tokenizer = None
+        saved = studio_shards.load_tokenizer(folder)
+        if saved is not None:
+            try:
+                tokenizer = sm.Tokenizer.restore(saved)
+            except (ValueError, KeyError, TypeError):
+                tokenizer = None  # unreadable: fitted again below
+        if tokenizer is None:
+            say("tokenizer", 0, 0)
+            module, module_cfg = module_of("tokenizer", spec)
+            tokenizer = module.fit(module_cfg, training)
+            studio_shards.save_tokenizer(folder, tokenizer.serialize())
         tally = [0, len(training) + len(validation)]  # documents cut so far, of all
-        say("tokenizing", 0, tally[1])
-        if sm.characters_in(training) + sm.characters_in(validation) >= sm.STREAM_CHARS:
-            train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash,
-                                             shard_dir or directory / "windows")
-        else:
-            train, val = sm.samples_from(_counted(training, tally, say), tokenizer, cfg), sm.samples_from(_counted(validation, tally, say), tokenizer, cfg)
-        say("tokenizing", tally[1], tally[1])
+        cached = studio_shards.load(folder, sm.shard_key(tokenizer, cfg, split_hash), tokenizer.vocab_size) is not None
+        say("cached" if cached else "tokenizing", tally[1] if cached else 0, tally[1])  # cached: the windows are on disk from an earlier run
+        train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash, folder)
+        if not cached:
+            say("tokenizing", tally[1], tally[1])
         if not train:
             raise ValueError("No trainable target tokens were found.")
         if settings.target_win_rate is not None and not val:
@@ -688,7 +705,7 @@ class Coordinator:
         coordinator.split_hash, coordinator.split = split_hash, split
         coordinator.model_spec = model.spec
         for number, more in enumerate(later, 1):
-            coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, directory / "windows" / f"source{number}"))
+            coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, folder))
         coordinator._load_lessons()
         if coordinator.rules.source >= len(coordinator.spans):
             raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "

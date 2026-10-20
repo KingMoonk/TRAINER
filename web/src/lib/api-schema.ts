@@ -6005,7 +6005,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "reading" | "teacher" | "tokenizer" | "tokenizing" | "inviting";
+            phase: "reading" | "teacher" | "tokenizer" | "tokenizing" | "cached" | "inviting";
             /** Total */
             total: number;
         };

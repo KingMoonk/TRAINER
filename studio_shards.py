@@ -31,6 +31,33 @@ def key_for(*parts):
     return hashlib.sha256(json.dumps([FORMAT, *parts], sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
 
 
+def tokenizer_folder(root, split_hash, spec):
+    """root/tok-<key>: everything cached for this data split under this tokenizer spec (id and config) - the fitted tokenizer and,
+    in folders of their own, its windows. Another spec on the same data is another folder, so each format chosen keeps its own."""
+    return Path(root) / f"tok-{key_for('tokenizer', split_hash, spec)}"
+
+
+def load_tokenizer(folder):
+    """The serialized tokenizer fitted earlier into `folder`, or None when there is none or the file cannot be read."""
+    try:
+        data = json.loads((Path(folder) / "tokenizer.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def save_tokenizer(folder, data):
+    """Write the serialized tokenizer to folder/tokenizer.json through a temporary file, so it is whole or absent."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    scratch = folder / f"tokenizer.json.{uuid.uuid4().hex[:8]}.part"
+    try:
+        scratch.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(scratch, folder / "tokenizer.json")
+    finally:
+        scratch.unlink(missing_ok=True)
+
+
 def dtype_for(vocab_size):
     return np.uint16 if vocab_size <= 65535 else np.uint32
 

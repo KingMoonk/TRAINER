@@ -152,6 +152,7 @@ PREPARING = {
     "teacher": "Checking the teacher.",
     "tokenizer": "Learning the tokenizer.",
     "tokenizing": "Tokenizing the text",
+    "cached": "Reading the tokenized text from the cache.",
     "inviting": "Sending the invitations to the other machines.",
 }
 

@@ -237,7 +237,7 @@ class RunHealth(BaseModel):
 class Prep(BaseModel):
     """What the run is doing before its first round (studio_distributed.preparation): building its data, then inviting the machines."""
 
-    phase: Literal["reading", "teacher", "tokenizer", "tokenizing", "inviting"]
+    phase: Literal["reading", "teacher", "tokenizer", "tokenizing", "cached", "inviting"]
     note: str  # one sentence, with the count while it tokenizes
     done: int  # documents tokenized so far ...
     total: int  # ... of all (0 until known)
