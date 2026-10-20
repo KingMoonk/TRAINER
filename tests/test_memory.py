@@ -74,7 +74,8 @@ class BatchCapChecks(unittest.TestCase):
         self.assertLess(batch_cap(CONFIG, .5, device="cpu", ram=ram), 4)
 
     def test_a_small_auto_model_is_budgeted_on_the_cpu_without_probing_the_gpu(self):
-        with mock.patch("studio_backend.gpu_status", side_effect=AssertionError("a small model never probes the GPU")):
+        with mock.patch("studio_backend.gpu_status", side_effect=AssertionError("a small model never probes the GPU")), \
+                mock.patch("studio_probe.any_stored", return_value=False):  # no probe on this machine, whatever another test left in the cache
             self.assertEqual(batch_cap(dict(CONFIG, device="auto"), 1., ram=ram_for(CONFIG, 2)), 2)
 
     def test_a_large_auto_model_is_budgeted_on_the_gpu_it_will_use(self):
