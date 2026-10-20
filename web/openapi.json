@@ -9248,6 +9248,11 @@
             ],
             "title": "Best Val Loss"
           },
+          "can_join": {
+            "default": false,
+            "title": "Can Join",
+            "type": "boolean"
+          },
           "can_pause": {
             "default": false,
             "title": "Can Pause",
@@ -17462,6 +17467,49 @@
         ]
       }
     },
+    "/distributed/runs/{run_id}/join": {
+      "post": {
+        "description": "Ask the computer that coordinates a running run to add this one: it joins from the round after its invitation. 409 for a run\nthis computer coordinates; the coordinator's own refusals come back as they are.",
+        "operationId": "join_run_distributed_runs__run_id__join_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Join Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
     "/distributed/runs/{run_id}/lessons": {
       "get": {
         "description": "What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the\nrun is not going. A run another computer coordinates is read by asking that computer.",
@@ -17616,6 +17664,58 @@
           }
         },
         "summary": "Keep Run Lesson",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/members/{node}/add": {
+      "post": {
+        "description": "The coordinator's side of a join: add `node`, one of this computer's listed machines, to the running run. The scheduler offers\nit a slot now and invites it, and it trains from the round after; a machine that is busy gets a slot once it is free. 409 when the\nrun is not running here, for a node that is not listed, already in the run, or stopped by the owner, and for a full run.",
+        "operationId": "add_member_distributed_runs__run_id__members__node__add_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node",
+            "required": true,
+            "schema": {
+              "title": "Node",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Member",
         "tags": [
           "distributed"
         ]

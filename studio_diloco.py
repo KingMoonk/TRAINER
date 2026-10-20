@@ -1105,6 +1105,20 @@ class Coordinator:
         """The fence a member's lease is compared by: the coordinator's term first, then the scheduler's lease epoch."""
         return (self.term if term is None else term, epoch)
 
+    def refusal(self, node):
+        """Why `node` cannot be added to the run now, in a sentence, or "" when it can: the owner checks before it invites a machine
+        that asked to join. The member's own join checks the same again."""
+        with self.cond:
+            if self.finished:
+                return FINISHED
+            if node in self.banned:
+                return f"{node} was stopped by the run's owner."
+            if node in self.members or node in self.pending:
+                return f"{node} is already in this run."
+            if len(self.members) - len(self.leaving & set(self.members)) + len(self.pending) >= self.settings.max_members:  # a leaver's seat is free
+                return f"The run already has its {self.settings.max_members} members."
+            return ""
+
     def join(self, node, epoch=0, term=None):
         with self.cond:
             self._touch(node)

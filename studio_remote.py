@@ -801,7 +801,7 @@ class Cluster:
     def _tick_gangs(self):
         """Owner: free the slots of runs that ended, renew the slots whose member the coordinator hears from, and for each slot that
         lapsed let its member go at the round boundary and free the slot. Open slots are offered each tick to the machines that are free
-        then (`_refill`), so a machine that frees up joins the run at the round after it is invited. A machine holding a slot whose
+        then (`offer`), so a machine that frees up joins the run at the round after it is invited. A machine holding a slot whose
         invitation failed is asked again once per round (`studio_distributed.reinvite`)."""
         import studio_distributed
         import studio_diloco
@@ -823,7 +823,7 @@ class Cluster:
                                                            and (reported is None or reported <= self.lease_s)):
                         self.gangs.heard(run_id, address)
                 studio_distributed.reinvite(job, coordinator.next_round, self.client_for, among=set(self.gangs.held(run_id)))
-                self._refill(job)
+                self.offer(job)
         for run_id, address in self.gangs.lapsed():
             job, coordinator = live.get(run_id), studio_diloco.COORDINATORS.get(run_id)
             self.gangs.drop(run_id, address)
@@ -836,20 +836,22 @@ class Cluster:
                 studio_distributed.lapse(run, machine.node, self.client_for)
                 self.runner._emit("cluster", {"job": run_id, "state": "member_lapsed", "node": address, "detail": machine.node})
 
-    def _refill(self, job):
-        """Offer the open slots of a running distributed run to the machines that are free now, and invite them."""
+    def offer(self, job):
+        """Offer the open slots of a running distributed run to the machines that are free now, and invite them. Returns the addresses
+        that got a slot."""
         import studio_distributed
         import studio_diloco
         try:
             settings = studio_diloco.Settings.from_params(job.params)
         except ValueError:
-            return
+            return []
         chosen = {m.get("address") for m in job.params.get("machines") or []}
         nodes = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen]
         added = self.gangs.fill(job.id, nodes, self.health, settings.max_members)
         if added:
             studio_distributed.invite(job, self.client_for, only=added)
             self.runner._emit("cluster", {"job": job.id, "state": "member_added", "node": ",".join(added), "detail": ""})
+        return added
 
     def _reassign(self, job_id):
         """The runner has been silent for two leases, so its self-fence has fired: the job is interrupted at its last checkpoint and
