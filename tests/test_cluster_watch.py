@@ -114,6 +114,24 @@ class Watchdog(unittest.TestCase):
         self.coordinator.stop()
         self.assertEqual(self.check(), [])
 
+    def test_a_stopped_run_whose_job_is_still_running_is_ended_after_the_grace_and_not_before(self):
+        self.coordinator.stop()  # a stop path that did not end the job: the queue would show it running and the node busy (#613)
+        self.clock.advance(watch.STOP_GRACE - 1)
+        self.assertEqual(self.check(), [])
+        self.assertEqual(self.runner.removed, [])
+        self.clock.advance(2)
+        self.assertEqual(self.check(), ["run1"])
+        self.assertEqual(self.runner.removed, ["run1"])
+        self.assertIn("was stopped but the driver was still running", self.job.params["ended_reason"])
+        self.assertEqual(self.check(), [])  # once, not on every tick while the worker leaves
+
+    def test_a_stopped_run_whose_job_has_ended_is_left_alone(self):
+        self.coordinator.stop()
+        self.job.status = "stopped"
+        self.clock.advance(watch.STOP_GRACE * 3)
+        self.assertEqual(self.check(), [])
+        self.assertEqual(self.runner.removed, [])
+
     def test_a_run_without_a_local_member_has_no_driver_to_watch(self):
         self.run.machines = [runs.Machine("b", "b")]
         self.clock.advance(watch.DRIVER_TIMEOUT * 3)

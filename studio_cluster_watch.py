@@ -13,6 +13,8 @@ from studio_peer import PeerClient
 DRIVER_TIMEOUT = 900.  # seconds the owner's own member may go without a call before its run is ended
 SILENT = "Ended: the driver stopped responding at round {round}, so the run was stopped."
 GONE = "Ended: the driver stopped at round {round}{why}, so the run was stopped."
+STOP_GRACE = 120.  # seconds an owner job may keep running after its run was stopped: its worker is saving and leaving
+LINGERING = "Ended: the run was stopped but the driver was still running {seconds:.0f} seconds later, so its job was stopped."
 OVER = ("failed", "stopped")  # the owner job statuses that mean its worker is gone
 
 
@@ -23,8 +25,12 @@ def driver_of(run):
 
 def reason_for(coordinator, job, driver, timeout=DRIVER_TIMEOUT):
     """Why the run should end now, or "" when its driver is fine: the owner job ended while the coordinator still goes, or the
-    driver has not called it for `timeout` seconds while the job still says it runs."""
+    driver has not called it for `timeout` seconds while the job still says it runs, or the run was stopped and the job still runs
+    after STOP_GRACE."""
     if coordinator.finished:
+        stopped_ago = coordinator.clock() - getattr(coordinator, "stopped_at", coordinator.clock())
+        if getattr(coordinator, "stopped", False) and job.status == "running" and not job.params.get("ended_reason") and stopped_ago > STOP_GRACE:
+            return LINGERING.format(seconds=stopped_ago)  # stopped by a path that did not end the job: it would stay running, and the node busy
         return ""
     if job.status in OVER:
         return GONE.format(round=coordinator.next_round, why=f" ({job.error})" if job.error else "")
