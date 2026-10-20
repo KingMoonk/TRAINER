@@ -32,6 +32,8 @@ ENDED = ("finished", "stopped", "failed")  # states of a run nobody takes over
 CLAIM = "claim"  # store kind, key run id: {"term", "round", "rank", "released"}, written by the node that coordinates the run
 HELD = "held"  # store kind, key run id: {"term", "round", "rank", "ready", "held"}, written by a node that keeps a replica of it
 WHERE_PREFIX = "Coordinated on "
+POLL_EVERY = 5.  # seconds between polls of the peers (studio_remote reads it from here: a member's wait for a successor is derived from it)
+POLL_BACKOFF_MAX = 2 * POLL_EVERY  # the longest wait between polls of a peer that does not answer: a peer that answers again is seen within this
 SAVE_TRIES = 3  # polls that ask the successor for a finished run's weights when the owner's own job ended without saving them
 
 
@@ -69,7 +71,8 @@ class Seen:
 def order(claim):
     """The key claims are ordered by: higher term, then a live claim over a ghost, then higher round, then lower rank. Greater wins.
     A ghost's round is the run's current round, which is not comparable to the round a claim was made at (the takeover round), so it never
-    outranks a live claim of its term."""
+    outranks a live claim of its term. That includes a stale live claim of a down node: the ghost's rounds were deferred, not saved, so the
+    run is continued from the live claim's replicas rather than counted finished."""
     return claim.term, not claim.ghost, claim.round, -claim.rank
 
 

@@ -44,13 +44,14 @@ from pathlib import Path
 import numpy as np
 
 import studio_run_health as run_health
+from studio_failover import POLL_BACKOFF_MAX, POLL_EVERY
 import studio_diloco_rules as drules
 
 FORMAT = 1
 TERM_HEADER = "X-Run-Term"  # every answer on /collective/{run} carries the coordinator's term here and in its JSON body
 TERM_STALE = "Stale term"  # the start of the 409 message for a term that is not the coordinator's
 LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
-RELOCATE_SECONDS = 12.  # about two failover polls (studio_remote.POLL_EVERY): the wait for the claim that says where a run went
+RELOCATE_SECONDS = POLL_BACKOFF_MAX + POLL_EVERY + 5.  # the wait for the claim that says where a run went: a peer in poll backoff is next asked within POLL_BACKOFF_MAX, then the failover poll, plus margin
 STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
 GONE_RUN = "No distributed run"  # the start of the 404 detail of a run the coordinator's app does not hold (routers.collective.coordinator)
