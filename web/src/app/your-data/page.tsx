@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { api, unwrap, type ApiEvent } from "@/lib/api";
 import { CollectionCard } from "./collection-card";
 import { KIND, KINDS, T, fill, type Kind } from "./copy";
@@ -17,8 +18,9 @@ import { MAKE } from "./make-copy";
 import { MakeExtraData } from "./make-extra";
 import { ImportCard } from "./import-card";
 import { runJob, type JobLike } from "./jobs";
-import { backLink, collectionShown, dupLabel, errorText, kindOf, setsLine, type DataRow, type Summary } from "./logic";
-import { RowsTable, useRows } from "./rows-table";
+import { backLink, collectionShown, dupLabel, errorText, kindOf, type DataRow, type Summary } from "./logic";
+import { Overview } from "./overview";
+import { RowsList, useRows } from "./rows-table";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { optionBox } from "@/components/option-box";
 
@@ -45,11 +47,11 @@ function Detail({ row, kind, onChanged, onEdit }: { row: DataRow | undefined; ki
     onError: (error) => toast.error(errorText(error)),
   });
   return (
-    <Card>
+    <Card className="lg:sticky lg:top-4">
       <CardContent className="flex flex-col gap-3" data-testid="detail">
         {row ? (
           <>
-            <p className="whitespace-pre-wrap text-sm">
+            <p className={cn("max-h-80 overflow-y-auto whitespace-pre-wrap break-words text-sm", kind === "problems" && "font-mono text-[13px]")}>
               {row.a}
               {"\n\n"}
               {row.b}
@@ -122,11 +124,13 @@ function YourData() {
   const [query, setQuery] = useState("");
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [panel, setPanel] = useState<"add" | "edit" | "import" | null>(null);
+  const [panel, setPanel] = useState<"add" | "edit" | "import" | "make" | null>(null);
+  const [browse, setBrowse] = useState(false);
 
   const summaries = { text: useSummary("text"), conversations: useSummary("conversations"), problems: useSummary("problems") };
   const summary = summaries[kind].data;
-  const rows = useRows(kind, query);
+  const open = browse || !!query || onlyDuplicates;
+  const rows = useRows(kind, query, open);
   const row = rows.data?.pages.flatMap((p) => p.rows).find((r) => r.id === selected);
 
   useEffect(() => {
@@ -160,6 +164,7 @@ function YourData() {
     setTyped("");
     setQuery("");
     setOnlyDuplicates(false);
+    setBrowse(false);
     setSelected(null);
     setPanel(null);
   };
@@ -216,39 +221,38 @@ function YourData() {
         })}
       </div>
 
-      <div className="min-h-5 text-sm text-muted-foreground" data-testid="sets-line">
-        {summaries[kind].isLoading ? <Skeleton className="h-4 w-80" /> : setsLine(summary)}
-      </div>
+      <Overview summary={summary} loading={summaries[kind].isLoading} />
 
-      <label className="flex items-center gap-2 text-sm">
-        <span className="text-muted-foreground">{T.search}</span>
-        <input
-          aria-label={KIND[kind].searchLabel}
-          className="w-80 rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-        />
-      </label>
-
-      <RowsTable
-        kind={kind}
-        query={query}
-        count={summary?.count ?? 0}
-        onlyDuplicates={onlyDuplicates}
-        selected={selected}
-        onSelect={setSelected}
-        rows={rows}
-      />
-
-      <Detail row={row} kind={kind} onChanged={() => setSelected(null)} onEdit={() => setPanel("edit")} />
-
-      <div className="flex flex-wrap gap-2">
+      <div role="toolbar" aria-label={T.toolbar} className="flex flex-wrap items-center gap-2">
+        <label className="flex min-w-0 items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{T.search}</span>
+          <input
+            aria-label={KIND[kind].searchLabel}
+            className="w-full min-w-0 rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:w-64"
+            value={typed}
+            onChange={(e) => {
+              setTyped(e.target.value);
+              if (e.target.value.trim()) setBrowse(true);
+            }}
+          />
+        </label>
         <Button onClick={() => setPanel(panel === "add" ? null : "add")}>{KIND[kind].add}</Button>
         <Button variant="outline" onClick={() => setPanel(panel === "import" ? null : "import")}>
           {T.importFiles}
         </Button>
-        <Button variant="outline" disabled={!duplicates} onClick={() => setOnlyDuplicates((on) => !on)}>
+        <Button
+          variant="outline"
+          aria-pressed={onlyDuplicates}
+          disabled={!duplicates}
+          onClick={() => {
+            setOnlyDuplicates((on) => !on);
+            setBrowse(true);
+          }}
+        >
           {dupLabel(duplicates, onlyDuplicates)}
+        </Button>
+        <Button variant="outline" onClick={() => setPanel(panel === "make" ? null : "make")}>
+          {MAKE.title}
         </Button>
       </div>
 
@@ -266,13 +270,47 @@ function YourData() {
       )}
       {panel === "edit" && row && <EditForm key={row.id} row={row} kind={kind} onDone={() => setPanel(null)} />}
       {panel === "import" && <ImportCard key={`import-${kind}`} kind={kind} onClose={() => setPanel(null)} />}
+      {panel === "make" && (
+        <section id="make-extra-data" className="rounded-lg border bg-background/30 p-4">
+          <h2 className="font-medium">{MAKE.title}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">{MAKE.lead}</p>
+          <div className="mt-4">
+            <MakeExtraData key={kind} initialKind={kind} />
+          </div>
+        </section>
+      )}
+
+      <section className="flex flex-col gap-3">
+        <Button
+          variant="outline"
+          className="w-fit"
+          aria-expanded={open}
+          disabled={!!query || onlyDuplicates}
+          onClick={() => setBrowse((on) => !on)}
+        >
+          {open ? T.hideExamples : T.browse}
+        </Button>
+        {open ? (
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
+            <RowsList
+              kind={kind}
+              query={query}
+              count={summary?.count ?? 0}
+              onlyDuplicates={onlyDuplicates}
+              selected={selected}
+              onSelect={setSelected}
+              rows={rows}
+            />
+            <div className="min-w-0 lg:self-start">
+              <Detail row={row} kind={kind} onChanged={() => setSelected(null)} onEdit={() => setPanel("edit")} />
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{T.examplesHint}</p>
+        )}
+      </section>
 
       {collectionShown(summary) && <CollectionCard kind={kind} description={KIND[kind].collectionDesc} />}
-      <details id="make-extra-data" className="rounded-lg border bg-background/30 p-4">
-        <summary className="cursor-pointer font-medium">{MAKE.title}</summary>
-        <p className="mt-2 text-sm text-muted-foreground">{MAKE.lead}</p>
-        <div className="mt-4"><MakeExtraData key={kind} initialKind={kind} /></div>
-      </details>
     </main>
   );
 }

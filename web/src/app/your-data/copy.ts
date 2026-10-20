@@ -30,6 +30,15 @@ export const T = {
   showing: " · showing",
   importFiles: "Import files",
   noRows: "Nothing here yet.",
+  statTotal: "In total",
+  statHeldBack: "Held back",
+  statDuplicates: "Near-duplicates",
+  sets: "Sets",
+  shareOf: "{name} share of the total",
+  browse: "Browse examples",
+  hideExamples: "Hide examples",
+  examplesHint: "Search, or open the list to read, edit or review single examples.",
+  toolbar: "Data actions",
   noMatches: "Nothing matches.",
 } as const;
 

@@ -10,7 +10,8 @@ import {
   errorText,
   kindOf,
   parseRule,
-  setsLine,
+  overviewCounts,
+  setShare,
   shownLine,
   sourceAction,
   sourceStatus,
@@ -21,6 +22,7 @@ import {
 import { ApiError } from "@/lib/api";
 
 const rows = (...statuses: string[]) => statuses.map((status, i) => ({ id: i, status })) as unknown as DataRow[];
+
 const summary = (...sets: [string, number][]) => ({ sets: sets.map(([name, count]) => ({ name, count })) }) as unknown as Summary;
 
 describe("backLink", () => {
@@ -159,12 +161,27 @@ describe("kindOf", () => {
   });
 });
 
-describe("setsLine", () => {
-  it("lists each set with its count", () => expect(setsLine(summary(["Dolly", 15000], ["Mine", 3]))).toBe("Dolly (15,000) · Mine (3)"));
-  it("says there are no sets, or nothing before the summary loads", () => {
-    expect(setsLine(summary())).toBe(T.noSets);
-    expect(setsLine(undefined)).toBe("");
+describe("setShare", () => {
+  it("is the whole percent of the total", () => {
+    expect(setShare(1, 3)).toBe(33);
+    expect(setShare(3, 3)).toBe(100);
   });
+  it("is 0 for an empty kind and never above 100", () => {
+    expect(setShare(0, 0)).toBe(0);
+    expect(setShare(5, 3)).toBe(100);
+  });
+});
+
+describe("overviewCounts", () => {
+  it("lists total, held back and near-duplicates with thousands separators", () => {
+    const s = { count: 12345, held_back: 20, near_duplicates: 0 } as unknown as Summary;
+    expect(overviewCounts(s)).toEqual([
+      { key: "total", label: T.statTotal, value: "12,345" },
+      { key: "held", label: T.statHeldBack, value: "20" },
+      { key: "dups", label: T.statDuplicates, value: "0" },
+    ]);
+  });
+  it("is empty before the summary loads", () => expect(overviewCounts(undefined)).toEqual([]));
 });
 
 describe("errorText", () => {
