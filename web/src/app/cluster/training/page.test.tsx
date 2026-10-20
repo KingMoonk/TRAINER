@@ -142,6 +142,38 @@ describe("Training tab: the start form", () => {
     expect(state.started[0]).toMatchObject({ dataset_ids: ["stories", "chats"], teacher: "judge:1b", polish_every: 3, target_win_rate: 0.6 });
   });
 
+  test("starts a run that carries the chosen plateau, pivots and stages, and says when it moves on by itself", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Start run" });
+    expect(screen.queryByLabelText("Replay of earlier text (%)")).toBeNull(); // only once moving on to new text is ticked
+    await user.click(screen.getByRole("checkbox", { name: "Move on to the next unseen text" }));
+    await user.click(screen.getByRole("checkbox", { name: "Halve the learning rate" }));
+    expect(screen.getByRole("button", { name: "Start run" })).toBeDisabled();
+    expect(screen.getByText(/Set when the run stalls/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Stalls after (rounds)"), "3");
+    const gain = screen.getByLabelText("Gain needed (%)");
+    await user.clear(gain);
+    await user.type(gain, "2");
+    const replay = screen.getByLabelText("Replay of earlier text (%)");
+    await user.clear(replay);
+    await user.type(replay, "30");
+    expect(screen.getByText(/The run moves on by itself when the validation loss improves by less than 2% over 3 rounds\. Then it goes back to its best weights and first moves on to the next unseen text, replaying 30% of the text it already saw, then halves the learning rate\./)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0]).toMatchObject({ plateau_checks: 3, plateau_min_improvement: 0.02, pivots: ["next_dataset", "halve_lr"], stages: { replay: 0.3 } });
+  });
+
+  test("leaves the stall rules out of the request when no window is set", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    for (const key of ["plateau_checks", "plateau_min_improvement", "pivots", "stages"]) expect(state.started[0]).not.toHaveProperty(key);
+  });
+
   test("keeps the conversation sets out of the request when no teacher is used", async () => {
     const state = server();
     renderPage(<TrainingPage />, { route: "/cluster/training" });

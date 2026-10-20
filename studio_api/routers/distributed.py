@@ -20,6 +20,7 @@ import studio_diloco
 import studio_facts
 import studio_membership
 import studio_peer
+import studio_stages
 from studio_api.app import get_services
 from studio_api.routers.pretraining import _version
 from studio_api.version import app_version
@@ -41,6 +42,10 @@ class Defaults(BaseModel):
     outer_lr: float
     outer_momentum: float
     delta_dtype: str
+
+
+class Stages(BaseModel):
+    replay: float = Field(studio_stages.REPLAY, ge=0, lt=1)  # share of a round's shards drawn from the sets before the current one
 
 
 class StartRun(BaseModel):
@@ -65,6 +70,10 @@ class StartRun(BaseModel):
     teacher: str | None = Field(None, max_length=200)  # an Ollama model that polishes the weights and judges the win-rate; needed by polish_every and target_win_rate
     polish_every: int | None = Field(None, ge=0, le=100_000)  # rounds between teacher polishes (below rounds); None or 0: no polish
     target_win_rate: float | None = Field(None, gt=0, le=1)  # stop once the best weights win this share of the teacher's head-to-head against the starting weights
+    plateau_checks: int | None = Field(None, ge=0, le=100_000)  # a plateau: the validation loss improved by less than plateau_min_improvement over this many rounds (0 or None: off, at least 2 otherwise)
+    plateau_min_improvement: float | None = Field(None, gt=0, lt=1)  # the share the loss must fall by over those rounds (default 0.01)
+    pivots: list[Literal["halve_lr", "next_dataset", "drop_lessons"]] | None = None  # what the run tries, in this order, when the loss plateaus: back to the best weights, then the change; with none left, or no plateau window, it ends. Needs plateau_checks
+    stages: Stages | None = None  # next_dataset moves on to the workspace's unseen text sets, worst held-out loss first; needs next_dataset in pivots
 
 
 class Sample(BaseModel):
@@ -499,6 +508,22 @@ def _teacher_options(body, services, dataset_ids):
     return fields, {**fields, "conversations": True}
 
 
+def _rule_options(body):
+    """{"settings": Settings fields, "params": the job's other params} for the plateau, pivot and stages options of a start: empty when
+    none is set. 400 with a sentence when stages and the next_dataset pivot do not go together (stages is where that pivot finds its
+    sets, and without it the pivot has none to move on to); the rest is checked by the Settings."""
+    settings = {k: getattr(body, k) for k in ("plateau_checks", "plateau_min_improvement") if getattr(body, k) is not None}
+    pivots = list(body.pivots or [])
+    if pivots:
+        settings["pivots"] = pivots
+    moves_on = "next_dataset" in pivots
+    if moves_on and body.stages is None:
+        raise HTTPException(400, "The next_dataset pivot moves on to the workspace's unseen text sets, so it needs stages: set stages, or leave next_dataset out of pivots.")
+    if body.stages is not None and not moves_on:
+        raise HTTPException(400, "Stages only come into play through the next_dataset pivot: add next_dataset to pivots, or leave stages out.")
+    return {"settings": settings, "params": {"stages": {"replay": body.stages.replay}} if body.stages is not None else {}}
+
+
 def _check_coordinator(address, chosen, peers, own):
     """The machine chosen to coordinate a run must be one the run invites that answers on this app version; anything else is a 400 (not
     chosen) or 409 (not usable) with the reason, so a run never starts on a coordinator it cannot hand the run to. "" is this computer."""
@@ -538,8 +563,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     teaching, teaching_params = _teacher_options(body, services, dataset_ids)
+    rules = _rule_options(body)
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, **shape, **teaching)  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, **shape, **teaching, **rules["settings"])  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -568,7 +594,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)

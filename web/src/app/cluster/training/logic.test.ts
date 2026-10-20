@@ -3,13 +3,14 @@ import {
   bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
+import { initialRules } from "./rules";
 import { TRAINING as T } from "@/lib/copy/training";
 import { member as build, round, run } from "./test-data";
 
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", rules: initialRules(), ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
