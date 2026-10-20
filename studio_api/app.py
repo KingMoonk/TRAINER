@@ -16,7 +16,7 @@ from studio_api.version import app_version
 from studio_versions import NoCheckpoint
 
 ROUTERS = ("versions", "queue", "storage", "data", "pretraining", "post_training", "chat", "benchmark",
-           "node", "quicktest", "design", "cluster", "collective", "distributed", "training_run", "state", "mlperf")  # one module each in studio_api.routers
+           "node", "quicktest", "design", "cluster", "collective", "distributed", "training_run", "state", "collect", "mlperf")  # one module each in studio_api.routers
 LOCAL_ORIGIN = r"^http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 WEB_OUT = Path(__file__).resolve().parent.parent / "web" / "out"
 

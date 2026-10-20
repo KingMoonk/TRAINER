@@ -324,6 +324,21 @@ def gpu_kind():
     return status["kind"] if status["available"] else ""
 
 
+def cached_probe(spec, rows=None):
+    """The device probe (studio_probe) stored for this design on this machine at `rows` rows per step, or None: no GPU seen yet, or
+    the design was never timed here, or the stored one was made with another torch or GPU (it is keyed by them). Never measures, and
+    never touches torch before something else has."""
+    if not gpu_kind():
+        return None
+    try:
+        import studio_probe
+        from studio_backend import gpu_status
+        from studio_model import vocabulary_guess
+        return studio_probe.cached(validate_spec(spec), vocabulary_guess({"architecture": spec}), ROWS if rows is None else rows, gpu_status())
+    except Exception:  # noqa: BLE001 - a plan without a measurement is still a plan
+        return None
+
+
 def preset_term(key):
     return dict(PRESETS)[key]
 
@@ -349,17 +364,20 @@ def duration(seconds):
             return f"about {seconds / size:.0f} {unit}"
 
 
-def preset_cost(spec, ram=None, gpu=None):
+def preset_cost(spec, ram=None, gpu=None, probe=None):
     """What a design costs before it is loaded: {params, need, fits, rows, step, slow, lines}. `lines` are the card's sentences:
     size, whether it fits this computer (and at how many rows per step it would), and how long a step takes.
-    ram: bytes (None = ask the OS); gpu: "cuda"/"mps" when training will use one, "" or None for the processor alone."""
+    ram: bytes (None = ask the OS); gpu: "cuda"/"mps" when training will use one, "" or None for the processor alone.
+    probe: `cached_probe(spec)`. When given, the step time is the measured one on the device `auto` really picks, and the line says which
+    device is faster and by how much; otherwise the step is the fitted estimate and the line says so. `device` and `measured` report which."""
     s = read_spec(spec)
     c = sizes(spec, s["V"])
     ram = ram or ram_bytes()
     need = c["memory"] + ROWS * c["activations"]
     ok = None if ram is None else need <= ram
     rows = ROWS if ok or ram is None else max(0, int((ram - c["memory"]) // max(1, c["activations"])))
-    step = step_seconds({"batch_size": ROWS, "context": s["T"], "layers": s["L"]}, c["params"], gpu or "cpu")
+    kind = probe["device"] if probe else gpu or "cpu"
+    step = step_seconds({"batch_size": ROWS, "context": s["T"], "layers": s["L"]}, c["params"], kind, probe=probe)
     lines = [T["preset_size"].format(params=amount(c["params"]), memory=gigabytes(c["memory"]))]
     if ram is None:
         lines.append(T["preset_fit_unknown"])
@@ -369,10 +387,18 @@ def preset_cost(spec, ram=None, gpu=None):
         lines.append(T["preset_fits_fewer"].format(rows=ROWS, need=gigabytes(need), ram=gigabytes(ram), fit=rows))
     else:
         lines.append(T["preset_no_fit"].format(need=gigabytes(c["memory"] + c["activations"]), ram=gigabytes(ram)))
-    lines.append(T["preset_speed_gpu" if gpu else "preset_speed_cpu"].format(step=duration(step)))
+    if probe:
+        speed = probe["tokens_per_second"]
+        other = next((d for d in speed if d != kind), None)
+        lines.append(T["preset_speed_measured"].format(device=kind.upper() if kind == "cpu" else "GPU", speed=speed[kind], step=duration(step),
+                                                      other=speed[other], other_device="GPU" if other != "cpu" else "CPU")
+                     if other else T["preset_speed_measured_one"].format(device=kind.upper() if kind == "cpu" else "GPU", speed=speed[kind],
+                                                                         step=duration(step)))
+    else:
+        lines.append(T["preset_speed_gpu" if gpu else "preset_speed_cpu"].format(step=duration(step)) + (T["preset_speed_estimate"] if gpu else ""))
     if step > SLOW_STEP:
         lines[-1] += " " + T["preset_slow"].format(steps=STEPS, total=duration(step * STEPS))
-    return dict(params=c["params"], need=need, fits=ok, rows=rows, step=step, slow=step > SLOW_STEP, lines=lines)
+    return dict(params=c["params"], need=need, fits=ok, rows=rows, step=step, slow=step > SLOW_STEP, lines=lines, device=kind, measured=bool(probe))
 
 
 def passes_text(passes):
@@ -382,7 +408,7 @@ def passes_text(passes):
     return "one pass" if passes <= 1.05 else f"{passes:.1f} passes" if passes < 10 else f"{passes:.0f} passes"
 
 
-def compute_lines(params, context, layers, preview, gpu=""):
+def compute_lines(params, context, layers, preview, gpu="", probe=None):
     """[(sentence, bad)] for the cost panel: how much text a design of `params` parameters needs, against the word pieces
     `preview` (services.pretrain_preview; None while it is being counted) found, and how long a run of ROWS rows should be.
     Speed is the newest run's measured one, else studio_compute.throughput (the Pretraining page's time model)."""
@@ -391,7 +417,7 @@ def compute_lines(params, context, layers, preview, gpu=""):
     pieces = preview.get("pieces")
     if not pieces:
         return [(T["compute_none"], False)]
-    speed = preview.get("tokens_per_second") or throughput(ROWS, context, params, layers, gpu or "cpu")
+    speed = preview.get("tokens_per_second") or throughput(ROWS, context, params, layers, probe["device"] if probe else gpu or "cpu", probe=probe)
     p = plan(params, pieces, tokens_per_second=speed, batch_tokens=ROWS * context)
     tail = (T["compute_under"] if p["under_trained"] else T["compute_repeats"] if p["over_repeated"]
             else T["compute_reread"].format(times=f"{p['epochs_for_optimal']:.1f}", most=MAX_EPOCHS) if params > p["data_params"]
