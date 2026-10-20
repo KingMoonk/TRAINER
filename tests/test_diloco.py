@@ -373,6 +373,17 @@ class LiveView(Directory):
         with self.assertRaises(ValueError):
             c.progress(1, "a", generation, 2, "sleeping")
 
+    def test_the_owner_says_why_a_node_cannot_be_added_before_it_invites_it(self):
+        c = self.coordinator(min_members=1, max_members=2)
+        c.join("a")
+        self.assertEqual((c.refusal("a"), c.refusal("b")), ("a is already in this run.", ""))
+        c.join("b")
+        self.assertEqual(c.refusal("c"), "The run already has its 2 members.")
+        c.drop("b")
+        self.assertEqual(c.refusal("b"), "b was stopped by the run's owner.")
+        c.stop()
+        self.assertEqual(c.refusal("c"), studio_diloco.FINISHED)
+
     def test_an_overlapping_member_that_sent_the_open_round_may_report_the_next_one(self):
         c = self.coordinator(inner_steps=2, first_round_seconds=100., min_members=2)
         c.join("a")

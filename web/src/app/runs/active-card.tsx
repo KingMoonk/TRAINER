@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { useJoinRun } from "@/app/cluster/training/use-training";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { T, fill } from "./copy";
 import { Hint } from "./hint";
@@ -30,8 +32,23 @@ function Numbers({ row }: { row: RunRow }) {
   );
 }
 
+/** Join a running run another computer coordinates, from its next round. Beside the card's link, not in it. */
+function Join({ row, title }: { row: RunRow; title: string }) {
+  const join = useJoinRun();
+  return (
+    <div className="flex justify-end">
+      <Hint tip={fill(T.joinTip, { coordinator: row.coordinator })}>
+        <Button size="sm" aria-label={`${T.join}: ${title}`} disabled={join.isPending} onClick={() => join.mutate(row.id)}>
+          {T.join}
+        </Button>
+      </Hint>
+    </div>
+  );
+}
+
 export function ActiveCard({ row }: { row: RunRow }) {
   const { version, name } = titleText(row);
+  const title = [version, name].filter(Boolean).join(" · ");
   const percent = progressPercent(row);
   const progress = row.distributed
     ? row.rounds
@@ -40,12 +57,12 @@ export function ActiveCard({ row }: { row: RunRow }) {
     : row.total
       ? fill(T.step, { step: row.step.toLocaleString("en-US"), total: row.total.toLocaleString("en-US") })
       : T.starting;
-  return (
+  const card = (
     <Link href={`/runs/view/?id=${encodeURIComponent(row.id)}`} data-testid={`active-${row.id}`} className="block rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
       <Card className="transition-colors hover:bg-muted/40">
         <CardContent className="flex flex-col gap-3">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="font-semibold">{[version, name].filter(Boolean).join(" · ")}</span>
+            <span className="font-semibold">{title}</span>
             <span className="text-sm text-muted-foreground">
               {row.kindText} · {progress}
               {row.distributed && row.innerSteps > 0 && (
@@ -80,5 +97,12 @@ export function ActiveCard({ row }: { row: RunRow }) {
         </CardContent>
       </Card>
     </Link>
+  );
+  if (!row.canJoin) return card;
+  return (
+    <div className="flex flex-col gap-2">
+      {card}
+      <Join row={row} title={title} />
+    </div>
   );
 }

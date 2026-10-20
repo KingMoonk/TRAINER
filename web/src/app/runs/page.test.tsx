@@ -20,7 +20,7 @@ const diloco = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function server(runs: unknown[] = [diloco()], failed: unknown[] = []) {
+function server(runs: unknown[] = [diloco()], failed: unknown[] = [], extra: Parameters<typeof mockApi>[0] = {}) {
   const up_next = [job("w1", "v4 post", { kind: "post_training" }), job("w2", "v6 long", { params: { pinned: "beast:8000" } })];
   return mockApi({
     "GET /queue": () => ({ body: { job: job("v5run", "v5", { kind: "pretrain_distributed", status: "running" }), step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next, failed, plan: PLAN } }),
@@ -30,6 +30,7 @@ function server(runs: unknown[] = [diloco()], failed: unknown[] = []) {
     "GET /distributed/runs": () => ({ body: runs }),
     "GET /cluster/nodes": { body: [node("local", "mac"), node("beast:8000", "beast", { device: "cuda" })] },
     "POST /queue/jobs/*/hold": ({ body }) => ({ body: { job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { supported: true }, up_next: up_next.map((j) => (j.id === "w1" ? { ...j, status: (body as { held: boolean }).held ? "held" : "waiting" } : j)), plan: PLAN } }),
+    ...extra,
   });
 }
 
@@ -46,6 +47,17 @@ describe("Runs page", () => {
     expect(within(card).getByText("val 3.47")).toBeInTheDocument();
     expect(within(card).getByText(/ETA 5h 30m/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "New run" })).toHaveAttribute("href", expect.stringMatching(/^\/runs\/new\/?$/));
+  });
+
+  test("a running run another computer coordinates has a Join that asks it to add this one; this computer's own run has none", async () => {
+    const runs = [diloco({ owner: "beast", can_join: true, members: [member("beast", "local")] }), diloco({ id: "own" })];
+    const calls = server(runs, [], { "POST /distributed/runs/*/join": { body: diloco({ owner: "beast" }) } });
+    renderPage(<RunsPage />);
+    await screen.findByTestId("active-own");
+    const join = await screen.findByRole("button", { name: /^Join: / });
+    expect(screen.getAllByRole("button", { name: /^Join: / })).toHaveLength(1);
+    await userEvent.click(join);
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/distributed/runs/v5run/join")).toBe(true));
   });
 
   test("node chips show the device and the role in the active run", async () => {

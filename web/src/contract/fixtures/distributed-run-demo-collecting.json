@@ -3,6 +3,7 @@
     "age_s": 0.0,
     "best_round": null,
     "best_val_loss": null,
+    "can_join": false,
     "can_pause": true,
     "can_restart": false,
     "can_resume": false,

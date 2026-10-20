@@ -148,6 +148,20 @@ export function useStopMember() {
   });
 }
 
+/** Ask the computer that coordinates a running run to add this one (POST /distributed/runs/{id}/join): it trains from the round
+ * after it gets a slot. */
+export function useJoinRun() {
+  const write = useRunWrite();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/distributed/runs/{run_id}/join", { params: { path: { run_id: id } } })),
+    onSuccess: (run) => {
+      write(run);
+      toast.success(T.joined);
+    },
+    onError: (error) => toast.error(T.couldNotJoin.replace("{why}", problem(error))),
+  });
+}
+
 /** What the teacher gave a run (GET /distributed/runs/{id}/lessons), re-read when the run changes while `enabled`. */
 export function useLessons(id: string, enabled: boolean) {
   useLive([...RUNS, id, "lessons"], ["run"], { enabled, match: payloadIs("run", id, ["run"]) });

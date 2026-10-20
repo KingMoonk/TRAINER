@@ -285,6 +285,7 @@ class Run(BaseModel):
     can_pause: bool = False
     can_resume: bool = False
     can_restart: bool = False  # it ended and saved weights to start a new run from (best.npz, else last.npz)
+    can_join: bool = False  # another computer coordinates it while it runs, and this computer is not training in it: it may ask to join
     best_round: int | None = None  # the round whose weights are the best so far
     best_val_loss: float | None = None
     win_rate: float | None = None  # the best weights' share of head-to-head wins against the weights the run started from (target_win_rate), as last judged
@@ -383,7 +384,17 @@ def _rows(services):
     if cluster is None:
         rows = [{**row, "coordinator": row["owner"], "origin": row["owner"], "age_s": 0., "origin_down": False} for row in rows]
         return sorted(rows, key=lambda row: row["started_at"], reverse=True)
-    return studio_facts.cluster_runs(cluster, rows)
+    return [{**row, "can_join": can_join(row, cluster.hostname)} for row in studio_facts.cluster_runs(cluster, rows)]
+
+
+OUT = ("dropped", "left", "unreachable", "never_joined")  # member states of a machine not in the run now, which may ask to join
+
+
+def can_join(row, own):
+    """A run `own` may ask to join: it runs, another computer coordinates it, and `own` is not in it now (it was never a member, or it
+    dropped out; one its owner stopped stays out)."""
+    return (row["state"] == "running" and not row.get("origin_down") and row.get("coordinator", row["owner"]) != own
+            and all(m["state"] in OUT for m in row["members"] if m["node"] == own))
 
 
 @router.get("/runs")
@@ -740,6 +751,38 @@ def stop_member(run_id: str, node: str, services: Services) -> Run:
         raise HTTPException(409, str(exc)) from None
     runs.release_member(run, node)
     return Run.model_validate(_read(run, job)[0])
+
+
+@router.post("/runs/{run_id}/members/{node}/add")
+def add_member(run_id: str, node: str, services: Services) -> Run:
+    """The coordinator's side of a join: add `node`, one of this computer's listed machines, to the running run. The scheduler offers
+    it a slot now and invites it, and it trains from the round after; a machine that is busy gets a slot once it is free. 409 when the
+    run is not running here, for a node that is not listed, already in the run, or stopped by the owner, and for a full run."""
+    run, job = _find(services, run_id)
+    coordinator, cluster = studio_diloco.COORDINATORS.get(run.id), _cluster(services)
+    if coordinator is None or coordinator.finished or job is None or job.status != "running" or cluster is None:
+        raise HTTPException(409, "The run is not running, so nothing can join it.")
+    address = cluster.address_of(node)
+    machine = next((m for m in run.machines if m.node == node or m.address == address), None)
+    if address is None or (machine is not None and machine.local):
+        raise HTTPException(409, f"{node} is not on the Machines tab of {run.owner}, which coordinates the run.")
+    refused = coordinator.refusal(node)
+    if refused:
+        raise HTTPException(409, refused)
+    runs.choose(job, node, address)
+    cluster.offer(job)
+    return Run.model_validate(_read(run, job)[0])
+
+
+@router.post("/runs/{run_id}/join")
+def join_run(run_id: str, services: Services) -> Run:
+    """Ask the computer that coordinates a running run to add this one: it joins from the round after its invitation. 409 for a run
+    this computer coordinates; the coordinator's own refusals come back as they are."""
+    remote = _remote(services, run_id)
+    if remote is None:
+        _found(services, run_id)  # 404 for a run no one here knows
+        raise HTTPException(409, "This computer coordinates this run.")
+    return _forward(services, remote, f"distributed/runs/{run_id}/members/{_own_name(services)}/add")
 
 
 # ---- this computer as a member of other computers' runs ---------------------------------------------------------------

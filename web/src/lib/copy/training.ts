@@ -147,6 +147,8 @@ export const TRAINING = {
   stopMemberLabel: "Stop {node}",
   stoppingRun: "Stopping...",
   couldNotStop: "Could not stop: {why}",
+  joined: "Asked to join. This computer trains from the round after it gets a slot.",
+  couldNotJoin: "Could not join: {why}",
   errorCurve: "Error curve",
   errorCurveLead: "Training and validation loss after each round. The lowest validation loss is marked as the best round, and a dashed line marks where the run changed course, and a dotted line a round the teacher tried to polish.",
   bestRound: "Best",

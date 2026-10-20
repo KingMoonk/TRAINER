@@ -18,6 +18,7 @@ import studio_diloco
 import studio_distributed as runs
 from studio_api import app as api_app
 from studio_api.app import create_app
+from studio_api.routers import distributed as distributed_routes
 from studio_api.hosts import ANY
 from studio_ia.services import FakeServices, Job
 from studio_peer import PeerError
@@ -434,6 +435,24 @@ class ReadModel(unittest.TestCase):
         self.assertEqual(FakeClient.calls, [])  # no member job had been placed
 
 
+class Joinable(unittest.TestCase):
+    def row(self, state="running", coordinator="A", down=False, **members):
+        return {"state": state, "owner": "A", "coordinator": coordinator, "origin_down": down,
+                "members": [{"node": node, "state": s} for node, s in {"A": "training", **members}.items()]}
+
+    def test_only_a_running_run_another_computer_coordinates_that_this_one_is_not_in_may_be_joined(self):
+        self.assertTrue(distributed_routes.can_join(self.row(), "B"))
+        for out in ("dropped", "left", "unreachable", "never_joined"):
+            self.assertTrue(distributed_routes.can_join(self.row(B=out), "B"), out)
+        for now in ("invited", "joining", "training", "behind", "waiting", "stopped"):  # in it, on its way, or stopped by the owner
+            self.assertFalse(distributed_routes.can_join(self.row(B=now), "B"), now)
+        self.assertFalse(distributed_routes.can_join(self.row(), "A"))  # it coordinates the run
+        self.assertFalse(distributed_routes.can_join(self.row(coordinator="B"), "B"))  # the run moved to it
+        self.assertFalse(distributed_routes.can_join(self.row(down=True), "B"))  # its coordinator is not answering
+        for state in ("queued", "starting", "waiting", "finished", "stopped", "failed"):
+            self.assertFalse(distributed_routes.can_join(self.row(state=state), "B"), state)
+
+
 class Routes(unittest.TestCase):
     def setUp(self):
         self.services = FakeServices(step_seconds=.005)
@@ -587,6 +606,33 @@ class Routes(unittest.TestCase):
         while time.monotonic() < end and self.client.get(f"/distributed/runs/{run['id']}").json()["saved_version"] is None:
             time.sleep(.01)  # the job notes the saved version just after the coordinator reads finished
         self.assertEqual(self.client.get(f"/distributed/runs/{run['id']}").json()["saved_version"], 1)
+
+    def test_a_listed_machine_that_asks_to_join_a_running_run_is_chosen_and_offered_a_slot(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        coordinator, offered = studio_diloco.COORDINATORS[run_id], []
+        cluster = types.SimpleNamespace(hostname="here", address_of={"laptop": "10.0.0.5"}.get, offer=lambda job: offered.append(job.id))
+        with mock.patch.object(distributed_routes, "_cluster", lambda services: cluster):
+            add = lambda node: self.client.post(f"/distributed/runs/{run_id}/members/{node}/add")  # noqa: E731
+            with mock.patch.object(coordinator, "refusal", lambda node: f"{node} is already in this run."):
+                self.assertEqual((add("laptop").status_code, add("laptop").json()["detail"]), (409, "laptop is already in this run."))
+            self.assertEqual(add("ghost").json()["detail"], f"ghost is not on the Machines tab of {socket.gethostname()}, which coordinates the run.")
+            self.assertEqual(offered, [])
+
+            joined = add("laptop")
+            self.assertEqual(joined.status_code, 200, joined.text)
+            self.assertEqual(offered, [run_id])
+            self.assertIn({"node": "laptop", "address": "10.0.0.5"}, self.jobs()[run_id].params["machines"])
+            member = next(m for m in joined.json()["members"] if m["node"] == "laptop")
+            self.assertEqual((member["state"], member["note"]), ("waiting", runs.ASKED))
+            self.assertEqual(add("laptop").status_code, 200)  # asked again while it waits: chosen once
+            self.assertEqual(len([m for m in self.jobs()[run_id].params["machines"] if m["node"] == "laptop"]), 1)
+        self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/join").json()["detail"], "This computer coordinates this run.")
+        self.assertEqual(self.client.post("/distributed/runs/none/join").status_code, 404)
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        self.wait_state(run_id, "stopped")
+        with mock.patch.object(distributed_routes, "_cluster", lambda services: cluster):
+            self.assertEqual(add("laptop").json()["detail"], "The run is not running, so nothing can join it.")
 
     def test_a_run_can_be_stopped_and_one_member_taken_out(self):
         run_id = self.start(rounds=2000).json()["id"]

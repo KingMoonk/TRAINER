@@ -1851,6 +1851,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join Run
+         * @description Ask the computer that coordinates a running run to add this one: it joins from the round after its invitation. 409 for a run
+         *     this computer coordinates; the coordinator's own refusals come back as they are.
+         */
+        post: operations["join_run_distributed_runs__run_id__join_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/lessons": {
         parameters: {
             query?: never;
@@ -1907,6 +1928,28 @@ export interface paths {
          * @description Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop.
          */
         post: operations["keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/members/{node}/add": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Member
+         * @description The coordinator's side of a join: add `node`, one of this computer's listed machines, to the running run. The scheduler offers
+         *     it a slot now and invites it, and it trains from the round after; a machine that is busy gets a slot once it is free. 409 when the
+         *     run is not running here, for a node that is not listed, already in the run, or stopped by the owner, and for a full run.
+         */
+        post: operations["add_member_distributed_runs__run_id__members__node__add_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7216,6 +7259,11 @@ export interface components {
             /** Best Val Loss */
             best_val_loss?: number | null;
             /**
+             * Can Join
+             * @default false
+             */
+            can_join: boolean;
+            /**
              * Can Pause
              * @default false
              */
@@ -11708,6 +11756,37 @@ export interface operations {
             };
         };
     };
+    join_run_distributed_runs__run_id__join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_lessons_distributed_runs__run_id__lessons_get: {
         parameters: {
             query?: never;
@@ -11790,6 +11869,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_member_distributed_runs__run_id__members__node__add_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                node: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */
