@@ -274,6 +274,12 @@ def poll(addresses, fetch=None, timeout=POLL_TIMEOUT):
     return [offline(a, failure(a, answer, timeout)) if isinstance(answer, BaseException) else answer for a, answer in zip(addresses, answers)]
 
 
+def gateway_down(exc):
+    """True for an empty gateway answer (502/503/504 with no body): a proxy such as `tailscale serve` is there but the app behind it is
+    not, as while the app restarts. The app never had the request, so it is as unanswered as a refused connection."""
+    return isinstance(exc, PeerError) and exc.status in GATEWAY_ERRORS and not exc.detail.strip()
+
+
 def failure(address, exc, timeout=POLL_TIMEOUT):
     """Why a peer is offline, as a sentence for the person looking at the node list."""
     if isinstance(exc, PeerError) and exc.status is not None and is_page(exc.status, exc.detail):
@@ -281,7 +287,7 @@ def failure(address, exc, timeout=POLL_TIMEOUT):
                 f"(the machine's https://<name>.ts.net, or http://<machine>:{DEFAULT_PORT}) and that the app is running there.")
     if isinstance(exc, PeerError):
         text = f"{str(exc).rstrip('.')}."
-        if exc.status in GATEWAY_ERRORS and not exc.detail.strip():  # an empty gateway answer: a proxy is there, the app is not behind it
+        if gateway_down(exc):
             text += (f" Something answers at {address} (usually `tailscale serve`) but the app is not behind it: start the app on that "
                      f"machine, or list it by its direct address (http://<machine>:{DEFAULT_PORT}).")
         return text
