@@ -2,8 +2,7 @@
 # sync-base.sh session|prompt
 #
 # Keeps the local base branch current and tells the agent when origin's copy moved.
-# The base is wedd-compute-cluster, the upcoming main branch. master is legacy: this hook
-# never fetches or fast-forwards it; touch master only when the user asks.
+# The base is main, the repository's default branch.
 # Runs as the SessionStart (session) and UserPromptSubmit (prompt) hook.
 # Stdout is added to the agent's context, so only report lines go there.
 # Never blocks: the body runs in a subshell and the script always exits 0.
@@ -13,7 +12,7 @@
 #   last-base    the moved notice. In each worktree's own git dir (the main checkout's
 #                is the common dir), so every worktree reports a move once.
 
-BASE=wedd-compute-cluster
+BASE=main
 
 # Prints why a run is live ("queue job x is running") when the local API reports one; prints nothing when idle, down or unreadable
 # (studio_api.live exits 0 live, 1 idle, 2 API not answering). Always returns 0, so the caller pulls as before when unsure.
@@ -80,12 +79,10 @@ main() {
     fi
   fi
 
-  # On a task branch cut from the base, report whether catching up would merge cleanly. A branch
-  # forked from master (legacy work the user asked for) is left alone: its fork point is in master.
+  # On a task branch cut from the base, report whether catching up would merge cleanly.
   branch=$(git symbolic-ref -q --short HEAD) || return 0
-  case "$branch" in "$BASE"|master) return 0 ;; esac
+  [ "$branch" = "$BASE" ] && return 0
   fork=$(git merge-base HEAD "origin/$BASE" 2>/dev/null) || return 0
-  git merge-base --is-ancestor "$fork" refs/remotes/origin/master 2>/dev/null && return 0
   behind=$(git rev-list --count "HEAD..origin/$BASE" 2>/dev/null) || return 0
   [ "$behind" -gt 0 ] || return 0
   out=$(git merge-tree --write-tree --name-only --no-messages "origin/$BASE" HEAD 2>/dev/null)

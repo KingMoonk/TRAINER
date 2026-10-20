@@ -1,5 +1,7 @@
 # Rewrite: web UI, API server, compute cluster
 
+> Done: `wedd-compute-cluster` became `main`, the default branch, and `master` was retired. The plan below is the record.
+
 Branch `wedd-compute-cluster` turns the desktop app into two things that talk over HTTP:
 
 - **API** — the Python app minus Tk. FastAPI in front of `studio_ia.services.WorkspaceServices`, run as a long-lived

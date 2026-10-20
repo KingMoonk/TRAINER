@@ -22,7 +22,7 @@ on:
         description: "Branch to start from and open the PR against"
         required: false
         type: string
-        default: master
+        default: main
       model:
         description: "Claude model (alias such as opus or sonnet, or a full model ID)"
         required: false
