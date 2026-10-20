@@ -1097,6 +1097,7 @@ EXPECTATION = {  # short_* is the one visible line; the rest is the hover text b
     "chat_scale": "Answers that hold a conversation need hundreds of millions of parameters and billions of word pieces; this app teaches the same steps at laptop scale.",
     "byte": "Letters (bytes) spell every word out letter by letter, so a small model mostly learns spelling-shaped output and its context covers fewer words.",
     "bpe_custom": "Custom word pieces come out as whole common words, so the same context covers about 3 to 4 times more text; the word list costs parameters (list size × width).",
+    "bpe_fast": "Learned word pieces come out as common words and word parts, so the same context covers about 3 to 4 times more text than letters; they are learned from a sample of all your text, and the word list costs parameters (list size × width).",
     "bpe_gpt2": "GPT-2 word pieces give the same benefit, but the list has about 50,000 entries.",
     "word": "Whole words are one token each, so the same context covers about 5 times more text than letters and each token carries more meaning; but a rare word, or one your data never shows, is lost (it becomes an unknown mark), and the word list costs parameters (list size × width).",
     "table_heavy": "More than half of the parameters sit in the word table rather than in the blocks that do the thinking, so only the rest counts toward what it can learn.",

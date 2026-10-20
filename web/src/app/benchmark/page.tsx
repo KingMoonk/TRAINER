@@ -28,6 +28,7 @@ import {
   type FewShotOut,
 } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { TrainingSpeed } from "./training-speed";
 
 const READ_KEY = ["benchmark", "read"] as const;
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -69,6 +70,7 @@ export default function Page() {
         </Card>
       )}
       {state && <Loaded state={state} />}
+      <TrainingSpeed />
     </main>
   );
 }

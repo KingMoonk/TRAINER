@@ -78,7 +78,7 @@ class _SceneRenderer:
         self.link, self.demo = link, demo
         self.disableMouse()
         self.setBackgroundColor(*ui.rgba('bg'))
-        self.scene = SceneModel(sample_spec(6) if demo else default_spec())
+        self.scene = SceneModel(sample_spec(6) if demo else default_spec(device="cpu"))
         self.scene.level = 'Model'
         self.ids, self.sel_id = [], None
         self.cam_h, self.cam_p, self.cam_d = 25., 30., 28.

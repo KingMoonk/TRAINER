@@ -36,6 +36,62 @@ class Ordering(unittest.TestCase):
         self.assertIsNone(failover.standing([]))
 
 
+class Ghosts(unittest.TestCase):
+    """A released claim whose run row says the run finished is a ghost: the row's round is the run's own, not a takeover round."""
+
+    def test_a_ghost_never_outranks_a_live_claim_of_its_term_whatever_its_round(self):
+        live, ghost = Claim("r", "n1", 2, 38, 0), Claim("r", "n2", 2, 40, 0, ghost=True)
+        self.assertTrue(failover.beats(live, ghost))
+        self.assertFalse(failover.beats(ghost, live))
+        self.assertIs(failover.standing([Seen(ghost, 0.), Seen(live, 0.)]).claim, live)
+        self.assertIs(failover.standing([Seen(live, 0.), Seen(ghost, 0.)]).claim, live)
+
+    def test_a_higher_term_still_wins_and_a_ghost_alone_still_stands(self):
+        self.assertTrue(failover.beats(Claim("r", "n2", 3, 1, 0, ghost=True), Claim("r", "n1", 2, 38, 0)))
+        ghost = Seen(Claim("r", "n2", 2, 40, 0, ghost=True), 0., "finished")
+        self.assertIs(failover.standing([ghost]), ghost)
+
+    def test_the_host_reads_a_released_claim_of_a_finished_run_as_a_ghost_and_a_live_one_as_live(self):
+        value = {"term": 2, "round": 40, "state": "finished"}
+        state = SimpleNamespace(get=lambda origin, kind, key: {"value": value, "age": 1.})
+        host = failover.ClusterHost(SimpleNamespace(hostname="n1", lease_s=LEASE, state=state))
+        released = host._seen("n2", "r", True, {"value": {"released": True}, "age": 1.})
+        self.assertTrue(released.claim.ghost)
+        self.assertEqual((released.state, released.claim.term, released.claim.round), ("finished", 2, 40))
+        live = host._seen("n2", "r", True, {"value": {"term": 2, "round": 38, "rank": 0}, "age": 1.})
+        self.assertFalse(live.claim.ghost)
+        self.assertEqual(host._seen("n2", "r", True, None).claim.ghost, False)  # a run row alone (the first coordinator never claims) is no ghost
+
+    def test_after_a_heal_exactly_one_coordinator_is_left_and_it_is_the_live_claim(self):
+        """Both sides claimed term 2; the loser stepped down and its run row says finished at round 40, the winner's claim was made at 38. Each
+        side polls: the winner must not defer to the loser's row, and nobody has to take the run over again."""
+        clock = Clock(1000.)
+        winner, loser = FakeHost("n1", clock), FakeHost("n2", clock)
+        winner.mine, loser.mine = Claim("r", "n1", 2, 38, 0), None
+        views = [Seen(Claim("r", "n1", 2, 38, 0), 0.), Seen(Claim("r", "n2", 2, 40, 0, ghost=True), 0., "finished")]
+        for host in (winner, loser):
+            host.seen["r"] = views
+            failover.Failover(host).step()
+        self.assertEqual(winner.did("step_down"), [])
+        self.assertEqual(winner.did("claim"), [])
+        self.assertEqual(loser.did("claim"), [])
+        self.assertEqual(loser.did("take_over"), [])
+        self.assertIsNone(loser.mine)
+        self.assertEqual(winner.mine, Claim("r", "n1", 2, 38, 0))
+        self.assertIn(("point", "n1", 2, False), loser.log)  # the loser's members are sent to the winner
+
+    def test_a_finished_ghost_does_not_hold_back_a_takeover_from_a_stale_live_claim_of_its_term(self):
+        """The rule, pinned: W's finished row is a ghost, X (down, its lease lapsed) still has a live claim of the same term. The live claim
+        stands, so a replica claims the next term and continues the run, rather than counting it finished under the ghost."""
+        host = FakeHost("b", Clock(1000.))
+        host.held["r"] = [Held("b", 5, 0)]
+        host.down = {"x"}
+        host.seen["r"] = [Seen(Claim("r", "w", 2, 40, 0, ghost=True), 0., "finished"), Seen(Claim("r", "x", 2, 5, 0), LEASE + 1, "running")]
+        failover.Failover(host).step()
+        self.assertEqual(host.did("claim"), [("claim", Claim("r", "b", 3, 5, 0))])
+        self.assertEqual(host.did("finished_under_successor"), [])
+
+
 class Successor(unittest.TestCase):
     live = staticmethod(lambda node: True)
 

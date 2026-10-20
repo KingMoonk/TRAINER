@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
     "name": "My first transformer", "tokenizer": "byte", "width": 64,
     "layers": 2, "heads": 4, "context": 256, "expansion": 4, "dropout": 0.1,
     "batch_size": 4, "accumulation": 1, "steps": 300, "learning_rate": 0.001,
-    "weight_decay": 0.01, "warmup": 20, "eval_every": 25, "validation": 0.1,
+    "weight_decay": 0.01, "warmup": 20, "eval_every": 25, "eval_windows": 64, "validation": 0.1,
     "seed": 42, "objective": "assistant", "windowing": "anchored", "device": "auto", "architecture": None,
     "sample_every": 4, "sample_prompt": "The ",  # run page: a greedy sample of the prompt every N evaluation intervals (0 = off)
     "lora": None,  # {"rank", "alpha", "targets"}: train low-rank adapters on a frozen model instead of every weight (studio_lora)
@@ -72,7 +72,7 @@ DEFAULT_CONFIG = {
 # anchored windows with the assistant objective train answers only with their prompt in view.
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
-EVAL_WINDOWS = 400  # evaluation reads at most this many windows, spread evenly over the set
+EVAL_WINDOWS = 400  # legacy checkpoints and the distributed coordinator retain their original evaluation budget
 PREFILL_CHUNK = 256  # a reply's first KV-cached prefill runs this many tokens per forward pass, and checks `stop` between passes
 STREAM_CHARS = 16_000_000  # training text from this many characters on is tokenized into on-disk shards (about 48 MB of windows)
 
@@ -103,7 +103,8 @@ def validate_config(config):
     model_spec_given = is_model_spec(spec)
     structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 2048), ("expansion", 1, 8)]
     for key, low, high in structural + [("batch_size", 1, 128), ("accumulation", 1, 64),
-                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("seed", 0, 2147483647), ("sample_every", 0, 100000)]:
+                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("eval_windows", 1, 100000),
+                                        ("seed", 0, 2147483647), ("sample_every", 0, 100000)]:
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
@@ -187,7 +188,7 @@ def vocabulary_guess(cfg, vocab=263):
         fixed = module.vocab(config)
         if fixed:
             return fixed
-        if module.short in ("bpe_custom", "word"):
+        if module.short in ("bpe_custom", "bpe_fast", "word"):
             return config.vocab_size
     return vocab
 
@@ -740,6 +741,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 raise ValueError("Resume requires the original source lineage and validation split.")
             # Old checkpoints have no "architecture": validate_config derives the equivalent uniform spec.
             previous = validate_config(checkpoint["config"])
+            if not rebase:
+                # Best loss and history belong to this fixed subset. A resume must not compare a
+                # cheaper/new subset against them; pre-budget checkpoints always evaluated 400.
+                cfg["eval_windows"] = previous["eval_windows"] if "eval_windows" in checkpoint["config"] else EVAL_WINDOWS
             if "windowing" not in checkpoint["config"]:
                 # Checkpoints from before windowing existed were trained with independent sequential chunks.
                 previous["windowing"] = cfg["windowing"] = "sequential"
@@ -835,6 +840,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         emit({"type": "info", "text": f"Initialized from {Path(init_from).name}: copied {len(transplanted['copied'])} tensors, "
                                       f"{len(transplanted['fresh'])} freshly initialized."})
     emit({"type": "history", "history": [dict(row) for row in history]})
+    emit({"type": "info", "text": f"Evaluation uses up to {cfg['eval_windows']} fixed windows per split at every evaluation."})
 
     def save(filename):
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
@@ -853,8 +859,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             np.savez_compressed(stream, **arrays)
         replace_file(temporary, path)
 
-    def evaluate(samples, limit=EVAL_WINDOWS):
+    def evaluate(samples):
         """Plain cross-entropy over a fixed, evenly spread subset of the windows (all of them when few)."""
+        limit = cfg["eval_windows"]
         total, count = 0., 0
         chosen = np.linspace(0, len(samples) - 1, min(len(samples), limit), dtype=int) if len(samples) > limit else np.arange(len(samples))
         for start in range(0, len(chosen), shape[0]):
@@ -1025,7 +1032,7 @@ def batch_logits(model, windows, sliding, cache, stop=None, chunk=PREFILL_CHUNK)
     the context (`sliding`) every position shifts, so the cache is dropped and the windows re-prefilled. Without a cache the whole
     window is run. Callers pass `chunk` explicitly, as PREFILL_CHUNK read at call time."""
     if cache is None:
-        return model.forward(np.array(windows, dtype=np.int64))[:, -1]
+        return model.forward(np.array(windows, dtype=np.int64), last_only=True)[:, -1]
     if sliding:
         cache.clear()
         cache["n"] = 0
@@ -1034,7 +1041,7 @@ def batch_logits(model, windows, sliding, cache, stop=None, chunk=PREFILL_CHUNK)
     for start in range(0, new.shape[1], size):
         if start and stop and stop.is_set():
             return None
-        logits = model.forward(new[:, start:start + size], cache=cache)
+        logits = model.forward(new[:, start:start + size], cache=cache, last_only=True)
         if start + size < new.shape[1]:
             logits[0, -1, 0].item()   # a GPU runs ahead of this thread: wait for the chunk, or a stop would find every later chunk already queued
     return logits[:, -1]

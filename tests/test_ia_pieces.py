@@ -4,7 +4,7 @@ from unittest import mock
 
 from studio_ia import pieces as cut
 from studio_ia.services import FakeServices
-from studio_modules.tokenizer.bpe_custom import CustomBPETokenizer
+from studio_modules.tokenizer.bpe_fast import FastBPETokenizer
 from studio_modules.tokenizer.bpe_gpt2 import GPT2Tokenizer, bytes_to_unicode
 from studio_modules.tokenizer.word import WordTokenizer
 
@@ -33,7 +33,7 @@ class Pieces(unittest.TestCase):
     def test_lists_are_the_real_tokenizers_and_cut_the_sentence_back_whole(self):
         lists = cut.word_lists(TEXT)
         letters, small, _, words = lists["tokenizers"]
-        self.assertIsInstance(small, CustomBPETokenizer)
+        self.assertIsInstance(small, FastBPETokenizer)
         self.assertIsInstance(words, WordTokenizer)
         sentence = lists["sentence"]
         for tok in (letters, small, words):
@@ -73,7 +73,7 @@ class Pieces(unittest.TestCase):
     def test_fake_services_fit_on_their_rows_and_download_nothing(self):
         lists = FakeServices().word_lists()
         self.assertIsNone(lists["tokenizers"][2])
-        self.assertIsInstance(lists["tokenizers"][1], CustomBPETokenizer)
+        self.assertIsInstance(lists["tokenizers"][1], FastBPETokenizer)
 
 
 if __name__ == "__main__":

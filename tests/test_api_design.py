@@ -55,6 +55,8 @@ class DesignRouterTests(ApiCase):
         self.assertEqual({k: c[k] for k in want}, want)
         self.assertIn(c["fits"], (True, False, None))
 
+        start = self.call("GET", "/design/start")
+        self.assertEqual(start["spec"]["position"]["id"], "rope")
         presets = self.call("GET", "/design/presets")
         self.assertEqual([p["key"] for p in presets], [key for key, _ in D.preset_specs()])
         self.assertTrue(all(p["term"] and p["name"] and p["spec"] for p in presets))

@@ -9,7 +9,7 @@ LITTLE_TEXT = 5_000_000  # word pieces seen: below this a model only picks up le
 ENOUGH_TEXT = 20_000_000  # about 80 MB of text as word pieces
 SMALL, MEDIUM = 1_000_000, 10_000_000  # parameters that do the thinking
 FIXED_WORD_LIST = {"byte": 256, "character": 256, "bpe_gpt2": 50257}  # custom word lists are sized by the data
-WORD_PIECES = ("bpe_custom", "bpe_gpt2", "word")
+WORD_PIECES = ("bpe_custom", "bpe_fast", "bpe_gpt2", "word")
 
 
 def table_params(tokenizer, d_model, vocab=None):

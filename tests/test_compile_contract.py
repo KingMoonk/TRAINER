@@ -11,7 +11,7 @@ from tests.torchcheck import to_np
 
 class CompilerContract(unittest.TestCase):
     def model(self, post=False):
-        spec = default_spec()
+        spec = default_spec(preset="classic")
         spec['dims'].update(d_model=16, n_layer=1, n_ctx=32, dropout=0.)
         spec['train']['precision'] = {'id': 'fp64'}
         spec['block']['norm']['config']['placement'] = 'post' if post else 'pre'
@@ -79,7 +79,7 @@ class CompilerContract(unittest.TestCase):
         status = gpu_status()
         if not status['available']:
             self.skipTest(status['reason'])
-        spec = default_spec()
+        spec = default_spec(preset="classic")
         spec['dims'].update(d_model=16, n_layer=1, n_ctx=32, dropout=0.)
         cpu = CompiledModel(validate_spec(spec), 11, device='cpu')
         gpu = CompiledModel(validate_spec(spec), 11, device=status['kind'])

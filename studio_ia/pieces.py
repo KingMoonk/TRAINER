@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from studio_modules.tokenizer.bpe_custom import CustomBPEConfig, CustomBPETokenizer
+from studio_modules.tokenizer.bpe_fast import FastBPEConfig, FastBPETokenizer
 from studio_modules.tokenizer.byte import Tokenizer
 from studio_modules.tokenizer.word import PIECE, WordConfig, WordTokenizer
 from studio_slots import OFFSET
@@ -26,7 +26,7 @@ def word_lists(texts, gpt2=None):
         sample.append(text[:SAMPLE_CHARS - used])
         used += len(sample[-1])
     examples = [{"text": t} for t in sample if t]
-    small = CustomBPETokenizer.fit(examples, CustomBPEConfig().vocab_size) if examples else None
+    small = FastBPETokenizer.fit(examples, FastBPEConfig().vocab_size) if examples else None
     words = WordTokenizer.fit(examples, WordConfig().vocab_size) if examples else None
     return {"tokenizers": (Tokenizer("byte"), small, gpt2, words), "sentence": example_sentence(sample, small, words)}
 
