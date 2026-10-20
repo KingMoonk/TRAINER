@@ -1,9 +1,10 @@
-// The words of the busy card (components/busy-indicator.tsx): heavy work on the server and slow reads in the browser.
+// The words of the loading bar (components/busy-indicator.tsx): heavy work on the server and slow reads in the browser.
 
 export const BUSY = {
   region: "Work in progress",
   loading: "Loading {what}",
   stepOf: "{done} of {total}",
+  more: " +{count} more",
   /** What a slow read is called, by its React Query key (joined with spaces). Any other key is spelled out from its own words. */
   queries: {
     queue: "the queue",
