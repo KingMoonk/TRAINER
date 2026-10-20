@@ -83,6 +83,12 @@ export const T = {
   soloNodeTip: "|W| = 1 and the coordinator is the worker: no outer loop, no barrier, no traffic. This is the same view as a DiLoCo run with the round, timeline and transfer panels left out.",
   coordinatorWorker: "COORDINATOR + WORKER",
   localData: "corpus, held-out split and checkpoints local",
+  memberRole: "WORKER",
+  memberOf: "Member of '{run}', coordinated by {owner}.",
+  memberOfUnknown: "Member of '{run}'. The coordinator has not reported yet.",
+  memberData: "trains on the shards the coordinator sends; the corpus, held-out split and checkpoints are on {owner}",
+  openRun: "Open the run on {owner}",
+  memberRound: "Round {round}/{rounds}",
   soloLoss: "L_train {value}",
 
   // loss

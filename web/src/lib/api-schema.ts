@@ -5314,7 +5314,7 @@ export interface components {
             /** Note */
             note: string;
             /** Phase */
-            phase: ("downloading" | "training" | "uploading" | "waiting") | null;
+            phase: ("downloading" | "loading" | "training" | "uploading" | "waiting") | null;
             /**
              * Reason
              * @default
@@ -5868,6 +5868,23 @@ export interface components {
             /** Step */
             step?: ("faster" | "slower") | null;
         };
+        /**
+         * Prep
+         * @description What the run is doing before its first round (studio_distributed.preparation): building its data, then inviting the machines.
+         */
+        Prep: {
+            /** Done */
+            done: number;
+            /** Note */
+            note: string;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "reading" | "teacher" | "tokenizer" | "tokenizing" | "inviting";
+            /** Total */
+            total: number;
+        };
         /** Preset */
         Preset: {
             /** Key */
@@ -6084,7 +6101,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "downloading" | "training" | "uploading" | "waiting";
+            phase: "downloading" | "loading" | "training" | "uploading" | "waiting";
             /** Round */
             round: number;
             /**
@@ -7104,7 +7121,8 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "waiting" | "paused" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "polishing" | "judging" | "finished" | "stopped";
+            phase: "preparing" | "inviting" | "waiting" | "paused" | "getting_ready" | "next_round" | "training" | "collecting" | "outer_step" | "validating" | "polishing" | "judging" | "finished" | "stopped";
+            prep?: components["schemas"]["Prep"] | null;
             /**
              * Reviewed Only
              * @default false

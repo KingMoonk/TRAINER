@@ -7,7 +7,7 @@ import { PAGE_MAIN } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { problem } from "@/lib/cluster";
 import { T, fill } from "./copy";
-import { DilocoView, SoloView } from "./run-view";
+import { DilocoView, MemberView, SoloView } from "./run-view";
 import { useRunView } from "./use-run-view";
 
 function Message({ title, lead }: { title: string; lead?: string }) {
@@ -32,6 +32,8 @@ function RunPage() {
       return id === "" ? <Message title={T.noId} /> : <Message title={T.notFound} lead={T.notFoundLead} />;
     case "diloco":
       return <DilocoView run={view.run} />;
+    case "member":
+      return <MemberView view={view} />;
     default:
       return <SoloView view={view} />;
   }

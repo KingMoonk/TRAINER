@@ -122,7 +122,7 @@ describe("Queue page", () => {
     renderPage(<QueuePage />);
     expect(await screen.findByTestId("member-of")).toHaveTextContent("Member of 'Version 7' from Michael's Mac");
     expect(within(screen.getByTestId("member-of")).getByText("Training")).toBeVisible();
-    expect(screen.getByTestId("member-round")).toHaveTextContent("Round 6 of 50, 1,200 tok/s");
+    expect(screen.getByTestId("member-round")).toHaveTextContent("Round 7 of 50, 1,200 tok/s"); // 6 rounds are done, so round 7 is the open one, as the run's header says
     expect(screen.getByRole("progressbar", { name: "Run progress" })).toHaveAttribute("aria-valuenow", "12");
     expect(screen.queryByTestId("progress-line")).toBeNull(); // the job's own step line gives way to the run's round
   });

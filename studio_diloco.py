@@ -59,7 +59,7 @@ FINISHED = "The run is finished."  # the 409 detail of a join to a run that has 
 STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
-PHASES = ("downloading", "training", "uploading", "waiting")  # what a member says it is doing (POST /progress)
+PHASES = ("downloading", "loading", "training", "uploading", "waiting")  # what a member says it is doing (POST /progress)
 WORK_PHASES = ("training", "uploading")  # the phases that belong to one open round: a report in them for a closed round is stale
 MARKS = ("theta_taken", "first_step", "delta_sent", "delta_received")  # a round's timeline per member, in the order they happen
 PROGRESS_SECONDS = 2.  # a member reports at least this often while it runs ...
@@ -463,6 +463,18 @@ def step_size(delta, momentum, lr, mu):
     return float(np.sqrt(sum(float(((lr * (gradient + mu * momentum[name])) ** 2).sum()) for name, gradient in delta.items())))
 
 
+PREPARE_EVERY = 50  # documents tokenized between two progress reports of the build
+
+
+def _counted(examples, tally, say):
+    """`examples`, one by one, while `tally` ([done, total], shared by the splits) counts them and `say("tokenizing", done, total)` is called every PREPARE_EVERY."""
+    for example in examples:
+        yield example
+        tally[0] += 1
+        if tally[0] % PREPARE_EVERY == 0:
+            say("tokenizing", tally[0], tally[1])
+
+
 class Coordinator:
     """The global state of one run. Thread-safe; every method that can change it first moves the clock's consequences along
     (_advance: close a round that is complete or past its deadline, open the next). `evaluate(theta)` returns the validation loss."""
@@ -514,14 +526,15 @@ class Coordinator:
 
     # -- building and resuming
     @classmethod
-    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None, conversations=None):
+    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None, conversations=None, progress=None):
         """Tokenize `examples` once the way studio_model.train does, cut the windows, start theta from the config's seeded
         initialization, and continue from diloco.json if the folder has one. `later` are the example lists of the data sources
         the next_dataset pivot moves on to, in order: cut with the first source's tokenizer, never part of the validation. `start_from`, the
         path of a checkpoint (best.npz or last.npz of an earlier run), is where theta starts when the folder holds no run yet (a restart).
         `conversations`, when given (a list, possibly empty), are the teacher's: the polish and the head-to-head take their prompts from them, split
         by the run's seed into polish prompts and held-out ones, and they are never trained on, tokenized or part of the digest or the split. When
-        None the prompts come from the conversations among `examples` (the training split, the validation split)."""
+        None the prompts come from the conversations among `examples` (the training split, the validation split). `progress(phase, done, total)`, when
+        given, hears the build as it goes: "tokenizer" while the tokenizer is fitted, then "tokenizing" with the documents cut so far of all of them."""
         import studio_model as sm
         from studio_core import fingerprint
         from studio_planning import merge_duplicate_lineage
@@ -544,12 +557,18 @@ class Coordinator:
         digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
         training, validation, split = sm.partition_examples(examples, cfg["validation"], random.Random(cfg["seed"]), True)
         split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" + "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
+        say = progress or (lambda *_: None)
+        say("tokenizer", 0, 0)
         module, module_cfg = module_of("tokenizer", sm.effective_spec(cfg)["tokenizer"])
         tokenizer = module.fit(module_cfg, training)
+        tally = [0, len(training) + len(validation)]  # documents cut so far, of all
+        say("tokenizing", 0, tally[1])
         if sm.characters_in(training) + sm.characters_in(validation) >= sm.STREAM_CHARS:
-            train, val, _ = sm.shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or directory / "windows")
+            train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash,
+                                             shard_dir or directory / "windows")
         else:
-            train, val = sm.samples_from(training, tokenizer, cfg), sm.samples_from(validation, tokenizer, cfg)
+            train, val = sm.samples_from(_counted(training, tally, say), tokenizer, cfg), sm.samples_from(_counted(validation, tally, say), tokenizer, cfg)
+        say("tokenizing", tally[1], tally[1])
         if not train:
             raise ValueError("No trainable target tokens were found.")
         if settings.target_win_rate is not None and not val:
@@ -1422,7 +1441,7 @@ class Coordinator:
                 "closed": None if found.closed is None else found.closed - found.opened, "lanes": lanes}
 
     def _phase(self, current):
-        """Where the run is in its cycle: waiting (for members), next_round (members are taking theta), training, collecting (some
+        """Where the run is in its cycle: waiting (for members), next_round (members are taking theta; getting_ready in the first round), training, collecting (some
         change is in or on its way), outer_step, validating, or finished / stopped."""
         if self.stopped or self.finished:
             return "stopped" if self.stopped else "finished"
@@ -1438,7 +1457,9 @@ class Coordinator:
         working = [r for r in reports if r and r.get("round") == current.number and r.get("phase") in WORK_PHASES]
         if current.contributions or any(r["phase"] == "uploading" for r in working):
             return "collecting"
-        return "training" if working else "next_round"
+        if working:
+            return "training"
+        return "next_round" if self.history else "getting_ready"  # the first round: nothing has happened yet that a step of the cycle could tick
 
     def snapshot(self):
         """What the Training tab shows, from this process: the run's state and round, each node the run knows, the rounds so far, and
@@ -2101,6 +2122,16 @@ def prepare(job, services, directory, port, client_for=None):
     run resumes after the app restarted; the machines chosen are invited again. `client_for` reaches a peer (default PeerClient)."""
     import studio_distributed
     p = job.params
+    say = studio_distributed.preparing(job.id)  # what the run page shows until the first round: written here, read by the request path
+    try:
+        return _prepare(job, services, directory, port, client_for, p, say)
+    finally:
+        studio_distributed.prepared(job.id)
+
+
+def _prepare(job, services, directory, port, client_for, p, say):
+    import studio_distributed
+    say("reading")
     config = dict(p["config"])
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
@@ -2116,13 +2147,14 @@ def prepare(job, services, directory, port, client_for=None):
     try:
         if settings.polish_every or settings.target_win_rate is not None:
             teacher = teacher_settings(settings, getattr(services, "root", None))
+            say("teacher")
             if not p.get("resuming"):  # a new run fails now, not at the first use of the teacher, when it cannot be used; a resumed one meets it then
                 try:
                     check_teacher(teacher)
                 except RuntimeError as exc:
                     raise ValueError(f"The run {'polishes' if settings.polish_every else 'judges'} with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
-                                       start_from=p.get("restart_from"), conversations=conversations)
+                                       start_from=p.get("restart_from"), conversations=conversations, progress=say)
     except ValueError as exc:
         if p.get("resuming"):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None
@@ -2137,6 +2169,7 @@ def prepare(job, services, directory, port, client_for=None):
     studio_distributed.persist()
     studio_distributed.resumed(job)
     p.update(run=job.id, coordinator_url=f"http://127.0.0.1:{port}", settings=dict(settings.__dict__))
+    say("inviting")
     studio_distributed.invite(job, **({"client_for": client_for} if client_for else {}))  # the peers the person chose: a member job on each, which joins at the coordinator
     return coordinator
 
@@ -2524,6 +2557,8 @@ class Member:
                     elif self.replica_dir is not None:
                         self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
                     shards = [int(s) for s in view["shards"]]
+                    if not quiet and any(shard not in self.shards for shard in shards):
+                        self._phase("loading")  # θ is in; the text it has not held yet comes next
                     self._fetch(shards)
                 except PeerError as exc:
                     if exc.status == 409:  # the round moved on while this member was downloading

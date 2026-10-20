@@ -29,6 +29,7 @@ NOT_RESTARTED = ("resuming", "restart_from", "gang")  # params of one run's own 
 STATES = ("queued", "starting", "waiting", "running", "finished", "stopped", "failed")
 
 RUNS = {}  # run id -> Run
+PREP = {}  # run id -> (phase, done, total) while the owner job prepares the run (studio_diloco.prepare); read by view() without waiting on it
 _LOCK = threading.Lock()
 _HOME = None  # data/distributed_runs.json of the workspace the runs are kept in (see load); None: they live in memory only
 _WRITE = threading.Lock()
@@ -136,6 +137,40 @@ def note_saved(run_id, number):
     with _LOCK:
         if run_id in RUNS:
             RUNS[run_id].saved = number
+
+
+PREPARING = {
+    "reading": "Reading the datasets.",
+    "teacher": "Checking the teacher.",
+    "tokenizer": "Learning the tokenizer.",
+    "tokenizing": "Tokenizing the text",
+    "inviting": "Sending the invitations to the other machines.",
+}
+
+
+def preparing(run_id):
+    """`say(phase, done=0, total=0)` for the owner job's prepare: what the run is doing before its first round (a key of PREPARING), kept
+    where view() reads it. A plain dict write: the request path never waits for the thread that tokenizes."""
+    def say(phase, done=0, total=0):
+        PREP[run_id] = (phase, done, total)
+    return say
+
+
+def prepared(run_id):
+    """The run is built and its invitations are out (or prepare failed): nothing more to show."""
+    PREP.pop(run_id, None)
+
+
+def preparation(run_id):
+    """{"phase", "note", "done", "total"} of a run that is being prepared, else None. `done` of `total` is the documents tokenized."""
+    found = PREP.get(run_id)
+    if found is None:
+        return None
+    phase, done, total = found
+    note = PREPARING[phase]
+    if phase == "tokenizing":
+        note += f": {done:,} of {total:,} documents." if total else "."
+    return {"phase": phase, "note": note, "done": done, "total": total}
 
 
 def open_run(job):
@@ -508,12 +543,15 @@ def timeline_rows(timeline):
     return [{**line, "lanes": [{"node": node, **lane} for node, lane in line["lanes"].items()]} for line in timeline]
 
 
-def phase_of(snap, state):
-    """The run's phase for the live view: the coordinator's while it is going, finished or stopped once it is over."""
+def phase_of(snap, state, prep=None):
+    """The run's phase for the live view: the coordinator's while it is going, finished or stopped once it is over. While the run is
+    built (`prep`, from preparation) it is `preparing`, and `inviting` once the coordinator is up and the invitations are going out."""
     if state in ("finished", "stopped"):
         return state
     if state == "failed":
         return "stopped"
+    if prep is not None and state in ("starting", "waiting"):
+        return "inviting" if prep["phase"] == "inviting" else "preparing"
     return (snap or {}).get("phase") or "waiting"
 
 
@@ -545,8 +583,10 @@ def _member(node, machine, known, history, ended, snap=None, peer=None):
         state, note, row["blocking_job"] = "waiting", busy_reason(peer["blocking"]), peer["blocking"]
     elif machine is not None and machine.state == "unplaced":
         state, note = "waiting", machine.reason
-    else:
+    elif machine is not None and machine.peer_job:
         state, note = "invited", "Added to its queue. It joins by itself once the machine is free."
+    else:
+        state, note = "invited", "Not invited yet."  # no member job on its queue: the run is still being prepared, or the invitation is on its way
     held = (peer or {}).get("limits")
     if held and not ended and state in ("training", "behind", "joining", "invited", "waiting"):
         state, note = ("waiting" if state == "invited" else state), limit_reason(node, held)  # the machine's own limits say why
@@ -577,6 +617,11 @@ def view(run, coordinator, job, peers=None):
     if state == "waiting":
         note = "Waiting for enough members to join."
     ended = state in ("finished", "stopped", "failed") and (state if state != "failed" else "stopped")
+    prep = preparation(run.id)
+    if prep is not None and state in ("starting", "waiting"):
+        note = prep["note"]
+    else:
+        prep = None
     settings = (snap or {}).get("settings") or run.settings
     rules = (snap or {}).get("rules") or {}
     paused = bool((snap or {}).get("paused")) and state in ("waiting", "running")
@@ -591,7 +636,7 @@ def view(run, coordinator, job, peers=None):
             "can_restart": state in ENDED and not restart_blocker(run, getattr(coordinator, "term", run.term)),
             "best_round": rules.get("best_round"), "best_val_loss": rules.get("best_loss"), "win_rate": rules.get("win_rate"), "stop_rule": rules.get("stop_rule") or "",
             "stop_reason": stop_reason(state, rules, settings.get("rounds", 0)),
-            "phase": phase_of(snap, state), "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
+            "phase": phase_of(snap, state, prep), "prep": prep, "deadline_s": (snap or {}).get("deadline_s"), "grace_s": (snap or {}).get("grace_s", 0.),
             "window_s": (snap or {}).get("window_s"), "contributed": (snap or {}).get("contributed", 0), "expected": (snap or {}).get("expected", 0),
             "theta_bytes": (snap or {}).get("theta_bytes", 0), "now_s": (snap or {}).get("now_s", 0.),
             "timeline": timeline_rows((snap or {}).get("timeline", [])), "events": list((snap or {}).get("events", []))}

@@ -4724,6 +4724,7 @@
               {
                 "enum": [
                   "downloading",
+                  "loading",
                   "training",
                   "uploading",
                   "waiting"
@@ -6065,6 +6066,42 @@
         "title": "Prediction",
         "type": "object"
       },
+      "Prep": {
+        "description": "What the run is doing before its first round (studio_distributed.preparation): building its data, then inviting the machines.",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "reading",
+              "teacher",
+              "tokenizer",
+              "tokenizing",
+              "inviting"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "note",
+          "done",
+          "total"
+        ],
+        "title": "Prep",
+        "type": "object"
+      },
       "Preset": {
         "properties": {
           "key": {
@@ -6642,6 +6679,7 @@
           "phase": {
             "enum": [
               "downloading",
+              "loading",
               "training",
               "uploading",
               "waiting"
@@ -9051,8 +9089,11 @@
           },
           "phase": {
             "enum": [
+              "preparing",
+              "inviting",
               "waiting",
               "paused",
+              "getting_ready",
               "next_round",
               "training",
               "collecting",
@@ -9065,6 +9106,16 @@
             ],
             "title": "Phase",
             "type": "string"
+          },
+          "prep": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Prep"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reviewed_only": {
             "default": false,

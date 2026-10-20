@@ -114,6 +114,26 @@ class Directory(unittest.TestCase):
         self.dir = Path(self.tmp.name)
 
 
+class BuildProgress(Directory):
+    def test_building_reports_the_tokenizer_then_the_documents_tokenized_up_to_all_of_them(self):
+        seen = []
+        coordinator = studio_diloco.Coordinator.build("run1", self.dir, support.CONFIG, support.EXAMPLES, support.settings(),
+                                                      progress=lambda *step: seen.append(step))
+        self.addCleanup(coordinator.release)
+        self.assertEqual(seen[0], ("tokenizer", 0, 0))
+        tokenizing = [step for step in seen if step[0] == "tokenizing"]
+        total = len(support.EXAMPLES)
+        self.assertEqual((tokenizing[0], tokenizing[-1]), (("tokenizing", 0, total), ("tokenizing", total, total)))
+        counts = [done for _, done, _ in tokenizing]
+        self.assertEqual(counts, sorted(counts))
+        self.assertEqual({t for _, _, t in tokenizing}, {total})
+
+    def test_building_without_a_progress_callback_works_as_before(self):
+        coordinator = support.build(self.dir)
+        self.addCleanup(coordinator.release)
+        self.assertEqual(coordinator.snapshot()["phase"], "waiting")
+
+
 class Rounds(Directory):
     def setUp(self):
         super().setUp()
@@ -433,9 +453,9 @@ class LiveView(Directory):
         c.join("a")
         self.assertEqual(c.snapshot()["phase"], "waiting")  # below min_members
         c.join("b")
-        self.assertEqual(c.snapshot()["phase"], "next_round")
+        self.assertEqual(c.snapshot()["phase"], "getting_ready")
         self.report(c, "a", 0, "downloading")
-        self.assertEqual(c.snapshot()["phase"], "next_round")
+        self.assertEqual(c.snapshot()["phase"], "getting_ready")
         self.report(c, "a", 0, "training", 1)
         self.assertEqual(c.snapshot()["phase"], "training")
         self.report(c, "b", 0, "uploading", 2)
