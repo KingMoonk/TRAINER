@@ -477,7 +477,6 @@ class Services:
         """True when a run that trains on reviewed examples only would have text to train on in these sets."""
         raise NotImplementedError
 
-<<<<<<< HEAD
     def cluster_selftest_start(self, addresses, peer_url, api_port):
         """Start the cluster self-test (studio_selftest) on the listed machines, this one included; ValueError (with a sentence) when it
         cannot start: one is already running, this computer is busy, or an address is not on the Machines list."""
@@ -485,10 +484,10 @@ class Services:
 
     def cluster_selftest(self):
         """The running self-test's steps as they stand, else the last one's (kept across restarts), else {"state": "never", ...}."""
-=======
+        raise NotImplementedError
+
     def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
         """True when these sets hold `at_least` different prompts a run's teacher can answer (only conversations marked Good with `reviewed_only`)."""
->>>>>>> origin/wedd-compute-cluster
         raise NotImplementedError
 
     def text_sets(self):
@@ -868,7 +867,6 @@ class FakeServices(Services):
     def has_reviewed_text(self, dataset_ids):
         return self.reviewed_text
 
-<<<<<<< HEAD
     def cluster_selftest_start(self, addresses, peer_url, api_port):
         """A self-test whose every step passes at once (nothing is on the network); `studio_api --fake` shows the card with it."""
         import studio_selftest
@@ -881,13 +879,12 @@ class FakeServices(Services):
 
     def cluster_selftest(self):
         return getattr(self, "_selftest", {"state": "never", "id": "", "machines": [], "started_at": 0., "finished_at": None, "steps": []})
-=======
+
     def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
         return self.conversations_in_text >= at_least
 
     def conversations(self, params):
         return [{"user": f"Question {n}?", "assistant": f"Answer {n}."} for n in range(int(self.conversations_in_text))]
->>>>>>> origin/wedd-compute-cluster
 
     def versions(self):
         return list(self._versions)
