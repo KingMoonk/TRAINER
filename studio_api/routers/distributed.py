@@ -8,7 +8,7 @@ This is the owner's side. The members' wire protocol is `/collective` (studio_ap
 import os
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -58,7 +58,9 @@ class StartRun(BaseModel):
     max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
-    overlap: bool = False  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs
+    overlap: bool | None = None  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs. None (the default): on when another machine takes part, off for a run on this computer alone; false turns it off
+    delta_dtype: Literal["int8", "float16", "float32"] = DEFAULTS.delta_dtype  # the precision of a member's change and of the outer update members download; int8 keeps what it loses for the next change, float32 downloads the whole weights
+    time_box: bool | None = None  # members train until the round's deadline (set from the fastest member's time for H steps) instead of H steps each, and the outer step weights each change by the tokens it trained. None (the default): on when more than one machine takes part, off for a run on this computer alone.
     teacher: str | None = Field(None, max_length=200)  # an Ollama model that polishes the weights and judges the win-rate; needed by polish_every and target_win_rate
     polish_every: int | None = Field(None, ge=0, le=100_000)  # rounds between teacher polishes (below rounds); None or 0: no polish
     target_win_rate: float | None = Field(None, gt=0, le=1)  # stop once the best weights win this share of the teacher's head-to-head against the starting weights
@@ -185,6 +187,7 @@ class MemberHealth(BaseModel):
     tokens_per_s: float | None  # tokens / compute_s: its speed alone
     wait_s: float | None  # seconds its change was in before the slowest member's; null when the arrival was not recorded
     sync_s: float  # the rest: download, upload, outer step, validation
+    idle_s: float = 0.  # seconds of the round its GPU was not computing (the round minus compute_s); near 0 when the exchange overlaps the next steps
 
 
 class RoundHealth(BaseModel):
@@ -224,6 +227,9 @@ class RunHealth(BaseModel):
     wait_node: str  # the member that waits longest for the others
     wait_share: float | None  # its share of a round spent waiting
     straggler: str  # the member whose change most often comes in last
+    idle: dict[str, float] = {}  # per member, its share of a round its GPU was not computing; near 0 with overlap
+    idle_node: str = ""  # the member whose GPU idles most
+    idle_share: float | None = None  # its share
 
 
 class Prep(BaseModel):
@@ -529,7 +535,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     teaching, teaching_params = _teacher_options(body, services, dataset_ids)
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum, **shape, **teaching)  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, **shape, **teaching)  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -550,12 +556,15 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     if settings.min_members > len(machines):
         raise HTTPException(400, f"The run needs {settings.min_members} machines at once, but only {len(machines)} "
                                  f"{'is' if len(machines) == 1 else 'are'} chosen, this computer included.")
+    overlap = body.overlap if body.overlap is not None else len(machines) > 1  # a run with a member on another machine hides the exchange behind the next steps
+    boxed = body.time_box if body.time_box is not None else len(machines) > 1  # machines differ in speed, and none should wait for another
+    settings = replace(settings, time_box=boxed)
     config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
     label = runs.across_label(version.number, len(machines))
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **teaching_params, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)

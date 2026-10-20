@@ -628,7 +628,9 @@ export interface paths {
         };
         /**
          * Params
-         * @description The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline.
+         * @description The open round's global weights, fp32, as an .npz. `node`, who is asking, is noted on the round's timeline. A member that holds
+         *     the weights of round `since` (the round before) gets the outer update that led to this round's instead, quantized to the run's
+         *     delta_dtype, as an .npz marked with a `__update_from__` entry; with fp32 runs, or after a pivot or polish, it gets the weights.
          */
         get: operations["params_collective__run__params_get"];
         put?: never;
@@ -5413,6 +5415,11 @@ export interface components {
         MemberHealth: {
             /** Compute S */
             compute_s: number;
+            /**
+             * Idle S
+             * @default 0
+             */
+            idle_s: number;
             /** Loss */
             loss: number | null;
             /** Steps */
@@ -7259,6 +7266,20 @@ export interface components {
             basis: string;
             /** Comm Share */
             comm_share: number | null;
+            /**
+             * Idle
+             * @default {}
+             */
+            idle: {
+                [key: string]: number;
+            };
+            /**
+             * Idle Node
+             * @default
+             */
+            idle_node: string;
+            /** Idle Share */
+            idle_share?: number | null;
             /** Rounds */
             rounds: components["schemas"]["RoundHealth"][];
             /** Speedup */
@@ -7738,6 +7759,12 @@ export interface components {
             /** Dataset Ids */
             dataset_ids: string[];
             /**
+             * Delta Dtype
+             * @default int8
+             * @enum {string}
+             */
+            delta_dtype: "int8" | "float16" | "float32";
+            /**
              * Inner Steps
              * @default 100
              */
@@ -7761,11 +7788,8 @@ export interface components {
              * @default 0.9
              */
             outer_momentum: number;
-            /**
-             * Overlap
-             * @default false
-             */
-            overlap: boolean;
+            /** Overlap */
+            overlap?: boolean | null;
             /** Polish Every */
             polish_every?: number | null;
             /** Replaces */
@@ -7784,6 +7808,8 @@ export interface components {
             target_win_rate?: number | null;
             /** Teacher */
             teacher?: string | null;
+            /** Time Box */
+            time_box?: boolean | null;
             /** Version */
             version?: number | null;
         };
@@ -9598,6 +9624,7 @@ export interface operations {
             query: {
                 round: number;
                 node?: string;
+                since?: number | null;
                 /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
                 term: number;
             };

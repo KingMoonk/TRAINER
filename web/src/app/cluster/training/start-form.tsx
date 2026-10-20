@@ -19,7 +19,7 @@ import { JOIN } from "@/lib/copy/join";
 import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { DELTA_DTYPES, deltaDtypeOf, initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
@@ -160,6 +160,18 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
           <span>{T.overlap}</span>
         </label>
         <p className="max-w-prose text-xs text-muted-foreground">{T.overlapHelp}</p>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={form.timeBox} onChange={(e) => set({ timeBox: e.target.checked })} />
+          <span>{T.timeBox}</span>
+        </label>
+        <p className="max-w-prose text-xs text-muted-foreground">{T.timeBoxHelp}</p>
+        <div className="flex flex-col gap-1">
+          <label htmlFor="training-dtype" className="text-sm font-medium">{T.deltaDtype}</label>
+          <select id="training-dtype" value={form.deltaDtype} onChange={(e) => set({ deltaDtype: deltaDtypeOf(e.target.value) })} className={`${FIELD} w-fit max-w-full`}>
+            {DELTA_DTYPES.map((dtype) => <option key={dtype} value={dtype}>{dtype}</option>)}
+          </select>
+          <p className="max-w-prose text-xs text-muted-foreground">{T.deltaDtypeHelp}</p>
+        </div>
       </fieldset>
 
       <details className="flex flex-col gap-2" onToggle={(e) => e.currentTarget.open && setTeacherOpen(true)}>
