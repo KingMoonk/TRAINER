@@ -50,7 +50,7 @@ def get(slot, short):
 
 
 # Display order of the library cards; a module not listed here is shown after these, alphabetically.
-ORDER = {"tokenizer": ["bpe_gpt2", "bpe_custom", "word", "byte", "character"], "embedding": ["learned", "factorized"],
+ORDER = {"tokenizer": ["bpe_gpt2", "bpe_fast", "bpe_custom", "word", "byte", "character"], "embedding": ["learned", "factorized"],
          "position": ["learned", "sinusoidal", "rope", "alibi", "none"], "norm": ["layernorm", "rmsnorm", "none"],
          "mixer": ["attention", "gqa", "linear", "ssm", "gru", "lstm", "conv", "none"],
          "channel": ["mlp_gelu", "swiglu", "moe", "none"], "head": ["tied", "untied"], "objective": ["ce", "ce_ls", "ce_z"],
