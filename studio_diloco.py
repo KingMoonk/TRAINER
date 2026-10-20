@@ -1752,6 +1752,7 @@ class Coordinator:
                 return
             from studio_core import atomic_json
             self.stopped = self.finished = True
+            self.stopped_at = self.clock()
             self._polish_stop.set()
             self._event("finished", "", self.next_round, reason)
             if self.record:

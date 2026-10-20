@@ -85,13 +85,40 @@ class OwnerSide(unittest.TestCase):
         queue = [{"id": "job-box", "status": "waiting", "label": "m"}]
         for down, slowly, expected in ((True, True, True), (True, False, False), (False, True, False)):
             cluster = types.SimpleNamespace(is_down=lambda node, d=down: d, answers_slowly=lambda node, s=slowly: s)
-            with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
+            with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None), \
+                mock.patch.object(studio_facts, "member_failures", return_value=[]):
                 self.assertEqual(runs.peer_facts(self.run, cluster)["box"]["slow"], expected)
 
     def test_a_machine_that_refused_the_invite_is_unreachable_with_the_refusal(self):
         self.box.state, self.box.reason = "unreachable", "box refused the connection."
         row = self.row()
         self.assertEqual((row["state"], row["reason"]), ("unreachable", "box refused the connection."))
+
+    def test_a_machine_whose_member_job_failed_there_is_not_invited_any_more_and_says_why(self):  # #543
+        error = "https://beast.tailb22e91.ts.net answered 502 to POST /collective/run1/join. Set TRAINER_NODE_ADDRESS to an address box can reach."
+        row = self.row({"box": {**peer(), "member_failed": error}})
+        self.assertEqual((row["state"], row["can_stop"]), ("unreachable", False))
+        self.assertEqual(row["reason"], f"The member job on box failed: {error}")
+
+    def test_peer_facts_carry_the_error_of_the_member_job_that_failed_on_the_machine(self):  # #543
+        import studio_facts
+        cluster = types.SimpleNamespace(is_down=lambda node: False, answers_slowly=lambda node: False)
+        failures = [{"id": "other", "run": "x", "error": "not this one"}, {"id": "job-box", "run": self.run.id, "error": "It could not reach the owner."}]
+        with mock.patch.object(studio_facts, "queue_facts", return_value=([], 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None), \
+                mock.patch.object(studio_facts, "member_failures", return_value=failures):
+            facts = runs.peer_facts(self.run, cluster)
+        self.assertEqual(facts["box"]["member_failed"], "It could not reach the owner.")
+        row = self.row(facts)
+        self.assertEqual((row["state"], row["reason"]), ("unreachable", "The member job on box failed: It could not reach the owner."))
+
+    def test_a_machine_publishes_its_failed_member_jobs_and_only_those(self):  # #543
+        import studio_facts
+        from studio_queue import Job
+        jobs = [Job(id="ok", created_at=1., kind="diloco_member", status="running", params={"run": "r"}),
+                Job(id="bad", created_at=1., kind="diloco_member", status="failed", error="Could not reach the owner.", params={"run": "r"}),
+                Job(id="other", created_at=1., kind="pretrain", status="failed", error="x")]
+        runner = types.SimpleNamespace(lock=__import__("threading").RLock(), jobs=jobs)
+        self.assertEqual(studio_facts._member_failures(runner), [{"id": "bad", "run": "r", "error": "Could not reach the owner."}])
 
     def test_a_machine_whose_member_job_is_starting_is_joining(self):
         self.assertEqual(self.row({"box": peer(member_running=True)})["state"], "joining")
@@ -115,7 +142,8 @@ class OwnerSide(unittest.TestCase):
         import studio_facts
         cluster = types.SimpleNamespace(is_down=lambda node: False)
         queue = [{"id": "other", "status": "running", "label": "Version 1", "eta_s": 600.}, {"id": "job-box", "status": "waiting", "label": "m"}]
-        with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
+        with mock.patch.object(studio_facts, "queue_facts", return_value=(queue, 3.)), mock.patch.object(studio_facts, "limits_facts", return_value=None), \
+                mock.patch.object(studio_facts, "member_failures", return_value=[]):
             facts = runs.peer_facts(self.run, cluster)
         self.assertEqual(facts, {"box": {"down": False, "slow": False, "member_running": False, "blocking": {"label": "Version 1", "eta_s": 600.}, "limits": None}})
         with mock.patch.object(studio_facts, "queue_facts", return_value=([], None)), mock.patch.object(studio_facts, "limits_facts", return_value=None):
