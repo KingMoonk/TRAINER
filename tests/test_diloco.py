@@ -530,5 +530,29 @@ class Equivalence(Directory):
         self.assertGreater(gap, 1e-3)
 
 
+class Restarted(Directory):
+    def test_a_member_started_again_in_the_folder_of_its_earlier_attempt_trains_instead_of_refusing_it(self):
+        """A restart of the app resumes the owner's job, which runs its member again in the same folder (studio_jobs._member); the
+        folder holds the first attempt's checkpoint, which train() refuses as a user's run. A member's folder is scratch."""
+        folder = self.dir / "member"
+        for run in ("first", "again"):
+            coordinator = support.build(self.dir / f"diloco-{run}", inner_steps=2, rounds=2)
+            studio_diloco.COORDINATORS[run] = coordinator
+            self.addCleanup(studio_diloco.COORDINATORS.pop, run, None)
+            with TestClient(support.app()) as client:
+                studio_diloco.run_member(support.Peer(client), run, "solo", 0, self.dir, folder, lambda event: None,
+                                         threading.Event(), wait=.2)
+            self.assertTrue(coordinator.finished, run)
+        self.assertTrue((folder / "last.npz").is_file())
+
+    def test_the_output_folder_guard_still_protects_an_ordinary_run(self):
+        out = self.dir / "mine"
+        out.mkdir()
+        (out / "last.npz").write_bytes(b"x")
+        with self.assertRaisesRegex(ValueError, "Choose a new output folder"):
+            studio_model.train({**support.CONFIG, "steps": 1}, [], out, telemetry_every=0)
+        self.assertEqual((out / "last.npz").read_bytes(), b"x")
+
+
 if __name__ == "__main__":
     unittest.main()
