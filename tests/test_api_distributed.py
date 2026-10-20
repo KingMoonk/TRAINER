@@ -542,6 +542,23 @@ class Routes(unittest.TestCase):
         self.assertEqual({m["node"]: m["state"] for m in stopped.json()["members"]}["gpu-box"], "stopped")
         self.assertEqual(self.client.post(f"/distributed/runs/{run.id}/stop").json()["state"], "stopped")
 
+    def test_the_demo_run_says_its_view_changed_while_it_goes(self):
+        told = []
+        off = self.services.watch(lambda kind, payload: told.append(payload) if kind == "run" else None)
+        try:
+            run = self.services.demo_run()
+            end = time.monotonic() + 5.
+            while time.monotonic() < end and not told:
+                time.sleep(.01)
+            self.assertEqual(told[:1], [{"run": run.id}])
+            self.client.post(f"/distributed/runs/{run.id}/stop")
+            time.sleep(.6)  # one interval for the thread to see the stop
+            count = len(told)
+            time.sleep(.6)
+            self.assertEqual(len(told), count)
+        finally:
+            off()
+
     def test_a_run_on_this_computer_and_a_machine_that_is_down_runs_and_finishes(self):
         self.services.set_setting("nodes", ["127.0.0.1:9"])
         started = self.start(machines=["127.0.0.1:9"])

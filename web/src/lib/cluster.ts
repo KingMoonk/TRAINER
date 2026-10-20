@@ -16,6 +16,7 @@ export type QueueRow = components["schemas"]["QueueRow"];
 export type PublishedVersion = components["schemas"]["PublishedVersion"];
 
 const CLUSTER = ["cluster", "queue"] as const;
+const PEERS_MS = 5_000;
 
 /** More than one machine is listed. A cluster of one shows nothing about machines anywhere. */
 export function isCluster(cluster: ClusterQueue | undefined): boolean {
@@ -24,16 +25,18 @@ export function isCluster(cluster: ClusterQueue | undefined): boolean {
 
 /**
  * The jobs of every machine and the machines themselves (GET /cluster/merged). Empty for a cluster of one, so a page asks
- * `isCluster(data)` before it shows anything about machines. Re-read on every `queue` or `cluster` event, and on `facts`: a
- * peer's own queue reaches this one through the shared observations.
+ * `isCluster(data)` before it shows anything about machines. Re-read on every `queue`, `cluster`, `nodes` or `facts` event, and
+ * every few seconds while other machines are listed: the reply asks the peers themselves, and a peer that stops answering or
+ * changes its own queue tells no event here.
  */
 export function useCluster() {
-  useLive(CLUSTER, ["queue", "cluster", "facts"]);
-  return useQuery({
+  const query = useQuery({
     queryKey: CLUSTER,
     queryFn: ({ signal }) => unwrap(api.GET("/cluster/merged", { signal })),
     retry: false,
   });
+  useLive(CLUSTER, ["queue", "cluster", "nodes", "facts"], { backstopMs: isCluster(query.data) ? PEERS_MS : undefined });
+  return query;
 }
 
 /** The last time a machine answered, as a clock time, or "" when it never did. */
