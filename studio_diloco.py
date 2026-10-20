@@ -2723,8 +2723,10 @@ class Member:
             attempt = 0
             while True:  # one attempt of train() per coordinator this member is attached to; a failover or a settled claim ends one
                 self.first_step, found, self.warm = 0, None, False
+                folder = directory if not attempt else Path(f"{directory}_{attempt}")
+                shutil.rmtree(folder, ignore_errors=True)  # scratch: an earlier start of this member (the app restarted and resumed the run) left its checkpoint here, which train() refuses to write into
                 try:
-                    studio_model.train(cfg, [], directory if not attempt else Path(f"{directory}_{attempt}"), emit=watch,
+                    studio_model.train(cfg, [], folder, emit=watch,
                                        stop=Halt(self.stop, self.ended), pause=self.pause, distributed=self, telemetry_every=0, offload_optimizer=offload)
                     if (self.superseded or self.moved) and not self.finished and not self.stop.is_set():
                         found = self._relocated_within(self.clock() + self.patience)
