@@ -49,7 +49,7 @@ class State:
 
     @staticmethod
     def _blank():
-        return {"status": "off", "reason": "", "pid": None, "heartbeat": None, "plan": [], "planned_at": None, "sources": {},
+        return {"status": "off", "reason": "", "pid": None, "heartbeat": None, "plan": [], "plans": {}, "sources": {},
                 "stats": blank_stats(), "groups": {}, "registered": {}}
 
     def save(self, **fields):

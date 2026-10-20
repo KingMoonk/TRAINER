@@ -172,6 +172,18 @@ describe("ruleFires", () => {
     expect(ruleFires(err, { source: "event", kind: "api_error", payload: { status: 503 } }, memory())).toBe(true);
     expect(ruleFires(err, { source: "event", kind: "api_error", payload: { status: 404 } }, memory())).toBe(false);
   });
+  test("Run finished ignores background reads but still announces completed queued runs", () => {
+    const done = rule({ id: "run.finished", source: "event", kind: "job", where: "status", equals: "done" });
+    const fire = (payload: unknown) => ruleFires(done, { source: "event", kind: "job", payload }, memory());
+    expect(fire({ id: "read-1", kind: "design.notebook", status: "done", progress: "", error: "" })).toBe(false);
+    expect(fire({ id: "read-2", kind: "design.guess-check", status: "done" })).toBe(false);
+    expect(fire({ job: "run-1", status: "done", error: "" })).toBe(true);
+    expect(fire({ job: "run-1", status: "failed", error: "Training failed" })).toBe(false);
+    expect(fire({ job: "run-1", status: "running" })).toBe(false);
+    expect(fire({ job: "", status: "done" })).toBe(false);
+    // User-defined job rules retain their ordinary payload matching.
+    expect(ruleFires({ ...done, id: "custom" }, { source: "event", kind: "job", payload: { id: "read-1", status: "done" } }, memory())).toBe(true);
+  });
   test("new_min fires only when a value goes below the lowest seen, the first value just sets it", () => {
     const best = rule({ source: "event", kind: "train", where: "val_loss", new_min: true, id: "best" });
     const mem = memory();
@@ -186,6 +198,12 @@ describe("alerts", () => {
     const r = record({ method: "POST", path: "/collective/r/join", status: 409, ms: 30, remote: "BEAST", request: { headers: {}, query, body: null } });
     expect(alertDetail({ source: "traffic", record: r })).toBe("POST /collective/r/join · 409 · 30 ms · from BEAST · round 4");
     expect(alertDetail({ source: "event", kind: "job", payload: { status: "done", job: "j1", nested: {} } })).toBe("job · status done · job j1");
+  });
+  test("empty progress and error fields do not look like errors in a successful alert", () => {
+    expect(alertDetail({ source: "event", kind: "job", payload: { job: "j1", status: "done", progress: " ", error: "", step: 0, stopped: false } }))
+      .toBe("job · job j1 · status done · step 0 · stopped false");
+    expect(alertDetail({ source: "event", kind: "job", payload: { job: "j1", status: "failed", error: "Out of memory" } }))
+      .toContain("error Out of memory");
   });
   test("the same alert again bumps the earlier one instead of stacking", () => {
     const a = { rule: "x", label: "X", severity: "info" as const, detail: "d", at: 1 };

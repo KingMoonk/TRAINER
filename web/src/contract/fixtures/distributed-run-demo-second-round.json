@@ -48,6 +48,59 @@
     "expected": 2,
     "grace_s": 2.0,
     "handoff": "",
+    "health": {
+      "aggregate_tokens_per_s": null,
+      "baseline_node": "",
+      "baseline_tokens_per_s": null,
+      "basis": "Tokens trained per second against the fastest member's measured compute speed alone; not loss per second.",
+      "comm_share": null,
+      "rounds": [
+        {
+          "bytes_down": 8000000,
+          "bytes_up": 4000000,
+          "compression": 2.0,
+          "dtype": "float16",
+          "loss": 5.0509,
+          "lr": 0.7,
+          "members": {
+            "gpu-box": {
+              "compute_s": 2.35,
+              "loss": 5.0635,
+              "steps": 100,
+              "sync_s": 2.1,
+              "tokens": 23030,
+              "tokens_per_s": 9800.0,
+              "wait_s": 1.5499999999999998
+            },
+            "mac-mini": {
+              "compute_s": 3.6,
+              "loss": 5.0509,
+              "steps": 100,
+              "sync_s": 2.4,
+              "tokens": 8640,
+              "tokens_per_s": 2400.0,
+              "wait_s": 0.0
+            }
+          },
+          "round": 0,
+          "seconds": 6.0,
+          "slowest": "mac-mini",
+          "sync_s": 2.4,
+          "tokens": 31670,
+          "update_norm": 0.2,
+          "val_loss": 5.1309
+        }
+      ],
+      "speedup": null,
+      "straggler": "",
+      "verdict": {
+        "state": "not_enough_data",
+        "text": "Not enough data: it needs 2 rounds with two or more members to compare with one machine alone (1 so far)."
+      },
+      "wait_node": "",
+      "wait_share": null,
+      "window": 1
+    },
     "history": [
       {
         "best": true,

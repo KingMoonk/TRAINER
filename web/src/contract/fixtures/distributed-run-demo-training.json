@@ -32,6 +32,23 @@
     "expected": 2,
     "grace_s": 2.0,
     "handoff": "",
+    "health": {
+      "aggregate_tokens_per_s": null,
+      "baseline_node": "",
+      "baseline_tokens_per_s": null,
+      "basis": "Tokens trained per second against the fastest member's measured compute speed alone; not loss per second.",
+      "comm_share": null,
+      "rounds": [],
+      "speedup": null,
+      "straggler": "",
+      "verdict": {
+        "state": "not_enough_data",
+        "text": "Not enough data: it needs 2 rounds with two or more members to compare with one machine alone (0 so far)."
+      },
+      "wait_node": "",
+      "wait_share": null,
+      "window": 0
+    },
     "history": [],
     "id": "demo-run",
     "inner_steps": 100,

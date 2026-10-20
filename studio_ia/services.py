@@ -477,9 +477,17 @@ class Services:
         """True when a run that trains on reviewed examples only would have text to train on in these sets."""
         raise NotImplementedError
 
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        """True when these sets hold `at_least` different prompts a run's teacher can answer (only conversations marked Good with `reviewed_only`)."""
+        raise NotImplementedError
+
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
+
+    def conversation_sets(self):
+        """[{id, name, count}] of the sets that hold conversations: the places a cluster run's teacher can take its prompts from."""
+        return list(self.data("conversations").sets or [])
 
     def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
@@ -739,6 +747,39 @@ class Services:
         """The held-back documents as text."""
         raise NotImplementedError
 
+    # collect (passive training-data collection, issue #447) -------------------------------------------
+    def collect_options(self):
+        """{topics, sources, excluded, licences, user_agent}: what the Collect page offers (studio_collect.view.options)."""
+        raise NotImplementedError
+
+    def collect_config(self):
+        """The collector's settings (studio_collect.config.DEFAULTS shape)."""
+        raise NotImplementedError
+
+    def save_collect_config(self, overrides):
+        """Apply a partial settings dict and return the settings. ValueError, in plain words, for a bad value. Starts the background
+        collector when collection is on."""
+        raise NotImplementedError
+
+    def collect_state(self):
+        """What the collector is doing: status, counters, plan, per-source progress, disk and bandwidth use, journal (studio_collect.view.state)."""
+        raise NotImplementedError
+
+    def collect_pause(self):
+        """Pause collection at once (the service notices within a second). Returns the settings."""
+        raise NotImplementedError
+
+    def collect_resume(self):
+        """Resume (and turn on) collection; starts the background collector. Returns the settings."""
+        raise NotImplementedError
+
+    def collect_start(self):
+        """Begin keeping the collector running and registering its shards (the API calls this at start-up)."""
+
+    def collect_stop(self):
+        """Stop doing that (the API calls this at shut-down). The background collector itself keeps going."""
+
+
 
 DEMO_RUN = "demo-run"  # the id of the run `studio_api --fake` starts with (FakeServices.demo_run)
 
@@ -764,6 +805,7 @@ class FakeServices(Services):
         self.probe_path = None  # what viewer_probe_step returns
         self.heldout_docs: list = []  # the held-back text viewer_summarize reads
         self.reviewed_text = True  # whether the text sets hold an example marked Good
+        self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
 
     def viewer_status(self):
         return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
@@ -828,6 +870,12 @@ class FakeServices(Services):
 
     def has_reviewed_text(self, dataset_ids):
         return self.reviewed_text
+
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        return self.conversations_in_text >= at_least
+
+    def conversations(self, params):
+        return [{"user": f"Question {n}?", "assistant": f"Answer {n}."} for n in range(int(self.conversations_in_text))]
 
     def versions(self):
         return list(self._versions)
@@ -1383,6 +1431,46 @@ class FakeServices(Services):
 
     def inspect_reply(self, version, prompt, off=(), mode="mean"):
         return f"[reply with {len(off)} heads off]" if off else "[reply]"
+
+    # collect: the real settings, state and view over a scratch folder, with no collector process behind it -------------
+    def _collect_root(self):
+        if getattr(self, "_collect_dir", None) is None:
+            import shutil
+            import tempfile
+            import weakref
+            self._collect_dir = tempfile.mkdtemp(prefix="collect-fake-")
+            weakref.finalize(self, shutil.rmtree, self._collect_dir, True)
+        return self._collect_dir
+
+    def collect_options(self):
+        from studio_collect import view
+        return view.options()
+
+    def collect_config(self):
+        from studio_collect import view
+        return view.get_config(self._collect_root())
+
+    def save_collect_config(self, overrides):
+        from studio_collect import view
+        config = view.set_config(self._collect_root(), overrides)
+        self.emit("collect", {})
+        return config
+
+    def collect_state(self):
+        from studio_collect import view
+        return view.state(self._collect_root(), running=False)
+
+    def collect_pause(self):
+        from studio_collect import view
+        config = view.set_paused(self._collect_root(), True)
+        self.emit("collect", {})
+        return config
+
+    def collect_resume(self):
+        from studio_collect import view
+        config = view.set_paused(self._collect_root(), False)
+        self.emit("collect", {})
+        return config
 
 
 # ---- the real façade -------------------------------------------------------------------------------------------
@@ -2130,6 +2218,27 @@ class WorkspaceServices(Services):
         held = set(self._heldout())
         good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
         return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
+
+    def conversations(self, params):
+        """The conversations of params["datasets"] (default: every set) that can make a teacher's prompt: a run with a teacher takes its
+        polish and head-to-head prompts from them, and never trains on them. Drafts are left out, and with params["reviewed_only"] so is
+        everything not marked Good. A set may hold only conversations."""
+        return list(self._conversation_rows(params.get("datasets"), bool(params.get("reviewed_only"))))
+
+    def _conversation_rows(self, dataset_ids, good_only):
+        """The conversations of these sets a teacher can answer: not drafts, ending in an assistant turn (what studio_rlhf.prompts_from
+        keeps), and only the ones marked Good when `good_only`."""
+        import studio_data_kinds
+        from studio_core import messages_of
+        ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
+        return (e for i in ids for e in self.workspace.iter_kind(i, "conversations")
+                if not studio_data_kinds.is_draft(e) and (not good_only or e.get("quality") == "Good")
+                and (messages_of(e) or [{}])[-1].get("role") == "assistant")
+
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        import studio_diloco
+        # Prompts, not rows: two chats that ask the same question make one prompt (the coordinator's split dedupes the same way).
+        return len(studio_diloco.unique_prompts(self._conversation_rows(list(dataset_ids), reviewed_only))) >= at_least
 
     def has_reviewed_text(self, dataset_ids):
         """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held
@@ -2909,14 +3018,35 @@ class WorkspaceServices(Services):
     def text_sets(self):
         """The text sets from the counts storage keeps exact (Workspace.kind_stats), not from the summary: answering needs no scan
         of the rows, so it takes milliseconds on a workspace of a million of them."""
+        return self._sets_holding("text")
+
+    CHAT_COUNT_CAP = 1000  # the count of a set's prompts stops here (the form shows "1000+"): reading a huge set to the end buys nothing
+
+    def conversation_sets(self):
+        """[{id, name, count}] of the sets with prompts a run's teacher can answer: count is the different prompts (what has_conversations
+        counts), at most CHAT_COUNT_CAP; a set with none is not listed."""
+        import studio_diloco
+        from studio_rlhf import prompts_from
+        out = []
+        for dataset in list(self.workspace.state["datasets"]):
+            keys = set()
+            for row in self._conversation_rows([dataset["id"]], False):
+                keys.update(studio_diloco.prompt_key(p) for p in prompts_from([row]))
+                if len(keys) >= self.CHAT_COUNT_CAP:
+                    break
+            if keys:
+                out.append({"id": dataset["id"], "name": dataset["name"], "count": len(keys)})
+        return out
+
+    def _sets_holding(self, kind):
         import studio_data_kinds as dk
         out = []
         for dataset in list(self.workspace.state["datasets"]):
             if dataset.get("storage") == "sqlite":
                 stats = self.workspace.kind_stats(dataset["id"])
-                count = stats.get("text", (0,))[0] if stats is not None else sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+                count = stats.get(kind, (0,))[0] if stats is not None else sum(dk.classify(e) == kind for e in self.workspace.iter_examples(dataset["id"]))
             else:
-                count = sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+                count = sum(dk.classify(e) == kind for e in self.workspace.iter_examples(dataset["id"]))
             if count:
                 out.append({"id": dataset["id"], "name": dataset["name"], "count": count})
         return out
@@ -3515,6 +3645,54 @@ class WorkspaceServices(Services):
     def inspect_reply(self, version, prompt, off=(), mode="mean"):
         import studio_inspect
         return studio_inspect.greedy_reply(self._checkpoint(version), prompt, list(off), mode)
+
+    # collect -----------------------------------------------------------------------------------------
+    def collect_manager(self):
+        """The app-side manager of the background collector (starts the service, registers its shards); made on first use."""
+        if getattr(self, "_collect", None) is None:
+            from studio_collect.manager import Manager
+            self._collect = Manager(self.workspace, self.emit)
+        return self._collect
+
+    def collect_start(self):
+        self.collect_manager().start()
+
+    def collect_stop(self):
+        if getattr(self, "_collect", None) is not None:
+            self._collect.close()
+
+    def collect_options(self):
+        from studio_collect import view
+        return view.options()
+
+    def collect_config(self):
+        from studio_collect import view
+        return view.get_config(self.root)
+
+    def _collect_changed(self, config):
+        from studio_collect import service
+        if config["enabled"]:
+            service.ensure_running(self.root)
+        self.emit("collect", {})
+        return config
+
+    def save_collect_config(self, overrides):
+        from studio_collect import view
+        return self._collect_changed(view.set_config(self.root, overrides))
+
+    def collect_state(self):
+        from studio_collect import service, view
+        return view.state(self.root, running=service.running(self.root))
+
+    def collect_pause(self):
+        from studio_collect import view
+        return self._collect_changed(view.set_paused(self.root, True))
+
+    def collect_resume(self):
+        from studio_collect import view
+        return self._collect_changed(view.set_paused(self.root, False))
+
+
 
 
 class FixtureServices(WorkspaceServices):
