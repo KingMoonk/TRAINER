@@ -5,8 +5,8 @@ on:
   push:
     branches: [main]
     paths-ignore: ["**.md"]
+  # Every PR runs, docs-only ones too: unit, web, secrets and title are required checks, and a skipped run never reports them.
   pull_request:
-    paths-ignore: ["**.md"]
 
 permissions:
   contents: read
