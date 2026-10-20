@@ -2,6 +2,7 @@
 import type { components } from "@/lib/api-schema";
 import { TRAINING as T } from "@/lib/copy/training";
 import type { Mark, Series } from "@/components/series-chart";
+import { initialRules, rulesParams, rulesProblem, type RulesForm } from "./rules";
 
 export type Run = components["schemas"]["Run"];
 export type Member = components["schemas"]["Member"];
@@ -33,7 +34,7 @@ export function deltaDtypeOf(text: string | undefined): DeltaDtype {
 }
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string; rules: RulesForm };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -61,6 +62,7 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     teacher: "",
     polishEvery: "",
     targetWinRate: "",
+    rules: initialRules(),
   };
 }
 
@@ -124,7 +126,7 @@ export function startBody(form: Form): StartRun | null {
   const most = limit(form.maxMachines);
   if (least === null || most === null) return null;
   if (least !== undefined && most !== undefined && least > most) return null;
-  if (teacherProblem(form) !== "") return null;
+  if (teacherProblem(form) !== "" || rulesProblem(form.rules, form.polishEvery, form.rounds) !== "") return null;
   const teacher = teaching(form);
   return {
     version: form.version === "" ? null : Number(form.version),
@@ -142,6 +144,7 @@ export function startBody(form: Form): StartRun | null {
     delta_dtype: form.deltaDtype,
     reviewed_only: form.reviewedOnly,
     ...teacher,
+    ...rulesParams(form.rules),
   };
 }
 

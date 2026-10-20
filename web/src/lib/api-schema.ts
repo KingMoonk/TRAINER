@@ -7793,6 +7793,14 @@ export interface components {
             /** Sites */
             sites?: string[] | null;
         };
+        /** Stages */
+        Stages: {
+            /**
+             * Replay
+             * @default 0.2
+             */
+            replay: number;
+        };
         /** Start */
         Start: {
             /** Note */
@@ -7845,6 +7853,12 @@ export interface components {
             outer_momentum: number;
             /** Overlap */
             overlap?: boolean | null;
+            /** Pivots */
+            pivots?: ("halve_lr" | "next_dataset" | "drop_lessons")[] | null;
+            /** Plateau Checks */
+            plateau_checks?: number | null;
+            /** Plateau Min Improvement */
+            plateau_min_improvement?: number | null;
             /** Polish Every */
             polish_every?: number | null;
             /** Replaces */
@@ -7859,6 +7873,7 @@ export interface components {
              * @default 10
              */
             rounds: number;
+            stages?: components["schemas"]["Stages"] | null;
             /** Target Win Rate */
             target_win_rate?: number | null;
             /** Teacher */

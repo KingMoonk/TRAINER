@@ -10723,6 +10723,19 @@
         "title": "StackExchangeUpdate",
         "type": "object"
       },
+      "Stages": {
+        "properties": {
+          "replay": {
+            "default": 0.2,
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Replay",
+            "type": "number"
+          }
+        },
+        "title": "Stages",
+        "type": "object"
+      },
       "Start": {
         "properties": {
           "note": {
@@ -10850,6 +10863,51 @@
             ],
             "title": "Overlap"
           },
+          "pivots": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "halve_lr",
+                    "next_dataset",
+                    "drop_lessons"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pivots"
+          },
+          "plateau_checks": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau Checks"
+          },
+          "plateau_min_improvement": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1.0,
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau Min Improvement"
+          },
           "polish_every": {
             "anyOf": [
               {
@@ -10885,6 +10943,16 @@
             "minimum": 1.0,
             "title": "Rounds",
             "type": "integer"
+          },
+          "stages": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Stages"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "target_win_rate": {
             "anyOf": [

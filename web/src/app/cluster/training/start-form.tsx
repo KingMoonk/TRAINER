@@ -23,6 +23,7 @@ import { DELTA_DTYPES, deltaDtypeOf, initialForm, otherMachines, startBody, teac
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
+import { RulesFields } from "./rules-form";
 import { useDefaults, useMachines, useChatSets, useStart, useTeachers, useTextSets, useVersions } from "./use-training";
 
 const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
@@ -173,6 +174,8 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
           <p className="max-w-prose text-xs text-muted-foreground">{T.deltaDtypeHelp}</p>
         </div>
       </fieldset>
+
+      <RulesFields rules={form.rules} polishEvery={form.polishEvery} rounds={form.rounds} onChange={(rules) => set({ rules })} />
 
       <details className="flex flex-col gap-2" onToggle={(e) => e.currentTarget.open && setTeacherOpen(true)}>
         <summary className="cursor-pointer text-sm font-medium">{T.teacherTitle}</summary>
