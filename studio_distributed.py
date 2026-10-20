@@ -550,7 +550,8 @@ def peer_facts(run, cluster):
         mine = next((j for j in jobs if machine.peer_job and j["id"] == machine.peer_job), None)
         other = next((j for j in jobs if j["status"] == "running" and j["id"] != machine.peer_job), None)
         down = cluster.is_down(machine.node)
-        out[machine.node] = {"down": down, "slow": down and cluster.answers_slowly(machine.node), "member_running": bool(mine and mine["status"] == "running"),
+        failed = next((f for f in studio_facts.member_failures(cluster, machine.node) if machine.peer_job and f["id"] == machine.peer_job), None)
+        out[machine.node] = {**({"member_failed": failed["error"]} if failed else {}), "down": down, "slow": down and cluster.answers_slowly(machine.node), "member_running": bool(mine and mine["status"] == "running"),
                              "blocking": {"label": other["label"], "eta_s": other.get("eta_s")} if other else None, "limits": held}
     return out
 
@@ -575,6 +576,11 @@ def limit_reason(node, held):
     if blocked:
         return f"{node}'s queue plan holds it: {blocked}. It continues when that ends."
     return f"The queue on {node} is paused. It continues when someone resumes it there."
+
+
+def member_failed_note(node, error):
+    """Why a machine is not in the run: its member job failed there, with the sentence that machine gave."""
+    return f"The member job on {node} failed: {error.rstrip()}"
 
 
 def busy_reason(blocking):
@@ -646,6 +652,8 @@ def _member(node, machine, known, history, ended, snap=None, peer=None):
         state, note = "invited", "Starting."
     elif peer and peer["down"]:
         state, note = "unreachable", slow_note(node, studio_cluster.POLL_TIMEOUT, "It is asked again shortly.") if peer["slow"] else down_note(node)
+    elif peer and peer.get("member_failed"):
+        state, note = "unreachable", member_failed_note(node, peer["member_failed"])
     elif peer and peer["member_running"]:
         state, note = "joining", f"Starting up on {node}."
     elif peer and peer["blocking"]:
