@@ -20,8 +20,6 @@ jobs:
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: wedd-compute-cluster  # a scheduled run uses the default branch otherwise
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -48,8 +46,6 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: wedd-compute-cluster
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0; the pnpm version comes from web/package.json
         with:
           package_json_file: web/package.json

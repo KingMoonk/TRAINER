@@ -242,7 +242,7 @@ The builds are unsigned, so macOS Gatekeeper (right-click the app, Open) and Win
 
 ```
 gh workflow run agent.yml -f issue=123
-gh workflow run agent.yml -f issue=123 -f instructions="Keep the change to studio_queue.py" -f base=wedd-compute-cluster -f draft=true
+gh workflow run agent.yml -f issue=123 -f instructions="Keep the change to studio_queue.py" -f base=main -f draft=true
 ```
 
 `model` (default `opus`) and `max_budget_usd` (default 20) are inputs too. The run assigns the issue to whoever started it and comments the run link on it; it refuses an issue assigned to someone else. Claude Code then works on a fresh `agent/issue-<N>-<run id>` branch on an Ubuntu runner with a `.venv` holding the CPU build of PyTorch, following `CLAUDE.md` and `.claude/rules/` with the CI exceptions in `.github/agent/prompt.md`: it reads the issue, related issues, PRs and CI logs with `gh`, uses web fetch and search, runs the affected tests with `tasks.py test`, commits, and merges the base branch. The publish job then pushes the branch, files the agent's follow-up issues, opens the PR (`Closes #N`) and links it on the issue. If the agent makes no commits, writes no valid Conventional Commit title, or stops on the budget, the run posts that on the issue and hands the issue back. The job log shows the agent's messages and tool calls; the full transcript is in the run's `agent-out` artifact.
