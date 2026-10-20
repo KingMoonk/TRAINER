@@ -19,6 +19,7 @@ import studio_distributed as runs
 import studio_diloco
 import studio_facts
 import studio_membership
+import studio_model
 import studio_peer
 import studio_stages
 from studio_api.app import get_services
@@ -42,6 +43,7 @@ class Defaults(BaseModel):
     outer_lr: float
     outer_momentum: float
     delta_dtype: str
+    max_steps: int  # rounds × inner steps may come to at most this many (400 above it)
 
 
 class Stages(BaseModel):
@@ -308,7 +310,7 @@ def defaults() -> Defaults:
     """The DiLoCo settings the form starts from."""
     return Defaults(rounds=DEFAULTS.rounds, inner_steps=studio_diloco.default_inner_steps(False),
                     remote_inner_steps=studio_diloco.default_inner_steps(True), outer_lr=DEFAULTS.outer_lr,
-                    outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype)
+                    outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype, max_steps=studio_model.MAX_STEPS)
 
 
 class ChatSet(BaseModel):
