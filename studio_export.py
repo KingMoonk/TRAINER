@@ -32,8 +32,8 @@ from studio_spec import block_at
 
 SPECIAL_TOKENS = ("<|pad|>", "<|bos|>", "<|eos|>", "<|user|>", "<|assistant|>", "<|system|>", "<|unk|>")  # ids 0..6, studio_slots order
 PAD, BOS, EOS, USER, ASSISTANT, SYSTEM, UNK = range(OFFSET)
-HF_TOKENIZERS = ("byte", "bpe_gpt2")   # byte-level vocabularies Hugging Face's GPT2Tokenizer loads exactly
-GGUF_TOKENIZERS = HF_TOKENIZERS        # the same two, as llama.cpp's "gpt2" (byte-level BPE) tokenizer
+HF_TOKENIZERS = ("byte", "bpe_gpt2", "bpe_fast")   # byte-level vocabularies Hugging Face's GPT2Tokenizer loads exactly
+GGUF_TOKENIZERS = HF_TOKENIZERS        # the same vocabularies, as llama.cpp's "gpt2" (byte-level BPE) tokenizer
 KINDS = ("hf", "gguf")
 
 
@@ -181,6 +181,9 @@ def byte_level_vocab(tokenizer):
     if tokenizer.kind == "byte":
         table = bytes_to_unicode()
         return list(SPECIAL_TOKENS) + [table[byte] for byte in range(256)], []
+    if tokenizer.kind == "bpe_fast":
+        return (list(SPECIAL_TOKENS) + tokenizer.symbols,
+                [f"{tokenizer.symbols[left]} {tokenizer.symbols[right]}" for left, right in tokenizer.merges])
     if tokenizer.kind == "bpe_gpt2":
         tokens = list(SPECIAL_TOKENS) + [f"<|unused{i}|>" for i in range(tokenizer.vocab_size - OFFSET)]
         for symbol, index in tokenizer.encoder.items():

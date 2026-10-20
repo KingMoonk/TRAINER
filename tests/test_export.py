@@ -13,6 +13,7 @@ import studio_spec
 from studio_compile import CompiledModel
 from studio_model import DEFAULT_CONFIG, LocalModel, validate_config
 from studio_modules.tokenizer.bpe_custom import CustomBPETokenizer
+from studio_modules.tokenizer.bpe_fast import FastBPETokenizer
 from studio_modules.tokenizer.bpe_gpt2 import GPT2Tokenizer, bytes_to_unicode
 from studio_modules.tokenizer.byte import Tokenizer
 from studio_modules.tokenizer.word import WordTokenizer
@@ -243,6 +244,26 @@ class Gpt2Mapping(unittest.TestCase):
 
 
 class HuggingFaceExport(unittest.TestCase):
+    def test_fast_subword_export_preserves_ids_and_merge_order(self):
+        tokenizer = FastBPETokenizer([(104, 101), (108, 108), (256, 257), (32, 116)])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_checkpoint(root / "m.npz", gpt2_spec(tokenizer="bpe_fast"), tokenizer)
+            report = export.export_hf(root / "m.npz", root / "hf")
+            self.assertTrue(report["tokenizer_loadable"])
+            vocab = json.loads((root / "hf" / "vocab.json").read_text(encoding="utf-8"))
+            merges = [tuple(line.split(" ")) for line in
+                      (root / "hf" / "merges.txt").read_text(encoding="utf-8").splitlines()[1:]]
+            rebuilt = GPT2Tokenizer({symbol: index - OFFSET for symbol, index in vocab.items() if index >= OFFSET}, merges)
+            self.assertEqual(len(vocab), tokenizer.vocab_size)
+            self.assertEqual(merges, [(tokenizer.symbols[a], tokenizer.symbols[b]) for a, b in tokenizer.merges])
+            for text in ("hello hello", " the hell hat", "héllo ☃", "tab\tand\nline"):
+                self.assertEqual(rebuilt.encode(text), tokenizer.encode(text))
+            export.export_gguf(root / "m.npz", root / "m.gguf")
+            _, meta, _, _ = read_gguf(root / "m.gguf")
+            self.assertEqual(meta["tokenizer.ggml.tokens"], list(export.SPECIAL_TOKENS) + tokenizer.symbols)
+            self.assertEqual(meta["tokenizer.ggml.merges"], [f"{a} {b}" for a, b in merges])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
