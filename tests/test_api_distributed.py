@@ -254,6 +254,31 @@ class ReadModel(unittest.TestCase):
         self.job.status = "running"
         self.assertEqual(runs.view(self.run, None, self.job)["state"], "starting")
 
+    def test_a_machine_is_added_to_its_queue_only_once_its_job_is_placed(self):
+        self.job.status = "running"
+        machine = self.run.machines[1]
+        machine.peer_job = ""
+        row = lambda: runs.view(self.run, None, self.job)["members"][1]
+        self.assertEqual((row()["state"], row()["note"]), ("invited", "Not invited yet."))
+        machine.peer_job = "job-box"
+        self.assertIn("Added to its queue", row()["note"])
+
+    def test_a_run_being_prepared_says_what_it_is_doing_and_how_far_it_is(self):
+        self.addCleanup(runs.PREP.clear)
+        self.job.status = "running"
+        say = runs.preparing(self.run.id)
+        say("tokenizing", 1200, 4800)
+        view = runs.view(self.run, None, self.job)
+        self.assertEqual((view["state"], view["phase"], view["prep"]["done"], view["prep"]["total"]), ("starting", "preparing", 1200, 4800))
+        self.assertEqual(view["note"], "Tokenizing the text: 1,200 of 4,800 documents.")
+        say("inviting")
+        view = runs.view(self.run, None, self.job)
+        self.assertEqual((view["phase"], view["note"]), ("inviting", "Sending the invitations to the other machines."))
+        runs.prepared(self.run.id)
+        view = runs.view(self.run, None, self.job)
+        self.assertIsNone(view["prep"])
+        self.assertNotEqual(view["phase"], "preparing")
+
     def test_a_failed_job_says_why(self):
         self.job.status, self.job.error = "failed", "The dataset is empty."
         view = runs.view(self.run, None, self.job)

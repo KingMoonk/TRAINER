@@ -26,6 +26,12 @@ export type Series = {
 export type Mark = { id: string; x: number; label: string; color?: string; dash?: string };
 export type Band = { id: string; label: string; from: number; to: number; color?: string };
 
+/** The key a series is drawn under. Its id may hold dots or spaces (a machine called "Michaels-Mac.local"), which recharts reads as a path and CSS cannot name. */
+const keyOf = (index: number) => `s${index}`;
+
+/** Ticks of the value axis: thousands as "50k", so the widest tick fits beside the axis label. */
+const tick = (value: number) => (Math.abs(value) >= 10_000 ? `${+(value / 1000).toFixed(1)}k` : String(+value.toFixed(4)));
+
 const COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
 
 /**
@@ -50,11 +56,11 @@ export function SeriesChart({
   className?: string;
 }) {
   const config: ChartConfig = Object.fromEntries(
-    series.map((s, i) => [s.id, { label: s.label, color: s.color ?? COLORS[i % COLORS.length] }]),
+    series.map((s, i) => [keyOf(i), { label: s.label, color: s.color ?? COLORS[i % COLORS.length] }]),
   );
   // One row per x with a column per series, which is the shape recharts wants.
   const rows = new Map<number, Record<string, number>>();
-  for (const s of series) for (const p of s.points) rows.set(p.x, { ...rows.get(p.x), x: p.x, [s.id]: p.y });
+  series.forEach((s, i) => s.points.forEach((p) => rows.set(p.x, { ...rows.get(p.x), x: p.x, [keyOf(i)]: p.y })));
   const data = [...rows.values()].sort((a, b) => a.x - b.x);
   const firstX = Math.min(data[0]?.x ?? 0, ...bands.map((band) => band.from));
   return (
@@ -62,7 +68,7 @@ export function SeriesChart({
       <LineChart data={data} margin={{ left: 8, right: 8 }}>
         <CartesianGrid vertical={false} />
         <XAxis dataKey="x" type="number" domain={[firstX, "dataMax"]} tickLine={false} label={{ value: xLabel, position: "insideBottom", offset: -4 }} height={40} />
-        <YAxis yAxisId="left" tickLine={false} axisLine={false} width={48} label={{ value: yLabel, angle: -90, position: "insideLeft" }} />
+        <YAxis yAxisId="left" type="number" domain={["auto", "auto"]} tickCount={5} tickFormatter={tick} tickLine={false} axisLine={false} width={64} label={{ value: yLabel, angle: -90, position: "insideLeft" }} />
         {series.some((s) => s.axis === "right") && <YAxis yAxisId="right" orientation="right" domain={[0, "auto"]}
           tickLine={false} axisLine={false} width={68} tickFormatter={(value: number) => value === 0 ? "0" : value.toExponential(0)}
           label={{ value: rightLabel, angle: 90, position: "insideRight" }} />}
@@ -75,13 +81,13 @@ export function SeriesChart({
         <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <>
           <span className="text-muted-foreground">{config[String(name)]?.label ?? String(name)}</span>
           <span className="ml-auto font-mono font-medium tabular-nums">{typeof value === "number"
-            ? series.find((s) => s.id === name)?.axis === "right" ? value.toExponential(2) : value.toLocaleString("en-US", { maximumFractionDigits: 4 })
+            ? series.find((_, i) => keyOf(i) === name)?.axis === "right" ? value.toExponential(2) : value.toLocaleString("en-US", { maximumFractionDigits: 4 })
             : String(value)}</span>
         </>} />} />
         {series.length > 1 && <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-1" />} />}
-        {series.map((s) => (
-          <Line key={s.id} dataKey={s.id} yAxisId={s.axis ?? "left"} type={s.interpolation ?? "monotone"}
-            className={`series-${s.id}`} stroke={`var(--color-${s.id})`} strokeOpacity={s.opacity ?? 1}
+        {series.map((s, i) => (
+          <Line key={s.id} dataKey={keyOf(i)} yAxisId={s.axis ?? "left"} type={s.interpolation ?? "monotone"}
+            className={`series-${s.id}`} stroke={`var(--color-${keyOf(i)})`} strokeOpacity={s.opacity ?? 1}
             strokeWidth={s.strokeWidth ?? 2} strokeDasharray={s.dash} dot={s.dots ? { r: 3 } : false} connectNulls isAnimationActive={false} />
         ))}
       </LineChart>

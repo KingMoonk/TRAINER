@@ -60,7 +60,7 @@ class Pausing(unittest.TestCase):
         number = c.next_round
         view = c.round_view(number, "a")
         c.pause()
-        self.assertEqual((c.snapshot()["phase"], c.snapshot()["paused"]), ("next_round", True))
+        self.assertEqual((c.snapshot()["phase"], c.snapshot()["paused"]), ("getting_ready", True))
         self.clock.now += 1.
         c.submit(number, "a", view["generation"], 0, 10, 2, support.constant_delta(c), 1.)
         self.assertEqual(c.next_round, 1)

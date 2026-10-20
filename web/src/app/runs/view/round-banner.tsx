@@ -28,6 +28,23 @@ export function RoundBanner({ run }: { run: Run }) {
           </Hint>
         )}
       </div>
+      {run.prep && (
+        <div className="flex flex-col gap-1" data-testid="prep">
+          <p className="text-sm" data-testid="prep-note">{run.prep.note}</p>
+          {run.prep.total > 0 && (
+            <div
+              role="progressbar"
+              aria-label={T.prepProgress}
+              aria-valuemin={0}
+              aria-valuemax={run.prep.total}
+              aria-valuenow={run.prep.done}
+              className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+            >
+              <div className="h-full bg-primary" style={{ width: `${percentOf(run.prep.done, run.prep.total)}%` }} />
+            </div>
+          )}
+        </div>
+      )}
       <div
         role="progressbar"
         aria-label={V.roundsBar}

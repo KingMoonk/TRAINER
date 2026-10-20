@@ -43,7 +43,7 @@ class ProgressRequest(BaseModel):
     generation: int
     epoch: int
     round: int
-    phase: Literal["downloading", "training", "uploading", "waiting"]
+    phase: Literal["downloading", "loading", "training", "uploading", "waiting"]
     step: int = 0  # inner steps done in the round
     loss: float | None = None
     tokens_per_second: float | None = None

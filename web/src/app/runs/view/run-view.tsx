@@ -11,12 +11,13 @@ import { useQueueActions } from "@/app/queue/use-queue";
 import { etaText, runEta } from "@/app/runs/logic";
 import { Hint } from "@/app/runs/hint";
 import { TRAINING as TR } from "@/lib/copy/training";
+import { stateLabel } from "@/lib/members";
 import { RemoveMemberButton, SoloControls, StopRunButton } from "./controls";
 import { T, fill } from "./copy";
 import { EventLog } from "./event-log";
 import { ProgressCard, RunHeader } from "./header";
 import { HealthPanel } from "./health-panel";
-import { factAge, roundNumber } from "./live";
+import { factAge, memberPhaseText, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
 import { dilocoShape, runViewHref, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
 import { RoundBanner } from "./round-banner";
@@ -177,6 +178,42 @@ export function SoloView({ view }: { view: Extract<RunView, { kind: "solo" }> })
           <Link href="/runs/new/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">{T.relaunch}</Link>
         </section>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A member job on this computer: a worker of a run another computer coordinates. It says whose run it is and links to the run's own page
+ * (the coordinator's account, from the replica), and shows what this machine is doing now: downloading θ, loading shards, warming up, training.
+ */
+export function MemberView({ view }: { view: Extract<RunView, { kind: "member" }> }) {
+  const { job, invite, run, machine } = view;
+  const owner = run?.owner || invite?.owner || "";
+  const label = run?.label || invite?.run_label || job.label || job.kind;
+  const mine = run?.members.find((m) => m.node === (invite?.node ?? machine));
+  const doing = (run && mine ? memberPhaseText(mine, run) : "") || invite?.reason || "";
+  const rounds = run?.rounds ?? invite?.rounds ?? 0;
+  const done = run?.round ?? invite?.round ?? 0;
+  const roundText = rounds > 0 ? fill(T.memberRound, { round: Math.min(done + 1, rounds), rounds }) : "";
+  return (
+    <div className="flex flex-col gap-6" data-testid={`run-${job.id}`}>
+      <RunHeader title={label} shape={owner ? fill(T.memberOf, { run: label, owner }) : fill(T.memberOfUnknown, { run: label })} />
+      <section aria-labelledby="run-who" className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+        <h2 id="run-who" className="text-lg font-semibold">{T.who}</h2>
+        <span className="flex w-fit max-w-md flex-col gap-1.5 rounded-xl border-2 border-info bg-info/10 p-5" data-testid="member-node">
+          <span><b className="text-lg">{invite?.node || machine}</b></span>
+          <span className="font-mono text-xs text-info">{T.memberRole}</span>
+          {owner && <span className="text-sm">{fill(T.memberData, { owner })}</span>}
+          {invite && <Badge variant="secondary" className="w-fit" data-testid="member-state">{stateLabel(invite.state)}</Badge>}
+          {doing && <span className="text-sm" data-testid="member-doing">{doing}</span>}
+          {roundText && <span className="text-xs text-muted-foreground" data-testid="member-round">{roundText}</span>}
+        </span>
+        {invite?.run_id && (
+          <Link href={runViewHref(invite.run_id)} className="w-fit text-sm text-highlight underline-offset-4 hover:underline" data-testid="member-run-link">
+            {fill(T.openRun, { owner: owner || T.coordinatorLabel })} →
+          </Link>
+        )}
+      </section>
     </div>
   );
 }

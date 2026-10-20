@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { isActive, isProblem, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
 import { T as V } from "./copy";
 import {
-  deviceBadge, edges, liveLossText, liveSpeedText, progressFraction, reportedText, shardsText, stateColor, stepsText, type Edge,
+  deviceBadge, edges, liveLossText, liveSpeedText, memberPhaseText, progressFraction, reportedText, shardsText, stateColor, stepsText, type Edge,
 } from "./live";
 
 /** One edge between the coordinator and a member: θ goes out at the start of a round, Δ comes back at its end. It moves while the transfer runs. */
@@ -57,7 +57,7 @@ function MemberNode({ run, member, action }: { run: Run; member: Member; action:
         {action && <span className="ml-auto">{action}</span>}
       </div>
       {memberDevice(member) && <p className="text-xs text-muted-foreground">{memberDevice(member)}</p>}
-      {member.phase && member.state === "training" && <p className="text-sm" data-testid={`phase-${member.node}`}>{T.memberPhases[member.phase]}</p>}
+      {member.phase && member.state === "training" && <p className="text-sm" data-testid={`phase-${member.node}`}>{memberPhaseText(member, run)}</p>}
       <div className="flex flex-col gap-1">
         <div
           role="progressbar"

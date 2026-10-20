@@ -15,11 +15,11 @@ export function memberOfText(invite: Invite): string {
   return fill(JOIN.memberOf, { run: invite.run_label, owner: invite.owner ? fill(JOIN.fromOwner, { owner: invite.owner }) : "" });
 }
 
-/** "Round 6 of 50, 1,200 tok/s", or a line saying the owner has not reported yet. */
+/** "Round 6 of 50, 1,200 tok/s": the round being trained (the owner reports the rounds finished), or a line saying the owner has not reported yet. */
 export function roundText(invite: Invite): string {
   if (!invite.rounds) return fill(JOIN.roundsUnknown, { owner: invite.owner || "the owner" });
   const speed = invite.tokens_per_second == null ? "" : fill(JOIN.speed, { n: Math.round(invite.tokens_per_second).toLocaleString("en-US") });
-  return `${fill(JOIN.roundOf, { round: invite.round ?? 0, rounds: invite.rounds })}${speed}`;
+  return `${fill(JOIN.roundOf, { round: Math.min((invite.round ?? 0) + 1, invite.rounds), rounds: invite.rounds })}${speed}`;
 }
 
 /** The Queue page's running member job: the run it belongs to, its state in the shared vocabulary, and the run's round and progress. */
