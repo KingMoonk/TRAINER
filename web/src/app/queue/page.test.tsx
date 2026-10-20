@@ -61,6 +61,13 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
       state.up_next = state.up_next.filter((j) => j.id !== id);
       return reply();
     },
+    "POST /queue/jobs/*/restart": ({ path }) => {
+      const id = path.split("/queue/jobs/")[1].split("/")[0];
+      const failed = state.failed.find((j) => j.id === id);
+      state.failed = state.failed.filter((j) => j.id !== id);
+      if (failed) state.up_next = [{ ...failed, id: `${id}-again`, status: "waiting", error: "" }, ...state.up_next];
+      return reply();
+    },
     "POST /queue/pause": () => {
       state.paused = true;
       return reply();
@@ -292,6 +299,16 @@ describe("Queue page", () => {
     expect(screen.queryByTestId("failed-details-f1")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Dismiss: Version 4 pretraining" }));
     await waitFor(() => expect(screen.queryByTestId("failed-f1")).toBeNull());
+  });
+
+  test("Restart on a failed job queues it again first and takes it off the failed list", async () => {
+    const { state, calls } = server({ running: false });
+    state.failed = [job("f1", "Version 4 pretraining", { status: "failed", error: "No room left on the disk." })];
+    renderPage(<QueuePage />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Restart: Version 4 pretraining" }));
+    await waitFor(() => expect(screen.queryByTestId("failed-f1")).toBeNull());
+    expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs/f1/restart")).toBe(true);
+    expect(state.up_next[0].id).toBe("f1-again");
   });
 
   test("a failed job whose error is its own text has no details toggle", async () => {

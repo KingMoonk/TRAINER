@@ -80,6 +80,15 @@ export function useQueueActions() {
     onSuccess: keep,
     onError: failed,
   });
+  // A failed job runs again: a copy goes first in Up next and the failed entry is dismissed.
+  const restart = useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/queue/jobs/{job_id}/restart", job(id))),
+    onSuccess: (state) => {
+      keep(state);
+      toast.success(T.restarted);
+    },
+    onError: failed,
+  });
   const hold = useMutation({
     mutationFn: (v: { id: string; held: boolean }) => unwrap(api.POST("/queue/jobs/{job_id}/hold", { ...job(v.id), body: { held: v.held } })),
     onSuccess: keep,
@@ -138,7 +147,7 @@ export function useQueueActions() {
       failed(error);
     },
   });
-  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, hold, move, pin, allMachines, savePlan };
+  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, restart, hold, move, pin, allMachines, savePlan };
 }
 
 export type QueueActions = ReturnType<typeof useQueueActions>;
