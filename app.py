@@ -154,7 +154,7 @@ def main(argv=None, after_open=None):
     import uvicorn
 
     from studio_api import app as api_app
-    from studio_api.__main__ import build, parse
+    from studio_api.__main__ import GRACEFUL_SHUTDOWN, build, parse
 
     report, argv = split_smoke(sys.argv[1:] if argv is None else argv)
     if report is not None:
@@ -166,7 +166,9 @@ def main(argv=None, after_open=None):
     if not (api_app.WEB_OUT / "index.html").is_file():
         print(BUILD_HINT)
         return 1
-    server = uvicorn.Server(uvicorn.Config(build(args), host=args.bind, port=args.port, proxy_headers=False))
+    # the browser's /events stream never ends: without a limit, Ctrl-C waits for it forever and the port stays taken
+    server = uvicorn.Server(uvicorn.Config(build(args), host=args.bind, port=args.port, proxy_headers=False,
+                                           timeout_graceful_shutdown=GRACEFUL_SHUTDOWN))
     done = threading.Event()
     opener = threading.Thread(target=open_when_up, args=(url_of(args), done, (lambda: after_open(server)) if after_open else None),
                               name="open-browser", daemon=True)
