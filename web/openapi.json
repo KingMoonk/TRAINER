@@ -1208,9 +1208,15 @@
             "title": "Base"
           },
           "guess": {
-            "default": "",
-            "title": "Guess",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guess"
           },
           "mode": {
             "default": "params",
@@ -7469,13 +7475,20 @@
             "type": "string"
           },
           "guess": {
-            "enum": [
-              "Lower",
-              "Same",
-              "Higher"
+            "anyOf": [
+              {
+                "enum": [
+                  "Lower",
+                  "Same",
+                  "Higher"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Guess",
-            "type": "string"
+            "title": "Guess"
           },
           "minutes": {
             "default": 3,
@@ -7493,9 +7506,6 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "guess"
-        ],
         "title": "QuickTestRunRequest",
         "type": "object"
       },
@@ -12701,7 +12711,7 @@
     },
     "/benchmark/compare-queue": {
       "post": {
-        "description": "Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.",
+        "description": "Queue the runs of a Compare setup. It needs a variant and plain text to train on.",
         "operationId": "compare_queue_benchmark_compare_queue_post",
         "requestBody": {
           "content": {

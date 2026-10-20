@@ -65,9 +65,10 @@ class QuickTestApiTest(unittest.TestCase):
         self.assertEqual((r.status_code, r.json()["detail"]), (400, "Stage a change in the designer first."))
         self.assertEqual(self.services.queue().up_next, [])
 
-    def test_run_needs_a_guess_and_a_known_choice(self):
+    def test_run_needs_no_guess_but_a_known_choice(self):
         self.stage()
-        for body in ({}, {"guess": "Maybe"}, {"guess": "Same", "minutes": 2}, {"guess": "Same", "dataset": "x"}):
+        self.assertEqual(self.client.post("/quicktest/run", json={}).status_code, 202)
+        for body in ({"guess": "Maybe"}, {"guess": "Same", "minutes": 2}, {"guess": "Same", "dataset": "x"}):
             self.assertEqual(self.client.post("/quicktest/run", json=body).status_code, 422, body)
 
     def test_a_slice_of_your_data_needs_text(self):

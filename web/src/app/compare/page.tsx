@@ -20,7 +20,6 @@ import {
   curveSeries,
   deltaCell,
   finalCell,
-  guessLine,
   letter,
   matchingText,
   queueBlock,
@@ -69,28 +68,26 @@ export default function Page() {
   const [seeds, setSeeds] = useState<Setup["seeds"]>(3);
   const [retune, setRetune] = useState(true);
   const [question, setQuestion] = useState("");
-  const [guess, setGuess] = useState("");
   const [axis, setAxis] = useState<AxisId>("steps");
   const [picked, setPicked] = useState<number | null>(null); // index into the finished runs; null = the newest
   const [status, setStatus] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [live, setLive] = useState<Map<number, { seed: number; points: CurvePoint[] }>>(new Map());
-  const [doneGuess, setDoneGuess] = useState("");
   const [queuedNames, setQueuedNames] = useState<string[]>([]);
 
   const all = versions.data ?? [];
   const baseNumber = base === CURRENT ? (all.at(-1)?.number ?? null) : Number(base);
   const others = all.filter((v) => v.number !== baseNumber && !variants.includes(v.number));
-  const setup: Setup = { base: base === CURRENT ? null : Number(base), variants, mode, seeds, retune_lr: retune, question, guess };
+  const setup: Setup = { base: base === CURRENT ? null : Number(base), variants, mode, seeds, retune_lr: retune, question };
 
   // Planning is a server call: it matches each variant to the base and counts the runs.
   const plan = useQuery({
     queryKey: ["compare", "plan", base, variants, mode, seeds, retune],
-    queryFn: () => unwrap(api.POST("/benchmark/compare-plan", { body: { ...setup, question: "", guess: "" } })),
+    queryFn: () => unwrap(api.POST("/benchmark/compare-plan", { body: { ...setup, question: "" } })),
     enabled: variants.length > 0,
     retry: false,
   });
-  const block = queueBlock(variants.length, guess);
+  const block = queueBlock(variants.length);
 
   const queue = useMutation({
     mutationFn: () => unwrap(api.POST("/benchmark/compare-queue", { body: setup })),
@@ -98,7 +95,6 @@ export default function Page() {
       setQueuedNames(plan.data?.variants.map((r) => r.name) ?? []);
       setJobId(queued.id);
       setLive(new Map());
-      setDoneGuess(guess);
       setStatus(COMPARE.queued(queued.label, queued.outlook));
       toast.success(COMPARE.queued(queued.label, queued.outlook));
     },
@@ -279,16 +275,6 @@ export default function Page() {
             ))}
           </div>
 
-          <div className="flex flex-col gap-2">
-            <p className="text-sm">{COMPARE.guess}</p>
-            <ToggleGroup type="single" variant="outline" value={guess} onValueChange={setGuess} aria-label={COMPARE.guess}>
-              {COMPARE.guesses.map((g) => (
-                <ToggleGroupItem key={g} value={g}>
-                  {g}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
           <div className="flex flex-col items-start gap-2">
             <Button disabled={block !== "" || queue.isPending || plan.isError || !plan.data} onClick={() => queue.mutate()}>
               {plan.data ? COMPARE.queueRuns(plan.data.n_runs, plan.data.n_sweeps) : COMPARE.queueRuns(0, 0)}
@@ -341,7 +327,6 @@ export default function Page() {
               names={names}
               axis={axis}
               onAxis={setAxis}
-              guess={streaming ? doneGuess : (run?.guess ?? "")}
             />
           )}
         </CardContent>
@@ -360,14 +345,12 @@ function Curves({
   names,
   axis,
   onAxis,
-  guess,
 }: {
   run?: CompareRun;
   live?: Map<number, { seed: number; points: CurvePoint[] }>;
   names?: string[];
   axis: AxisId;
   onAxis: (a: AxisId) => void;
-  guess: string;
 }) {
   const stats = new Map((run?.results?.variants ?? []).map((v) => [v.variant, v]));
   const curves = new Map<number, CurvePoint[]>(live ? [...live].map(([n, l]) => [n, l.points]) : [...stats].map(([n, v]) => [n, v.curve]));
@@ -413,7 +396,6 @@ function Curves({
               ))}
             </tbody>
           </table>
-          {guess && <p className="text-sm">{guessLine(guess, "B", stats.get(1))}</p>}
           {run.results?.cancelled && <p className="text-sm text-warning">{COMPARE.cancelled}</p>}
         </>
       )}

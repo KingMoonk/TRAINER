@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BUILDER, fill, presetAbout, questionName } from "./builder";
+import { BUILDER, fill, presetAbout } from "./builder";
 
 describe("fill", () => {
   test("fills each named hole, numbers included", () => {
@@ -28,18 +28,6 @@ describe("fill", () => {
     expect(fill(BUILDER.about_multiplier, { mult: "2.3" })).toBe("about 2.3×");
     expect(fill(BUILDER.no_changes_text, { version: "version 4" })).toContain("Version version 4");
     expect(fill(BUILDER.split_partial, { saved: "3", queued: 2, total: 3, reason: "r" })).toBe("Saved 3; queued 2 of 3 jobs. r");
-  });
-});
-
-describe("questionName", () => {
-  test("names the three guess questions the server asks", () => {
-    expect(questionName("error")).toBe(BUILDER.predict_error);
-    expect(questionName("step")).toBe(BUILDER.predict_step);
-    expect(questionName("memory")).toBe(BUILDER.predict_memory);
-  });
-
-  test("an unknown key is shown as it is", () => {
-    expect(questionName("throughput")).toBe("throughput");
   });
 });
 

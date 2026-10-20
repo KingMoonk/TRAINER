@@ -147,7 +147,7 @@ class CompareSetup(BaseModel):
     seeds: Literal[1, 3, 5] = 3
     retune_lr: bool = True
     question: str = ""
-    guess: str = ""  # better | about the same | worse; needed to queue, not to plan
+    guess: str | None = None  # better | about the same | worse; no longer asked for, still accepted
 
 
 class PlanRow(BaseModel):
@@ -193,7 +193,7 @@ def _experiment(services, body: CompareSetup):
         specs = [validate_spec(versions[n].spec) for n in body.variants]
         names = ["Base"] + [change_text(base, spec) or f"Variant {i + 1}" for i, spec in enumerate(specs)]
         experiment = ex.ExperimentSpec(base, specs, seeds=body.seeds, mode=body.mode, steps=STEPS, wall_seconds=WALL_SECONDS,
-                                       question=body.question.strip(), lr_retune=body.retune_lr, guess=body.guess, names=names)
+                                       question=body.question.strip(), lr_retune=body.retune_lr, guess=body.guess or "", names=names)
         return experiment, ex.plan(experiment), base, base_version
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
@@ -213,12 +213,10 @@ def compare_plan(body: CompareSetup, services=Depends(get_services)):
 
 @router.post("/compare-queue", response_model=Queued, status_code=201)
 def compare_queue(body: CompareSetup, services=Depends(get_services)):
-    """Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on."""
+    """Queue the runs of a Compare setup. It needs a variant and plain text to train on."""
     experiment, plan, _base, _version = _experiment(services, body)
     if not body.variants:
         raise HTTPException(422, "Add a variant first.")
-    if not body.guess:
-        raise HTTPException(422, "Pick your guess first.")
     summary = services.data("text")
     sets = [s["id"] for s in (summary.get("sets", []) if isinstance(summary, dict) else getattr(summary, "sets", []))]
     if not sets:

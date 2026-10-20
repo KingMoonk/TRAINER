@@ -27,25 +27,19 @@ describe("checkMark", () => {
 });
 
 describe("signalText", () => {
-  it("repeats the guess beside the verdict", () => {
-    expect(signalText(result(), "Base", "Better")).toBe("After the same 3 minutes, your idea's error is better than Base's. You guessed better.");
-    expect(signalText(result({ verdict: "worse" }), "Base", "Worse")).toBe("After the same 3 minutes, your idea's error is worse than Base's. You guessed worse.");
+  it("states the verdict", () => {
+    expect(signalText(result(), "Base")).toBe("After the same 3 minutes, your idea's error is better than Base's.");
+    expect(signalText(result({ verdict: "worse" }), "Base")).toBe("After the same 3 minutes, your idea's error is worse than Base's.");
   });
-  it("words an equal verdict naturally, in the verdict and in the guess", () => {
-    expect(signalText(result({ verdict: "about the same" }), "Base", "Same")).toBe(
-      "After the same 3 minutes, your idea's error is about the same as Base's. You guessed about the same.",
-    );
-  });
-  it("leaves the guess out when there is none", () => {
-    expect(signalText(result(), "Base", null)).toBe("After the same 3 minutes, your idea's error is better than Base's.");
-    expect(signalText(result(), "Base", "")).toBe("After the same 3 minutes, your idea's error is better than Base's.");
+  it("words an equal verdict naturally", () => {
+    expect(signalText(result({ verdict: "about the same" }), "Base")).toBe("After the same 3 minutes, your idea's error is about the same as Base's.");
   });
   it("points at the part to look at when a check failed, replacing the verdict", () => {
     const check = QUICKTEST.checks[1];
-    expect(signalText(result({ broken: check.id }), "Base", "Better")).toBe(`A check failed: ${check.name}. ${QUICKTEST.lookAt[check.id]}`);
+    expect(signalText(result({ broken: check.id }), "Base")).toBe(`A check failed: ${check.name}. ${QUICKTEST.lookAt[check.id]}`);
   });
   it("names an unknown check by its id and adds no advice", () => {
-    expect(signalText(result({ broken: "mystery" }), "Base", null)).toBe("A check failed: mystery.");
+    expect(signalText(result({ broken: "mystery" }), "Base")).toBe("A check failed: mystery.");
   });
 });
 

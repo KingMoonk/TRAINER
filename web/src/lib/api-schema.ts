@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Compare Queue
-         * @description Queue the runs of a Compare setup. It needs a variant, a guess for the first one, and plain text to train on.
+         * @description Queue the runs of a Compare setup. It needs a variant and plain text to train on.
          */
         post: operations["compare_queue_benchmark_compare_queue_post"];
         delete?: never;
@@ -3918,11 +3918,8 @@ export interface components {
         CompareSetup: {
             /** Base */
             base?: number | null;
-            /**
-             * Guess
-             * @default
-             */
-            guess: string;
+            /** Guess */
+            guess?: string | null;
             /**
              * Mode
              * @default params
@@ -6476,11 +6473,8 @@ export interface components {
              * @enum {string}
              */
             dataset: "stories" | "slice" | "problems";
-            /**
-             * Guess
-             * @enum {string}
-             */
-            guess: "Lower" | "Same" | "Higher";
+            /** Guess */
+            guess?: ("Lower" | "Same" | "Higher") | null;
             /**
              * Minutes
              * @default 3

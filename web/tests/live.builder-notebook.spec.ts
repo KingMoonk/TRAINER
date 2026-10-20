@@ -1,8 +1,8 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 // Real fake services (python -m studio_api --fake), no intercepted responses: the Builder's lab notebook lists each saved
-// version with its change, the guess and the question it was made to ask; the explain panel works a part through the
-// example sentence; a starting question sets up one change. The draft is seeded as live.builder-guess.spec.ts does.
+// version with its change and the question it was made to ask; the explain panel works a part through the
+// example sentence; a starting question sets up one change.
 // The number the Builder's own save was given, read off its POST /versions response, so a row is never guessed from the seed's number.
 const savedNumber = (page: Page) =>
   page
@@ -19,7 +19,7 @@ async function seed(page: Page, request: APIRequestContext, more = 1) {
   return { base: base.number as number, blocks: cur.L as number };
 }
 
-test("the notebook lists each change with its guess and updates its rows in place", async ({ page, request }) => {
+test("the notebook lists each change and updates its rows in place", async ({ page, request }) => {
   const { base } = await seed(page, request);
   await page.goto("/builder/");
   await page.locator("summary").filter({ hasText: "Lab notebook · one line per version" }).click();
@@ -27,34 +27,18 @@ test("the notebook lists each change with its guess and updates its rows in plac
   await expect(first).toContainText(`Version ${base} · Builder notebook fixture`);
   await first.evaluate((element) => element.setAttribute("data-original-row", "yes"));
 
-  await page.getByTestId("save").click();
-  await page.getByTestId("guess-error").getByRole("radio", { name: "Lower" }).click();
   const saved = savedNumber(page);
-  await page.getByTestId("guess-save").click();
+  await page.getByTestId("save").click();
   const number = await saved;
 
   const row = page.getByTestId(`notebook-${number}`);
   await expect(row).toContainText(`Version ${number} ·`);
   await expect(row.getByTestId("notebook-effects")).toContainText("not trained yet");
-  await expect(row.getByTestId("notebook-guess")).toHaveText("you guessed lower error");
   await expect(first).toHaveAttribute("data-original-row", "yes"); // the earlier row was kept, not rebuilt
   await expect(page.getByRole("list", { name: "Lab notebook · one line per version" }).getByRole("listitem").last()).toHaveAttribute(
     "data-testid",
     `notebook-${number}`,
   );
-});
-
-test("a skipped guess is recorded as no guess in the notebook", async ({ page, request }) => {
-  await seed(page, request);
-  await page.goto("/builder/");
-  await page.getByTestId("save").click();
-  const saved = savedNumber(page);
-  await page.getByTestId("guess-skip").click();
-  await page.locator("summary").filter({ hasText: "Lab notebook · one line per version" }).click();
-  const row = page.getByTestId(`notebook-${await saved}`);
-  await expect(row).toBeVisible();
-  await expect(row.getByTestId("notebook-guess")).toHaveText("no guess"); // the Tk page's line for a version saved without one
-  await expect(row.getByTestId("notebook-guess")).not.toContainText("guessed");
 });
 
 test("clicking a part explains it on the example sentence", async ({ page, request }) => {
@@ -82,10 +66,8 @@ test("a starting question sets up one change and goes with the version", async (
   await page.getByTestId("try-depth").click();
   await expect(page.getByTestId("block-count")).toHaveText(String(blocks + 1));
   await expect(page.getByTestId("experiment-asking")).toContainText("Is depth or width better?");
-  await page.getByTestId("save").click();
-  await expect(page.getByTestId("guess-question")).toContainText("Your question: “Is depth or width better?”");
   const saved = savedNumber(page);
-  await page.getByTestId("guess-skip").click();
+  await page.getByTestId("save").click();
   const number = await saved;
   const row = page.getByTestId(`notebook-${number}`);
   await expect(row.getByTestId("notebook-question")).toHaveText("asked “Is depth or width better?”");

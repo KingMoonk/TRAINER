@@ -19,11 +19,11 @@ import { NO_RUN, applyEvent, checkMark, secondsLeft, signalText, type Result, ty
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 const route = routeFor("quicktest");
-const STORE = "groundwork.quicktest"; // this tab's last run: when it was queued (server clock), its job and the guess made
+const STORE = "groundwork.quicktest"; // this tab's last run: when it was queued (server clock), its job
 const NEVER = 1e15; // `since` for "no run started from this tab": nothing finished after it
 const REFRESH_MS = 5_000;
 
-type Started = { since: number; jobId: string; guess: string };
+type Started = { since: number; jobId: string };
 
 function loadStarted(): Started | null {
   try {
@@ -114,7 +114,6 @@ export default function Page() {
   const [dataset, setDataset] = useState<"stories" | "slice" | "problems">("stories");
   const [minutes, setMinutes] = useState<"1" | "3" | "10">("3");
   const [size, setSize] = useState<"full" | "shrunk">("full");
-  const [pickedGuess, setGuess] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
@@ -131,7 +130,6 @@ export default function Page() {
     [queue.data],
   );
   const jobId = started?.jobId ?? queued?.id ?? null;
-  const guess = pickedGuess ?? started?.guess ?? (queued?.params as { guess?: string } | undefined)?.guess ?? "";
 
   useEffect(
     () =>
@@ -160,15 +158,14 @@ export default function Page() {
     mutationFn: () =>
       unwrap(
         api.POST("/quicktest/run", {
-          body: { dataset, minutes: Number(minutes) as 1 | 3 | 10, shrink: size === "shrunk", guess: guess as "Lower" | "Same" | "Higher" },
+          body: { dataset, minutes: Number(minutes) as 1 | 3 | 10, shrink: size === "shrunk" },
         }),
       ),
     onSuccess: async (made) => {
-      const next = { since: made.started_at, jobId: made.job_id, guess };
+      const next = { since: made.started_at, jobId: made.job_id };
       saveStarted(next);
       setStarted(next);
       setRun(NO_RUN);
-      setGuess(guess);
       setStatus(QUICKTEST.queued(made.outlook));
       await client.invalidateQueries({ queryKey: ["queue"] });
     },
@@ -195,7 +192,6 @@ export default function Page() {
 
   const onStart = () => {
     if (!state.data?.draft) setStatus(QUICKTEST.needDraft);
-    else if (!guess) setStatus(QUICKTEST.needGuess);
     else start.mutate();
   };
 
@@ -284,16 +280,6 @@ export default function Page() {
           </Card>
 
           <div className="flex flex-col gap-2">
-            <span className="text-base font-medium">
-              {QUICKTEST.yourGuess} <span className="text-sm font-normal text-muted-foreground">{QUICKTEST.resultShows}</span>
-            </span>
-            <ToggleGroup type="single" variant="outline" value={guess} onValueChange={(v) => v && setGuess(v)} aria-label={QUICKTEST.yourGuess} className="justify-start">
-              {QUICKTEST.guesses.map((g) => (
-                <ToggleGroupItem key={g} value={g}>
-                  {g}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
             <Button className="mt-2 self-start" disabled={busy} onClick={onStart}>
               {busy ? `${QUICKTEST.running}…` : result ? QUICKTEST.runAgain : QUICKTEST.run}
             </Button>
@@ -310,7 +296,6 @@ export default function Page() {
               run={run}
               now={now}
               name={name}
-              guess={guess}
               nextNumber={state.data.next_number}
               canSave={!!state.data.draft}
               saving={save.isPending}
@@ -341,7 +326,6 @@ function ResultCard({
   run,
   now,
   name,
-  guess,
   nextNumber,
   canSave,
   saving,
@@ -352,7 +336,6 @@ function ResultCard({
   run: RunState;
   now: number;
   name: string;
-  guess: string;
   nextNumber: number;
   canSave: boolean;
   saving: boolean;
@@ -438,7 +421,7 @@ function ResultCard({
 
             <div className="flex flex-col gap-1">
               <Kicker>{QUICKTEST.earlySignal}</Kicker>
-              <p className="max-w-prose text-lg">{signalText(result, name, guess || null)}</p>
+              <p className="max-w-prose text-lg">{signalText(result, name)}</p>
               <p className="max-w-prose text-xs text-muted-foreground">{QUICKTEST.onePrefix}</p>
               {result.references && !result.learned_context && <p className="max-w-prose text-sm text-warning-soft">{QUICKTEST.guard}</p>}
             </div>

@@ -114,10 +114,12 @@ class CompareSetupTest(unittest.TestCase):
         self.assertEqual((job.note, job.params["experiment"]["seeds"]), ("Does width help?", 3))
         self.assertTrue(got.json()["outlook"])
 
-    def test_queue_refuses_without_a_variant_or_a_guess_or_text(self):
-        for change, message in (({"variants": []}, "Add a variant first."), ({"guess": ""}, "Pick your guess first.")):
-            got = self.client.post("/benchmark/compare-queue", json={**self.setup, **change})
-            self.assertEqual((got.status_code, got.json()["detail"]), (422, message))
+    def test_queue_needs_no_guess(self):
+        self.assertEqual(self.client.post("/benchmark/compare-queue", json={**self.setup, "guess": ""}).status_code, 201)
+
+    def test_queue_refuses_without_a_variant_or_text(self):
+        got = self.client.post("/benchmark/compare-queue", json={**self.setup, "variants": []})
+        self.assertEqual((got.status_code, got.json()["detail"]), (422, "Add a variant first."))
         self.services.data = lambda kind, query="": {"sets": []}
         self.assertIn("no plain text", self.client.post("/benchmark/compare-queue", json=self.setup).json()["detail"])
         self.assertEqual(self.services.queue().up_next, [])

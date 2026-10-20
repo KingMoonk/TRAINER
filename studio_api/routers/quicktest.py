@@ -87,7 +87,7 @@ class QuickTestRunRequest(BaseModel):
     dataset: Dataset = "stories"
     minutes: Literal[1, 3, 10] = 3
     shrink: bool = False
-    guess: Guess
+    guess: Guess | None = None  # no longer asked for; still accepted
 
 
 class QuickTestStarted(BaseModel):

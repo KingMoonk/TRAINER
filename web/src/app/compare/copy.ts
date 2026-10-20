@@ -42,10 +42,7 @@ export const COMPARE = {
   parameters: (m: string) => `${m} parameters`,
   minBudget: (minutes: string) => `${minutes} min budget`,
   notRetuned: " · learning rate not retuned",
-  guess: "Before it runs, your guess for B:",
-  guesses: ["Better", "About the same", "Worse"],
   queueRuns: (count: number, sweeps: number) => (sweeps ? `Queue ${count} runs + ${sweeps} short sweeps` : `Queue ${count} runs`),
-  needGuess: "Pick your guess first.",
   needVariant: "Add a variant first.",
   queued: (label: string, outlook: string) => `Queued: ${label}. ${outlook}.`,
   // Finished runs and curves
@@ -56,7 +53,7 @@ export const COMPARE = {
   retry: "Try again",
   curvesTitle: (axis: string) => `Error (bits per character) vs ${axis}`,
   curvesDesc: "line: mean of seeds · spread across seeds is in the table",
-  curvesStream: "Curves stream in here while runs train. Your guess is shown next to the result.",
+  curvesStream: "Curves stream in here while runs train.",
   axisLabel: "Horizontal axis",
   axes: [
     { id: "steps", label: "Steps", title: "steps" },

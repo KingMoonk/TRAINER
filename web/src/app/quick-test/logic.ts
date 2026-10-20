@@ -25,15 +25,14 @@ export function checkMark(ok: boolean | null | undefined): string {
   return ok ? "✓" : ok === null || ok === undefined ? "…" : "✗";
 }
 
-/** The early-signal sentence, repeating the guess; a failed check replaces it with the part to look at. */
-export function signalText(result: Result, name: string, guess: string | null): string {
+/** The early-signal sentence; a failed check replaces it with the part to look at. */
+export function signalText(result: Result, name: string): string {
   if (result.broken) {
     const check = QUICKTEST.checks.find((c) => c.id === result.broken)?.name ?? result.broken;
     return `A check failed: ${check}. ${QUICKTEST.lookAt[result.broken] ?? ""}`.trim();
   }
   const rel = result.verdict === "about the same" ? "about the same as" : `${result.verdict} than`;
-  const said = guess ? `You guessed ${guess.toLowerCase().replace("same", "about the same")}.` : "";
-  return `After the same ${result.minutes} minutes, your idea's error is ${rel} ${name}'s. ${said}`.trim();
+  return `After the same ${result.minutes} minutes, your idea's error is ${rel} ${name}'s.`;
 }
 
 /** What one `train` or `job` event does to the watched run; any other event, or another job's, leaves it as it was. */
