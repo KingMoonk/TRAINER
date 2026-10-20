@@ -315,6 +315,7 @@ DEFAULTS = {
     "pretrain": Requirements(device="cuda"),
     "post_round": Requirements(device="cuda"),  # RLHF
     "restore_answers": Requirements(device="cuda"),  # RLHF
+    "mlperf": ANY,  # a training-speed run (studio_mlperf); the device it times is named in its params
     "rlhf_loop": Requirements(device="cuda"),  # the loop (studio_loop); never moved whole: its folder is on its owner
     "pretrain_distributed": Requirements(device="cuda"),  # the owner: the coordinator plus one local member (studio_diloco)
     "diloco_member": ANY,

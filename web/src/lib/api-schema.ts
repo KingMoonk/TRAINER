@@ -1937,6 +1937,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mlperf/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Board */
+        get: operations["board_mlperf_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mlperf/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare
+         * @description Summaries of the chosen results side by side. 422 when they are of different tasks or task versions.
+         */
+        post: operations["compare_mlperf_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mlperf/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run
+         * @description Queue a run of the task on this machine; it starts when the queue is free.
+         */
+        post: operations["run_mlperf_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/node": {
         parameters: {
             query?: never;
@@ -3372,6 +3429,32 @@ export interface components {
             /** Label */
             label: string;
         };
+        /** BoardOut */
+        BoardOut: {
+            /**
+             * Board
+             * @description studio_mlperf.leaderboard: results per division, fastest first, and the other task versions held apart
+             */
+            board: {
+                [key: string]: unknown;
+            };
+            /**
+             * Devices
+             * @description the devices this machine can time a task on
+             */
+            devices: string[];
+            /**
+             * History
+             * @description the single-device division's converged times in time order, with the app version of each
+             */
+            history: {
+                [key: string]: unknown;
+            };
+            /** Tasks */
+            tasks: components["schemas"]["TaskOut"][];
+        } & {
+            [key: string]: unknown;
+        };
         /** Body_import_data_data__kind__import_post */
         Body_import_data_data__kind__import_post: {
             /** Files */
@@ -3755,6 +3838,11 @@ export interface components {
             variants: components["schemas"]["studio_api__routers__benchmark__PlanRow"][];
             /** Wall Seconds */
             wall_seconds: number;
+        };
+        /** CompareRequest */
+        CompareRequest: {
+            /** Ids */
+            ids: string[];
         };
         /**
          * CompareSetup
@@ -6211,15 +6299,6 @@ export interface components {
              */
             up_next: components["schemas"]["JobModel"][];
         };
-        /** Queued */
-        Queued: {
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Outlook */
-            outlook: string;
-        };
         /** QuickTestCheck */
         QuickTestCheck: {
             /**
@@ -7094,11 +7173,6 @@ export interface components {
             /** Version */
             version?: number | null;
         };
-        /** RunRequest */
-        RunRequest: {
-            /** Version */
-            version: number;
-        };
         /**
          * SharedVersion
          * @description What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights.
@@ -7787,6 +7861,25 @@ export interface components {
                 ];
             };
         };
+        /** TaskOut */
+        TaskOut: {
+            /** Attempts */
+            attempts: number;
+            /** Checksum */
+            checksum: string;
+            /** Id */
+            id: string;
+            /** Step Cap */
+            step_cap: number;
+            /** Target Bpc */
+            target_bpc: number;
+            /** Title */
+            title: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** TeacherOut */
         TeacherOut: {
             /** Name */
@@ -8129,6 +8222,20 @@ export interface components {
             /** Variant */
             variant: number;
         };
+        /** Queued */
+        studio_api__routers__benchmark__Queued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Outlook */
+            outlook: string;
+        };
+        /** RunRequest */
+        studio_api__routers__benchmark__RunRequest: {
+            /** Version */
+            version: number;
+        };
         /** Accepted */
         studio_api__routers__cluster__Accepted: {
             /** Epoch */
@@ -8201,6 +8308,25 @@ export interface components {
             t: number;
             /** Tokens Per Second */
             tokens_per_second: number | null;
+        };
+        /** Queued */
+        studio_api__routers__mlperf__Queued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** RunRequest */
+        studio_api__routers__mlperf__RunRequest: {
+            /** Attempts */
+            attempts?: number | null;
+            /**
+             * Device
+             * @default cpu
+             */
+            device: string;
+            /** Task */
+            task: string;
         };
         /**
          * GateModel
@@ -8336,7 +8462,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Queued"];
+                    "application/json": components["schemas"]["studio_api__routers__benchmark__Queued"];
                 };
             };
             /** @description Validation Error */
@@ -8432,7 +8558,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RunRequest"];
+                "application/json": components["schemas"]["studio_api__routers__benchmark__RunRequest"];
             };
         };
         responses: {
@@ -11311,6 +11437,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_mlperf_board_get: {
+        parameters: {
+            query?: {
+                task?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_mlperf_compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_mlperf_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["studio_api__routers__mlperf__RunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__mlperf__Queued"];
                 };
             };
             /** @description Validation Error */
