@@ -20,7 +20,12 @@ const row = (over: Record<string, unknown>) => ({
   pinned: "", waiting_reason: "", stale: false, note: "", step: 10, total: 100, eta_s: 4.7 * 86_400, ...over,
 });
 
-function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[] } = {}) {
+const source = (version: number, over: Record<string, unknown> = {}) => ({
+  version, name: "", change: "", status: "completed", finished_at: "2026-10-01T11:30:00", steps: 1200, steps_planned: 1500, seconds: 5400, tokens: 4_900_000,
+  params: 812_000, best_val_loss: 2.25, train_loss: 2.5, device: "RTX 4090", rounds: null, inner_steps: null, same_design: true, parent: false, ...over,
+});
+
+function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null } = {}) {
   const calls = mockApi({
     "GET /cluster/merged": { body: { nodes: [], jobs } },
     "GET /cluster/nodes": { body: nodes },
@@ -39,7 +44,12 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
     },
     "GET /queue/outlook": { body: { outlook } },
     "GET /queue": { body: { job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next: [], plan: PLAN } },
-    "POST /pretraining/plan": ({ body }) => ({ body: { can_add: true, reason: "", job: { ...job, params: { ...job.params, mode: (body as { mode: string }).mode } }, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: false, can_continue: true } }),
+    "POST /pretraining/plan": ({ body }) => {
+      const { mode, from_version } = body as { mode: string; from_version: number | null };
+      const from = sources.length ? (from_version ?? (sources[0] as { version: number }).version) : null;
+      return { body: { can_add: true, reason: "", job: { ...job, params: { ...job.params, mode } }, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: false,
+        can_continue: sources.length > 0, sources, continue_from: from, continue_blocked: sources.length ? null : blocked } };
+    },
     "POST /queue/jobs": { body: { id: "job-7", kind: "pretrain", label: "x", status: "waiting" } },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
     "POST /post-training/rounds": { body: { id: "job-8", label: "SFT", params: {}, round: 1 } },
@@ -72,6 +82,38 @@ describe("New run", () => {
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-7"));
     expect(sent("POST", "/pretraining/plan")?.body).toMatchObject({ dataset_ids: ["stories"], mode: "from_scratch", version: null });
     expect(sent("POST", "/queue/jobs")?.body).toEqual({ ...job, note: "" });
+  });
+
+  test("Continue lists the earlier runs with what they did, and the one picked is the one the plan starts from", async () => {
+    const { sent } = server({ sources: [source(3, { name: "wide", same_design: false, best_val_loss: 1.75, rounds: 5, inner_steps: 10, seconds: null }), source(1, { name: "tiny", parent: true })] });
+    const user = userEvent.setup();
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await waitFor(async () => expect(await cta()).toBeEnabled());
+    expect(screen.queryByText("Earlier training to continue from")).toBeNull();
+    await user.selectOptions(screen.getByLabelText(/Start from/), "catch_up");
+
+    const tiny = await screen.findByTestId("source-1");
+    expect(tiny).toHaveTextContent("Version 1 · tiny · saved from it");
+    expect(tiny).toHaveTextContent("Finished 1 Oct 2026");
+    for (const fact of ["1,200 of 1,500 steps", "1 h 30 min", "Held-out loss 2.250", "Train loss 2.500", "812K params", "4.9M word pieces", "RTX 4090", "Same design"])
+      expect(tiny).toHaveTextContent(fact);
+    const wide = screen.getByTestId("source-3");
+    expect(wide).toHaveTextContent("5 rounds × H 10");
+    expect(wide).toHaveTextContent("Different design: only matching weights are copied");
+    expect(within(wide).getByRole("radio")).toBeChecked();
+
+    await user.click(within(tiny).getByRole("radio"));
+    await waitFor(() => expect(within(screen.getByTestId("source-1")).getByRole("radio")).toBeChecked());
+    expect(sent("POST", "/pretraining/plan")?.body).toMatchObject({ mode: "catch_up", from_version: 1 });
+  });
+
+  test("Continue with nothing to continue from says why", async () => {
+    server({ blocked: "word_list_changed" });
+    const user = userEvent.setup();
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await waitFor(async () => expect(await cta()).toBeEnabled());
+    await user.selectOptions(screen.getByLabelText(/Start from/), "catch_up");
+    expect(await screen.findByText(/this version changes the word list/)).toBeVisible();
   });
 
   test("the button says Start when the queue starts the job now", async () => {

@@ -4143,6 +4143,55 @@ export interface components {
              */
             width?: number | null;
         };
+        /**
+         * ContinueSource
+         * @description A trained version a catch-up may start from, and what its run did (studio_ia.pretraining_plan.run_source). Null: the run did not record it.
+         */
+        ContinueSource: {
+            /** Best Val Loss */
+            best_val_loss?: number | null;
+            /**
+             * Change
+             * @default
+             */
+            change: string;
+            /** Device */
+            device?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Inner Steps */
+            inner_steps?: number | null;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /** Params */
+            params?: number | null;
+            /** Parent */
+            parent: boolean;
+            /** Rounds */
+            rounds?: number | null;
+            /** Same Design */
+            same_design: boolean;
+            /** Seconds */
+            seconds?: number | null;
+            /**
+             * Status
+             * @default
+             */
+            status: string;
+            /** Steps */
+            steps?: number | null;
+            /** Steps Planned */
+            steps_planned?: number | null;
+            /** Tokens */
+            tokens?: number | null;
+            /** Train Loss */
+            train_loss?: number | null;
+            /** Version */
+            version: number;
+        };
         /** CorrectionRequest */
         CorrectionRequest: {
             /** Correction */
@@ -5878,6 +5927,8 @@ export interface components {
              * @default []
              */
             dataset_ids: string[];
+            /** From Version */
+            from_version?: number | null;
             /**
              * Hold
              * @default 0.05
@@ -6072,6 +6123,8 @@ export interface components {
             context: number;
             /** Continue Blocked */
             continue_blocked?: ("word_list_changed" | "no_trained_parent") | null;
+            /** Continue From */
+            continue_from?: number | null;
             enough?: components["schemas"]["EnoughText"] | null;
             /**
              * Estimated
@@ -6118,6 +6171,11 @@ export interface components {
              */
             reason: string;
             sizing?: components["schemas"]["Sizing"] | null;
+            /**
+             * Sources
+             * @default []
+             */
+            sources: components["schemas"]["ContinueSource"][];
             /** Steps */
             steps?: number | null;
             /** Version */

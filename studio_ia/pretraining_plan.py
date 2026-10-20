@@ -27,6 +27,70 @@ def forced_mode(v, parent, requested):
     return requested if requested == "from_scratch" or can_continue(v, parent) else "from_scratch"
 
 
+DESIGN_KEYS = ("tokenizer", "dims", "embedding", "position", "block", "blocks", "head")  # what sets the weights' shapes
+
+
+def continue_sources(v, versions, absolute):
+    """The trained versions a catch-up of `v` may start from (a best checkpoint and the same word list), newest first, each with what
+    its run did (run_source). `absolute` turns a stored checkpoint path into one on this computer."""
+    if v is None:
+        return []
+    trained = [p for p in versions if p.best_checkpoint and p.number != v.number and not word_list_changed(v, p)]
+    return [run_source(p, v, absolute) for p in sorted(trained, key=lambda p: p.number, reverse=True)]
+
+
+def run_source(p, v, absolute):
+    """What the run behind version `p`'s best checkpoint did, read from its run.json (and diloco.json for a run over several
+    machines): how long it trained, its losses, its size and device, and whether `v` has the same design (every tensor is copied)
+    or another one (only the matching ones are)."""
+    from pathlib import Path
+
+    run_dir = Path(absolute(p.best_checkpoint)).parent
+    run, diloco = _json(run_dir / "run.json"), _json(run_dir / "diloco.json")
+    settings = diloco.get("settings") if isinstance(diloco.get("settings"), dict) else {}
+    seconds = run.get("duration_seconds") or _between(run.get("createdAt"), run.get("finishedAt"))
+    return {"version": p.number, "name": p.name or "", "change": p.change or "", "status": run.get("status") or "",
+            "finished_at": run.get("finishedAt"), "steps": _whole(run.get("step")), "steps_planned": _whole(run.get("steps")),
+            "seconds": seconds or None, "tokens": _whole(run.get("trained_tokens")) or None, "params": _whole(run.get("parameters")),
+            "best_val_loss": _finite(run.get("best_val_loss"), run.get("best_loss")), "train_loss": _finite(run.get("loss")),
+            "device": run.get("device_name") or p.train_device or None, "rounds": _whole(settings.get("rounds")),
+            "inner_steps": _whole(settings.get("inner_steps")), "same_design": same_design(p.spec, v.spec),
+            "parent": p.number == v.parent}
+
+
+def same_design(a, b):
+    """True when two specs give weights of the same shapes, so a start from one copies every tensor into the other."""
+    return all((a or {}).get(key) == (b or {}).get(key) for key in DESIGN_KEYS)
+
+
+def _json(path):
+    from studio_core import read_json
+    try:
+        found = read_json(path) if path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _between(start, end):
+    """Seconds from one ISO time to another; None when either is missing or unreadable."""
+    from datetime import datetime
+    try:
+        return max(0., (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def _whole(x):
+    return int(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
+
+
+def _finite(*values):
+    """The first of `values` that is a finite number; None when none is."""
+    import math
+    return next((float(x) for x in values if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)), None)
+
+
 def steps_for(pieces, per_step, passes):
     """Steps for `passes` passes over `pieces` word pieces at `per_step` pieces a step; None when the size is unknown."""
     return max(1, -(-int(pieces) * passes // per_step)) if pieces and per_step else None
@@ -132,14 +196,17 @@ def plateau_line(rule):
             f"{rule['window_steps']:,} steps (not before step {rule['min_steps']:,}).")
 
 
-def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, plateau=None):
-    """(label, params) of the pretrain job "Add to the queue" adds for version `v` (see Job in studio_ia.services). `mode` is
-    forced to from_scratch when continuing from `parent` is not valid; `hold` is the held-back fraction, `pieces` the size preview's;
-    `plateau` the rule that ends the run when its validation loss goes flat (plateau_rule)."""
+def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, plateau=None, source=None):
+    """(label, params) of the pretrain job "Add to the queue" adds for version `v` (see Job in studio_ia.services). A catch-up starts
+    from `source`'s best checkpoint (default `parent`), and `mode` is forced to from_scratch when that is not valid; `hold` is the
+    held-back fraction, `pieces` the size preview's; `plateau` the rule that ends the run when its validation loss goes flat (plateau_rule)."""
     cfg = pretrain_config(v.spec, steps, rows, hold)
-    mode = forced_mode(v, parent, mode)
-    init = parent.best_checkpoint if mode == "catch_up" else None
+    start = source or parent
+    mode = forced_mode(v, start, mode)
+    init = start.best_checkpoint if mode == "catch_up" else None
     label = f"Version {v.number} {'catch-up' if mode == 'catch_up' else 'from scratch'}"
+    if mode == "catch_up" and start is not parent:
+        label += f" from version {start.number}"
     return label, {"config": cfg, "datasets": list(chosen), "mode": mode, "init_from": init, "output_dir": None,
                    "user_text": own_text, "previous_best": parent.best_checkpoint if parent else None,
                    "version": v.number, "heldout_fraction": cfg["validation"], "pieces_per_pass": pieces,
