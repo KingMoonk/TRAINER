@@ -52,6 +52,7 @@ class ContinueTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.enterContext(mock.patch("studio_probe.default_path", return_value=self.root / "device_probe.json"))  # "auto" training probes the GPU: never into data/
 
     def test_a_run_remembers_the_sets_it_read(self):
         out, _, _ = first_run(self.root)
