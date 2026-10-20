@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { busyPeers, ctaLabel, defaultSftVersion, nameList, runningText, localForced, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, durationText, nameList, runningText, localForced, peersOf, pinnedJob, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source } from "./logic";
 
 const node = (address: string, over: Partial<Node> = {}): Node => ({
   address, busy: false, device: "cuda", device_name: "", dtypes: [], error: "", hostname: address, local: false, memory_bytes: 0, online: true, tailnet_name: "", origin: "", origin_down: false, version: "", ...over,
@@ -75,5 +75,27 @@ describe("busy machines", () => {
     expect(runningText("beast", rows)).toBe("Post-training · about 2 min left");
     expect(runningText("lab", rows)).toBe("");
     expect(runningText("beast", [{ ...rows[0], eta_s: 3 * 3600 }])).toBe("Post-training · about 3 hours left");
+  });
+});
+
+test("durationText reads a wall time in plain words", () => {
+  expect([45, 720, 5400, 7200, 183_600, 172_800].map(durationText)).toEqual(["45 s", "12 min", "1 h 30 min", "2 h", "2 d 3 h", "2 d"]);
+});
+
+describe("sourceFacts", () => {
+  const source = (over: Partial<Source> = {}): Source => ({
+    version: 4, name: "deep", change: "", status: "stopped", finished_at: "2026-10-19T08:00:00", steps: 300, steps_planned: null, seconds: 600, tokens: null,
+    params: 2_500_000, best_val_loss: 1.98765, train_loss: null, device: null, rounds: null, inner_steps: null, same_design: true, parent: false, ...over,
+  });
+
+  test("names the run and lists only what it recorded", () => {
+    expect(sourceFacts(source())).toEqual({
+      title: "Version 4 · deep", when: "Stopped 19 Oct 2026", facts: ["300 steps", "10 min", "Held-out loss 1.988", "2.5M params"], design: "Same design: every weight is copied",
+    });
+  });
+
+  test("a run with no record says so", () => {
+    const bare = source({ name: "", status: "", finished_at: null, steps: null, seconds: null, params: null, best_val_loss: null, same_design: false, parent: true });
+    expect(sourceFacts(bare)).toMatchObject({ title: "Version 4 · saved from it", when: "", facts: ["Its run left no record of what it did."] });
   });
 });

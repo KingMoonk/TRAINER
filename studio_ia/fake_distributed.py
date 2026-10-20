@@ -266,6 +266,20 @@ class FakeCoordinator:
             return "collecting"
         return "training" if "training" in phases else "next_round"
 
+    def refusal(self, node):
+        """As studio_diloco.Coordinator.refusal. A demo run's members are the ones it started with, so a machine added later waits."""
+        with self.lock:
+            if self.finished or self.stopped:
+                return "The run is finished."
+            if self.gone.get(node, ("",))[0] == "stopped":
+                return f"{node} was stopped by the run's owner."
+            if node in self.members and node not in self.gone:
+                return f"{node} is already in this run."
+            most = int(self.settings.get("max_members", 8))
+            if len([m for m in self.members if m not in self.gone]) >= most:
+                return f"The run already has its {most} members."
+            return ""
+
     def drop(self, node):
         with self.lock:
             self._catch_up(self._beat())

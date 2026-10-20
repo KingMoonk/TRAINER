@@ -23,7 +23,7 @@ from tests.fake_cluster import Clock, Net
 from tests.test_api_cluster import ClusterServices, FakePeers, node_payload, probed
 from tests.test_queue_cluster import own_node
 
-COMMANDS = ("/stop", "/pause", "/resume", "/restart")
+COMMANDS = ("/stop", "/pause", "/resume", "/restart", "/add")
 MACHINES = [{"node": "A", "address": "local", "device": "mps", "device_name": "M3"},
             {"node": "B", "address": "B", "device": "cuda", "device_name": "RTX"}]
 
@@ -91,7 +91,7 @@ class TwoNodes(unittest.TestCase):
             if path == "state/sync":
                 return node.state.handle_sync(json.loads(json.dumps(body)))
             if path.startswith("distributed/runs/") and path.endswith(COMMANDS):  # a command: the owner answers with the run it reads
-                return node.client.get("/" + path.split("/members/")[0].rsplit("/", 1)[0]).json()
+                return node.client.get("/" + (path.split("/members/")[0] if "/members/" in path else path.rsplit("/", 1)[0])).json()
             raise PeerError(f"answered 404: {path}", status=404, detail=path)
         return handler
 
@@ -185,6 +185,16 @@ class TwoNodes(unittest.TestCase):
         self.assertEqual([(a, m, p) for a, m, p, _, _ in self.net.calls],
                          [("A", "POST", f"distributed/runs/run1/{verb}") for verb in ("pause", "resume", "restart")])
         self.assertEqual(self.b.facts(), before)
+
+    def test_a_join_from_b_goes_to_a_under_bs_name(self):
+        self.a.runs.append(a_run())
+        self.sync()
+        self.net.calls.clear()
+        reply = self.b.client.post("/distributed/runs/run1/join")
+        self.assertEqual((reply.status_code, reply.json()["origin"]), (200, "A"), reply.text)
+        self.assertEqual([(a, m, p) for a, m, p, _, _ in self.net.calls], [("A", "POST", "distributed/runs/run1/members/B/add")])
+        self.assertEqual(self.a.client.post("/distributed/runs/run1/join").status_code, 409)  # A coordinates it
+        self.assertEqual(self.b.client.post("/distributed/runs/nope/join").status_code, 404)
 
     def test_a_command_for_an_owner_that_does_not_answer_is_a_502_and_changes_nothing(self):
         self.a.runs.append(a_run())

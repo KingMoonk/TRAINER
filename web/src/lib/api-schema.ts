@@ -1874,6 +1874,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join Run
+         * @description Ask the computer that coordinates a running run to add this one: it joins from the round after its invitation. 409 for a run
+         *     this computer coordinates; the coordinator's own refusals come back as they are.
+         */
+        post: operations["join_run_distributed_runs__run_id__join_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/lessons": {
         parameters: {
             query?: never;
@@ -1930,6 +1951,28 @@ export interface paths {
          * @description Put a dropped (or stepped-back) lesson back: the next rounds deal it again. Same errors as drop.
          */
         post: operations["keep_run_lesson_distributed_runs__run_id__lessons__lesson__keep_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/runs/{run_id}/members/{node}/add": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Member
+         * @description The coordinator's side of a join: add `node`, one of this computer's listed machines, to the running run. The scheduler offers
+         *     it a slot now and invites it, and it trains from the round after; a machine that is busy gets a slot once it is free. 409 when the
+         *     run is not running here, for a node that is not listed, already in the run, or stopped by the owner, and for a full run.
+         */
+        post: operations["add_member_distributed_runs__run_id__members__node__add_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4166,6 +4209,55 @@ export interface components {
              */
             width?: number | null;
         };
+        /**
+         * ContinueSource
+         * @description A trained version a catch-up may start from, and what its run did (studio_ia.pretraining_plan.run_source). Null: the run did not record it.
+         */
+        ContinueSource: {
+            /** Best Val Loss */
+            best_val_loss?: number | null;
+            /**
+             * Change
+             * @default
+             */
+            change: string;
+            /** Device */
+            device?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Inner Steps */
+            inner_steps?: number | null;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /** Params */
+            params?: number | null;
+            /** Parent */
+            parent: boolean;
+            /** Rounds */
+            rounds?: number | null;
+            /** Same Design */
+            same_design: boolean;
+            /** Seconds */
+            seconds?: number | null;
+            /**
+             * Status
+             * @default
+             */
+            status: string;
+            /** Steps */
+            steps?: number | null;
+            /** Steps Planned */
+            steps_planned?: number | null;
+            /** Tokens */
+            tokens?: number | null;
+            /** Train Loss */
+            train_loss?: number | null;
+            /** Version */
+            version: number;
+        };
         /** CorrectionRequest */
         CorrectionRequest: {
             /** Correction */
@@ -4274,10 +4366,14 @@ export interface components {
             delta_dtype: string;
             /** Inner Steps */
             inner_steps: number;
+            /** Max Steps */
+            max_steps: number;
             /** Outer Lr */
             outer_lr: number;
             /** Outer Momentum */
             outer_momentum: number;
+            /** Remote Inner Steps */
+            remote_inner_steps: number;
             /** Rounds */
             rounds: number;
         };
@@ -5911,6 +6007,8 @@ export interface components {
              * @default []
              */
             dataset_ids: string[];
+            /** From Version */
+            from_version?: number | null;
             /**
              * Hold
              * @default 0.05
@@ -6105,6 +6203,8 @@ export interface components {
             context: number;
             /** Continue Blocked */
             continue_blocked?: ("word_list_changed" | "no_trained_parent") | null;
+            /** Continue From */
+            continue_from?: number | null;
             enough?: components["schemas"]["EnoughText"] | null;
             /**
              * Estimated
@@ -6151,6 +6251,11 @@ export interface components {
              */
             reason: string;
             sizing?: components["schemas"]["Sizing"] | null;
+            /**
+             * Sources
+             * @default []
+             */
+            sources: components["schemas"]["ContinueSource"][];
             /** Steps */
             steps?: number | null;
             /** Version */
@@ -7197,6 +7302,11 @@ export interface components {
             /** Best Val Loss */
             best_val_loss?: number | null;
             /**
+             * Can Join
+             * @default false
+             */
+            can_join: boolean;
+            /**
              * Can Pause
              * @default false
              */
@@ -7836,6 +7946,14 @@ export interface components {
             /** Sites */
             sites?: string[] | null;
         };
+        /** Stages */
+        Stages: {
+            /**
+             * Replay
+             * @default 0.2
+             */
+            replay: number;
+        };
         /** Start */
         Start: {
             /** Note */
@@ -7888,6 +8006,12 @@ export interface components {
             outer_momentum: number;
             /** Overlap */
             overlap?: boolean | null;
+            /** Pivots */
+            pivots?: ("halve_lr" | "next_dataset" | "drop_lessons")[] | null;
+            /** Plateau Checks */
+            plateau_checks?: number | null;
+            /** Plateau Min Improvement */
+            plateau_min_improvement?: number | null;
             /** Polish Every */
             polish_every?: number | null;
             /** Replaces */
@@ -7902,6 +8026,7 @@ export interface components {
              * @default 10
              */
             rounds: number;
+            stages?: components["schemas"]["Stages"] | null;
             /** Target Win Rate */
             target_win_rate?: number | null;
             /** Teacher */
@@ -11709,6 +11834,37 @@ export interface operations {
             };
         };
     };
+    join_run_distributed_runs__run_id__join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_lessons_distributed_runs__run_id__lessons_get: {
         parameters: {
             query?: never;
@@ -11791,6 +11947,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_member_distributed_runs__run_id__members__node__add_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                node: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */

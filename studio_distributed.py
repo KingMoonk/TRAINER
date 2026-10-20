@@ -28,6 +28,7 @@ ASK_RETRIES = 2  # timed-out asks sent again; safe, because the member job's id 
 INVITE_WAIT = 5.  # seconds `invite` waits for the answers before it returns; a slow machine's ask goes on in the background
 ACTIVE = ("queued", "starting", "waiting", "running")
 UNPLACED = "It was busy when the run was placed. It joins a later round if it is free by then."
+ASKED = "It asked to join. It joins at the round after it gets a slot, once it is free."
 ENDED = ("finished", "stopped", "failed")
 ENDED_JOB = ("done", "failed", "stopped")  # a queue job's statuses once it is over (studio_queue.Job)
 NOT_RESTARTED = ("resuming", "restart_from", "gang")  # params of one run's own life, not of its setup
@@ -463,6 +464,24 @@ def release_member(run, node, client_for=PeerClient):
         client_for(machine.address, timeout=INVITE_TIMEOUT, retries=0).delete_json(f"/queue/jobs/{machine.peer_job}")
     except Exception:  # noqa: BLE001 - the member is already fenced out of the run
         pass
+
+
+def choose(job, node, address):
+    """Add a listed machine to a running run's chosen machines, because the person on it asked to join: the scheduler offers it a slot
+    as it does the others (studio_remote.Cluster.offer), and it joins at the round after its invitation. A machine chosen before is
+    chosen again, its last reason cleared. Returns the run."""
+    run = run_of(job)
+    with _LOCK:
+        rows = list(job.params.get("machines") or [])
+        if not any(row.get("address") == address for row in rows):
+            job.params = {**job.params, "machines": [*rows, {"node": node, "address": address}]}
+        machine = next((m for m in run.machines if m.address == address), None)
+        if machine is None:
+            run.machines.append(Machine(node=node, address=address, state="unplaced", reason=ASKED))
+        elif not (machine.peer_job and machine.state == "invited"):
+            machine.state, machine.reason, machine.error = "unplaced", ASKED, ""
+    persist()
+    return run
 
 
 def lapse(run, node, client_for=PeerClient):

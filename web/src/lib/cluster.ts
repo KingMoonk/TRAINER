@@ -3,9 +3,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError, unwrap } from "@/lib/api";
-import { useEvent } from "@/lib/events";
 import type { components } from "@/lib/api-schema";
 import { awaitJob } from "@/lib/job-result";
+import { useLive } from "@/lib/live";
 
 export { nodeName } from "@/lib/node-name";
 
@@ -16,7 +16,7 @@ export type QueueRow = components["schemas"]["QueueRow"];
 export type PublishedVersion = components["schemas"]["PublishedVersion"];
 
 const CLUSTER = ["cluster", "queue"] as const;
-const REFRESH_MS = 5_000;
+const PEERS_MS = 5_000;
 
 /** More than one machine is listed. A cluster of one shows nothing about machines anywhere. */
 export function isCluster(cluster: ClusterQueue | undefined): boolean {
@@ -25,20 +25,18 @@ export function isCluster(cluster: ClusterQueue | undefined): boolean {
 
 /**
  * The jobs of every machine and the machines themselves (GET /cluster/merged). Empty for a cluster of one, so a page asks
- * `isCluster(data)` before it shows anything about machines. Re-read on every `queue` event, and every few seconds while
- * other machines are listed (a peer's own queue changes without telling this one).
+ * `isCluster(data)` before it shows anything about machines. Re-read on every `queue`, `cluster`, `nodes` or `facts` event, and
+ * every few seconds while other machines are listed: the reply asks the peers themselves, and a peer that stops answering or
+ * changes its own queue tells no event here.
  */
 export function useCluster() {
-  const client = useQueryClient();
-  const refresh = () => void client.invalidateQueries({ queryKey: CLUSTER });
-  useEvent("queue", refresh); // the shell's one stream: a page does not open its own for this
-  useEvent("cluster", refresh);
-  return useQuery({
+  const query = useQuery({
     queryKey: CLUSTER,
     queryFn: ({ signal }) => unwrap(api.GET("/cluster/merged", { signal })),
-    refetchInterval: (query) => (isCluster(query.state.data) ? REFRESH_MS : false),
     retry: false,
   });
+  useLive(CLUSTER, ["queue", "cluster", "nodes", "facts"], { backstopMs: isCluster(query.data) ? PEERS_MS : undefined });
+  return query;
 }
 
 /** The last time a machine answered, as a clock time, or "" when it never did. */
@@ -51,9 +49,10 @@ export function isStoreUnset(error: unknown): boolean {
   return error instanceof ApiError && error.status === 409;
 }
 
-/** Poll the store every 15 seconds, but not while it answers 409: nothing changes until a store is set up. */
+/** Look at the store once a minute (another machine publishes into it without telling this one), but not while it answers 409:
+ * nothing changes until a store is set up. A `versions` event re-reads it at once. */
 export function refetchPublished(query: { state: { error: unknown } }): number | false {
-  return isStoreUnset(query.state.error) ? false : 15_000;
+  return isStoreUnset(query.state.error) ? false : 60_000;
 }
 
 /**
@@ -61,6 +60,7 @@ export function refetchPublished(query: { state: { error: unknown } }): number |
  * answers 409, and that is the same as nothing published: the list is empty and says nothing about machines.
  */
 export function usePublished(cluster: ClusterQueue | undefined) {
+  useLive(["versions", "published"], ["versions"], { enabled: isCluster(cluster), backstopMs: false });
   return useQuery({
     queryKey: ["versions", "published"],
     enabled: isCluster(cluster),

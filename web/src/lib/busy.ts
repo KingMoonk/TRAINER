@@ -31,15 +31,31 @@ export function queryLabel(key: readonly unknown[]): string {
   return BUSY.loading.replace("{what}", what);
 }
 
-const ROW_REM = 2.5;
-const GAP_REM = 0.75;
-const PAD_REM = 0.75;
-const EDGE_REM = 1;
-
-/** How far above the bottom edge toasts sit while the card shows `rows` rows, so they stack above it instead of under it. */
-export function toastOffset(rows: number): string {
-  if (rows <= 0) return "";
-  const card = rows * ROW_REM + (rows - 1) * GAP_REM + 2 * PAD_REM;
-  return `${EDGE_REM + card + GAP_REM}rem`;
+/** 0 to 1 across everything busy (each item counts the same), or null when any of it has no measurable steps. */
+export function overall(items: BusyItem[]): number | null {
+  if (!items.length) return null;
+  const parts = items.map(fraction);
+  if (parts.some((part) => part === null)) return null;
+  return (parts as number[]).reduce((sum, part) => sum + part, 0) / parts.length;
 }
-export const ROW = { height: `${ROW_REM}rem`, gap: `${GAP_REM}rem`, padding: `${PAD_REM}rem`, edge: `${EDGE_REM}rem` };
+
+/** The bar's title: the first item, with its step count when it has several, and how many more are busy. */
+export function busyTitle(items: BusyItem[]): string {
+  const [first, ...rest] = items;
+  if (!first) return "";
+  const steps = fraction(first) !== null && first.total !== null && first.total > 1
+    ? ` (${BUSY.stepOf.replace("{done}", String(first.done)).replace("{total}", String(first.total))})`
+    : "";
+  return first.label + steps + (rest.length ? BUSY.more.replace("{count}", String(rest.length)) : "");
+}
+
+const BAR_REM = 2.25;
+const GAP_REM = 0.75;
+
+/** The bar's height, also set on the page as `--busy-bar` so the traffic console keeps its last line above it. */
+export const BAR_HEIGHT = `${BAR_REM}rem`;
+
+/** How far above the bottom edge toasts sit while the bar shows, so they stack above it instead of under it. */
+export function toastOffset(busy: boolean): string {
+  return busy ? `${BAR_REM + GAP_REM}rem` : "";
+}

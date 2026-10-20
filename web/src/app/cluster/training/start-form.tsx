@@ -19,10 +19,11 @@ import { JOIN } from "@/lib/copy/join";
 import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { DELTA_DTYPES, deltaDtypeOf, initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { DELTA_DTYPES, defaultInnerSteps, deltaDtypeOf, initialForm, otherMachines, startBody, stepsProblem, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
+import { RulesFields } from "./rules-form";
 import { useDefaults, useMachines, useChatSets, useStart, useTeachers, useTextSets, useVersions } from "./use-training";
 
 const FIELD = "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
@@ -47,14 +48,16 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
   const chatSets = (useChatSets(teacherOpen).data ?? []).filter((c) => !sets.some((t) => t.id === c.id)); // a set with text is ticked above
   const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
   const teacherWhy = teacherProblem(form);
+  const stepsWhy = stepsProblem(form);
   const [failure, setFailure] = useState("");
   const [asking, setAsking] = useState(false);
   const start = useStart((run) => {
     setFailure("");
     onStarted(run);
   }, setFailure);
+  const [stepsTyped, setStepsTyped] = useState(false); // once the person types H, choosing machines no longer changes it
   const set = (patch: Partial<Form>) => {
-    setForm((f) => ({ ...f, ...patch }));
+    setForm((f) => ({ ...f, ...patch, ...(patch.machines && !stepsTyped && !("innerSteps" in patch) ? { innerSteps: defaultInnerSteps(defaults, patch.machines) } : {}) }));
     setFailure("");
   };
   const body = startBody(form);
@@ -151,10 +154,14 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
         <p className="text-xs text-muted-foreground">{T.settingsLead}</p>
         <div className="flex flex-wrap gap-x-6 gap-y-3">
           <Setting id="training-rounds" label={T.rounds} help={T.roundsHelp} value={form.rounds} onChange={(rounds) => set({ rounds })} step="1" />
-          <Setting id="training-steps" label={T.innerSteps} help={T.innerStepsHelp} value={form.innerSteps} onChange={(innerSteps) => set({ innerSteps })} step="1" />
+          <Setting id="training-steps" label={T.innerSteps} help={T.innerStepsHelp} value={form.innerSteps} onChange={(innerSteps) => { setStepsTyped(true); set({ innerSteps }); }} step="1" />
           <Setting id="training-lr" label={T.outerLr} help={T.outerLrHelp} value={form.outerLr} onChange={(outerLr) => set({ outerLr })} step="0.1" />
           <Setting id="training-momentum" label={T.outerMomentum} help={T.outerMomentumHelp} value={form.outerMomentum} onChange={(outerMomentum) => set({ outerMomentum })} step="0.1" />
         </div>
+        {stepsWhy && <p role="status" className="max-w-prose text-sm text-destructive">{stepsWhy}</p>}
+        {form.machines.length > 0 && form.innerSteps === String(defaults.remote_inner_steps) && (
+          <p className="max-w-prose text-xs text-muted-foreground">{fill(T.innerStepsWhy, { steps: form.innerSteps })}</p>
+        )}
         <label className="flex items-center gap-2 text-sm font-medium">
           <input type="checkbox" checked={form.overlap} onChange={(e) => set({ overlap: e.target.checked })} />
           <span>{T.overlap}</span>
@@ -173,6 +180,8 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
           <p className="max-w-prose text-xs text-muted-foreground">{T.deltaDtypeHelp}</p>
         </div>
       </fieldset>
+
+      <RulesFields rules={form.rules} polishEvery={form.polishEvery} rounds={form.rounds} onChange={(rules) => set({ rules })} />
 
       <details className="flex flex-col gap-2" onToggle={(e) => e.currentTarget.open && setTeacherOpen(true)}>
         <summary className="cursor-pointer text-sm font-medium">{T.teacherTitle}</summary>

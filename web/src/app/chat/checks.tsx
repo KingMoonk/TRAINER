@@ -35,8 +35,7 @@ export function CheckpointStep({ version }: { version: Version }) {
       const initial = await unwrap(api.POST("/versions/{number}/checkpoint-step", { params: { path: { number: version.number } } }));
       return checkpointStep(await awaitJob<unknown>(initial, signal));
     },
-    staleTime: Infinity,
-    refetchInterval: version.status === "training" ? 30_000 : false,
+    staleTime: Infinity, // the page re-reads it when a checkpoint changes (its event handler invalidates ["chat", "checkpoint"])
     retry: false,
   });
   return <div aria-label={`Checkpoint for Version ${version.number}`} className="text-xs text-muted-foreground">

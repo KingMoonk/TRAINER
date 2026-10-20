@@ -1,13 +1,13 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
-import { api, subscribe, unwrap } from "@/lib/api";
+import { api, unwrap } from "@/lib/api";
 import { routeFor } from "@/lib/routes";
 import { COLLECT as T } from "./copy";
 import {
@@ -29,20 +29,15 @@ import {
   type Update,
 } from "./logic";
 import { Section, SettingsForm } from "./settings-form";
+import { useLive } from "@/lib/live";
 
 export default function Page() {
   const route = routeFor("collect");
   const queryClient = useQueryClient();
 
-  // The collector runs in another process: the page asks again every few seconds, and at once when the server says something changed.
-  useEffect(
-    () =>
-      subscribe((event) => {
-        if (event.kind === "collect") queryClient.invalidateQueries({ queryKey: ["collect"] });
-      }),
-    [queryClient],
-  );
-  const state = useQuery({ queryKey: ["collect", "state"], queryFn: () => unwrap(api.GET("/collect")), refetchInterval: 5000 });
+  // The collector runs in another process: re-read at once when the server says something changed, and every 15 seconds besides.
+  useLive(["collect"], ["collect"], { backstopMs: 15_000 });
+  const state = useQuery({ queryKey: ["collect", "state"], queryFn: () => unwrap(api.GET("/collect")) });
   const config = useQuery({ queryKey: ["collect", "config"], queryFn: () => unwrap(api.GET("/collect/config")) });
   const options = useQuery({ queryKey: ["collect", "options"], queryFn: () => unwrap(api.GET("/collect/options")), staleTime: Infinity });
 

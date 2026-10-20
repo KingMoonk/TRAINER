@@ -2,8 +2,10 @@
   "body": {
     "delta_dtype": "int8",
     "inner_steps": 100,
+    "max_steps": 1000000,
     "outer_lr": 0.7,
     "outer_momentum": 0.9,
+    "remote_inner_steps": 1500,
     "rounds": 10
   },
   "request": {

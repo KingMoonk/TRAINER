@@ -76,10 +76,12 @@ def megabytes(count):
 
 class SelfTest:
     """One self-test. `probe` is the app's side (see Probe in the tests): survey(addresses), client(address), launch(), run(), snapshot(),
-    rows(), job_error(), theta_digest(number), term(), stop(), plus `clock` and `sleep`. `peers` are the other machines' addresses."""
+    rows(), job_error(), theta_digest(number), term(), stop(), plus `clock` and `sleep`. `peers` are the other machines' addresses.
+    `on_change()` is called after a step changes and once the verdict is in (the app emits a `selftest` event with it)."""
 
-    def __init__(self, probe, peers, peer_url, hostname, clock=time.monotonic, sleep=time.sleep, now=time.time):
+    def __init__(self, probe, peers, peer_url, hostname, clock=time.monotonic, sleep=time.sleep, now=time.time, on_change=None):
         self.probe, self.peers, self.peer_url, self.hostname = probe, list(peers), peer_url, hostname
+        self.on_change = on_change or (lambda: None)
         self.clock, self.sleep = clock, sleep
         self.lock = threading.Lock()
         self.result = Result(id=f"selftest-{int(now())}", machines=list(peers), started_at=now())
@@ -105,6 +107,7 @@ class SelfTest:
             step.status, step.detail, step.fix = status, detail, fix
             if started is not None:
                 step.seconds = round(self.clock() - started, 2)
+        self.on_change()
 
     def _ok(self, step_id, detail="", started=None):
         self._set(step_id, PASS, detail, "", started)
@@ -135,6 +138,7 @@ class SelfTest:
                 step.status, step.detail = SKIPPED, step.detail or "Not reached: an earlier step failed."
             self.result.state = "passed" if ok and not any(s.status == FAIL for s in self.result.steps) else "failed"
             self.result.finished_at = self.now()
+        self.on_change()
         return self.result
 
     def _before(self):

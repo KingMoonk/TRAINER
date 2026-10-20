@@ -32,6 +32,7 @@ import {
   type VerdictResult,
 } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { useLive } from "@/lib/live";
 
 type PaneState = { text: string; status: "idle" | "streaming" | "done" | "stopped" | "error"; error?: string };
 const IDLE: PaneState = { text: "", status: "idle" };
@@ -48,8 +49,8 @@ export default function Page() {
   const versionsQuery = useQuery({
     queryKey: ["versions"],
     queryFn: () => unwrap(api.GET("/versions")),
-    refetchInterval: 15_000, // a version finishing training appears on its own
   });
+  useLive(["versions"], []); // checkpoint events below are the fast path; this re-reads after a dropped stream or a hidden tab
   const cluster = useCluster().data;
   const published = usePublished(cluster).data;
   const multi = isCluster(cluster); // a cluster of one shows nothing about machines

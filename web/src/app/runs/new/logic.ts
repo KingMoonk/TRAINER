@@ -8,6 +8,7 @@ import { fill, NEW_RUN as T } from "./copy";
 export type Node = components["schemas"]["ClusterNode"];
 export type Stage = (typeof T.stages)[number]["id"];
 type Version = components["schemas"]["Version"];
+export type Source = components["schemas"]["ContinueSource"];
 
 /** The one phrase `GET /queue/outlook` uses for a job that would start at once. */
 const STARTS_NOW = "Starts now";
@@ -81,6 +82,41 @@ export function pinnedJob(job: NonNullable<Plan["job"]>, address: string | null)
 /** The version SFT starts from when none is chosen: the best trained one, else the latest (as the Post-training page does). */
 export function defaultSftVersion(versions: Version[]): Version | undefined {
   return [...versions].reverse().find((v) => v.best_checkpoint) ?? versions.at(-1);
+}
+
+/** A wall time in plain words: "45 s", "12 min", "1 h 30 min", "2 d 3 h". */
+export function durationText(seconds: number): string {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} s`;
+  const minutes = Math.round(s / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+}
+
+const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+/** What one earlier run did, for its row under "Start from": a title, then the facts it recorded (each left out when it is unknown). */
+export function sourceFacts(s: Source): { title: string; when: string; facts: string[]; design: string } {
+  const title = [fill(T.sourceTitle, { number: s.version }), s.name, s.parent ? T.sourceParent : ""].filter(Boolean).join(" · ");
+  const status = s.status ? (T.statuses[s.status] ?? s.status) : "";
+  const date = s.finished_at && !Number.isNaN(Date.parse(s.finished_at)) ? DAY.format(new Date(s.finished_at)) : "";
+  const when = status || date ? fill(T.sourceFinished, { status: status || T.statuses.completed, date }).trim() : "";
+  const loss = (x: number) => x.toFixed(3);
+  const facts = [
+    s.steps == null ? "" : s.steps_planned ? fill(T.sourceSteps, { done: s.steps.toLocaleString("en-US"), planned: s.steps_planned.toLocaleString("en-US") }) : fill(T.sourceStepsDone, { done: s.steps.toLocaleString("en-US") }),
+    s.rounds && s.inner_steps ? fill(T.sourceRounds, { rounds: s.rounds, inner: s.inner_steps }) : "",
+    s.seconds ? durationText(s.seconds) : "",
+    s.best_val_loss == null ? "" : fill(T.sourceBest, { loss: loss(s.best_val_loss) }),
+    s.train_loss == null ? "" : fill(T.sourceTrain, { loss: loss(s.train_loss) }),
+    s.params ? fill(T.sourceParams, { count: COMPACT.format(s.params) }) : "",
+    s.tokens ? fill(T.sourceTokens, { count: COMPACT.format(s.tokens) }) : "",
+    s.device ?? "",
+  ].filter(Boolean);
+  return { title, when, facts: when || facts.length ? facts : [T.sourceNoRun], design: s.same_design ? T.sourceSame : T.sourceOther };
 }
 
 /** The route of a run's page: a query parameter, since the app is a static export. */

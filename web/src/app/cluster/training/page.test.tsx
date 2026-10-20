@@ -10,7 +10,7 @@ import { member, run } from "./test-data";
 // The Training tab against a mocked API: GET /distributed/defaults and /distributed/runs, POST /distributed/runs, the two stop routes,
 // and the lists the form reads. The live spec (tests/live.training.spec.ts) runs the same flow against a real --fake server.
 
-const DEFAULTS = { rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
 const SETS = [
   { id: "stories", name: "Stories", count: 1200, on: true, held: false, library: false },
   { id: "notes", name: "Notes", count: 40, on: false, held: false, library: false },
@@ -77,6 +77,24 @@ describe("Training tab: the start form", () => {
     expect(screen.getByText("No run has been started. Start one above.")).toBeInTheDocument();
   });
 
+  test("starts from the larger steps per round, with the reason, once a machine is ticked, and not when typed over", async () => {
+    server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    const box = await screen.findByRole("checkbox", { name: /gpu-box/ });
+    expect(screen.queryByText(/moving the model is a fixed cost/)).not.toBeInTheDocument();
+    await user.click(box);
+    expect(screen.getByLabelText("Steps per round")).toHaveValue(1500);
+    expect(screen.getByText("H 1500: moving the model is a fixed cost per round, so a longer round hides it.")).toBeInTheDocument();
+    await user.click(box);
+    expect(screen.getByLabelText("Steps per round")).toHaveValue(100);
+    await user.clear(screen.getByLabelText("Steps per round"));
+    await user.type(screen.getByLabelText("Steps per round"), "300");
+    await user.click(box);
+    expect(screen.getByLabelText("Steps per round")).toHaveValue(300);
+    expect(screen.queryByText(/moving the model is a fixed cost/)).not.toBeInTheDocument();
+  });
+
   test("starts a run with what was typed and ticked, and shows it", async () => {
     const state = server();
     renderPage(<TrainingPage />, { route: "/cluster/training" });
@@ -96,7 +114,7 @@ describe("Training tab: the start form", () => {
     await user.click(screen.getByRole("button", { name: "Start run" }));
     await waitFor(() => expect(state.started).toHaveLength(1));
     expect(state.started[0]).toEqual({
-      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: false, time_box: null, delta_dtype: "int8", reviewed_only: true,
+      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: false, time_box: null, delta_dtype: "int8", reviewed_only: true,
     });
     expect(await screen.findByTestId("run-r1")).toHaveTextContent("Version 2 across machines");
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");
@@ -122,6 +140,38 @@ describe("Training tab: the start form", () => {
     await user.click(screen.getByRole("button", { name: "Start run" }));
     await waitFor(() => expect(state.started).toHaveLength(1));
     expect(state.started[0]).toMatchObject({ dataset_ids: ["stories", "chats"], teacher: "judge:1b", polish_every: 3, target_win_rate: 0.6 });
+  });
+
+  test("starts a run that carries the chosen plateau, pivots and stages, and says when it moves on by itself", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Start run" });
+    expect(screen.queryByLabelText("Replay of earlier text (%)")).toBeNull(); // only once moving on to new text is ticked
+    await user.click(screen.getByRole("checkbox", { name: "Move on to the next unseen text" }));
+    await user.click(screen.getByRole("checkbox", { name: "Halve the learning rate" }));
+    expect(screen.getByRole("button", { name: "Start run" })).toBeDisabled();
+    expect(screen.getByText(/Set when the run stalls/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Stalls after (rounds)"), "3");
+    const gain = screen.getByLabelText("Gain needed (%)");
+    await user.clear(gain);
+    await user.type(gain, "2");
+    const replay = screen.getByLabelText("Replay of earlier text (%)");
+    await user.clear(replay);
+    await user.type(replay, "30");
+    expect(screen.getByText(/The run moves on by itself when the validation loss improves by less than 2% over 3 rounds\. Then it goes back to its best weights and first moves on to the next unseen text, replaying 30% of the text it already saw, then halves the learning rate\./)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    expect(state.started[0]).toMatchObject({ plateau_checks: 3, plateau_min_improvement: 0.02, pivots: ["next_dataset", "halve_lr"], stages: { replay: 0.3 } });
+  });
+
+  test("leaves the stall rules out of the request when no window is set", async () => {
+    const state = server();
+    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Start run" }));
+    await waitFor(() => expect(state.started).toHaveLength(1));
+    for (const key of ["plateau_checks", "plateau_min_improvement", "pivots", "stages"]) expect(state.started[0]).not.toHaveProperty(key);
   });
 
   test("keeps the conversation sets out of the request when no teacher is used", async () => {

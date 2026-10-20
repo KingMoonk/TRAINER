@@ -19,7 +19,9 @@ import studio_distributed as runs
 import studio_diloco
 import studio_facts
 import studio_membership
+import studio_model
 import studio_peer
+import studio_stages
 from studio_api.app import get_services
 from studio_api.routers.pretraining import _version
 from studio_api.version import app_version
@@ -37,9 +39,15 @@ DEFAULTS = studio_diloco.Settings()
 class Defaults(BaseModel):
     rounds: int
     inner_steps: int
+    remote_inner_steps: int  # the steps per round the form starts from when a member is on another machine
     outer_lr: float
     outer_momentum: float
     delta_dtype: str
+    max_steps: int  # rounds × inner steps may come to at most this many (400 above it)
+
+
+class Stages(BaseModel):
+    replay: float = Field(studio_stages.REPLAY, ge=0, lt=1)  # share of a round's shards drawn from the sets before the current one
 
 
 class StartRun(BaseModel):
@@ -64,6 +72,10 @@ class StartRun(BaseModel):
     teacher: str | None = Field(None, max_length=200)  # an Ollama model that polishes the weights and judges the win-rate; needed by polish_every and target_win_rate
     polish_every: int | None = Field(None, ge=0, le=100_000)  # rounds between teacher polishes (below rounds); None or 0: no polish
     target_win_rate: float | None = Field(None, gt=0, le=1)  # stop once the best weights win this share of the teacher's head-to-head against the starting weights
+    plateau_checks: int | None = Field(None, ge=0, le=100_000)  # a plateau: the validation loss improved by less than plateau_min_improvement over this many rounds (0 or None: off, at least 2 otherwise)
+    plateau_min_improvement: float | None = Field(None, gt=0, lt=1)  # the share the loss must fall by over those rounds (default 0.01)
+    pivots: list[Literal["halve_lr", "next_dataset", "drop_lessons"]] | None = None  # what the run tries, in this order, when the loss plateaus: back to the best weights, then the change; with none left, or no plateau window, it ends. Needs plateau_checks
+    stages: Stages | None = None  # next_dataset moves on to the workspace's unseen text sets, worst held-out loss first; needs next_dataset in pivots
 
 
 class Sample(BaseModel):
@@ -273,6 +285,7 @@ class Run(BaseModel):
     can_pause: bool = False
     can_resume: bool = False
     can_restart: bool = False  # it ended and saved weights to start a new run from (best.npz, else last.npz)
+    can_join: bool = False  # another computer coordinates it while it runs, and this computer is not training in it: it may ask to join
     best_round: int | None = None  # the round whose weights are the best so far
     best_val_loss: float | None = None
     win_rate: float | None = None  # the best weights' share of head-to-head wins against the weights the run started from (target_win_rate), as last judged
@@ -296,8 +309,9 @@ class Run(BaseModel):
 @router.get("/defaults")
 def defaults() -> Defaults:
     """The DiLoCo settings the form starts from."""
-    return Defaults(rounds=DEFAULTS.rounds, inner_steps=DEFAULTS.inner_steps, outer_lr=DEFAULTS.outer_lr,
-                    outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype)
+    return Defaults(rounds=DEFAULTS.rounds, inner_steps=studio_diloco.default_inner_steps(False),
+                    remote_inner_steps=studio_diloco.default_inner_steps(True), outer_lr=DEFAULTS.outer_lr,
+                    outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype, max_steps=studio_model.MAX_STEPS)
 
 
 class ChatSet(BaseModel):
@@ -370,7 +384,17 @@ def _rows(services):
     if cluster is None:
         rows = [{**row, "coordinator": row["owner"], "origin": row["owner"], "age_s": 0., "origin_down": False} for row in rows]
         return sorted(rows, key=lambda row: row["started_at"], reverse=True)
-    return studio_facts.cluster_runs(cluster, rows)
+    return [{**row, "can_join": can_join(row, cluster.hostname)} for row in studio_facts.cluster_runs(cluster, rows)]
+
+
+OUT = ("dropped", "left", "unreachable", "never_joined")  # member states of a machine not in the run now, which may ask to join
+
+
+def can_join(row, own):
+    """A run `own` may ask to join: it runs, another computer coordinates it, and `own` is not in it now (it was never a member, or it
+    dropped out; one its owner stopped stays out)."""
+    return (row["state"] == "running" and not row.get("origin_down") and row.get("coordinator", row["owner"]) != own
+            and all(m["state"] in OUT for m in row["members"] if m["node"] == own))
 
 
 @router.get("/runs")
@@ -497,6 +521,22 @@ def _teacher_options(body, services, dataset_ids):
     return fields, {**fields, "conversations": True}
 
 
+def _rule_options(body):
+    """{"settings": Settings fields, "params": the job's other params} for the plateau, pivot and stages options of a start: empty when
+    none is set. 400 with a sentence when stages and the next_dataset pivot do not go together (stages is where that pivot finds its
+    sets, and without it the pivot has none to move on to); the rest is checked by the Settings."""
+    settings = {k: getattr(body, k) for k in ("plateau_checks", "plateau_min_improvement") if getattr(body, k) is not None}
+    pivots = list(body.pivots or [])
+    if pivots:
+        settings["pivots"] = pivots
+    moves_on = "next_dataset" in pivots
+    if moves_on and body.stages is None:
+        raise HTTPException(400, "The next_dataset pivot moves on to the workspace's unseen text sets, so it needs stages: set stages, or leave next_dataset out of pivots.")
+    if body.stages is not None and not moves_on:
+        raise HTTPException(400, "Stages only come into play through the next_dataset pivot: add next_dataset to pivots, or leave stages out.")
+    return {"settings": settings, "params": {"stages": {"replay": body.stages.replay}} if body.stages is not None else {}}
+
+
 def _check_coordinator(address, chosen, peers, own):
     """The machine chosen to coordinate a run must be one the run invites that answers on this app version; anything else is a 400 (not
     chosen) or 409 (not usable) with the reason, so a run never starts on a coordinator it cannot hand the run to. "" is this computer."""
@@ -536,8 +576,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     teaching, teaching_params = _teacher_options(body, services, dataset_ids)
+    rules = _rule_options(body)
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, **shape, **teaching)  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, **shape, **teaching, **rules["settings"])  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -566,7 +607,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)
@@ -743,6 +784,38 @@ def stop_member(run_id: str, node: str, services: Services) -> Run:
     return Run.model_validate(_read(run, job)[0])
 
 
+@router.post("/runs/{run_id}/members/{node}/add")
+def add_member(run_id: str, node: str, services: Services) -> Run:
+    """The coordinator's side of a join: add `node`, one of this computer's listed machines, to the running run. The scheduler offers
+    it a slot now and invites it, and it trains from the round after; a machine that is busy gets a slot once it is free. 409 when the
+    run is not running here, for a node that is not listed, already in the run, or stopped by the owner, and for a full run."""
+    run, job = _find(services, run_id)
+    coordinator, cluster = studio_diloco.COORDINATORS.get(run.id), _cluster(services)
+    if coordinator is None or coordinator.finished or job is None or job.status != "running" or cluster is None:
+        raise HTTPException(409, "The run is not running, so nothing can join it.")
+    address = cluster.address_of(node)
+    machine = next((m for m in run.machines if m.node == node or m.address == address), None)
+    if address is None or (machine is not None and machine.local):
+        raise HTTPException(409, f"{node} is not on the Machines tab of {run.owner}, which coordinates the run.")
+    refused = coordinator.refusal(node)
+    if refused:
+        raise HTTPException(409, refused)
+    runs.choose(job, node, address)
+    cluster.offer(job)
+    return Run.model_validate(_read(run, job)[0])
+
+
+@router.post("/runs/{run_id}/join")
+def join_run(run_id: str, services: Services) -> Run:
+    """Ask the computer that coordinates a running run to add this one: it joins from the round after its invitation. 409 for a run
+    this computer coordinates; the coordinator's own refusals come back as they are."""
+    remote = _remote(services, run_id)
+    if remote is None:
+        _found(services, run_id)  # 404 for a run no one here knows
+        raise HTTPException(409, "This computer coordinates this run.")
+    return _forward(services, remote, f"distributed/runs/{run_id}/members/{_own_name(services)}/add")
+
+
 # ---- this computer as a member of other computers' runs ---------------------------------------------------------------
 
 class Invite(BaseModel):
@@ -861,6 +934,7 @@ def receive_pause_request(body: AskPause, services: Services) -> PauseRequest:
     """Another computer asks this one to pause its running job. It is shown here as an alert, and nothing happens until a person
     here accepts it. Asking again from the same computer for the same run refreshes the request."""
     request = studio_membership.ask_here(body.from_node, body.run_label)
+    services.emit("invites", {})
     state = services.queue()
     return PauseRequest.model_validate(studio_membership.requests_row(request, state.job, state.eta_s))
 
@@ -874,6 +948,7 @@ def accept_pause_request(request_id: str, services: Services) -> Invites:
         raise HTTPException(404, f"No pause request {request_id}.")
     _yield(services)
     studio_membership.dismiss(request_id)
+    services.emit("invites", {})
     return _invites(services)
 
 
@@ -882,6 +957,7 @@ def dismiss_pause_request(request_id: str, services: Services) -> Invites:
     """Decline a pause request; the running job carries on."""
     if not studio_membership.dismiss(request_id):
         raise HTTPException(404, f"No pause request {request_id}.")
+    services.emit("invites", {})
     return _invites(services)
 
 
