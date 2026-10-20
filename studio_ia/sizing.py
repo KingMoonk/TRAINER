@@ -73,6 +73,8 @@ def resized_spec(spec, width, layers):
         head = max(1, spec["dims"]["d_model"] // max(1, mixer["heads"]))
         head = max(head, 64) if width >= 256 else head
         mixer["heads"] = max(1, width // head)
+        if "kv_heads" in mixer:   # grouped-query attention: the shared key/value heads must divide the new number of query heads
+            mixer["kv_heads"] = max(k for k in range(1, mixer["heads"] + 1) if mixer["heads"] % k == 0 and k <= max(1, mixer["kv_heads"]))
     try:
         return validate_spec(new)
     except (ValueError, KeyError, TypeError):

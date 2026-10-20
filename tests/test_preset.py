@@ -174,3 +174,14 @@ class Api(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Resizing(unittest.TestCase):
+    def test_resizing_the_preset_keeps_the_shared_key_value_heads_valid(self):
+        from studio_ia import sizing
+        for width in (16, 32, 64, 256):
+            spec = sizing.resized_spec(default_spec(device="cpu"), width, 1)
+            self.assertIsNotNone(spec, width)
+            mixer = spec["block"]["mixer"]["config"]
+            self.assertEqual(mixer["heads"] % mixer["kv_heads"], 0, width)
+            self.assertEqual(errors(spec), [], width)
