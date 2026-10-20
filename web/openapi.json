@@ -19201,6 +19201,49 @@
         ]
       }
     },
+    "/queue/jobs/{job_id}/restart": {
+      "post": {
+        "description": "Run a failed job again: a copy with the same kind, label, note and params goes first in Up next, and the failed entry is\ndismissed. Only a failed job restarts; any other id is a 404.",
+        "operationId": "restart_queue_jobs__job_id__restart_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueStateModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restart",
+        "tags": [
+          "queue"
+        ]
+      }
+    },
     "/queue/next_step": {
       "get": {
         "description": "Services.next_step: the single \"what next\" answer.",
