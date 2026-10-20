@@ -625,6 +625,17 @@ class CoordinatorChoice(unittest.TestCase):
         self.assertEqual(every.status_code, 409)  # also when the rest of the machines would have been enough
         self.assertEqual(self.services.queue().up_next, [])
 
+    def test_a_teacher_needs_this_computer_to_coordinate_but_the_coordinators_own_error_comes_first(self):
+        teacher = {"teacher": "judge:1b", "polish_every": 1}
+        refused = self.start(machines=["box"], coordinator="box", **teacher)
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("only on the computer that starts the run", refused.json()["detail"])
+        self.assertEqual(self.start(machines=["box"], coordinator="spare", **teacher).json()["detail"],
+                         "spare cannot coordinate the run: it is not one of the machines chosen for it.")
+        self.assertEqual(self.start(machines=["box", "off"], coordinator="off", **teacher).status_code, 409)
+        self.assertEqual(self.start(machines=["box"], **teacher).status_code, 201)  # this computer coordinates
+        self.assertEqual(self.services.queue().up_next[0].params["teacher"], "judge:1b")
+
     def test_the_run_remembers_the_node_the_chosen_machine_joins_under(self):
         job = Job(id="run9", created_at=1., kind="pretrain_distributed", label="x", params={
             "machines": [MACHINES[0], {"node": "peer", "address": "box"}], "coordinator": "box", "owner": "me"})

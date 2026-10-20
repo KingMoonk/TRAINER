@@ -390,7 +390,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/cluster/selftest": {
+    "/collect": {
         parameters: {
             query?: never;
             header?: never;
@@ -398,25 +398,60 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Selftest
-         * @description The cluster self-test as it stands: its steps while it runs, else the last one's (kept across restarts), else state `never`.
+         * Collect State
+         * @description What the collector is doing now.
          */
-        get: operations["selftest_cluster_selftest_get"];
+        get: operations["collect_state_collect_get"];
         put?: never;
-        /**
-         * Start Selftest
-         * @description Start the self-test with the listed machines: the checks per machine, then a tiny real DiLoCo run through the queue, invite and
-         *     join path, each step with its verdict. 409 with a sentence when it cannot start (one is running, this computer is busy, an address is
-         *     not on the Machines list).
-         */
-        post: operations["start_selftest_cluster_selftest_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/cluster/selftest/digest": {
+    "/collect/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Config */
+        get: operations["get_config_collect_config_get"];
+        /**
+         * Put Config
+         * @description Save settings. 400 with a sentence for a bad value (a site that is excluded, a cap out of range). Turning collection on starts it.
+         */
+        put: operations["put_config_collect_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collect/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collect Options
+         * @description Topics, sources with their licence and terms notes, the sites that are never collected.
+         */
+        get: operations["collect_options_collect_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collect/pause": {
         parameters: {
             query?: never;
             header?: never;
@@ -426,18 +461,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Selftest Digest
-         * @description Download the weights of an open round from the coordinator at `url`, as a member does, and answer their checksum. 409 when the
-         *     round has closed or the coordinator refused.
+         * Pause
+         * @description Pause now; the collector notices within a second.
          */
-        post: operations["selftest_digest_cluster_selftest_digest_post"];
+        post: operations["pause_collect_pause_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/cluster/selftest/ping": {
+    "/collect/resume": {
         parameters: {
             query?: never;
             header?: never;
@@ -447,10 +481,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Selftest Ping
-         * @description Asked by the machine running the self-test: can this one reach `url` (that machine, by the address it gave its members)?
+         * Resume
+         * @description Resume, turning collection on if it was off.
          */
-        post: operations["selftest_ping_cluster_selftest_ping_post"];
+        post: operations["resume_collect_resume_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1421,6 +1455,26 @@ export interface paths {
          * @description write_spec: `base` with only the choices that changed rewritten.
          */
         post: operations["write_design_write_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/distributed/chat_sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Chat Sets
+         * @description The sets that hold conversations: the form's prompt sources for a run with a teacher (they are never trained on).
+         */
+        get: operations["chat_sets_distributed_chat_sets_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3344,6 +3398,18 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * ChatSet
+         * @description One set that holds conversations, which a run's teacher may take its prompts from.
+         */
+        ChatSet: {
+            /** Count */
+            count: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
         /** CheckBody */
         CheckBody: {
             /** New Version */
@@ -3545,6 +3611,118 @@ export interface components {
             /** Nodes */
             nodes: components["schemas"]["QueueNode"][];
         };
+        /** CollectConfig */
+        CollectConfig: {
+            /** Approved */
+            approved: string[];
+            /** Blocked */
+            blocked: string[];
+            /** Custom Topics */
+            custom_topics: string[];
+            /** Enabled */
+            enabled: boolean;
+            github: components["schemas"]["GitHub"];
+            idle: components["schemas"]["Idle"];
+            licences: components["schemas"]["Licences"];
+            limits: components["schemas"]["Limits"];
+            /** Paused */
+            paused: boolean;
+            sources: components["schemas"]["Sources"];
+            stackexchange: components["schemas"]["StackExchange"];
+            /** Topics */
+            topics: string[];
+            web: components["schemas"]["Web"];
+        };
+        /** CollectOptions */
+        CollectOptions: {
+            /** Excluded */
+            excluded: components["schemas"]["Excluded"][];
+            /** Licences */
+            licences: components["schemas"]["LicenceOption"][];
+            /** Sources */
+            sources: components["schemas"]["SourceOption"][];
+            /** Topics */
+            topics: components["schemas"]["Topic"][];
+            /** User Agent */
+            user_agent: string;
+        };
+        /** CollectState */
+        CollectState: {
+            /** Bandwidth Cap */
+            bandwidth_cap: number;
+            /** Bandwidth Today */
+            bandwidth_today: number;
+            /** Bandwidth Total */
+            bandwidth_total: number;
+            /** Disk Cap */
+            disk_cap: number;
+            /** Disk Used */
+            disk_used: number;
+            /** Enabled */
+            enabled: boolean;
+            /** File */
+            file: string;
+            /** Heartbeat Age */
+            heartbeat_age?: number | null;
+            /** Journal */
+            journal: components["schemas"]["JournalRow"][];
+            /** Paused */
+            paused: boolean;
+            /** Plan */
+            plan: components["schemas"]["studio_api__routers__collect__PlanRow"][];
+            /** Reason */
+            reason: string;
+            /** Requests Today */
+            requests_today: {
+                [key: string]: number;
+            };
+            /**
+             * Running
+             * @description the background collector process is alive
+             */
+            running: boolean;
+            /** Sets */
+            sets: components["schemas"]["CollectedSet"][];
+            /** Sources */
+            sources: components["schemas"]["SourceProgress"][];
+            stats: components["schemas"]["Stats"];
+            /**
+             * Status
+             * @description off | running | waiting | paused | idle | error
+             */
+            status: string;
+            /**
+             * Waiting Shards
+             * @description finished shards not yet added to your data
+             */
+            waiting_shards: number;
+        };
+        /** CollectedSet */
+        CollectedSet: {
+            /** Bytes */
+            bytes: number;
+            dropped: components["schemas"]["Dropped"];
+            /** Group */
+            group: string;
+            /** Id */
+            id: string;
+            /**
+             * Kept
+             * @description records the collector kept for this set
+             */
+            kept: number;
+            /** Name */
+            name: string;
+            /**
+             * Records
+             * @description records in the set now (what the trainer reads)
+             */
+            records: number;
+            /** Redactions */
+            redactions: number;
+            /** Seen */
+            seen: number;
+        };
         /** ComparePlan */
         ComparePlan: {
             /** Base */
@@ -3554,7 +3732,7 @@ export interface components {
             /** N Sweeps */
             n_sweeps: number;
             /** Variants */
-            variants: components["schemas"]["PlanRow"][];
+            variants: components["schemas"]["studio_api__routers__benchmark__PlanRow"][];
             /** Wall Seconds */
             wall_seconds: number;
         };
@@ -3607,6 +3785,31 @@ export interface components {
             };
             /** V */
             v: number;
+        };
+        /**
+         * ConfigUpdate
+         * @description Any of the settings; what is left out is kept. A list or a website list replaces the whole list.
+         */
+        ConfigUpdate: {
+            /** Approved */
+            approved?: string[] | null;
+            /** Blocked */
+            blocked?: string[] | null;
+            /** Custom Topics */
+            custom_topics?: string[] | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            github?: components["schemas"]["GitHubUpdate"] | null;
+            idle?: components["schemas"]["IdleUpdate"] | null;
+            licences?: components["schemas"]["LicencesUpdate"] | null;
+            limits?: components["schemas"]["LimitsUpdate"] | null;
+            /** Paused */
+            paused?: boolean | null;
+            sources?: components["schemas"]["SourcesUpdate"] | null;
+            stackexchange?: components["schemas"]["StackExchangeUpdate"] | null;
+            /** Topics */
+            topics?: string[] | null;
+            web?: components["schemas"]["Web"] | null;
         };
         /** ContinueBody */
         ContinueBody: {
@@ -3826,6 +4029,44 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** Dropped */
+        Dropped: {
+            /**
+             * Decontam
+             * @default 0
+             */
+            decontam: number;
+            /**
+             * Duplicate
+             * @default 0
+             */
+            duplicate: number;
+            /**
+             * Invalid
+             * @default 0
+             */
+            invalid: number;
+            /**
+             * Licence
+             * @default 0
+             */
+            licence: number;
+            /**
+             * Near Duplicate
+             * @default 0
+             */
+            near_duplicate: number;
+            /**
+             * Pii
+             * @default 0
+             */
+            pii: number;
+            /**
+             * Quality
+             * @default 0
+             */
+            quality: number;
+        };
         /**
          * Ended
          * @description Why a run ended itself (the run's `run.json`): `plateau` is the validation loss going flat (studio_plateau).
@@ -3862,6 +4103,13 @@ export interface components {
             path: string;
             /** Size */
             size?: number | null;
+        };
+        /** Excluded */
+        Excluded: {
+            /** Host */
+            host: string;
+            /** Reason */
+            reason: string;
         };
         /** ExpectBody */
         ExpectBody: {
@@ -4036,6 +4284,20 @@ export interface components {
              */
             store: boolean;
         };
+        /** GitHub */
+        GitHub: {
+            /** Max Repos */
+            max_repos: number;
+            /** Queries */
+            queries: string[];
+        };
+        /** GitHubUpdate */
+        GitHubUpdate: {
+            /** Max Repos */
+            max_repos?: number | null;
+            /** Queries */
+            queries?: string[] | null;
+        };
         /** GuessCheck */
         GuessCheck: {
             /** Hits */
@@ -4084,6 +4346,28 @@ export interface components {
              * @default true
              */
             held: boolean;
+        };
+        /** Idle */
+        Idle: {
+            /** Cpu Percent */
+            cpu_percent: number;
+            /** Only On Mains */
+            only_on_mains: boolean;
+            /** Only When Idle */
+            only_when_idle: boolean;
+            /** Unmetered Confirmed */
+            unmetered_confirmed: boolean;
+        };
+        /** IdleUpdate */
+        IdleUpdate: {
+            /** Cpu Percent */
+            cpu_percent?: number | null;
+            /** Only On Mains */
+            only_on_mains?: boolean | null;
+            /** Only When Idle */
+            only_when_idle?: boolean | null;
+            /** Unmetered Confirmed */
+            unmetered_confirmed?: boolean | null;
         };
         /** ImportJob */
         ImportJob: {
@@ -4339,6 +4623,15 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** JournalRow */
+        JournalRow: {
+            /** At */
+            at: string;
+            /** Text */
+            text: string;
+            /** Type */
+            type: string;
+        };
         /** JudgesOut */
         JudgesOut: {
             /** Error */
@@ -4491,6 +4784,76 @@ export interface components {
             prompt: string;
             /** Reply */
             reply: string;
+        };
+        /** LicenceOption */
+        LicenceOption: {
+            /**
+             * Default
+             * @description kept without asking
+             */
+            default: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Opt In
+             * @description the licences setting that allows it; empty for the default classes
+             * @default
+             */
+            opt_in: string;
+        };
+        /** Licences */
+        Licences: {
+            /** Copyleft */
+            copyleft: boolean;
+            /** Non Commercial */
+            non_commercial: boolean;
+            /** Unknown */
+            unknown: boolean;
+        };
+        /** LicencesUpdate */
+        LicencesUpdate: {
+            /** Copyleft */
+            copyleft?: boolean | null;
+            /** Non Commercial */
+            non_commercial?: boolean | null;
+            /** Unknown */
+            unknown?: boolean | null;
+        };
+        /** Limits */
+        Limits: {
+            /** Auto Approve Mb */
+            auto_approve_mb: number;
+            /** Bandwidth Mb Per Day */
+            bandwidth_mb_per_day: number;
+            /** Disk Mb */
+            disk_mb: number;
+            /** Max Dataset Mb */
+            max_dataset_mb: number;
+            /** Max File Mb */
+            max_file_mb: number;
+            /** Requests Per Host Per Day */
+            requests_per_host_per_day: number;
+            /** Seconds Between Requests */
+            seconds_between_requests: number;
+        };
+        /** LimitsUpdate */
+        LimitsUpdate: {
+            /** Auto Approve Mb */
+            auto_approve_mb?: number | null;
+            /** Bandwidth Mb Per Day */
+            bandwidth_mb_per_day?: number | null;
+            /** Disk Mb */
+            disk_mb?: number | null;
+            /** Max Dataset Mb */
+            max_dataset_mb?: number | null;
+            /** Max File Mb */
+            max_file_mb?: number | null;
+            /** Requests Per Host Per Day */
+            requests_per_host_per_day?: number | null;
+            /** Seconds Between Requests */
+            seconds_between_requests?: number | null;
         };
         /** Line */
         Line: {
@@ -5249,30 +5612,6 @@ export interface components {
             steps?: number | null;
             /** Version */
             version?: number | null;
-        };
-        /** PlanRow */
-        PlanRow: {
-            /** Adjustments */
-            adjustments?: unknown[];
-            /** Changes */
-            changes?: string[];
-            /** Matched */
-            matched: boolean;
-            /** Name */
-            name: string;
-            /** Parameters */
-            parameters: number;
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-            /** Relative Error */
-            relative_error?: number | null;
-            /** Steps */
-            steps?: number | null;
-            /** Variant */
-            variant: number;
         };
         /**
          * PlateauRule
@@ -6740,83 +7079,6 @@ export interface components {
             /** Version */
             version: number;
         };
-        /** SelfTestDigest */
-        SelfTestDigest: {
-            /** Round */
-            round: number;
-            /** Run */
-            run: string;
-            /** Term */
-            term: number;
-            /** Url */
-            url: string;
-        };
-        /** SelfTestDigestAnswer */
-        SelfTestDigestAnswer: {
-            /** Bytes */
-            bytes: number;
-            /** Seconds */
-            seconds: number;
-            /** Sha256 */
-            sha256: string;
-        };
-        /** SelfTestPing */
-        SelfTestPing: {
-            /** Url */
-            url: string;
-        };
-        /** SelfTestPingAnswer */
-        SelfTestPingAnswer: {
-            /** Error */
-            error: string;
-            /** Ok */
-            ok: boolean;
-            /** Seconds */
-            seconds: number;
-        };
-        /** SelfTestRun */
-        SelfTestRun: {
-            /** Finished At */
-            finished_at: number | null;
-            /** Id */
-            id: string;
-            /** Machines */
-            machines: string[];
-            /** Started At */
-            started_at: number;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "never" | "running" | "passed" | "failed";
-            /** Steps */
-            steps: components["schemas"]["SelfTestStep"][];
-        };
-        /** SelfTestStart */
-        SelfTestStart: {
-            /** Machines */
-            machines: string[];
-        };
-        /** SelfTestStep */
-        SelfTestStep: {
-            /** Detail */
-            detail: string;
-            /** Fix */
-            fix: string;
-            /** Id */
-            id: string;
-            /** Machine */
-            machine: string;
-            /** Seconds */
-            seconds: number | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "running" | "pass" | "fail" | "skipped";
-            /** Title */
-            title: string;
-        };
         /**
          * SharedVersion
          * @description What a peer needs to add this version without the store: the metadata `publish` uploads next to the weights.
@@ -6881,6 +7143,20 @@ export interface components {
              * @default float16
              */
             weights_dtype: string;
+        };
+        /** Site */
+        Site: {
+            /** Host */
+            host: string;
+            /** Licence */
+            licence: string;
+            /**
+             * Pages
+             * @default 200
+             */
+            pages: number;
+            /** Seeds */
+            seeds?: string[];
         };
         /** Sizes */
         Sizes: {
@@ -6986,6 +7262,69 @@ export interface components {
              */
             total: number;
         };
+        /** SourceOption */
+        SourceOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Note
+             * @description a caution, such as a tool this computer lacks; empty when none
+             * @default
+             */
+            note: string;
+            /**
+             * Terms
+             * @description the licence and terms note for this source
+             */
+            terms: string;
+            /** What */
+            what: string;
+        };
+        /** SourceProgress */
+        SourceProgress: {
+            /** Detail */
+            detail: string;
+            /** Done */
+            done: boolean;
+            /** Downloaded */
+            downloaded: number;
+            /** Error */
+            error: string;
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Topic */
+            topic: string;
+        };
+        /** Sources */
+        Sources: {
+            /** Github */
+            github: boolean;
+            /** Hub */
+            hub: boolean;
+            /** Stackexchange */
+            stackexchange: boolean;
+            /** Web */
+            web: boolean;
+        };
+        /** SourcesUpdate */
+        SourcesUpdate: {
+            /** Github */
+            github?: boolean | null;
+            /** Hub */
+            hub?: boolean | null;
+            /** Stackexchange */
+            stackexchange?: boolean | null;
+            /** Web */
+            web?: boolean | null;
+        };
         /** SpecBody */
         SpecBody: {
             /** Spec */
@@ -7045,6 +7384,24 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** StackExchange */
+        StackExchange: {
+            /** Dump Url */
+            dump_url: string;
+            /** Min Score */
+            min_score: number;
+            /** Sites */
+            sites: string[];
+        };
+        /** StackExchangeUpdate */
+        StackExchangeUpdate: {
+            /** Dump Url */
+            dump_url?: string | null;
+            /** Min Score */
+            min_score?: number | null;
+            /** Sites */
+            sites?: string[] | null;
+        };
         /**
          * StartRun
          * @description What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.
@@ -7085,6 +7442,8 @@ export interface components {
              * @default false
              */
             overlap: boolean;
+            /** Polish Every */
+            polish_every?: number | null;
             /** Replaces */
             replaces?: string | null;
             /**
@@ -7097,6 +7456,10 @@ export interface components {
              * @default 10
              */
             rounds: number;
+            /** Target Win Rate */
+            target_win_rate?: number | null;
+            /** Teacher */
+            teacher?: string | null;
             /** Version */
             version?: number | null;
         };
@@ -7116,6 +7479,30 @@ export interface components {
             seq: number;
             /** Value */
             value: unknown;
+        };
+        /** Stats */
+        Stats: {
+            /**
+             * Bytes Kept
+             * @default 0
+             */
+            bytes_kept: number;
+            dropped?: components["schemas"]["Dropped"];
+            /**
+             * Kept
+             * @default 0
+             */
+            kept: number;
+            /**
+             * Redactions
+             * @default 0
+             */
+            redactions: number;
+            /**
+             * Seen
+             * @default 0
+             */
+            seen: number;
         };
         /** StatusRequest */
         StatusRequest: {
@@ -7404,6 +7791,13 @@ export interface components {
             /** On */
             on: boolean;
         };
+        /** Topic */
+        Topic: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
         /** Tower */
         Tower: {
             /** Blocks */
@@ -7586,6 +7980,11 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** Web */
+        Web: {
+            /** Sites */
+            sites: components["schemas"]["Site"][];
+        };
         /** WordList */
         WordList: {
             /** Chips */
@@ -7677,12 +8076,70 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** PlanRow */
+        studio_api__routers__benchmark__PlanRow: {
+            /** Adjustments */
+            adjustments?: unknown[];
+            /** Changes */
+            changes?: string[];
+            /** Matched */
+            matched: boolean;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Relative Error */
+            relative_error?: number | null;
+            /** Steps */
+            steps?: number | null;
+            /** Variant */
+            variant: number;
+        };
         /** Accepted */
         studio_api__routers__cluster__Accepted: {
             /** Epoch */
             epoch: number;
             /** Job Id */
             job_id: string;
+        };
+        /** PlanRow */
+        studio_api__routers__collect__PlanRow: {
+            /** Approved */
+            approved: boolean;
+            /** Blocked */
+            blocked: boolean;
+            /** Bytes */
+            bytes: number;
+            /** Files */
+            files: number;
+            /** Group */
+            group: string;
+            /** Id */
+            id: string;
+            /** Licence */
+            licence: string;
+            /** Licence Class */
+            licence_class: string;
+            /** Reason */
+            reason: string;
+            /** Score */
+            score: number;
+            /** Source */
+            source: string;
+            /**
+             * Status
+             * @description planned | needs_approval | skipped
+             */
+            status: string;
+            /** Topic */
+            topic: string;
+            /** Url */
+            url: string;
         };
         /** Accepted */
         studio_api__routers__collective__Accepted: {
@@ -8412,7 +8869,7 @@ export interface operations {
             };
         };
     };
-    selftest_cluster_selftest_get: {
+    collect_state_collect_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -8427,45 +8884,32 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SelfTestRun"];
+                    "application/json": components["schemas"]["CollectState"];
                 };
             };
         };
     };
-    start_selftest_cluster_selftest_post: {
+    get_config_collect_config_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SelfTestStart"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            202: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SelfTestRun"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["CollectConfig"];
                 };
             };
         };
     };
-    selftest_digest_cluster_selftest_digest_post: {
+    put_config_collect_config_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -8474,7 +8918,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SelfTestDigest"];
+                "application/json": components["schemas"]["ConfigUpdate"];
             };
         };
         responses: {
@@ -8484,7 +8928,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SelfTestDigestAnswer"];
+                    "application/json": components["schemas"]["CollectConfig"];
                 };
             };
             /** @description Validation Error */
@@ -8498,18 +8942,14 @@ export interface operations {
             };
         };
     };
-    selftest_ping_cluster_selftest_ping_post: {
+    collect_options_collect_options_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SelfTestPing"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -8517,16 +8957,47 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SelfTestPingAnswer"];
+                    "application/json": components["schemas"]["CollectOptions"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+        };
+    };
+    pause_collect_pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["CollectConfig"];
+                };
+            };
+        };
+    };
+    resume_collect_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectConfig"];
                 };
             };
         };
@@ -10113,6 +10584,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_sets_distributed_chat_sets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSet"][];
                 };
             };
         };
