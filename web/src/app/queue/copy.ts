@@ -27,6 +27,8 @@ export const T = {
   showDetails: "Show details",
   hideDetails: "Hide details",
   dismiss: "Dismiss",
+  restart: "Restart",
+  restarted: "Restarted: it runs next.",
   upNext: "UP NEXT · IN ORDER",
   allDoneIn: "all done in about {hours} h at the current plan",
   finishNeedsEstimates: "the finish time shows once each waiting job has a time estimate",

@@ -1108,6 +1108,7 @@ class FakeServices(Services):
 
     def remove(self, job_id):
         self._queue.up_next = [j for j in self._queue.up_next if j.id != job_id]
+        self._queue.failed = [j for j in self._queue.failed if j.id != job_id]  # a failed job is dismissed, as the real queue does
         self.emit("queue", self._queue)
 
     def pause(self):

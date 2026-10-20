@@ -67,6 +67,7 @@ export const T = {
   roundsDone: "{round} of {rounds} rounds",
   stopped: "stopped",
   failed: "failed",
+  restart: "Restart",
   finished: "finished",
   noReason: "No reason was given.",
 } as const;

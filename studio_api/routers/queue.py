@@ -231,6 +231,20 @@ def remove(job_id: str, services: Services) -> QueueStateModel:
     return _state(services)
 
 
+@router.post("/jobs/{job_id}/restart")
+def restart(job_id: str, services: Services) -> QueueStateModel:
+    """Run a failed job again: a copy with the same kind, label, note and params goes first in Up next, and the failed entry is
+    dismissed. Only a failed job restarts; any other id is a 404."""
+    failed = next((j for j in services.queue().failed if j.id == job_id), None)
+    if failed is None:
+        raise HTTPException(404, f"No failed job {job_id}")
+    again = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind=failed.kind, label=failed.label, note=failed.note, params=dict(failed.params))
+    services.enqueue(again)
+    services.move(again.id, 0)
+    services.remove(job_id)
+    return _state(services)
+
+
 @router.get("/outlook")
 def outlook(services: Services) -> Outlook:
     """Services.queue_outlook for a job added to the end of the queue now."""

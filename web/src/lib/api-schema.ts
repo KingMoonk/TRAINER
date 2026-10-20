@@ -2796,6 +2796,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/queue/jobs/{job_id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart
+         * @description Run a failed job again: a copy with the same kind, label, note and params goes first in Up next, and the failed entry is
+         *     dismissed. Only a failed job restarts; any other id is a 404.
+         */
+        post: operations["restart_queue_jobs__job_id__restart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/next_step": {
         parameters: {
             query?: never;
@@ -13060,6 +13081,37 @@ export interface operations {
                 "application/json": components["schemas"]["Pin"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueStateModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restart_queue_jobs__job_id__restart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
