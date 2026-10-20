@@ -490,15 +490,6 @@ class Services:
         """True when these sets hold `at_least` different prompts a run's teacher can answer (only conversations marked Good with `reviewed_only`)."""
         raise NotImplementedError
 
-    def cluster_selftest_start(self, addresses, peer_url, api_port):
-        """Start the cluster self-test (studio_selftest) on the listed machines, this one included; ValueError (with a sentence) when it
-        cannot start: one is already running, this computer is busy, or an address is not on the Machines list."""
-        raise NotImplementedError
-
-    def cluster_selftest(self):
-        """The running self-test's steps as they stand, else the last one's (kept across restarts), else {"state": "never", ...}."""
-        raise NotImplementedError
-
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
@@ -907,19 +898,6 @@ class FakeServices(Services):
 
     def conversations(self, params):
         return [{"user": f"Question {n}?", "assistant": f"Answer {n}."} for n in range(int(self.conversations_in_text))]
-
-    def cluster_selftest_start(self, addresses, peer_url, api_port):
-        """A self-test whose every step passes at once (nothing is on the network); `studio_api --fake` shows the card with it."""
-        import studio_selftest
-        test = studio_selftest.SelfTest(None, list(addresses), peer_url, "this computer")
-        for step in test.result.steps:
-            step.status, step.detail, step.seconds = studio_selftest.PASS, "Simulated: this is the fake app.", 0.1
-        test.result.state, test.result.finished_at = "passed", test.now()
-        self._selftest = test.result.view()
-        return self._selftest
-
-    def cluster_selftest(self):
-        return getattr(self, "_selftest", {"state": "never", "id": "", "machines": [], "started_at": 0., "finished_at": None, "steps": []})
 
     def versions(self):
         return list(self._versions)
