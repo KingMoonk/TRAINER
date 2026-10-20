@@ -62,7 +62,11 @@ test("the Builder edits a part and saves a version against the API", async ({ pa
   await expect(tray).toContainText("Not saved · only this page sees these");
 
   await page.getByTestId("save").click();
-  await page.locator("summary").filter({ hasText: "Version history & results" }).click();
-  await expect(page.getByTestId(`version-${next}`)).toBeVisible();
   await expect(tray).toContainText("No changes");
+  // The save makes the page read its design again, which can remount the closed history section: open it until the new version shows.
+  const summary = page.locator("summary").filter({ hasText: "Version history & results" });
+  await expect(async () => {
+    if (!(await summary.evaluate((s) => (s.parentElement as HTMLDetailsElement).open))) await summary.click();
+    await expect(page.getByTestId(`version-${next}`)).toBeVisible({ timeout: 1_000 });
+  }).toPass();
 });
