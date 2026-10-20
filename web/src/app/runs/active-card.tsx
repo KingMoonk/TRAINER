@@ -8,7 +8,7 @@ import { RoleChip } from "./role-chip";
 
 /** The machines of a run as chips: a coordinator that is also a worker is one chip "c, w". */
 function Machines({ row }: { row: RunRow }) {
-  const names = [...new Set([row.coordinator, ...row.workers])];
+  const names = [...new Set([row.coordinator, ...row.workers].filter(Boolean))];
   return (
     <div className="flex flex-wrap gap-2">
       {names.map((name) => (

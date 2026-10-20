@@ -77,6 +77,33 @@ describe("buildRows", () => {
   });
 });
 
+describe("a member machine", () => {
+  // Live data from the Mac while BEAST coordinates: `local` is relative to the coordinator, and the Mac is listed by its tailnet URL.
+  const MAC = "Michaels-Mac.local";
+  const URL = "https://michaels-mac.tailb22e91.ts.net";
+  const nodes = [node("local", MAC), node("beast:8000", "BEAST", { device: "cuda" })];
+  const members = [
+    { node: "BEAST", address: "local", local: true, state: "training" },
+    { node: MAC, address: URL, local: false, state: "training" },
+  ] as Run["members"];
+  const remote = run("e693047f", { owner: "BEAST", members, version: 4 });
+  const memberJob = job("m1", { kind: "diloco_member", label: "Version 4 across 2 machines (member)", status: "running", params: { run: "e693047f", node: MAC } });
+
+  test("the run shows once, named by node, and its member job on this machine is not a second row", () => {
+    const rows = buildRows({ queue: queue({ job: memberJob }), runs: [remote], clusterJobs: [], nodes });
+    expect(rows.map((r) => r.id)).toEqual(["e693047f"]);
+    expect(rows[0]).toMatchObject({ coordinator: "BEAST", workers: ["BEAST", MAC] });
+    expect(rolesOn("BEAST", rows)[0].roles).toBe("c, w");
+    expect(rolesOn(MAC, rows)).toEqual([{ roles: "w", run: "v4", runName: "from scratch" }]);
+  });
+
+  test("a member job whose run is not listed is never the coordinator", () => {
+    const [row] = buildRows({ queue: queue({ job: memberJob }), runs: [], clusterJobs: [], nodes });
+    expect(row).toMatchObject({ workers: [MAC], coordinator: "" });
+    expect(rolesOn(MAC, [row])[0].roles).toBe("w");
+  });
+});
+
 describe("text", () => {
   test("rolesOn gives c, w for the coordinator that also trains", () => {
     const rows = buildRows({ queue: queue(), runs: [run("r1")], clusterJobs: [], nodes: NODES });
