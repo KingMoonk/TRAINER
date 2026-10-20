@@ -142,6 +142,8 @@ describe("the traffic console", () => {
     const { live } = setup([]);
     const user = userEvent.setup();
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });  // the rules and the /events stream settle
+    act(() => emit("job", { id: "read-1", kind: "design.notebook", status: "done", progress: "", error: "" }));
+    expect(screen.queryByText("Run finished")).not.toBeInTheDocument();
     act(() => emit("job", { status: "done", job: "j1" }));
     expect(await screen.findByText("Run finished")).toBeInTheDocument();  // the toast
     await user.click(openButton());
