@@ -6,6 +6,7 @@ address fails the test. The network between the nodes is fake and cut by hand; t
 the failure detector and the members' leases lapse without sleeping. Nothing opens a window or a socket."""
 import dataclasses
 import json
+import re
 import tempfile
 import threading
 import time
@@ -31,6 +32,7 @@ from tests.test_queue_cluster import own_node
 
 RUN = "run1"
 ROUNDS = 40
+GATE_AT = 6  # a handoff test holds the first coordinator at this round until the handoff has been seen
 CUT_AT = 3  # the cable to the coordinator is pulled when it opens this round
 NAMES = ("n0", "n1", "n2")
 PORTS = {"n0": 9100, "n1": 9101, "n2": 9102}  # not studio_peer.DEFAULT_PORT: the where-file must name the port the API listens on
@@ -48,9 +50,9 @@ def local_url(name):
 class Cable(support.Peer):
     """A member's line to the first coordinator: it works until `cut` is set, which happens the first time `trigger()` is true."""
 
-    def __init__(self, client, cut, trigger):
+    def __init__(self, client, cut, trigger, gate=None):
         super().__init__(client)
-        self.cut, self.trigger = cut, trigger
+        self.cut, self.trigger, self.gate = cut, trigger, gate
 
     def _line(self, path):
         if not self.cut.is_set() and self.trigger():
@@ -72,6 +74,9 @@ class Cable(support.Peer):
 
     def post_bytes(self, path, data, params=None, timeout=None):
         self._line(path)
+        found = re.search(r"/rounds/(\d+)/delta", path)
+        while self.gate is not None and found and int(found.group(1)) >= GATE_AT and not self.gate.is_set():
+            time.sleep(.02)  # the run is held at this round, whatever the machine's speed, until the test has seen what it waits for
         return super().post_bytes(path, data, params, timeout)
 
 
@@ -141,12 +146,15 @@ class Fleet:
 
     def __init__(self, case, handoff="", **settings):
         self.case, self.clock = case, Clock()
+        self.gate = threading.Event()  # set: the first coordinator's rounds are no longer held (see Cable); a run without a handoff is never held
+        if not handoff:
+            self.gate.set()
         self.handlers, self.nets = {}, {name: Net() for name in NAMES}
         for net in self.nets.values():
             net.handlers = self.handlers  # one set of handlers, one `down` set per caller: a partition can be between two nodes only
         self.nodes = {name: Node(self, name) for name in NAMES}
         self.cut = threading.Event()
-        self.line = Cable(self.nodes["n0"].client, self.cut, lambda: not handoff and self.first.next_round >= CUT_AT and self.ready("n1", "n2"))
+        self.line = Cable(self.nodes["n0"].client, self.cut, lambda: not handoff and self.first.next_round >= CUT_AT and self.ready("n1", "n2"), self.gate)
         self.urls = {url(name): name for name in NAMES for url in (peer_url, local_url)}
         case.enterContext(mock.patch("studio_peer.PeerClient", self.client_for))  # the worker's PeerClient, in studio_jobs and file_locator
         studio_distributed.RUNS.clear()
@@ -210,6 +218,7 @@ class Fleet:
         return {name: node.registry[RUN] for name, node in self.nodes.items() if RUN in node.registry and not node.registry[RUN].superseded}
 
     def stop(self):
+        self.gate.set()  # a member held at the gate must be able to end
         for node in self.nodes.values():
             node.stop.set()
         for node in self.nodes.values():
@@ -296,6 +305,7 @@ class Handoff(unittest.TestCase):
         self.assertEqual(fleet.nodes["n1"].cluster.claims[RUN]["term"], 2)
         self.assertGreaterEqual(fleet.nodes["n1"].cluster.claims[RUN]["round"], 1)  # from a round it held, never from nothing
         self.assertFalse(fleet.first.finished)  # n0 was up: nobody waited for it to be lost
+        fleet.gate.set()  # the handoff happened while the run was held mid-way; let it run on
         fleet.wait_for("n0 to step down", lambda: RUN not in fleet.nodes["n0"].registry)
         self.assertGreaterEqual(fleet.first.superseded, 2)
         self.assertEqual(fleet.nodes["n0"].cluster.claims[RUN], {"released": True})
