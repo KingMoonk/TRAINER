@@ -53,6 +53,18 @@ class FitTests(unittest.TestCase):
 
 
 class StepRateTests(unittest.TestCase):
+    def test_resizing_gqa_preserves_valid_query_and_key_value_groups(self):
+        original = studio_spec.default_spec()
+        original["block"]["mixer"] = {"id": "gqa", "config": {"heads": 4, "kv_heads": 2}}
+        for width in (16, 32, 48, 64, 256, 512):
+            with self.subTest(width=width):
+                resized = sizing.resized_spec(original, width, 1)
+                config = resized["block"]["mixer"]["config"]
+                self.assertEqual(width % config["heads"], 0)
+                self.assertEqual(config["heads"] % config["kv_heads"], 0)
+                self.assertGreaterEqual(config["kv_heads"], 1)
+        self.assertEqual(original["block"]["mixer"]["config"]["kv_heads"], 2)
+
     def test_the_rate_is_the_clocks_mean_over_the_timed_steps_and_warmup_is_not_timed(self):
         calls = []
 
