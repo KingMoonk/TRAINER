@@ -93,6 +93,8 @@ async def events(request: Request):
         try:
             yield ": connected\n\n"
             yield sse("status", await asyncio.to_thread(status_snapshot, broadcaster.services))
+            if running := broadcaster.services.busy.items():  # work already under way when this client joins
+                yield sse("busy", {"items": running})
             while not await request.is_disconnected():
                 try:
                     kind, text = await asyncio.wait_for(queue.get(), KEEPALIVE)
