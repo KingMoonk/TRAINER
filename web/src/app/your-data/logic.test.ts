@@ -9,7 +9,6 @@ import {
   dupLabel,
   errorText,
   kindOf,
-  listLine,
   parseRule,
   overviewCounts,
   setShare,
@@ -25,18 +24,6 @@ import { ApiError } from "@/lib/api";
 const rows = (...statuses: string[]) => statuses.map((status, i) => ({ id: i, status })) as unknown as DataRow[];
 
 const summary = (...sets: [string, number][]) => ({ sets: sets.map(([name, count]) => ({ name, count })) }) as unknown as Summary;
-
-describe("listLine", () => {
-  const row = { id: "r", a: "notes.txt", b: "The first line.", status: "In use", dataset: "Your files" } as DataRow;
-  it("shows a text row's first line, not the document it came from", () => {
-    expect(listLine("text", row)).toBe("The first line.");
-    expect(listLine("text", { ...row, b: "" })).toBe("notes.txt");
-  });
-  it("shows the prompt of a conversation or problem", () => {
-    expect(listLine("conversations", row)).toBe("notes.txt");
-    expect(listLine("problems", row)).toBe("notes.txt");
-  });
-});
 
 describe("backLink", () => {
   it("sends text back to Pretraining and the other kinds to Post-training", () => {

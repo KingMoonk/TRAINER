@@ -43,7 +43,11 @@ function server() {
       const sets = kind === "conversations" ? [{ id: "d1", name: "Your conversations", count: rows.length }, ...(state.imported ? [{ id: "d2", name: "Imported set", count: 1 }] : [])] : [];
       return { status: 202, body: job(`s-${kind}-${state.imported}`, "data", summary(kind, rows, sets)) };
     },
-    "GET /data/*/rows": ({ path }) => ({ body: { rows: kindOf(path) === "conversations" ? conversations() : [], next_cursor: null } }),
+    "GET /data/*/rows": ({ path }) => {
+      const kind = kindOf(path);
+      const rows = kind === "conversations" ? conversations() : kind === "text" ? [row("t1", "story.txt", "A small boat crossed the lake.")] : [];
+      return { body: { rows, next_cursor: null } };
+    },
     "GET /data/collections/*": { body: [source("tinystories", "TinyStories", "downloading", { total: 100, completed: 10 }), source("wikitext2", "WikiText-2", "not downloaded")] },
     "POST /data/collections/*/download": ({ body }) => {
       state.downloads.push(body);
@@ -128,6 +132,16 @@ describe("Your data page", () => {
     expect(screen.getByTestId("detail")).toHaveTextContent("Hello there.");
     expect(screen.getByRole("button", { name: "Mark Good" })).toBeVisible();
     expect(screen.getByRole("link", { name: "‹ Back to Post-training" })).toHaveAttribute("href", expect.stringMatching(/\/post-training/));
+  });
+
+  test("a text row shows its first line beside its document, since the document alone does not tell rows apart", async () => {
+    server();
+    const user = userEvent.setup();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=text" });
+    await user.click(await screen.findByRole("button", { name: "Browse examples" }));
+    const first = await screen.findByTestId("row-t1");
+    expect(within(first).getByText("A small boat crossed the lake.", { exact: true })).toBeVisible();
+    expect(first).toHaveTextContent("story.txt");
   });
 
   test("an uploaded file is imported and the new row and set appear", async () => {

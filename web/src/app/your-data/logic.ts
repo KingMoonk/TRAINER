@@ -14,11 +14,6 @@ export function visibleRows(rows: DataRow[], onlyDuplicates: boolean): DataRow[]
   return onlyDuplicates ? rows.filter((r) => r.status === "Near-duplicate") : rows;
 }
 
-/** What one line of the examples list shows: a text row's first line (its `a` is only the document it came from), else the prompt. */
-export function listLine(kind: Kind, row: DataRow): string {
-  return kind === "text" ? row.b || row.a : row.a;
-}
-
 export function dupLabel(found: number, onlyDuplicates: boolean): string {
   return fill(T.nearDuplicates, { n: found.toLocaleString("en-US") }) + (onlyDuplicates ? T.showing : "");
 }

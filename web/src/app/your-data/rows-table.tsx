@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { T, type Kind } from "./copy";
-import { STATUS_CLASS, listLine, shownLine, visibleRows, type DataRow } from "./logic";
+import { STATUS_CLASS, shownLine, visibleRows, type DataRow } from "./logic";
 
 const PAGE = 200; // rows the list gains per read
 
@@ -76,8 +76,15 @@ export function RowsList({
                 row.id === selected && "bg-(--selected-surface)",
               )}
             >
-              <span className={cn("min-w-0 flex-1 truncate", mono && "font-mono text-[13px]")}>{listLine(kind, row)}</span>
-              {kind === "text" && <span className="hidden max-w-40 shrink-0 truncate text-xs text-muted-foreground sm:inline">{row.a}</span>}
+              {kind === "text" ? (
+                // A text row's first column is its document, the second its first line: the line is what reads as the row.
+                <>
+                  <span className="max-w-[35%] shrink-0 truncate text-muted-foreground">{row.a}</span>
+                  <span className="min-w-0 flex-1 truncate">{row.b}</span>
+                </>
+              ) : (
+                <span className={cn("min-w-0 flex-1 truncate", mono && "font-mono text-[13px]")}>{row.a}</span>
+              )}
               <Badge variant="outline" className={STATUS_CLASS[row.status]}>
                 {row.status}
               </Badge>
