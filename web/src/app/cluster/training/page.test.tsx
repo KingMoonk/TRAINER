@@ -10,7 +10,7 @@ import { member, run } from "./test-data";
 // The Training tab against a mocked API: GET /distributed/defaults and /distributed/runs, POST /distributed/runs, the two stop routes,
 // and the lists the form reads. The live spec (tests/live.training.spec.ts) runs the same flow against a real --fake server.
 
-const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
 const SETS = [
   { id: "stories", name: "Stories", count: 1200, on: true, held: false, library: false },
   { id: "notes", name: "Notes", count: 40, on: false, held: false, library: false },

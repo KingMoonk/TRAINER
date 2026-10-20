@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stopReasonText, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stepsProblem, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { initialRules } from "./rules";
@@ -10,18 +10,26 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", rules: initialRules(), ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", rules: initialRules(), maxSteps: 1_000_000, ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
     const sets = [{ id: "a", name: "A", count: 3, on: true, held: false, library: false }, { id: "b", name: "B", count: 1, on: false, held: false, library: false }];
-    expect(initialForm({ rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" }, sets)).toEqual(form());
+    expect(initialForm({ rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 }, sets)).toEqual(form());
   });
 
   test("steps per round: the usual on this computer alone, the larger with another machine", () => {
-    const defaults = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+    const defaults = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
     expect(defaultInnerSteps(defaults, [])).toBe("100");
     expect(defaultInnerSteps(defaults, ["gpu-box"])).toBe("1500");
+  });
+
+  test("keeps Start off, saying why, while rounds × steps per round is more than a run trains", () => {
+    expect(stepsProblem(form({ rounds: "3000", innerSteps: "1000" }))).toBe("3,000 rounds of 1,000 steps is 3,000,000 steps; a run trains at most 1,000,000. Use fewer rounds or fewer steps per round.");
+    expect(startBody(form({ rounds: "3000", innerSteps: "1000" }))).toBeNull();
+    expect(stepsProblem(form({ rounds: "1000", innerSteps: "1000" }))).toBe("");
+    expect(startBody(form({ rounds: "1000", innerSteps: "1000" }))).not.toBeNull();
+    expect(stepsProblem(form({ rounds: "", innerSteps: "1000" }))).toBe(""); // not filled in yet
   });
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {

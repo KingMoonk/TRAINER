@@ -10,7 +10,7 @@ import { event, lane, line, member, round, run } from "./test-data";
 // The Training tab's live view against a mocked API: the topology and its edges, the round banner, the timeline, the charts, the event log, the
 // list of other runs, the folded start form and the polling. The contract tier (src/contract) renders it from recorded --fake responses.
 
-const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
 const SETS = [{ id: "stories", name: "Stories", count: 1200, on: true, held: false, library: false }];
 const node = (address: string, over: Record<string, unknown> = {}) => ({
   address, local: false, hostname: address, version: "1", device: "cuda", device_name: "RTX 4090", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,

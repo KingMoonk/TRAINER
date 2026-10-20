@@ -4251,6 +4251,8 @@ export interface components {
             delta_dtype: string;
             /** Inner Steps */
             inner_steps: number;
+            /** Max Steps */
+            max_steps: number;
             /** Outer Lr */
             outer_lr: number;
             /** Outer Momentum */

@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
 # anchored windows with the assistant objective train answers only with their prompt in view.
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
+MAX_STEPS = 1_000_000  # the most optimizer steps one run trains; a distributed run counts rounds × inner steps
 EVAL_WINDOWS = 400  # legacy checkpoints and the distributed coordinator retain their original evaluation budget
 PREFILL_CHUNK = 256  # a reply's first KV-cached prefill runs this many tokens per forward pass, and checks `stop` between passes
 STREAM_CHARS = 16_000_000  # training text from this many characters on is tokenized into on-disk shards (about 48 MB of windows)
@@ -103,7 +104,7 @@ def validate_config(config):
     model_spec_given = is_model_spec(spec)
     structural = [] if spec is not None else [("width", 16, 512), ("layers", 1, 12), ("heads", 1, 16), ("context", 32, 2048), ("expansion", 1, 8)]
     for key, low, high in structural + [("batch_size", 1, 128), ("accumulation", 1, 64),
-                                        ("steps", 1, 1000000), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("eval_windows", 1, 100000),
+                                        ("steps", 1, MAX_STEPS), ("warmup", 0, 100000), ("eval_every", 1, 100000), ("eval_windows", 1, 100000),
                                         ("seed", 0, 2147483647), ("sample_every", 0, 100000)]:
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
