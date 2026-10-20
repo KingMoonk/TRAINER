@@ -80,6 +80,17 @@ class Ghosts(unittest.TestCase):
         self.assertEqual(winner.mine, Claim("r", "n1", 2, 38, 0))
         self.assertIn(("point", "n1", 2, False), loser.log)  # the loser's members are sent to the winner
 
+    def test_a_finished_ghost_does_not_hold_back_a_takeover_from_a_stale_live_claim_of_its_term(self):
+        """The rule, pinned: W's finished row is a ghost, X (down, its lease lapsed) still has a live claim of the same term. The live claim
+        stands, so a replica claims the next term and continues the run, rather than counting it finished under the ghost."""
+        host = FakeHost("b", Clock(1000.))
+        host.held["r"] = [Held("b", 5, 0)]
+        host.down = {"x"}
+        host.seen["r"] = [Seen(Claim("r", "w", 2, 40, 0, ghost=True), 0., "finished"), Seen(Claim("r", "x", 2, 5, 0), LEASE + 1, "running")]
+        failover.Failover(host).step()
+        self.assertEqual(host.did("claim"), [("claim", Claim("r", "b", 3, 5, 0))])
+        self.assertEqual(host.did("finished_under_successor"), [])
+
 
 class Successor(unittest.TestCase):
     live = staticmethod(lambda node: True)
