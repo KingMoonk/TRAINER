@@ -1025,7 +1025,7 @@ def batch_logits(model, windows, sliding, cache, stop=None, chunk=PREFILL_CHUNK)
     the context (`sliding`) every position shifts, so the cache is dropped and the windows re-prefilled. Without a cache the whole
     window is run. Callers pass `chunk` explicitly, as PREFILL_CHUNK read at call time."""
     if cache is None:
-        return model.forward(np.array(windows, dtype=np.int64))[:, -1]
+        return model.forward(np.array(windows, dtype=np.int64), last_only=True)[:, -1]
     if sliding:
         cache.clear()
         cache["n"] = 0
@@ -1034,7 +1034,7 @@ def batch_logits(model, windows, sliding, cache, stop=None, chunk=PREFILL_CHUNK)
     for start in range(0, new.shape[1], size):
         if start and stop and stop.is_set():
             return None
-        logits = model.forward(new[:, start:start + size], cache=cache)
+        logits = model.forward(new[:, start:start + size], cache=cache, last_only=True)
         if start + size < new.shape[1]:
             logits[0, -1, 0].item()   # a GPU runs ahead of this thread: wait for the chunk, or a stop would find every later chunk already queued
     return logits[:, -1]
