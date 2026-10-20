@@ -149,9 +149,9 @@ parts_clock = time.monotonic  # studio_parts.Assembler's clock
 def assembler(found: "studio_diloco.Coordinator") -> "studio_parts.Assembler":
     """The run's parts of changes being posted (kept on its coordinator, so a coordinator that goes takes them with it)."""
     with PARTS:
-        if getattr(found, "parts", None) is None:
-            found.parts = studio_parts.Assembler()
-        return found.parts
+        if getattr(found, "upload_parts", None) is None:
+            found.upload_parts = studio_parts.Assembler()
+        return found.upload_parts
 
 
 @router.post("/join", response_model=JoinInfo)

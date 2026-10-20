@@ -82,6 +82,16 @@ class Parts(Collective):
         self.assertGreater(member["up_mb_s"], 0.)
         self.assertEqual(coordinator.history[0]["node_bytes"], {"a": len(body)})
 
+    def test_shards_are_still_served_once_a_change_came_in_parts(self):
+        coordinator, generation = self.open_round()
+        body = self.delta_body(coordinator)
+        parts = self.cut(body, 4000)
+        self.assertEqual(self.post_part(parts[0], 0, len(parts), len(body), hashlib.sha256(body).hexdigest(), generation).status_code, 202)
+        answer = self.client.get("/collective/r1/shards/0/hash", params={"term": 1})
+        self.assertEqual(answer.status_code, 200, answer.text)
+        self.assertEqual(answer.json()["hash"], hashlib.sha256(coordinator.shard_bytes(0)).hexdigest())
+        self.assertEqual(self.client.get("/collective/r1/shards/0").content, coordinator.shard_bytes(0))
+
     def test_a_part_that_does_not_match_its_hash_is_rejected_and_sent_again(self):
         coordinator, generation = self.open_round()
         body = self.delta_body(coordinator)
