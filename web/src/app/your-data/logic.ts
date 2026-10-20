@@ -90,8 +90,20 @@ export function kindOf(value: string | null | undefined): Kind {
   return value === "text" || value === "problems" || value === "conversations" ? value : "conversations";
 }
 
-export function setsLine(summary: Summary | undefined): string {
-  return summary ? summary.sets.map((s) => `${s.name} (${s.count.toLocaleString("en-US")})`).join(" · ") || T.noSets : "";
+/** A set's share of the kind's total as a whole percent, 0 to 100; 0 when the kind is empty. */
+export function setShare(count: number, total: number): number {
+  return total > 0 ? Math.min(100, Math.round((count / total) * 100)) : 0;
+}
+
+/** The at-a-glance numbers over the set cards. Only what the summary carries: the API has no count of rows waiting for review. */
+export function overviewCounts(summary: Summary | undefined): { key: string; label: string; value: string }[] {
+  if (!summary) return [];
+  const n = (value: number) => value.toLocaleString("en-US");
+  return [
+    { key: "total", label: T.statTotal, value: n(summary.count) },
+    { key: "held", label: T.statHeldBack, value: n(summary.held_back) },
+    { key: "dups", label: T.statDuplicates, value: n(summary.near_duplicates) },
+  ];
 }
 
 /** The sentence for a failed call: the server's own `detail`, else what the browser said. */

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import { emit, mockApi } from "@/test/network";
@@ -67,20 +67,63 @@ function server() {
 }
 
 describe("Your data page", () => {
-  test("Make extra data is a section at the foot of the page", async () => {
+  test("on load the overview and toolbar show and no examples are read", async () => {
     server();
-    renderPage(<YourDataPage />, { route: "/your-data/" });
-    expect(await screen.findByText("Make extra data", { selector: "summary" })).toBeVisible();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    const toolbar = await screen.findByRole("toolbar", { name: "Data actions" });
+    for (const name of ["Write a conversation", "Import files", "Make extra data"]) expect(within(toolbar).getByRole("button", { name })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: /Near-duplicates/ })).toBeDisabled();
+    await waitFor(() => expect(screen.getByTestId("stat-total")).toHaveTextContent("2"));
+    expect(screen.queryByTestId("row-c1")).toBeNull();
+    expect(screen.queryByTestId("detail")).toBeNull();
+    expect(screen.getByRole("button", { name: "Browse examples" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  test("the three kinds show their counts and the first kind's rows", async () => {
+  test("the set cards show each set's name, count and share of the total", async () => {
+    server();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    const card = await screen.findByTestId("set-d1");
+    expect(card).toHaveTextContent("Your conversations");
+    expect(card).toHaveTextContent("2");
+    expect(within(card).getByRole("progressbar", { name: "Your conversations share of the total" })).toHaveAttribute("aria-valuenow", "100");
+  });
+
+  test("Make extra data opens its panel under the toolbar", async () => {
+    server();
+    const user = userEvent.setup();
+    renderPage(<YourDataPage />, { route: "/your-data/" });
+    await user.click(await screen.findByRole("button", { name: "Make extra data" }));
+    expect(await screen.findByRole("group", { name: "What to make" })).toBeVisible();
+  });
+
+  test("Write a conversation opens the add form under the toolbar", async () => {
+    server();
+    const user = userEvent.setup();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    await user.click(await screen.findByRole("button", { name: "Write a conversation" }));
+    expect(await screen.findByLabelText("Prompt")).toBeVisible();
+  });
+
+  test("searching opens the examples list without the Browse click", async () => {
+    server();
+    const user = userEvent.setup();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    await user.type(await screen.findByRole("textbox", { name: "Search conversations" }), "prime");
+    expect(await screen.findByTestId("row-c1")).toBeVisible();
+  });
+
+  test("the three kinds show their counts; Browse examples lists one text column plus status, and a row opens in the detail", async () => {
     server();
     const user = userEvent.setup();
     renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
     expect(await screen.findByRole("heading", { level: 1, name: "Your data" })).toBeVisible();
     await waitFor(() => expect(screen.getByRole("tab", { name: /Conversations it practises/ })).toHaveTextContent("2 conversations · 1 sets"));
-    expect(await screen.findByTestId("row-c1")).toHaveTextContent("Name a prime.");
-    await waitFor(() => expect(screen.getByTestId("sets-line")).toHaveTextContent(/^Your conversations \(2\)$/));
+    await user.click(screen.getByRole("button", { name: "Browse examples" }));
+    const first = await screen.findByTestId("row-c1");
+    expect(first).toHaveTextContent("Name a prime.");
+    expect(first).not.toHaveTextContent("7 is a prime number.");
+    expect(first).toHaveTextContent("In use");
+    expect(screen.getByTestId("detail")).toHaveTextContent("Select a row");
     await user.click(screen.getByTestId("row-c2"));
     expect(screen.getByTestId("detail")).toHaveTextContent("Hello there.");
     expect(screen.getByRole("button", { name: "Mark Good" })).toBeVisible();
@@ -97,6 +140,7 @@ describe("Your data page", () => {
     } as typeof FormData.prototype.append);
     const user = userEvent.setup();
     renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    await user.click(await screen.findByRole("button", { name: "Browse examples" }));
     expect(await screen.findByTestId("row-c1")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Import files" }));
     await user.upload(screen.getByLabelText("Choose files"), new File(["hello world"], "notes.txt", { type: "text/plain" }));
@@ -111,7 +155,8 @@ describe("Your data page", () => {
     expect(content).toBe("hello world");
     // the rows and the sets are read again: the imported ones are listed
     expect(await screen.findByTestId("row-c3")).toHaveTextContent("Imported prompt");
-    await waitFor(() => expect(screen.getByTestId("sets-line")).toHaveTextContent("Your conversations (3) · Imported set (1)"));
+    await waitFor(() => expect(screen.getByTestId("set-d2")).toHaveTextContent("Imported set"));
+    expect(screen.getByTestId("set-d1")).toHaveTextContent("3");
   });
 
   test("a file in a folder on the server is picked and imported", async () => {

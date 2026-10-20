@@ -20,6 +20,7 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("button", { name: "Import 1 file", exact: true }).click();
   await expect(page.getByText(`${source}.txt: 1 added, 0 duplicates, 0 invalid`, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Browse examples", exact: true }).click();
   await expect(page.getByRole("main").getByText(text, { exact: true })).toBeVisible();
 
   // Pretraining is a page of the Data area, so it is listed in the page list, not the Studio nav.
