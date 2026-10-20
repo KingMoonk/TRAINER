@@ -174,7 +174,7 @@ describe("Queue page with several machines", () => {
       kind: "pretrain_distributed",
       params: { machines: [{ node: "mac-mini" }, { node: "gpu-box" }], left_out: [{ node: "old", reason: "old did not answer within 2 seconds." }] },
     });
-    const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+    const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
     const { calls } = server(state, {
       extra: {
         "GET /distributed/defaults": { body: DEFAULTS },

@@ -217,6 +217,10 @@ class Settings:
     def __post_init__(self):
         if self.inner_steps < 1 or self.rounds < 1 or self.shards < 1:
             raise ValueError("inner_steps, rounds and shards must be at least 1.")
+        from studio_model import MAX_STEPS
+        if self.rounds * self.inner_steps > MAX_STEPS:
+            raise ValueError(f"{self.rounds:,} rounds of {self.inner_steps:,} steps is {self.rounds * self.inner_steps:,} steps; a run trains at most {MAX_STEPS:,}. "
+                             "Use fewer rounds or fewer steps per round.")
         if not 1 <= self.min_members <= self.max_members:
             raise ValueError("min_members must be between 1 and max_members.")
         if self.delta_dtype not in DELTA_DTYPES:

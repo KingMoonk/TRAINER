@@ -16,7 +16,7 @@ const item = (prompt: string, answer: string) => ({ prompt, reply: "no idea", an
 function server(initialRun: Run, initial: Lesson[]) {
   const state = { run: initialRun, lessons: initial, posted: [] as string[] };
   mockApi({
-    "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" } },
+    "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 } },
     "GET /pretraining/text_sets": { body: [] },
     "GET /versions": { body: [] },
     "GET /cluster/nodes": { body: NODES },
@@ -77,7 +77,7 @@ describe("lessons list", () => {
 
   test("lessons that cannot be reached are a quiet note, not an alert", async () => {
     mockApi({
-      "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" } },
+      "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 } },
       "GET /pretraining/text_sets": { body: [] },
       "GET /versions": { body: [] },
       "GET /cluster/nodes": { body: NODES },
@@ -92,7 +92,7 @@ describe("lessons list", () => {
 
   test("an ended run shows only the count, without reading its lessons", async () => {
     const calls = mockApi({
-      "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" } },
+      "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 } },
       "GET /pretraining/text_sets": { body: [] },
       "GET /versions": { body: [] },
       "GET /cluster/nodes": { body: NODES },

@@ -9,7 +9,7 @@ import { member, run } from "./test-data";
 
 // The join flow on the machine that starts a run: the readiness roster, the dialog when a chosen machine is not ready, and the run page's alerts.
 
-const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
 const SETS = [{ id: "stories", name: "Stories", count: 1200, on: true, held: false, library: false }];
 const node = (address: string, over: Record<string, unknown> = {}) => ({
   address, local: false, hostname: address, version: "1", device: "cuda", device_name: "RTX 4090", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,

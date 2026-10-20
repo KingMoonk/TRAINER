@@ -19,7 +19,7 @@ import { JOIN } from "@/lib/copy/join";
 import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { DELTA_DTYPES, defaultInnerSteps, deltaDtypeOf, initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { DELTA_DTYPES, defaultInnerSteps, deltaDtypeOf, initialForm, otherMachines, startBody, stepsProblem, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
@@ -48,6 +48,7 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
   const chatSets = (useChatSets(teacherOpen).data ?? []).filter((c) => !sets.some((t) => t.id === c.id)); // a set with text is ticked above
   const [form, setForm] = useState<Form>(() => initialForm(defaults, sets));
   const teacherWhy = teacherProblem(form);
+  const stepsWhy = stepsProblem(form);
   const [failure, setFailure] = useState("");
   const [asking, setAsking] = useState(false);
   const start = useStart((run) => {
@@ -157,6 +158,7 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
           <Setting id="training-lr" label={T.outerLr} help={T.outerLrHelp} value={form.outerLr} onChange={(outerLr) => set({ outerLr })} step="0.1" />
           <Setting id="training-momentum" label={T.outerMomentum} help={T.outerMomentumHelp} value={form.outerMomentum} onChange={(outerMomentum) => set({ outerMomentum })} step="0.1" />
         </div>
+        {stepsWhy && <p role="status" className="max-w-prose text-sm text-destructive">{stepsWhy}</p>}
         {form.machines.length > 0 && form.innerSteps === String(defaults.remote_inner_steps) && (
           <p className="max-w-prose text-xs text-muted-foreground">{fill(T.innerStepsWhy, { steps: form.innerSteps })}</p>
         )}
