@@ -42,6 +42,7 @@ class Claim:
     term: int
     round: int
     rank: int = 0
+    ghost: bool = False  # what a released claim leaves behind: its node's finished run row, whose round is the run's, not a takeover round
 
 
 @dataclass(frozen=True)
@@ -66,8 +67,10 @@ class Seen:
 # ---- the rules ----------------------------------------------------------------------------------------------------------
 
 def order(claim):
-    """The key claims are ordered by: higher term, then higher round, then lower rank. Greater wins."""
-    return claim.term, claim.round, -claim.rank
+    """The key claims are ordered by: higher term, then a live claim over a ghost, then higher round, then lower rank. Greater wins.
+    A ghost's round is the run's current round, which is not comparable to the round a claim was made at (the takeover round), so it never
+    outranks a live claim of its term."""
+    return claim.term, not claim.ghost, claim.round, -claim.rank
 
 
 def beats(a, b):
@@ -234,7 +237,7 @@ class ClusterHost(Host):
         self.claims = {}  # run id -> the Claim this node made (its coordinator's place in the order)
         self.name = cluster.hostname
         self.lease_s = cluster.lease_s
-        self.pointed = {}  # run id -> (node, term) written to the where-file
+        self.pointed = {}  # run id -> (node, term, url) written to the where-file
         self.saves = {}  # run id -> how many times the successor's weights were asked for after the owner's job had ended
 
     # -- reading the store
@@ -264,7 +267,7 @@ class ClusterHost(Host):
             return None
         if claim is not None and value.get("state", "running") not in ENDED:
             return None  # it released its claim (stepped down or withdrew): its run row, until the next publish, is not a coordinator to yield to
-        return Seen(Claim(run, origin, int(value.get("term", 1)), int(value.get("round", 0)), 0), 0. if origin == self.name else row["age"],
+        return Seen(Claim(run, origin, int(value.get("term", 1)), int(value.get("round", 0)), 0, ghost=claim is not None), 0. if origin == self.name else row["age"],
                     value.get("state", "running"), str(value.get("handoff") or ""))
 
     def replicas(self, run):
@@ -381,19 +384,19 @@ class ClusterHost(Host):
     def point(self, run, claim, node_down):
         """Write where the members here find the coordinator (studio_diloco.file_locator): only after a failover (term 2 or more), only
         for a coordinator that answers, and only when it changed."""
-        if claim.term < 2 or node_down or self.pointed.get(run) == (claim.node, claim.term):
+        if claim.term < 2 or node_down:
             return
         if run not in self.cluster.members and run not in self.cluster.replicas:
             return  # no member of the run here
         url = self.url_of(claim.node, run)
-        if not url:
+        if not url or self.pointed.get(run) == (claim.node, claim.term, url):  # the url counts: a claim's own url may replace the address first guessed
             return
         import studio_diloco
         from studio_core import atomic_json
         path = studio_diloco.where_file(self.cluster.runner.root, run)
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(path, {"node": claim.node, "term": claim.term, "url": url})
-        self.pointed[run] = (claim.node, claim.term)
+        self.pointed[run] = (claim.node, claim.term, url)
 
     def finished_under_successor(self, run):
         """The owner's job ended without saving the run's weights (its member stopped or failed while the run went on, #453): replay the
