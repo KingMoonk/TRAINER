@@ -10,7 +10,7 @@ import { AvailableVersions } from "@/components/available-versions";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
-import { cameFrom, isCluster, useCluster, usePublished } from "@/lib/cluster";
+import { cameFrom, isCluster, isStoreUnset, useCluster, usePublished } from "@/lib/cluster";
 import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { T } from "./copy";
@@ -70,7 +70,9 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
   const versions = useQuery({ queryKey: ["versions"], queryFn: ({ signal }) => unwrap(api.GET("/versions", { signal })), refetchInterval: 15_000 });
   const queue = useQuery({ queryKey: ["queue"], queryFn: ({ signal }) => unwrap(api.GET("/queue", { signal })), refetchInterval: 15_000 });
   const cluster = useCluster().data;
-  const published = usePublished(cluster).data;
+  const publishedQuery = usePublished(cluster);
+  const published = publishedQuery.data;
+  const storeUnset = isStoreUnset(publishedQuery.error);
   const multi = isCluster(cluster); // a cluster of one shows nothing about machines
   const [picked, setPicked] = useState<number>();
   const rows = versions.data ?? [];
@@ -112,6 +114,7 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
           <h3 className="text-sm font-medium">{T.availableElsewhere}</h3>
           <AvailableVersions published={published} />
         </div>}
+        {multi && storeUnset && <p className="mt-4 text-sm text-muted-foreground" data-testid="store-unset">{T.storeUnset}</p>}
         {queue.isError && <p role="alert" className="mt-3 text-sm">{T.queueUnavailable}</p>}
       </CardContent>
     </Card>

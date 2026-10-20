@@ -24,6 +24,7 @@ export const T = {
   onThisMachine: "On this machine",
   pulledFrom: "pulled from",
   availableElsewhere: "Available on other machines",
+  storeUnset: "Sharing between machines isn't set up. Set TRAINER_STORE_FOLDER to a shared folder, or the TRAINER_STORE_* bucket variables (see docs/cluster.md).",
   readingVersions: "Reading versions",
   readingCurves: "Reading training curves",
   couldNotReadVersions: "Could not read versions:",

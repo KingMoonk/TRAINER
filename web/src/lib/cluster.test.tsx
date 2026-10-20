@@ -4,7 +4,8 @@ import { describe, expect, test, vi } from "vitest";
 import { toast } from "sonner";
 import { emit, mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
-import { availableElsewhere, cameFrom, isCluster, nodeName, seenText, useCluster, usePublished, usePull, type ClusterQueue, type PublishedVersion } from "./cluster";
+import { ApiError } from "./api";
+import { availableElsewhere, cameFrom, isCluster, isStoreUnset, nodeName, refetchPublished, seenText, useCluster, usePublished, usePull, type ClusterQueue, type PublishedVersion } from "./cluster";
 import { nodeName as nodeNameDirect } from "./node-name";
 
 const node = (address: string, hostname = "") => ({ address, hostname, local: address === "local" });
@@ -136,6 +137,22 @@ describe("usePublished", () => {
     mockApi({ "GET /versions/published": { body: [published({ number: 4 })] } });
     renderPage(<PublishedView cluster={clusterOf("local", "100.64.0.2")} />);
     expect(await screen.findByText("1 published")).toBeInTheDocument();
+  });
+});
+
+describe("an unset version store", () => {
+  const unset = new ApiError(409, "/versions/published", "no store");
+
+  test("is a 409 and nothing else", () => {
+    expect(isStoreUnset(unset)).toBe(true);
+    expect(isStoreUnset(new ApiError(500, "/versions/published", ""))).toBe(false);
+    expect(isStoreUnset(new Error("offline"))).toBe(false);
+  });
+
+  test("stops the 15-second poll, and keeps it for every other state", () => {
+    expect(refetchPublished({ state: { error: unset } })).toBe(false);
+    expect(refetchPublished({ state: { error: null } })).toBe(15_000);
+    expect(refetchPublished({ state: { error: new ApiError(500, "/versions/published", "") } })).toBe(15_000);
   });
 });
 
