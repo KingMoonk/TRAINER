@@ -377,6 +377,115 @@ class NewConverterTests(unittest.TestCase):
         self.assertEqual(converted["groupId"], "wikitext2:Aster Station")
 
 
+NEW_DEFAULTS = ("fineweb_edu", "openwebmath", "cosmopedia_khan", "gutenberg", "orca_math", "stackexchange_math", "magicoder_oss",
+                "stackexchange_unix", "smoltalk_magpie", "reddit_instruct")
+
+
+class HigherQualityCorpusTests(unittest.TestCase):
+    """Converters for the second wave of corpora, each fed a small row in its source's real schema."""
+
+    def test_new_defaults_are_commercially_licensed_pinned_and_hash_checked(self):
+        defaults = default_catalog_ids()
+        for catalog_id in NEW_DEFAULTS:
+            with self.subTest(catalog_id):
+                entry = _entry(catalog_id)
+                self.assertIn(catalog_id, defaults)
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+                self.assertNotRegex(entry["license"].lower(), r"non-commercial|unspecified|unknown")
+                self.assertTrue(entry["records_hint"][0].isdigit() or entry["records_hint"].startswith("~"))
+                self.assertLess(entry.get("range_bytes", 0), 1_000_000_000)
+        self.assertFalse(_entry("openbookqa")["default"])
+        self.assertIn("no licence", _entry("openbookqa")["description"])
+        self.assertEqual(_entry("gutenberg")["batch_size"], 8)
+
+    def test_stack_exchange_html_becomes_text_with_the_accepted_answer(self):
+        raw = {"qid": 77, "date": "2012/01/01", "metadata": ["https://math.stackexchange.com/questions/77"],
+               "question": "<p>Why is <code>x &lt; y</code> true?</p>\n\n<pre><code>print(1 &lt; 2)\n</code></pre>\n<ul><li>one</li></ul>",
+               "answers": [{"answer_id": 1, "author": "a", "author_id": 1, "author_profile": "", "pm_score": 9, "selected": False, "text": "<p>Top.</p>"},
+                           {"answer_id": 2, "author": "b", "author_id": 2, "author_profile": "", "pm_score": 3, "selected": True,
+                            "text": "<p>Because $x&lt;y$.<br>See <a href=\"http://e.org\">this</a>.</p>"}]}
+        row = _convert("stackexchange_math", raw)[0]
+        self.assertEqual(row["user"], "Why is `x < y` true?\n\n```\nprint(1 < 2)\n```\n\n- one")
+        self.assertEqual(row["assistant"], "Because $x<y$.\nSee this.")
+        self.assertEqual((row["intent"], row["sourceId"], row["metadata"]["accepted"]), ("forum_qa", "stackexchange_math:77", True))
+        best = _convert("stackexchange_unix", {**raw, "answers": [{**raw["answers"][0]}, {**raw["answers"][1], "selected": False}]})[0]
+        self.assertEqual(best["assistant"], "Top.")  # no accepted answer: the best-scored one
+        self.assertEqual(_convert("stackexchange_math", {**raw, "answers": [{**raw["answers"][1], "pm_score": 0}]}), [])
+        self.assertEqual(_convert("stackexchange_math", {**raw, "answers": []}), [])
+
+    def test_reddit_instruct_skips_removed_posts(self):
+        raw = {"post_title": "What is billet?", "post_text": "I cannot find an explanation.", "post_scores": 24,
+               "comment_text": "A chunk of metal.", "comment_score": 54}
+        row = _convert("reddit_instruct", raw)[0]
+        self.assertEqual((row["user"], row["assistant"]), ("What is billet?\n\nI cannot find an explanation.", "A chunk of metal."))
+        self.assertEqual(row["metadata"], {"post_score": 24, "comment_score": 54})
+        self.assertEqual(_convert("reddit_instruct", {**raw, "post_text": ""})[0]["user"], "What is billet?")
+        self.assertEqual(_convert("reddit_instruct", {**raw, "comment_text": "[removed]"}), [])
+        self.assertEqual(_convert("reddit_instruct", {**raw, "post_text": "[deleted]"}), [])
+
+    def test_web_text_corpora_keep_pages_and_skip_stubs(self):
+        page = "Bromide in rivers. " * 20
+        fine = _convert("fineweb_edu", {"text": page, "id": "<urn:uuid:1>", "dump": "CC-MAIN-2013-20", "url": "http://a.org", "language": "en",
+                                        "language_score": 0.9, "token_count": 80, "score": 3.2, "int_score": 3})[0]
+        self.assertEqual((fine["text"], fine["intent"], fine["sourceId"]), (page.strip(), "web_text", "<urn:uuid:1>"))
+        self.assertEqual(_convert("fineweb_edu", {"text": "short", "id": "x"}), [])
+        math = _convert("openwebmath", {"url": "http://m.org/bayes", "text": "Bayes. $P(A|B)$ " * 20, "date": "2020-01-01", "metadata": "{}"})[0]
+        self.assertEqual((math["intent"], math["metadata"]["url"]), ("math_text", "http://m.org/bayes"))
+        self.assertTrue(math["groupId"].startswith("openwebmath:"))
+        self.assertEqual(_convert("openwebmath", {"url": "u", "text": " "}), [])
+        book = _convert("cosmopedia_khan", {"prompt": "Write a unit", "text": " Lesson Objective: count.", "text_token_length": 5,
+                                            "seed_data": "khanacademy", "format": "textbook", "audience": "middle_school"})[0]
+        self.assertEqual((book["text"], book["intent"], book["metadata"]["audience"]), ("Lesson Objective: count.", "textbook", "middle_school"))
+        self.assertEqual(_convert("cosmopedia_khan", {"prompt": "p", "text": ""}), [])
+
+    def test_gutenberg_rejoins_hard_wrapped_lines_and_cuts_passages(self):
+        paragraph = "\r\n\r\n".join(["The quick brown fox jumps over the lazy dog and keeps running far"] * 10)
+        wrapped = "\r\n".join([paragraph] * 20)
+        meta = json.dumps({"language": "en", "text_id": 22428, "title": "Essays\nA Series", "authors": "Wallace, Alfred Russel"})
+        passages = _convert("gutenberg", {"TEXT": wrapped, "SOURCE": "gutenberg", "METADATA": meta})
+        self.assertEqual(len(passages), 5)  # four ~650-character paragraphs per passage; the short remainder is dropped
+        self.assertTrue(all(2000 <= len(p["text"]) <= 3300 for p in passages))
+        self.assertNotIn("\n\n", passages[0]["text"])
+        self.assertTrue(passages[0]["text"].startswith("The quick brown fox jumps over the lazy dog and keeps running far The quick"))
+        self.assertEqual((passages[0]["sourceId"], passages[1]["sourceId"], passages[0]["groupId"]), ("gutenberg:22428:1", "gutenberg:22428:2", "gutenberg:22428"))
+        self.assertEqual((passages[0]["metadata"]["title"], passages[0]["intent"]), ("Essays", "book"))
+        paragraphs = "\n\n".join(["A paragraph that is long enough to be a whole line of its own in this book. " * 6] * 5)
+        self.assertEqual(len(_convert("gutenberg", {"TEXT": paragraphs, "METADATA": "not json"})), 1)  # real paragraphs are left alone
+        self.assertEqual(_convert("gutenberg", {"TEXT": "A tiny book.", "METADATA": meta}), [])
+
+    def test_instruction_corpora_map_their_fields(self):
+        orca = _convert("orca_math", {"question": "Find the number of people ahead of 5th place.", "answer": "4 people crossed first."})[0]
+        self.assertEqual((orca["user"], orca["assistant"], orca["intent"]), ("Find the number of people ahead of 5th place.", "4 people crossed first.", "math_reasoning"))
+        self.assertEqual(_convert("orca_math", {"question": "Q", "answer": " "}), [])
+        code = _convert("magicoder_oss", {"lang": "cpp", "raw_index": 101533, "index": 4626, "seed": "int n;", "openai_fingerprint": "fp_eeff13170a",
+                                          "problem": "Write convolution.", "solution": "```cpp\nint main() {}\n```"})[0]
+        self.assertEqual((code["user"], code["assistant"], code["intent"], code["sourceId"]),
+                         ("Write convolution.", "```cpp\nint main() {}\n```", "coding", "magicoder:cpp:4626"))
+        self.assertEqual(code["metadata"], {"language": "cpp"})
+        self.assertEqual(_convert("magicoder_oss", {"lang": "cpp", "problem": "", "solution": "x"}), [])
+
+    def test_smoltalk_keeps_only_good_chats_and_openbookqa_maps_stems(self):
+        chat = {"messages": [{"role": "user", "content": "Plan a lake trip."}, {"role": "assistant", "content": "Weigh rain and cost."}],
+                "category": "planning", "difficulty": "easy", "quality": "good", "reward_model_score": 0.1, "conversation_tokens": 20}
+        row = _convert("smoltalk_magpie", chat)[0]
+        self.assertEqual((row["intent"], len(row["messages"]), row["metadata"]["quality"]), ("planning", 2, "good"))
+        self.assertEqual(row["groupId"], _convert("smoltalk_magpie", {**chat, "quality": "excellent"})[0]["groupId"])
+        for bad in ("average", "poor", "very poor"):
+            self.assertEqual(_convert("smoltalk_magpie", {**chat, "quality": bad}), [])
+        obqa = _convert("openbookqa", {"id": "7-980", "question_stem": "The sun is responsible for", "answerKey": "D",
+                                       "choices": {"text": ["puppies", "children", "flowers", "plants sprouting"], "label": ["A", "B", "C", "D"]}})[0]
+        self.assertEqual((obqa["assistant"], obqa["sourceId"], obqa["intent"]), ("D) plants sprouting", "7-980", "science_qa"))
+        self.assertIn("Question: The sun is responsible for", obqa["user"])
+
+    def test_catalog_rows_normalise_into_training_records(self):
+        for catalog_id, raw in (("stackexchange_math", {"qid": 1, "question": "<p>Q?</p>", "answers": [{"pm_score": 2, "selected": True, "text": "<p>A.</p>"}]}),
+                                ("smoltalk_magpie", {"quality": "good", "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]}),
+                                ("fineweb_edu", {"id": "i", "text": "word " * 60}), ("reddit_instruct", {"post_title": "T", "comment_text": "C"})):
+            with self.subTest(catalog_id):
+                row = normalize(_convert(catalog_id, raw)[0], source=f"catalog:{catalog_id}")
+                self.assertTrue(row["text"] or (row["user"] and row["assistant"]))
+
+
 class BoundedDownloadTests(unittest.TestCase):
     def test_range_fetch_requests_a_prefix_and_never_keeps_more_than_asked(self):
         seen = {}

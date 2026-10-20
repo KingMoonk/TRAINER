@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import html
 import json
 import logging
 import random
@@ -69,6 +70,30 @@ CATALOG = [
      "size_hint": "157 MB download", "records_hint": "~400K paragraphs", "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
      "repo": "Salesforce/wikitext", "filename": "wikitext-103-raw-v1/train-00001-of-00002.parquet", "format": "parquet", "parser": "wikitext",
      "split": "train", "synthetic": False},
+    {"id": "fineweb_edu", "name": "FineWeb-Edu · educational web text (bounded)", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "Web pages that an LLM classifier rated educational (score 3 or more), from the last shard of the 10-billion-token FineWeb-Edu sample. Bounded to the first 25,000 pages of that shard; pages under 200 characters are skipped.",
+     "license": "ODC-By 1.0", "source_url": "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu",
+     "size_hint": "541 MB download (one shard)", "records_hint": "25,000 pages (first of 182,101 in the shard)", "revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9",
+     "repo": "HuggingFaceFW/fineweb-edu", "filename": "sample/10BT/013_00000.parquet", "format": "parquet", "parser": "fineweb_edu",
+     "max_records": 25_000, "sha256": "b393f51fefab26cd6f4c8f65707c1924f6666c4961a0ebebe04bb57f7ec832de", "split": "train", "synthetic": False},
+    {"id": "openwebmath", "name": "OpenWebMath · mathematical web text (bounded)", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "Mathematical pages (proofs, forum answers, lecture notes, with the LaTeX kept) filtered from Common Crawl. One shard of the training split, bounded to the first 25,000 pages; pages under 200 characters are skipped.",
+     "license": "ODC-By 1.0", "source_url": "https://huggingface.co/datasets/open-web-math/open-web-math",
+     "size_hint": "236 MB download (one shard)", "records_hint": "25,000 pages (first of 55,397 in the shard)", "revision": "fde8ef8de2300f5e778f56261843dab89f230815",
+     "repo": "open-web-math/open-web-math", "filename": "data/train-00000-of-00114-5a023365406cb9c4.parquet", "format": "parquet", "parser": "web_math",
+     "max_records": 25_000, "sha256": "18d7ef70a6ef61f09c020950626d7e6e61d1300f3f85beddbd3b3c6801071a41", "split": "train", "synthetic": False},
+    {"id": "cosmopedia_khan", "name": "Cosmopedia · Khan Academy-style textbooks", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "Textbook units on school subjects written by Mixtral-8x7B from Khan Academy course outlines (the khanacademy config of Cosmopedia). Plain explanatory prose with worked examples.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/cosmopedia",
+     "size_hint": "49 MB download", "records_hint": "24,066 textbook units", "revision": "0ae6ec63f91742bd2d1eaef4f02232c55d719385",
+     "repo": "HuggingFaceTB/cosmopedia", "filename": "data/khanacademy/train-00000-of-00001.parquet", "format": "parquet", "parser": "cosmopedia",
+     "sha256": "193141996fe9609c8fd98e984991c554007c4167014f4c99b7e4e1f10013152c", "split": "train", "synthetic": True},
+    {"id": "gutenberg", "name": "Project Gutenberg · public-domain books (bounded)", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "English books from Project Gutenberg (one shard of the sedthh/gutenberg_english collection, boilerplate removed by the publisher). Each book is cut into passages of about 2,000 characters on line breaks (the first 150 per book); bounded to the first 25,000 passages.",
+     "license": "MIT (publisher dataset card); the book texts are public domain in the US", "source_url": "https://huggingface.co/datasets/sedthh/gutenberg_english",
+     "size_hint": "195 MB download (one shard)", "records_hint": "25,002 passages from 327 books", "revision": "28973b04f28fd7be4a6186a042bc26159d4366ca",
+     "repo": "sedthh/gutenberg_english", "filename": "data/train-00010-of-00037-316f04ddc46599fe.parquet", "format": "parquet", "parser": "gutenberg",
+     "batch_size": 8, "max_records": 25_000, "sha256": "7e89349978ed18781e60632e6a9325f985400eb9869531371889865543a2e66e", "split": "train", "synthetic": False},
     # --- stage "instructions" -------------------------------------------------------------------
     {"id": "dolly15k", "name": "Dolly 15K · human instructions", "domain": "General instructions", "stage": "instructions", "default": True,
      "description": "Human-written instructions, extraction, summaries, brainstorming and question answering. Context is kept with each question.",
@@ -113,6 +138,12 @@ CATALOG = [
      "license": "CC BY-NC 3.0 (non-commercial)", "source_url": "https://huggingface.co/datasets/allenai/sciq",
      "size_hint": "4 MB download", "records_hint": "11,679 questions", "revision": "2c94ad3e1aafab77146f384e23536f97a4849815",
      "repo": "allenai/sciq", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "sciq", "split": "train", "synthetic": False},
+    {"id": "openbookqa", "name": "OpenBookQA · elementary science facts", "domain": "Science multiple choice", "stage": "knowledge", "default": False,
+     "description": "Crowdsourced four-option questions that need a core science fact plus common knowledge (main config, training split). Not downloaded by default: the dataset card states no licence (\"unknown\"), so commercial use is unconfirmed.",
+     "license": "Unspecified (dataset card: unknown)", "source_url": "https://huggingface.co/datasets/allenai/openbookqa",
+     "size_hint": "0.5 MB download", "records_hint": "4,952 questions", "revision": "388097ea7776314e93a529163e0fea805b8a6454",
+     "repo": "allenai/openbookqa", "filename": "main/train-00000-of-00001.parquet", "format": "parquet", "parser": "openbookqa",
+     "sha256": "98148f8a54e62eb862346a75192d5fb824d6cbb68f2f59aecd793d39ecb5cd8b", "split": "train", "synthetic": False},
     # --- stage "reasoning" ----------------------------------------------------------------------
     {"id": "gsm8k", "name": "GSM8K · mathematical reasoning", "domain": "Math and reasoning", "stage": "reasoning", "default": True,
      "description": "Human-written grade-school word problems with worked solutions. Only the 7,473 training examples are imported; official test questions stay separate.",
@@ -133,6 +164,18 @@ CATALOG = [
      "license": "MIT", "source_url": "https://huggingface.co/datasets/tau/commonsense_qa",
      "size_hint": "1.2 MB download", "records_hint": "9,741 questions", "revision": "94630fe30dad47192a8546eb75f094926d47e155",
      "repo": "tau/commonsense_qa", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "mcq", "split": "train", "synthetic": False},
+    {"id": "orca_math", "name": "Orca-Math · 200K word problems", "domain": "Math and reasoning", "stage": "reasoning", "default": True,
+     "description": "Grade-school math word problems with worked answers, synthesised by GPT-4 from seed problems (Microsoft Orca-Math). Answers are step-by-step prose.",
+     "license": "MIT", "source_url": "https://huggingface.co/datasets/microsoft/orca-math-word-problems-200k",
+     "size_hint": "84 MB download", "records_hint": "199,573 word problems", "revision": "29255d1770cc4eac66e5e7fa378cba542c026350",
+     "repo": "microsoft/orca-math-word-problems-200k", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "orca_math",
+     "sha256": "38513af71b04e2f710c6cd98f750bf72a87b7a4da1804caaa76f898585c1cfaf", "split": "train", "synthetic": True},
+    {"id": "stackexchange_math", "name": "Math StackExchange · accepted answers", "domain": "Math and reasoning", "stage": "reasoning", "default": True,
+     "description": "Questions from math.stackexchange.com with their accepted (or best-scored) answer, from the first shard of the Stack Exchange preferences dump. HTML is converted to text with code blocks fenced and LaTeX kept; answers scoring under 1 are skipped.",
+     "license": "CC BY-SA 4.0", "source_url": "https://huggingface.co/datasets/HuggingFaceH4/stack-exchange-preferences",
+     "size_hint": "52 MB download (one shard)", "records_hint": "25,837 questions", "revision": "c7bda74048748f55749cd663c3d8d1025a841fd9",
+     "repo": "HuggingFaceH4/stack-exchange-preferences", "filename": "data/math.stackexchange.com/train-00000-of-00019.parquet", "format": "parquet",
+     "parser": "stackexchange", "sha256": "d0ee1cb89b5d19417676cb2e14ec118001409e7a24ac923f1aa919c3ce116e7d", "split": "train", "synthetic": False},
     # --- stage "code" ---------------------------------------------------------------------------
     {"id": "codealpaca20k", "name": "Code Alpaca · programming", "domain": "Coding", "stage": "code", "default": True,
      "description": "20K published programming instructions and answers generated by text-davinci-003. Treat code as unverified training text; nothing is executed.",
@@ -144,6 +187,18 @@ CATALOG = [
      "license": "CC BY 4.0", "source_url": "https://huggingface.co/datasets/google-research-datasets/mbpp",
      "size_hint": "0.1 MB download", "records_hint": "374 problems", "revision": "4bb6404fdc6cacfda99d4ac4205087b89d32030c",
      "repo": "google-research-datasets/mbpp", "filename": "full/train-00000-of-00001.parquet", "format": "parquet", "parser": "mbpp", "split": "train", "synthetic": False},
+    {"id": "magicoder_oss", "name": "Magicoder OSS-Instruct · code from real snippets", "domain": "Coding", "stage": "code", "default": True,
+     "description": "75K coding problems and solutions that GPT-3.5 wrote from snippets of open-source code, in several languages (decontaminated release). The publisher asks users to respect OpenAI's usage policy. Nothing is executed.",
+     "license": "MIT (publisher dataset card)", "source_url": "https://huggingface.co/datasets/ise-uiuc/Magicoder-OSS-Instruct-75K",
+     "size_hint": "203 MB download", "records_hint": "75,197 problems", "revision": "5f839b1f368a76b161028bb9edff055db34022b2",
+     "repo": "ise-uiuc/Magicoder-OSS-Instruct-75K", "filename": "data-oss_instruct-decontaminated.jsonl", "format": "jsonl", "parser": "oss_instruct",
+     "sha256": "f988f14d3516a9f958eeea310f63903727c6d3463bc9cb435288b6ca4bb09cf9", "split": "train", "synthetic": True},
+    {"id": "stackexchange_unix", "name": "Unix StackExchange · accepted answers", "domain": "Coding", "stage": "code", "default": True,
+     "description": "Shell and Linux questions from unix.stackexchange.com with their accepted (or best-scored) answer, from the first shard of the Stack Exchange preferences dump. HTML is converted to text with code blocks fenced; answers scoring under 1 are skipped.",
+     "license": "CC BY-SA 4.0", "source_url": "https://huggingface.co/datasets/HuggingFaceH4/stack-exchange-preferences",
+     "size_hint": "40 MB download (one shard)", "records_hint": "19,895 questions", "revision": "c7bda74048748f55749cd663c3d8d1025a841fd9",
+     "repo": "HuggingFaceH4/stack-exchange-preferences", "filename": "data/unix.stackexchange.com/train-00000-of-00004.parquet", "format": "parquet",
+     "parser": "stackexchange", "sha256": "13a0e6ef39f2695d383c1e38a2a8a448fb2579b023a129da3d9f58032cf5312e", "split": "train", "synthetic": False},
     # --- stage "conversation" -------------------------------------------------------------------
     {"id": "oasst1", "name": "OpenAssistant · conversation trees", "domain": "Conversation", "stage": "conversation", "default": True,
      "description": "Complete ready-for-export conversation trees from OpenAssistant. Preserves multilingual dialogue paths, source message IDs and human/synthetic provenance. Deleted or rejected branches are skipped.",
@@ -158,6 +213,18 @@ CATALOG = [
      "size_hint": "244 MB download", "records_hint": "~69K conversations", "revision": "8049631c405ae6576f93f445c6b8166f76f5505a",
      "repo": "HuggingFaceH4/ultrachat_200k", "filename": "data/train_sft-00000-of-00003-a3ecf92756993583.parquet", "format": "parquet",
      "parser": "ultrachat", "split": "train_sft", "synthetic": True},
+    {"id": "smoltalk_magpie", "name": "SmolTalk · Smol-Magpie-Ultra chats (bounded)", "domain": "Conversation", "stage": "conversation", "default": True,
+     "description": "Multi-turn instruction chats across coding, maths, writing, planning and advice, generated with Llama-3.1-405B (Smol-Magpie-Ultra, the Apache-2.0 part of SmolTalk; the mixed \"all\" config is not used because it bundles other licences). First shard, only chats rated good or excellent, bounded to the first 25,000.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smoltalk",
+     "size_hint": "232 MB download (one shard)", "records_hint": "25,000 chats (first of 47,834 rated good or excellent in the shard)", "revision": "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa",
+     "repo": "HuggingFaceTB/smoltalk", "filename": "data/smol-magpie-ultra/train-00000-of-00006.parquet", "format": "parquet", "parser": "smoltalk",
+     "max_records": 25_000, "sha256": "512cb90bf3c8a6772e97c43977d10177b2726118a107eaf8de4797a604e09df8", "split": "train", "synthetic": True},
+    {"id": "reddit_instruct", "name": "Reddit-Instruct · Q&A subreddit answers", "domain": "Conversation", "stage": "conversation", "default": True,
+     "description": "Question posts and their top comment from explanatory subreddits (AskScience, AskProgramming, AskMath, ELI5, changemyview and similar), filtered by score. The dataset card declares the MIT licence; the posts remain Reddit user content.",
+     "license": "MIT (publisher dataset card)", "source_url": "https://huggingface.co/datasets/euclaise/reddit-instruct",
+     "size_hint": "66 MB download", "records_hint": "84,784 question-answer pairs", "revision": "7ac118fb7d4a6bd7b89dc23774db7c419ce079c9",
+     "repo": "euclaise/reddit-instruct", "filename": "data/train-00000-of-00001.parquet", "format": "parquet", "parser": "reddit_instruct",
+     "sha256": "9162098535271b9e82c459420a8bdb6c385c41b6b7b39a8833b641db5054b156", "split": "train", "synthetic": False},
     # --- stage "problems": questions with an answer key a rule checks (Post-training, round 2) -------------
     {"id": "gsm8k_check", "name": "GSM8K · word problems with a numeric key", "domain": "Checkable problems", "stage": "problems", "default": True,
      "description": "The 7,473 GSM8K training problems, each stored with its final number as the key. Checked by the final number in the answer.",
@@ -436,7 +503,7 @@ def wikitext_paragraphs(rows, minimum_chars=80):
 def source_records(path, entry):
     path = Path(path)
     if entry["format"] == "parquet":
-        rows = iter_parquet(path)
+        rows = iter_parquet(path, batch_size=int(entry.get("batch_size", 2048)))  # a small batch keeps book-sized rows in memory
         yield from (wikitext_paragraphs(rows) if entry.get("parser") == "wikitext" else rows)
         return
     if entry["format"] == "txt_stories":
@@ -557,12 +624,127 @@ def convert_record(raw, entry):
     elif parser == "ultrachat":
         yield {"messages": raw.get("messages") or [], "intent": "conversation", "sourceId": str(raw.get("prompt_id", "")),
                "groupId": "ultrachat:" + str(raw.get("prompt_id", ""))}
+    elif parser == "stackexchange":
+        converted = _stackexchange(raw, entry["id"])
+        if converted:
+            yield converted
+    elif parser == "reddit_instruct":
+        title, body, comment = (str(raw.get(key) or "").strip() for key in ("post_title", "post_text", "comment_text"))
+        if title and comment.lower() not in {"", "[deleted]", "[removed]"} and body.lower() not in {"[deleted]", "[removed]"}:
+            digest = hashlib.sha256((title + "\n" + body).encode()).hexdigest()[:16]
+            yield {"user": title + ("\n\n" + body if body else ""), "assistant": comment, "intent": "forum_qa",
+                   "sourceId": "reddit_instruct:" + digest, "groupId": "reddit_instruct:" + digest,
+                   "metadata": {"post_score": raw.get("post_scores"), "comment_score": raw.get("comment_score")}}
+    elif parser in {"fineweb_edu", "web_math"}:
+        text = str(raw.get("text") or "").strip()
+        if len(text) >= 200:
+            source = str(raw.get("id") or hashlib.sha256(str(raw.get("url", "")).encode()).hexdigest()[:16])
+            yield {"text": text, "intent": "web_text" if parser == "fineweb_edu" else "math_text", "sourceId": source,
+                   "groupId": f"{entry['id']}:{source}", "metadata": {"url": raw.get("url", "")}}
+    elif parser == "cosmopedia":
+        text = str(raw.get("text") or "").strip()
+        if text:
+            digest = hashlib.sha256(str(raw.get("prompt", text[:200])).encode()).hexdigest()[:16]
+            yield {"text": text, "intent": "textbook", "sourceId": "cosmopedia:" + digest, "groupId": "cosmopedia:" + digest,
+                   "metadata": {"audience": raw.get("audience", ""), "format": raw.get("format", ""), "seed_data": raw.get("seed_data", "")}}
+    elif parser == "gutenberg":
+        yield from _gutenberg_passages(raw)
+    elif parser == "orca_math":
+        question, answer = str(raw.get("question") or "").strip(), str(raw.get("answer") or "").strip()
+        if question and answer:
+            yield {"user": question, "assistant": answer, "intent": "math_reasoning", "groupId": group_id(question)}
+    elif parser == "oss_instruct":
+        problem, solution = str(raw.get("problem") or "").strip(), str(raw.get("solution") or "").strip()
+        if problem and solution:
+            source = f"magicoder:{raw.get('lang', '')}:{raw.get('index', '')}"
+            yield {"user": problem, "assistant": solution, "intent": "coding", "sourceId": source, "groupId": group_id(problem),
+                   "metadata": {"language": raw.get("lang", "")}}
+    elif parser == "smoltalk":
+        if str(raw.get("quality") or "").lower() in {"good", "excellent"} and raw.get("messages"):
+            first = next((m.get("content", "") for m in raw["messages"] if m.get("role") == "user"), "")
+            digest = hashlib.sha256(str(first).encode()).hexdigest()[:16]
+            yield {"messages": raw["messages"], "intent": str(raw.get("category") or "conversation"), "sourceId": "smoltalk:" + digest,
+                   "groupId": "smoltalk:" + digest, "metadata": {"difficulty": raw.get("difficulty", ""), "quality": raw.get("quality", "")}}
+    elif parser == "openbookqa":
+        converted = _multiple_choice({**raw, "question": raw.get("question_stem")}, "mcq")
+        if converted:
+            yield converted
     elif parser.endswith("_check"):
         converted = _checkable(raw, parser)
         if converted:
             yield converted
     else:
         yield raw
+
+
+_HTML_PRE = re.compile(r"<pre\b[^>]*>(.*?)</pre>", re.S | re.I)
+_HTML_CODE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.S | re.I)
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _html_text(value):
+    """Stack Exchange post HTML -> plain text: code blocks fenced, inline code in backticks, lists as dashes, LaTeX untouched."""
+    blocks = []
+
+    def keep(match):
+        blocks.append(html.unescape(_HTML_TAG.sub("", match.group(1))).strip("\n"))
+        return f"\n\n{len(blocks) - 1}\n\n"
+
+    text = _HTML_PRE.sub(keep, str(value or ""))
+    text = _HTML_CODE.sub(lambda match: "`" + _HTML_TAG.sub("", match.group(1)) + "`", text)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(?:p|div|blockquote|h[1-6]|ul|ol|table|tr)>", "\n\n", text, flags=re.I)
+    text = re.sub(r"<li\b[^>]*>", "\n- ", text, flags=re.I)
+    text = html.unescape(_HTML_TAG.sub("", text))
+    text = re.sub(r"(\d+)", lambda match: "```\n" + blocks[int(match.group(1))] + "\n```", text)
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+\n", "\n", text)).strip()
+
+
+def _stackexchange(raw, catalog_id):
+    """A question with its accepted answer (else the best-scored one); answers scored under 1 are dropped."""
+    answers = [a for a in raw.get("answers") or [] if isinstance(a, dict) and str(a.get("text") or "").strip()]
+    best = next((a for a in answers if a.get("selected")), None) or max(answers, key=lambda a: a.get("pm_score") or 0, default=None)
+    if best is None or (best.get("pm_score") or 0) < 1:
+        return None
+    question, answer = _html_text(raw.get("question")), _html_text(best.get("text"))
+    if not question or not answer:
+        return None
+    qid = str(raw.get("qid", ""))
+    return {"user": question, "assistant": answer, "intent": "forum_qa", "sourceId": f"{catalog_id}:{qid}", "groupId": f"{catalog_id}:{qid}",
+            "metadata": {"answer_score": best.get("pm_score"), "accepted": bool(best.get("selected"))}}
+
+
+def _gutenberg_passages(raw, size=2000, most=150):
+    """One book -> at most `most` passages of about `size` characters cut on line breaks, so a long book cannot crowd out the rest.
+    Passages under 200 characters and a last short remainder are dropped."""
+    text = str(raw.get("TEXT") or "").replace("\r\n", "\n").replace("\r", "\n")
+    blocks = text.split("\n\n")
+    if len(blocks) >= 50 and sorted(len(block) for block in blocks)[len(blocks) // 2] < 100:
+        # Most books arrive hard-wrapped with a blank line after every ~70-character line (paragraphs end in a single newline): rejoin them.
+        text = re.sub(r"(?<!\n)\n\n(?!\n)", " ", text)
+    try:
+        meta = json.loads(raw.get("METADATA") or "{}")
+    except ValueError:
+        meta = {}
+    book = str(meta.get("text_id") or hashlib.sha256(text[:2000].encode()).hexdigest()[:12])
+    title = str(meta.get("title") or "").split("\n")[0]
+    lines, length, number = [], 0, 0
+
+    def passage():
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+    for line in text.split("\n"):
+        lines.append(line)
+        length += len(line) + 1
+        if length >= size:
+            chunk = passage()
+            lines, length = [], 0
+            if len(chunk) >= 200:
+                number += 1
+                if number > most:
+                    return
+                yield {"text": chunk, "intent": "book", "sourceId": f"gutenberg:{book}:{number}", "groupId": f"gutenberg:{book}",
+                       "metadata": {"title": title, "authors": meta.get("authors", "")}}
 
 
 def _unix_newlines(value):
